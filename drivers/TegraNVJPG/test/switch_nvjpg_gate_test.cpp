@@ -81,13 +81,66 @@ TEST_F(NVJPGGate, AFalconErrorFailsTheDecodeAtOnceWithTheFirmwaresReason)
     EXPECT_FALSE(logged("not reached in"));
     EXPECT_TRUE(logged("engine reset: running again"));
     using Steps = std::vector<std::string>;
-    EXPECT_EQ(gEngine.steps(from, {"falcon error", "flush", "reset", "falcon start"}),
-              (Steps{"falcon error", "flush", "reset", "reset", "reset", "falcon start"}));
+    EXPECT_EQ(gEngine.steps(from, {"falcon error", "flush", "reset", "fence released", "falcon start"}),
+              (Steps{"falcon error", "flush", "reset", "reset", "reset", "fence released", "falcon start"}));
     EXPECT_EQ(switch_mmio_read32(gNvjpgRegisters.data(), SWITCH_FALCON_THI_INT_STATUS), 0u);
     EXPECT_TRUE(IOWorkLoop::last()->enabled) << "the line is on again once the falcon is proven";
     const uint32_t before = gEngine.syncpt;
     EXPECT_EQ(runDecode(&job, &status), 0);
     EXPECT_EQ(gEngine.syncpt, before + 1);
+}
+
+// A cancelled job's fence is released by the CPU once channel 3 is torn down and its falcon stopped (the model checks
+// both), as NVDEC's and VIC's cancellations release theirs, so a re-pack queued behind it runs and ends. The reboot's
+// proof and the next job count on from the released fence.
+TEST_F(NVJPGGate, ACancelledJobsFenceIsReleasedOnceTheEngineIsStopped)
+{
+    TegraNVJPGJob job = decodeJob();
+    nvjpg_dec_status status = {};
+    ASSERT_EQ(runDecode(&job, &status), 0);
+    const uint32_t before = gEngine.syncpt;
+    gEngine.stallDecodes = true;
+    EXPECT_EQ(runDecode(&job, &status), -5);
+    gEngine.stallDecodes = false;
+    EXPECT_EQ(gEngine.released, std::vector<uint32_t>{before + 1});
+    EXPECT_EQ(gEngine.syncpt, before + 3) << "the released fence, then the reboot's proof";
+    EXPECT_EQ(runDecode(&job, &status), 0);
+    EXPECT_EQ(gEngine.syncpt, before + 4);
+}
+
+// A job whose fence cannot be armed would have nothing to end it: it is cancelled at once, its fence released, and no
+// end is signalled.
+TEST_F(NVJPGGate, AJobWhoseFenceCannotBeArmedIsCancelledAndItsFenceReleased)
+{
+    TegraNVJPGJob job = decodeJob();
+    nvjpg_dec_status status = {};
+    ASSERT_EQ(runDecode(&job, &status), 0);
+    const uint32_t before = gEngine.syncpt;
+    gEngine.stallDecodes = true;
+    gEngine.armError = TEGRA_HOST1X_ENODEV;
+    EXPECT_EQ(runDecode(&job, &status), -5);
+    gEngine.stallDecodes = false;
+    EXPECT_EQ(gEngine.released, std::vector<uint32_t>{before + 1});
+    EXPECT_TRUE(logged("engine reset: running again"));
+    EXPECT_EQ(runDecode(&job, &status), 0);
+}
+
+// A fence host1x does not release leaves the engine off to the idle gate, with the reason in the line: the next decode
+// powers it on and runs.
+TEST_F(NVJPGGate, AFenceHost1xDoesNotReleaseLeavesTheEngineToTheNextPowerOn)
+{
+    gEngine.stallDecodes = true;
+    gEngine.releaseError = TEGRA_HOST1X_ENODEV;
+    TegraNVJPGJob job = decodeJob();
+    nvjpg_dec_status status = {};
+    EXPECT_EQ(runDecode(&job, &status), -5);
+    gEngine.stallDecodes = false;
+    gEngine.releaseError = 0;
+    EXPECT_TRUE(logged("it did not come back, the next decode powers it on again: its fence was not released"));
+    EXPECT_FALSE(gEngine.clockOn);
+    const int boots = gEngine.boots;
+    EXPECT_EQ(runDecode(&job, &status), 0);
+    EXPECT_EQ(gEngine.boots, boots + 1);
 }
 
 // "Whenever a module is reset, the corresponding teardown bit in [HOST1X_SYNC_MOD_TEARDOWN] should be written" (TRM

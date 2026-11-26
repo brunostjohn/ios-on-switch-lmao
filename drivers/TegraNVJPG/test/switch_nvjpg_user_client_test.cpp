@@ -821,6 +821,60 @@ TEST_F(NVJPGUserClient, UnalignedStrideExecutesViaCopyEngineRepackBehindNVJPGFen
     retire(&d.backing);
 }
 
+// A decode cancelled on the engine, past its bound or on a falcon error, releases its fence: the copy engine's re-pack
+// queued behind it runs and its end wakes the engine thread, which would otherwise sleep for good. The decode fails.
+TEST_F(NVJPGUserClient, ACancelledDecodeLetsTheCopyEngineQueuedBehindItEnd)
+{
+    for (const bool falconError : {false, true}) {
+        Destination d(260, 0x9c000000);
+        IOMemoryDescriptor dstMem;
+        gCeCopies.clear();
+        gEngine.released.clear();
+        gEngine.stallDecodes = true;
+        gEngine.falconErrorInDecode = falconError;
+        EXPECT_EQ(engineRuns(copyRowsInto(d, dstMem)), kIOReturnIOError);
+        gEngine.stallDecodes = false;
+        gEngine.falconErrorInDecode = false;
+        EXPECT_EQ(gEngine.decodeEndedBy, falconError ? "falcon" : "fence");
+        ASSERT_EQ(gCeCopies.size(), 1u);
+        EXPECT_EQ(gEngine.released, std::vector<uint32_t>{gCeCopies[0].wait.threshold}) << falconError;
+        EXPECT_TRUE(logged("engine reset: running again"));
+        EXPECT_EQ(d.backing.refs, 1);
+        retire(&d.backing);
+    }
+    EXPECT_EQ(gSurfaceAccessReleased, 2);
+}
+
+// The same for VIC's re-pack of a '444f' decode.
+TEST_F(NVJPGUserClient, ACancelledDecodeLetsVICsRepackQueuedBehindItEnd)
+{
+    gEngine.stallDecodes = true;
+    EXPECT_EQ(engineRuns(repackOf(64 << 10)), kIOReturnIOError);
+    gEngine.stallDecodes = false;
+    EXPECT_EQ(gEngine.decodeEndedBy, "fence");
+    EXPECT_EQ(gEngine.released, std::vector<uint32_t>{gVicAfter.threshold});
+    EXPECT_TRUE(logged("engine reset: running again"));
+}
+
+// A rebooted falcon's proof increments NVJPG's syncpoint past the cancelled fence, but a reboot whose falcon never
+// loads sends no proof: only the fence's release lets the copy engine queued behind it run, so the engine thread wakes
+// and a later decode can power the engine on.
+TEST_F(NVJPGUserClient, ADecodeWhoseFalconDoesNotLoadAgainStillEndsItsQueuedRepack)
+{
+    Destination d(260, 0x9f000000);
+    IOMemoryDescriptor dstMem;
+    gEngine.stallDecodes = true;
+    gEngine.scrubNeverEnds = true;
+    EXPECT_EQ(engineRuns(copyRowsInto(d, dstMem)), kIOReturnIOError);
+    gEngine.stallDecodes = false;
+    gEngine.scrubNeverEnds = false;
+    EXPECT_TRUE(logged("it did not come back, the next decode powers it on again: J1 FAIL IMEM/DMEM scrubbing"));
+    ASSERT_EQ(gCeCopies.size(), 1u);
+    EXPECT_EQ(gEngine.released, std::vector<uint32_t>{gCeCopies[0].wait.threshold});
+    EXPECT_EQ(gSurfaceAccessReleased, 1);
+    retire(&d.backing);
+}
+
 // The copy engine's end can come before NVJPG's fence callback (each on its own work loop): the engine thread finishes
 // NVJPG's part at its own signal, then ends the decode, whichever signal came first.
 TEST_F(NVJPGUserClient, ARepackThatEndsBeforeNVJPGsSignalStillEndsTheDecodeOnce)
@@ -831,6 +885,22 @@ TEST_F(NVJPGUserClient, ARepackThatEndsBeforeNVJPGsSignalStillEndsTheDecodeOnce)
     EXPECT_EQ(gEngine.decodeEndedBy, "fence");
     ASSERT_EQ(gCeCopies.size(), 1u);
     EXPECT_TRUE(gEngine.released.empty());
+    EXPECT_EQ(gSurfaceAccessReleased, 1);
+    retire(&d.backing);
+}
+
+// A decode whose fence could not be armed is cancelled inside its start, after its re-pack was queued: the start fails,
+// and the re-pack, released with the fence, still ends before the decode does.
+TEST_F(NVJPGUserClient, ADecodeWhoseFenceCannotBeArmedStillEndsItsQueuedRepack)
+{
+    Destination d(260, 0x9d000000);
+    IOMemoryDescriptor dstMem;
+    gEngine.stallDecodes = true;
+    gEngine.armError = TEGRA_HOST1X_ENODEV;
+    EXPECT_EQ(engineRuns(copyRowsInto(d, dstMem)), kIOReturnIOError);
+    gEngine.stallDecodes = false;
+    ASSERT_EQ(gCeCopies.size(), 1u);
+    EXPECT_EQ(gEngine.released, std::vector<uint32_t>{gCeCopies[0].wait.threshold});
     EXPECT_EQ(gSurfaceAccessReleased, 1);
     retire(&d.backing);
 }

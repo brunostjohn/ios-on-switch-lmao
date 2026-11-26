@@ -412,10 +412,12 @@ void park()
 // A job past its bound: the engine stopped making progress on it (a lost interrupt panics in TegraHost1x instead).
 // As L4T's nvhost does on a channel timeout, the job is cancelled, not the engine: channel 3 is torn down so nothing of
 // the stream reaches the engine again, the memory client is flushed (tegra_mc_flush), the engine reset with its
-// partition kept on and brought up again as at J1 (powerUp releases the flush once the reset is), the falcon rebooted
-// and proven as at J2, and the job fails; the next one runs. An engine the reset does not bring back is turned off and
-// handed back to the idle gate, which powers it on at a later decode. One line per cancellation, with what the
-// falcon and the memory controller held. gJobLock held (the caller's) and the job's use of the gate, so no NVJPG power
+// partition kept on and brought up again as at J1 (powerUp releases the flush once the reset is), the job's fence
+// released by the CPU, the falcon rebooted and proven as at J2, and the job fails; the next one runs. The release lets
+// a re-pack queued behind the fence (TegraNVJPGFollow: VIC or the copy engine) run and end, as NVDEC's and VIC's
+// cancellations do. An engine the reset does not bring back, or whose fence host1x does not release, is turned off and
+// handed back to the idle gate, which powers it on at a later decode. One line per cancellation, with what the falcon
+// and the memory controller held. gJobLock held (the caller's) and the job's use of the gate, so no NVJPG power
 // transition runs meanwhile (gateOn runs only in a job, gateOff only with no user, and suspend first takes gJobLock).
 // The power lock and gStateLock are taken one after the other, never one inside the other: the gate calls gateOn and
 // gateOff with the power lock held, and they take gStateLock.
@@ -453,10 +455,11 @@ int cancelled(const TegraNVJPGJob *job, uint32_t fence, uint64_t us)
     switch_car_reset_assert(kClock);
     IODelay(10);
     const bool reset = powerUp(&wasOn);
+    const int released = tegra_host1x_syncpt_release_through(gSyncpt, fence);
     tegra_host1x_channel_restart(TEGRA_HOST1X_CHANNEL_NVJPG);
     const uint32_t from = tegra_host1x_syncpt_read(gSyncpt);
     const char *stage = nullptr;
-    const bool back = reset && bootFalcon() && !answer(gSyncpt, from, &stage);
+    const bool back = reset && !released && bootFalcon() && !answer(gSyncpt, from, &stage);
     if (back)
         gErrors.on();
     IOLockUnlock(power);
@@ -478,9 +481,10 @@ int cancelled(const TegraNVJPGJob *job, uint32_t fence, uint64_t us)
           mcErrors, mcStatus, mcError, mcAddress, host, drained ? "drained" : "did not drain in 10 ms",
           back ? "running again" : "it did not come back, the next decode powers it on again: ",
           back ? ""
-               : (gLine[0] ? gLine
-                  : stage  ? stage
-                           : "falcon"));
+               : (gLine[0]   ? gLine
+                  : released ? "its fence was not released"
+                  : stage    ? stage
+                             : "falcon"));
     return -5;
 }
 

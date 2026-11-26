@@ -86,7 +86,8 @@ void tegra_nvjpg_pages_unmap(uint32_t window, uint64_t address, uint32_t mapped)
 // NVJPG's syncpoint, runs `follow` (another engine's job queued to wait for that increment on the hardware) and arms a
 // fence on the increment, bounded by the job's size, whose end runs `signal`. Returns at once: 0 with the job on the
 // engine and `signal` to come. Otherwise `signal` never runs: the job never reached the engine, or its fence could not
-// be armed and it was cancelled there and then (-5). Job lock held, from here to tegra_nvjpg_finish.
+// be armed and it was cancelled there and then (-5), its fence released for the work `follow` queued. Job lock held,
+// from here to tegra_nvjpg_finish.
 int tegra_nvjpg_start(const TegraNVJPGJob *job, const TegraNVJPGSignal *signal,
                       const TegraNVJPGFollow *follow = nullptr);
 // After the start's signal: the job's result (one past its bound or failed by its falcon cancelled, -5), the firmware's
