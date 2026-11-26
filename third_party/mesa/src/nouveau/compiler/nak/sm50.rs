@@ -138,10 +138,28 @@ impl ShaderModel for ShaderModel50 {
         &self,
         write: &Op,
         dst_idx: usize,
-        _read: &Op,
+        read: &Op,
         _src_idx: usize,
     ) -> u32 {
-        instr_latency(self.sm, write, dst_idx)
+        let latency = instr_latency(self.sm, write, dst_idx);
+        let gpr = match &write.dsts_as_slice()[dst_idx] {
+            Dst::SSA(vec) => vec.file() == RegFile::GPR,
+            Dst::Reg(reg) => reg.file() == RegFile::GPR,
+            Dst::None => false,
+        };
+        if !gpr || !write.has_fixed_latency(self.sm) {
+            return latency;
+        }
+        // A variable-latency reader collects its operands after it issues:
+        // NVIDIA's GM20B code issues these 2 cycles after a fixed-latency
+        // GPR write, and LDC 4
+        match read {
+            Op::MuFu(_) | Op::F2F(_) | Op::F2I(_) | Op::I2F(_) | Op::Flo(_) => {
+                2
+            }
+            Op::Ldc(_) => 4,
+            _ => latency,
+        }
     }
 
     fn war_latency(

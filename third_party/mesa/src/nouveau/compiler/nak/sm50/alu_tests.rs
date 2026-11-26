@@ -136,3 +136,57 @@ fn a_far_or_different_immediate_gets_its_own_copy() {
         assert!(first.src_ref != second.src_ref);
     }
 }
+
+fn gpr(i: u32) -> Dst {
+    RegRef::new(RegFile::GPR, i, 1).into()
+}
+
+fn ffma(dst: u32) -> Op {
+    Op::FFma(Box::new(OpFFma {
+        dst: gpr(dst),
+        srcs: [Src::ZERO, Src::ZERO, Src::ZERO],
+        saturate: false,
+        rnd_mode: FRndMode::NearestEven,
+        ftz: false,
+        dnz: false,
+    }))
+}
+
+fn mufu(op: MuFuOp) -> Op {
+    Op::MuFu(Box::new(OpMuFu {
+        dst: gpr(2),
+        op,
+        src: Src::ZERO,
+        op_type: FloatType::F32,
+    }))
+}
+
+fn ldc() -> Op {
+    Op::Ldc(Box::new(OpLdc {
+        dst: gpr(2),
+        cb: SrcRef::CBuf(CBufRef {
+            buf: CBuf::Binding(1),
+            offset: 0,
+        })
+        .into(),
+        offset: Src::ZERO,
+        mode: LdcMode::Indexed,
+        mem_type: MemType::B32,
+    }))
+}
+
+/// A fixed-latency GPR write read by MUFU issues 2 cycles before the read,
+/// by LDC 4 and by FFMA 6; MUFU's own result keeps its estimate
+#[test]
+fn a_variable_latency_reader_collects_its_operand_after_issue() {
+    let sm = ShaderModel50::new(53);
+    let w = ffma(1);
+    assert_eq!(sm.raw_latency(&w, 0, &mufu(MuFuOp::Rcp), 0), 2);
+    assert_eq!(sm.raw_latency(&w, 0, &ldc(), 0), 4);
+    assert_eq!(sm.raw_latency(&w, 0, &ffma(3), 0), 6);
+    let m = mufu(MuFuOp::Rcp);
+    assert_eq!(
+        sm.raw_latency(&m, 0, &mufu(MuFuOp::Rsq), 0),
+        instr_latency(53, &m, 0)
+    );
+}
