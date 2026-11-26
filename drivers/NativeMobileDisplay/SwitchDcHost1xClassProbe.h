@@ -125,10 +125,40 @@ void dcClassRelease(DcClassStream &s)
     }
 }
 
+// Either probe on the display's channel (this one and the host1x flip run) holds it while dcClassBusy is set: no stream
+// of windows B and C is armed meanwhile, so a probe's fault never lands under an accepted swap.
+static bool dcChannelProbed()
+{
+    return __atomic_load_n(&dcClassBusy, __ATOMIC_ACQUIRE);
+}
+
+// Under the gate, once dcClassBusy is taken: a stream of windows B and C armed or still queued refuses the probe, and
+// none can be armed after this (mediaFlipMay).
+bool dcClassStreamOut()
+{
+    using Self = decltype(this);
+    struct Ask {
+        Self display;
+        bool out;
+    } ask = {this, false};
+    getWorkLoop()->runAction(
+        [](OSObject *, void *a, void *, void *, void *) -> IOReturn {
+            auto &q = *static_cast<Ask *>(a);
+            q.out = !q.display->mediaFlipIdle() || __atomic_load_n(&mediaHostGeneration, __ATOMIC_ACQUIRE) != 0u;
+            return kIOReturnSuccess;
+        },
+        this, &ask);
+    return ask.out;
+}
+
 void dcClassProbe()
 {
     if (!getWorkLoop() || tegra_host1x_start() != TEGRA_HOST1X_OK) {
         snprintf(dcClassLine, sizeof(dcClassLine), "class70=not_run reason=host1x");
+        return;
+    }
+    if (dcClassStreamOut()) {
+        snprintf(dcClassLine, sizeof(dcClassLine), "class70=not_run reason=stream");
         return;
     }
     if (const int error = switch_host1x_probe_syncpts_claim(dcClassSyncpts)) {
@@ -206,4 +236,9 @@ void dcClassRun()
 #else
 static void dcClassRegister()
 {}
+
+static bool dcChannelProbed()
+{
+    return false;
+}
 #endif

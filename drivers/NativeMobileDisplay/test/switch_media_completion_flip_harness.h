@@ -480,6 +480,11 @@ struct Display : OSObject {
         return false;
     }
 
+    static bool dcChannelProbed()
+    {
+        return false;
+    }
+
     void getDisplayDimensions(uint32_t *width, uint32_t *height)
     {
         *width = 720;

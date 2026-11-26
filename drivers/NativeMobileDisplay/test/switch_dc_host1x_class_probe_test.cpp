@@ -22,7 +22,8 @@ TEST(DcHost1xClassProbe, ItIsDebugOnlyAndUsesTheJobApi)
     const size_t gate = probe.find("#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)");
     ASSERT_NE(gate, std::string::npos);
     EXPECT_LT(gate, probe.find("void dcClassProbe()"));
-    EXPECT_EQ(Between(probe, "#else\n", "#endif"), "static void dcClassRegister()\n{}\n");
+    EXPECT_EQ(Between(probe, "#else\n", "#endif"),
+              "static void dcClassRegister()\n{}\n\nstatic bool dcChannelProbed()\n{\n    return false;\n}\n");
     EXPECT_NE(probe.find("switch_host1x_job_copy(kDcClassChannel, words, n, dcClassSyncpts[2], s.channelAt)"),
               std::string::npos);
     EXPECT_NE(probe.find("kDcClassChannel = TEGRA_HOST1X_CHANNEL_DISPLAY"), std::string::npos)
@@ -47,6 +48,23 @@ TEST(DcHost1xClassProbe, ItRunsOnTheProbesSharedSyncpointsAndLetsThemGo)
     EXPECT_TRUE(start.before("tegra_host1x_start()", "switch_host1x_probe_syncpts_claim(dcClassSyncpts)"));
     EXPECT_TRUE(start.before("switch_host1x_probe_syncpts_claim(dcClassSyncpts)", "dcClassRun();"));
     EXPECT_TRUE(start.has("dcClassRun(); switch_host1x_probe_syncpts_release();"));
+}
+
+// The probe shares DC A's host1x channel with windows B and C's stream: it never runs under one queued, and none is
+// armed while either probe holds the channel, so a stop of the channel under a stream is the kernel's own failure.
+TEST(DcHost1xClassProbe, ItNeverSharesTheChannelWithAStream)
+{
+    const std::string probe = SourceText("../SwitchDcHost1xClassProbe.h");
+    const CodeText start = Block(probe, "void dcClassProbe()");
+    EXPECT_TRUE(start.before("if (dcClassStreamOut()) {", "switch_host1x_probe_syncpts_claim(dcClassSyncpts)"));
+    EXPECT_TRUE(Block(probe, "bool dcClassStreamOut()")
+                    .has("q.out = !q.display->mediaFlipIdle() || "
+                         "__atomic_load_n(&mediaHostGeneration, __ATOMIC_ACQUIRE) != 0u;"));
+    EXPECT_TRUE(
+        Block(probe, "static bool dcChannelProbed()").has("return __atomic_load_n(&dcClassBusy, __ATOMIC_ACQUIRE);"));
+    EXPECT_TRUE(Block(SourceText("../SwitchMediaCompletionFlipDisplay.h"),
+                      "bool mediaFlipMay(const PlaneSet &p, PlaneSet &assigned)")
+                    .has("host1xFlipBusy() || dcChannelProbed())"));
 }
 
 TEST(DcHost1xClassProbe, OnlyTheProbesEntitlementRunsIt)

@@ -46,7 +46,8 @@ bool mediaFlipMay(const PlaneSet &p, PlaneSet &assigned)
     if (!planesOn || !planesAttached || planeRecovering || planeHeldSet || planeProbe.active() || copyPlaneJoined ||
         hwSuspended || gPanicRestore.panicking || ring.held != kNoBuffer || !planeLatch.mayWrite() ||
         !planeLatch.armedRequested || p.on() != planeBlending || !completionFlipIdle() || !mediaFlipIdle() ||
-        p.landscape || landscapeOn() || landscapeHoldsKicks() || windowProbeBusy() || host1xFlipBusy())
+        p.landscape || landscapeOn() || landscapeHoldsKicks() || windowProbeBusy() || host1xFlipBusy() ||
+        dcChannelProbed())
         return false;
     const switch_display::WindowState windows[2] = {planeWindowState(switch_landscape::kB),
                                                     planeWindowState(switch_landscape::kC)};
@@ -124,10 +125,10 @@ void writeEarlyMediaFlip(uint32_t generation)
 }
 
 // completionFlipVerdict's: a set the stream wrote (host1x's filter early, or the stream's completion with no filter) is
-// on screen, whatever its producers say by now. A client's failure dated after the writes reached DRAM (its kill or close,
-// GONE; a refused write) leaves it shown with one line: a GPU producer's by the reason its bridge gave before it went
-// (SwitchHost1xDisplay.h), else a VIC or NVDEC producer's. A written set with no failure reported, or any producer's
-// compositor kill (FAILED: a contract our driver breaks), is the kernel's own.
+// on screen, whatever its producers say by now. A client's failure dated after the writes reached DRAM (its kill or
+// close, GONE; a refused write) leaves it shown with one line: a GPU producer's by the reason its bridge gave before it
+// went (SwitchHost1xDisplay.h), else a VIC or NVDEC producer's. A written set with no failure reported, or any
+// producer's compositor kill (FAILED: a contract our driver breaks), is the kernel's own.
 int mediaFlipVerdict(int status)
 {
     if (!status || !(mediaFlip.early() || mediaFlipWrittenByStream()))
