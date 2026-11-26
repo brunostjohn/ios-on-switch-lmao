@@ -12,6 +12,7 @@
 #import "TegraGM20BMetalBlitImages.h"
 #import "TegraGM20BMetalBlitRules.h"
 #include <algorithm>
+#include "blit_overlap.h"
 #include "decode_pass.h"
 
 namespace {
@@ -309,15 +310,46 @@ bool gm20bEncodeFamilyTextureCopy(gm20b::CommandBuffer *rc, SwitchMetalCommandBu
         useBuffer(rc, sourceOwner->_keptBlocks, false);
         const gm20b::KeptLevel sk = keptLevelOf(sourceOwner, s->_levelsBase + sourceLevel);
         const bool sourceVolume = sourceOwner->_raw.type == gm20b::fx::kTexThreeD;
-        for (uint32_t p = 0; p < planes; p++)
-            for (uint32_t r = 0; r < down; r++) {
-                const uint64_t a =
-                    sk.offset + (sourceVolume ? from[2] + p : s->_slicesBase + sourceSlice) * sk.planeBytes +
-                    uint64_t(from[1] / f.blockH + r) * sk.rowBytes + uint64_t(from[0] / f.blockW) * f.blockBytes;
-                be->copyBytes(sourceOwner->_keptBlocks->_raw.va + a,
-                              owner->_keptBlocks->_raw.va + at + p * k.planeBytes + r * k.rowBytes,
-                              uint64_t(across) * f.blockBytes);
+        const uint64_t rowBytes = uint64_t(across) * f.blockBytes;
+        const uint32_t sLevel = s->_levelsBase + sourceLevel, dLevel = t->_levelsBase + level;
+        const uint32_t sZ = sourceVolume ? from[2] : s->_slicesBase + sourceSlice;
+        const uint32_t dZ = volume ? origin[2] : t->_slicesBase + slice;
+        const uint32_t sx = from[0] / f.blockW, sy = from[1] / f.blockH;
+        const uint32_t dx = origin[0] / f.blockW, dy = origin[1] / f.blockH;
+        if (sourceOwner == owner && sLevel == dLevel && sZ == dZ && sx == dx && sy == dy)
+            return true;
+        if (sourceOwner == owner && sLevel == dLevel && sZ < dZ + planes && dZ < sZ + planes &&
+            gm20b::rectsOverlap(sx, sy, dx, dy, across, down)) {
+            const uint64_t planeStage = uint64_t(down) * rowBytes;
+            const uint64_t totalBytes =
+                planeStage && planes <= UINT64_MAX / planeStage ? uint64_t(planes) * planeStage : 0;
+            gm20b::Texture *scratch = totalBytes ? rc->copyScratch(totalBytes) : nullptr;
+            if (!scratch) {
+                *why = "no staging memory for an overlapping decoded texture copy";
+                return false;
             }
+            be->barrier();
+            for (uint32_t p = 0; p < planes; p++)
+                for (uint32_t r = 0; r < down; r++) {
+                    const uint64_t a = sk.offset + (sZ + p) * sk.planeBytes + uint64_t(sy + r) * sk.rowBytes +
+                                       uint64_t(sx) * f.blockBytes;
+                    be->copyBytes(sourceOwner->_keptBlocks->_raw.va + a,
+                                  scratch->va + (uint64_t(p) * down + r) * rowBytes, rowBytes);
+                }
+            be->barrier();
+            for (uint32_t p = 0; p < planes; p++)
+                for (uint32_t r = 0; r < down; r++)
+                    be->copyBytes(scratch->va + (uint64_t(p) * down + r) * rowBytes,
+                                  owner->_keptBlocks->_raw.va + at + p * k.planeBytes + r * k.rowBytes, rowBytes);
+        } else {
+            for (uint32_t p = 0; p < planes; p++)
+                for (uint32_t r = 0; r < down; r++) {
+                    const uint64_t a = sk.offset + (sZ + p) * sk.planeBytes + uint64_t(sy + r) * sk.rowBytes +
+                                       uint64_t(sx) * f.blockBytes;
+                    be->copyBytes(sourceOwner->_keptBlocks->_raw.va + a,
+                                  owner->_keptBlocks->_raw.va + at + p * k.planeBytes + r * k.rowBytes, rowBytes);
+                }
+        }
     } else if (s->_gm20bOk && s->_raw.blockW == f.blockW && s->_raw.blockH == f.blockH) {
         useTexture(rc, s, false);
         gm20b::Texture image;
