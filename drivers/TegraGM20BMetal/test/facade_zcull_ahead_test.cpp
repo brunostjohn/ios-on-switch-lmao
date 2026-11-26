@@ -9,6 +9,7 @@
 
 #include <gtest/gtest.h>
 #include <chrono>
+#include <cstdio>
 #include <thread>
 
 namespace {
@@ -104,6 +105,10 @@ Moved aheadPair(void (^between)(id<MTLCommandBuffer>, id<MTLTexture>), bool apar
     [cb commit];
     [cb waitUntilCompleted];
     NSDictionary *p = ((NSDictionary * (*)(id, SEL)) objc_msgSend)((id)cb, sel_registerName("switchMetalPipelined"));
+    std::printf("zcull_ahead %s: passes=%lld loads=%lld carried=%lld pipelined=%d stopped=0x%x given_back=0x%x\n",
+                testing::UnitTest::GetInstance()->current_test_info()->name(), counter(@"zcull_passes") - passes,
+                counter(@"zcull_loads") - loads, counter(@"zcull_carried") - carried, [p[@"pipelined"] intValue],
+                [p[@"stopped"] unsignedIntValue], [p[@"given_back"] unsignedIntValue]);
     return {counter(@"zcull_passes") - passes,
             counter(@"zcull_loads") - loads,
             counter(@"fused_passes") - fused,
@@ -224,6 +229,41 @@ TEST(GM20BFacadeZcullAhead, AChunkCutBetweenTheStoreAndTheLoadCarriesTheRegion)
     for (int p = 0; p < shape.passes; p++)
         scale_frames::pass(cb, openedWithZcull().state, into, shape, p, 0);
     depthPass(cb, into[0], depth, false);
+    [cb commit];
+    [cb waitUntilCompleted];
+    EXPECT_EQ(cb.status, MTLCommandBufferStatusCompleted);
+    EXPECT_EQ(counter(@"zcull_loads") - loads, 1);
+    EXPECT_EQ(counter(@"zcull_carried") - carried, 1) << "the load in a job of its own";
+}
+
+// HW Test gpu.gm20b.zcull's `carried` arm as it records: a compute encoder first, the depth stored, ten clear-only passes
+// of one 8x8 target, the depth loaded; encoded at the commit, the range is cut between them and the region carried
+TEST(GM20BFacadeZcullAhead, TheCarriedArmsShapeCarriesTheRegion)
+{
+    ASSERT_TRUE(openedWithZcull().device != nil);
+    id<MTLCommandQueue> queue = [openedWithZcull().device newCommandQueue];
+    id<MTLTexture> colour = scale_frames::targets(openedWithZcull().device, kShape)[0];
+    MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                                                 width:8
+                                                                                height:8
+                                                                             mipmapped:NO];
+    d.usage = MTLTextureUsageRenderTarget;
+    d.storageMode = MTLStorageModePrivate;
+    id<MTLTexture> filler = [openedWithZcull().device newTextureWithDescriptor:d];
+    id<MTLTexture> depth = depthTexture();
+    ASSERT_TRUE(filler != nil && depth != nil);
+    const long long loads = counter(@"zcull_loads"), carried = counter(@"zcull_carried");
+    id<MTLCommandBuffer> cb = [queue commandBuffer];
+    [[cb computeCommandEncoder] endEncoding];
+    depthPass(cb, colour, depth, true);
+    for (int k = 0; k < 10; k++) {
+        MTLRenderPassDescriptor *clear = [MTLRenderPassDescriptor renderPassDescriptor];
+        clear.colorAttachments[0].texture = filler;
+        clear.colorAttachments[0].loadAction = MTLLoadActionClear;
+        clear.colorAttachments[0].storeAction = MTLStoreActionStore;
+        [[cb renderCommandEncoderWithDescriptor:clear] endEncoding];
+    }
+    depthPass(cb, colour, depth, false);
     [cb commit];
     [cb waitUntilCompleted];
     EXPECT_EQ(cb.status, MTLCommandBufferStatusCompleted);
