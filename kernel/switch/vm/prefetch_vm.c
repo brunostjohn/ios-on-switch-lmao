@@ -108,10 +108,16 @@ uint64_t switch_vm_prefetch_begin(uint64_t list_vm_pages, void *replay_thread)
 
 void switch_vm_prefetch_end_replay(void)
 {
-    __atomic_store_n(&g_replay_thread, THREAD_NULL, __ATOMIC_RELEASE);
 #if !(DEVELOPMENT || DEBUG)
     switch_pace_deactivate(&g_pace);
 #endif
+}
+
+/* Called only after the in-flight drain: XNU's busy-page raise (switch_upl_below_waiter) and the SD queue's replay
+ * class recognise the replay's UPLs by this thread until the last of its reads completes. */
+void switch_vm_prefetch_forget_replay_thread(void)
+{
+    __atomic_store_n(&g_replay_thread, THREAD_NULL, __ATOMIC_RELEASE);
 }
 
 void switch_vm_prefetch_wait_inflight_drain(void)

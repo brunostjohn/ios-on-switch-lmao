@@ -85,6 +85,7 @@ extern void switch_cluster_record_set_skip_thread(void *thread);
 extern bool switch_vm_prefetch_start_thread(void (*entry)(void *, int), void *arg);
 extern uint64_t switch_vm_prefetch_begin(uint64_t list_vm_pages, void *replay_thread);
 extern void switch_vm_prefetch_end_replay(void);
+extern void switch_vm_prefetch_forget_replay_thread(void);
 extern void switch_vm_prefetch_wait_inflight_drain(void);
 extern void switch_vm_prefetch_finish(void);
 extern bool switch_vm_prefetch_can_issue_now(void);

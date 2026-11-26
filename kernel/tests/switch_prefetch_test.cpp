@@ -1042,3 +1042,16 @@ TEST(SwitchPrefetchSource, ATierZeroWaiterRaisesTheReplaysBusyPages)
         EXPECT_THAT(object, Not(HasSubstr("upl->upl_priority = THROTTLE_LEVEL")));
     }
 }
+
+// The replay's last reads are still at the card after its loop ends; their UPLs stay the replay's until they complete.
+TEST(SwitchPrefetchSource, TheReplayThreadIsForgottenOnlyAfterItsReadsDrain)
+{
+    const std::string replay = bodyOf(SourceText("../switch/vm/prefetch.c"), "switch_prefetch_replay_runs(");
+    const size_t drain = replay.rfind("switch_vm_prefetch_wait_inflight_drain();");
+    const size_t forget = replay.rfind("switch_vm_prefetch_forget_replay_thread();");
+    ASSERT_NE(drain, std::string::npos);
+    ASSERT_NE(forget, std::string::npos);
+    EXPECT_LT(drain, forget);
+    const std::string end = bodyOf(SourceText("../switch/vm/prefetch_vm.c"), "switch_vm_prefetch_end_replay(void)");
+    EXPECT_THAT(end, Not(HasSubstr("g_replay_thread")));
+}

@@ -77,8 +77,10 @@ static uint64_t switch_delta(uint64_t cur, uint64_t prev)
     return cur >= prev ? cur - prev : 0u;
 }
 
+#if CONFIG_IOSCHED
 /* XNU's busy-page raises: queued (vm_object.c) and the device's answer to each (vnode_pager.c) */
 extern uint64_t switch_reprio_requested, switch_reprio_delivered, switch_reprio_failed;
+#endif
 
 static void switch_prefetch_diag_tick(thread_call_param_t p0 __unused, thread_call_param_t p1 __unused)
 {
@@ -133,12 +135,14 @@ static void switch_prefetch_diag_tick(thread_call_param_t p0 __unused, thread_ca
         "demand %llu/%llu",
         r_mib, u_mib, x_mib, l_mib, b_mib, d_cx + d_root + d_data, d_cx, d_root, d_data, replay_ms, demand_ms,
         replay_gt64k, replay_reqs, demand_gt64k, demand_reqs);
-    /* Its own line: a kernel os_log message is at most OS_LOG_BUFFER_MAX_SIZE (256) bytes with its arguments, and one
-     * that does not fit is dropped whole. */
+#if CONFIG_IOSCHED
+    /* Its own line: as three more fields of the line above (about 270 formatted characters) the message never reached
+     * the kernel log, with no error. */
     os_log(OS_LOG_DEFAULT, "SwitchBootPrefetch: busy-page raises requested %llu delivered %llu refused %llu",
            (unsigned long long)__atomic_load_n(&switch_reprio_requested, __ATOMIC_RELAXED),
            (unsigned long long)__atomic_load_n(&switch_reprio_delivered, __ATOMIC_RELAXED),
            (unsigned long long)__atomic_load_n(&switch_reprio_failed, __ATOMIC_RELAXED));
+#endif
 
     if (__atomic_load_n(&g_prefetch.diag_stop, __ATOMIC_SEQ_CST) == 0u) {
         uint64_t deadline = 0;
@@ -303,6 +307,7 @@ static uint32_t switch_prefetch_replay_runs(const struct switch_prefetch_run *ru
     const uint64_t bound = switch_vm_prefetch_begin(list_vm_pages, current_thread());
     if (bound == 0u) {
         switch_vm_prefetch_end_replay();
+        switch_vm_prefetch_forget_replay_thread();
         return 0u;
     }
     switch_cluster_record_set_skip_thread(current_thread());
@@ -389,6 +394,7 @@ static uint32_t switch_prefetch_replay_runs(const struct switch_prefetch_run *ru
     switch_cluster_record_set_skip_thread(NULL);
     switch_vm_prefetch_end_replay();
     switch_vm_prefetch_wait_inflight_drain();
+    switch_vm_prefetch_forget_replay_thread();
     return replayed;
 }
 
