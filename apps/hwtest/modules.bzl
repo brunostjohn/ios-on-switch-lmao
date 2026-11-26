@@ -2,6 +2,7 @@
 
 GPU_SRCS = [
     "gpu/AegirMoon.swift",
+    "gpu/BytesAddress.swift",
     "gpu/CACorpus.swift",
     "gpu/CAState.swift",
     "gpu/CAStateSweep.swift",
@@ -244,6 +245,7 @@ TESTS_DEPTH_SRCS = [
     "tests/BlendKillReachArms.swift",
     "tests/BlendKillTest.swift",
     "tests/BlendTwinTest.swift",
+    "tests/BytesAddressTest.swift",
     "tests/CoherenceBench.swift",
     "tests/CoherenceRewriteTest.swift",
     "tests/CompressedFloorTest.swift",
