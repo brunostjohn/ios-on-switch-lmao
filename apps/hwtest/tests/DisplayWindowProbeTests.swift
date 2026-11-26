@@ -82,6 +82,12 @@ struct DisplayWindowProbeTest: HWTest {
             number: 8
         ),
         DisplayWindowProbeTest(
+            id: "display.x1.flip_words",
+            name: "Window B flipping BGRA across, down and both, pitch linear and in 16-GOB blocks (CRC)",
+            probe: "V8",
+            number: 9
+        ),
+        DisplayWindowProbeTest(
             id: "display.x1.window_formats",
             name: "NV12 Cb first at depth 43, NV24 at 49, packed 4:2:2 at 16 and SWAP2, against BGRA (CRC)",
             probe: "L979/L955", number: 4

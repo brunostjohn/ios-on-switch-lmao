@@ -137,7 +137,8 @@ uint32_t crcOf(const std::vector<uint32_t> &panel)
 std::vector<Plan> allPlans()
 {
     std::vector<Plan> plans;
-    for (const Probe p : {kOverlayBlockYuv, kColumnScanYuv, kOffsetCrop, kColumnScanBgra, kColumnScanWords}) {
+    for (const Probe p :
+         {kOverlayBlockYuv, kColumnScanYuv, kOffsetCrop, kColumnScanBgra, kColumnScanWords, kFlipWords}) {
         Plan plan;
         EXPECT_TRUE(planOf(p, plan));
         plans.push_back(plan);
@@ -243,7 +244,7 @@ TEST(WindowProbePlans, WindowBsHeaviestStepPassesTheMemoryMath)
         native_planes::Image image;
         ASSERT_TRUE(heaviestOverlay(plan.step, plan.steps, image));
         EXPECT_EQ(image.yuv, plan.probe != kColumnScanYuv && plan.probe != kColumnScanBgra &&
-                                 plan.probe != kColumnScanWords);  // V3's: the UI's BGRA
+                                 plan.probe != kColumnScanWords && plan.probe != kFlipWords);  // V3's: the UI's BGRA
         const uint32_t bpp = image.yuv ? 1 : 4;
         switch_display_memory_window out = {};
         EXPECT_TRUE(switch_display::memoryWindow(
@@ -323,6 +324,22 @@ TEST(WindowProbePlans, TheOtherColumnScanWordsAndAPitchFlipFollowTheRules)
     EXPECT_EQ(plan.step[6].b.hOffset, 1278u * 4 + 3);
     EXPECT_EQ(plan.step[6].check, kDiffer);
     EXPECT_EQ(plan.step[6].against, 5u);
+}
+
+// V8: words 1, 2 and 3 as row scans with H and V alone or together, pitch linear and in 16-GOB blocks.
+TEST(WindowProbePlans, TheFlipWordsScanRowsFromTheirLastByteOrRow)
+{
+    Plan plan;
+    ASSERT_TRUE(planOf(kFlipWords, plan));
+    EXPECT_TRUE(plan.mismatchFails);
+    EXPECT_EQ(plan.step[1].b.options & 0x15u, 0x01u);
+    EXPECT_EQ(plan.step[1].b.hOffset, 720u * 4 - 1);
+    EXPECT_EQ(plan.step[1].b.kind, 0u);
+    EXPECT_EQ(plan.step[3].b.options & 0x15u, 0x04u);
+    EXPECT_EQ(plan.step[3].b.vOffset, 1279u);
+    EXPECT_EQ(plan.step[4].b.kind & 3u, uint32_t(native_planes::kSurfaceKindBlock));
+    EXPECT_EQ(plan.step[7].b.options & 0x15u, 0x05u);
+    EXPECT_EQ(plan.step[7].against, 6u);
 }
 
 // --- The run -------------------------------------------------------------------------------------------------------

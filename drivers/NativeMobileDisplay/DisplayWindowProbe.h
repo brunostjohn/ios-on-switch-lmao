@@ -33,6 +33,7 @@ enum Probe : uint32_t {
     kOffsetCrop = 3,
     kColumnScanBgra = 7,
     kColumnScanWords = 8,
+    kFlipWords = 9,
 };
 
 struct Plan;
@@ -52,6 +53,8 @@ inline const char *probeName(Probe p)
         return "V6";
     case kColumnScanWords:
         return "V7";
+    case kFlipWords:
+        return "V8";
     default:
         return extraProbeName(p);
     }
@@ -324,6 +327,16 @@ inline Window columnWindowBgra(const Surface &s, bool hDirection, bool vDirectio
     return w;
 }
 
+// `s` row-scanned from its last byte (h) and its last row (v): transform words 1 to 3's directions.
+inline Window flipWindow(const Surface &s, bool h, bool v)
+{
+    Window w = rowWindow(s);
+    w.options |= (h ? native_column_scan::kHDirection : 0) | (v ? native_column_scan::kVDirection : 0);
+    w.hOffset = h ? s.width * 4 - 1 : 0;
+    w.vOffset = v ? s.height - 1 : 0;
+    return w;
+}
+
 // --- The plans ---------------------------------------------------------------------------------------------------------
 enum Check : uint8_t {
     kShown,   // a reference
@@ -484,10 +497,7 @@ inline Plan columnScanWordsPlan()
     };
     const Surface plain = turnedAs(Content::TurnedPlain);
     const Surface half = turnedAs(Content::TurnedHV);
-    Window flip = rowWindow(plain);
-    flip.options |= native_column_scan::kHDirection | native_column_scan::kVDirection;
-    flip.hOffset = plain.width * 4 - 1;
-    flip.vOffset = plain.height - 1;
+    const Window flip = flipWindow(plain, true, true);
     Window lastIn = columnWindowBgra(land, true);
     lastIn.prescaled -= 1u << 16;
     lastIn.size -= 1u << 16;
@@ -500,6 +510,33 @@ inline Plan columnScanWordsPlan()
     addStep(p, "flip_hv", off, flip, kEqual, 2);
     addStep(p, "last_in", off, lastIn);
     addStep(p, "pixel_in", off, pixelIn, kDiffer, 5);
+    return p;
+}
+
+// V8: words 1 and 2 alone, the flips window B takes at 1:1 without SCAN_COLUMN, on a pitch-linear surface and in the
+// GPU's 16-GOB blocks. Row-scanned, word 6's picture mirrored across is word 4's, and mirrored down is word 7's, so
+// V6's references judge them; word 3 in blocks is checked against word 5's picture.
+inline Plan flipWordsPlan()
+{
+    Plan p;
+    p.probe = kFlipWords;
+    const Window off;
+    const auto portrait = [&](Content content, uint8_t yLog2) {
+        Surface s = bgra(kPanelWidth, kPanelHeight, yLog2);
+        s.content = content;
+        return p.surface[addSurface(p, s)];
+    };
+    const Surface plain = portrait(Content::TurnedPlain, kPitch), blocks = portrait(Content::TurnedPlain, 4);
+    const Surface across = portrait(Content::TurnedV, kPitch), down = portrait(Content::Turned, kPitch);
+    const Surface half = portrait(Content::TurnedHV, kPitch);
+    addStep(p, "turned_v", off, rowWindow(across));
+    addStep(p, "flip_h", off, flipWindow(plain, true, false), kEqual, 0);
+    addStep(p, "turned_b", off, rowWindow(down));
+    addStep(p, "flip_v", off, flipWindow(plain, false, true), kEqual, 2);
+    addStep(p, "flip_h_blocks", off, flipWindow(blocks, true, false), kEqual, 0);
+    addStep(p, "flip_v_blocks", off, flipWindow(blocks, false, true), kEqual, 2);
+    addStep(p, "turned_hv", off, rowWindow(half));
+    addStep(p, "flip_hv_blocks", off, flipWindow(blocks, true, true), kEqual, 6);
     return p;
 }
 
@@ -547,6 +584,9 @@ inline bool planOf(Probe probe, Plan &plan)
         return true;
     case kColumnScanWords:
         plan = columnScanWordsPlan();
+        return true;
+    case kFlipWords:
+        plan = flipWordsPlan();
         return true;
     default:
         return extraPlanOf(probe, plan);
