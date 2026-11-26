@@ -121,11 +121,13 @@ IOTimerEventSource::invokeAction(IOEventSource::Action _action, IOTimerEventSour
 		    VM_KERNEL_ADDRHIDE(_owner));
 	}
 
+	const uint64_t switch_begin = switch_callout_begin();
 	if (kActionBlock & flags) {
 		((IOTimerEventSource::ActionBlock) actionBlock)(ts);
 	} else {
 		((IOTimerEventSource::Action)_action)(_owner, ts);
 	}
+	switch_callout_end(address, NULL, switch_begin);
 
 #if CONFIG_DTRACE
 	DTRACE_TMR3(iotescallout__expire, Action, address, OSObject, _owner, void, _workLoop);
@@ -154,9 +156,7 @@ IOTimerEventSource::timeout(void *self)
 			IOStatisticsCloseGate();
 			doit = me->action;
 			if (doit && me->enabled && AbsoluteTime_to_scalar(&me->abstime)) {
-				const uint64_t switch_begin = switch_callout_begin();
 				me->invokeAction(doit, me, me->owner, me->workLoop);
-				switch_callout_end((const void *)doit, NULL, switch_begin);
 			}
 			IOStatisticsOpenGate();
 			wl->openGate();
@@ -184,9 +184,7 @@ IOTimerEventSource::timeoutAndRelease(void * self, void * c)
 			doit = me->action;
 			if (doit && (me->reserved->calloutGeneration == count)) {
 				thread_call_start_iotes_invocation((thread_call_t)me->calloutEntry);
-				const uint64_t switch_begin = switch_callout_begin();
 				me->invokeAction(doit, me, me->owner, me->workLoop);
-				switch_callout_end((const void *)doit, NULL, switch_begin);
 			}
 			IOStatisticsOpenGate();
 			wl->openGate();

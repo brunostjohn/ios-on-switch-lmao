@@ -1,6 +1,6 @@
 // kernel/switch/sched/callouts.h on the host: thread call functions and timer actions by CPU, per CPU table and
-// summed, each window's top four and the rest; both trees bracket thread_call_invoke's function and
-// IOTimerEventSource's thread call actions.
+// summed, each window's top four and the rest; both trees bracket thread_call_invoke's function and every
+// IOTimerEventSource action where invokeAction runs it.
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -100,13 +100,13 @@ TEST_P(XnuSchedCalloutsSource, ThreadCallFunctionsAndTimerActionsAreBracketed)
                           "\t(*func)(param0, param1);\n#if DEVELOPMENT || DEBUG\n\tswitch_callout_end((const void "
                           "*)func, group->tcg_name, switch_begin);\n#endif\n"));
     const std::string timer = switch_ios::test::SourceText("../" + tree + "/iokit/Kernel/IOTimerEventSource.cpp");
-    const std::string bracketed =
-        "const uint64_t switch_begin = switch_callout_begin();\n\t\t\t\tme->invokeAction(doit, "
-        "me, me->owner, me->workLoop);\n\t\t\t\tswitch_callout_end((const void *)doit, NULL, "
-        "switch_begin);\n";
-    EXPECT_THAT(switch_ios::test::Body(timer, "\nIOTimerEventSource::timeout(void *self)"), HasSubstr(bracketed));
-    EXPECT_THAT(switch_ios::test::Body(timer, "\nIOTimerEventSource::timeoutAndRelease(void * self"),
-                HasSubstr(bracketed));
+    EXPECT_THAT(switch_ios::test::Body(timer, "\nIOTimerEventSource::invokeAction(IOEventSource::Action _action"),
+                HasSubstr("\tconst uint64_t switch_begin = switch_callout_begin();\n\tif (kActionBlock & flags) {\n"
+                          "\t\t((IOTimerEventSource::ActionBlock) actionBlock)(ts);\n\t} else {\n"
+                          "\t\t((IOTimerEventSource::Action)_action)(_owner, ts);\n\t}\n"
+                          "\tswitch_callout_end(address, NULL, switch_begin);\n"))
+        << "keyed by the code invokeAction computes: a block source's invoke function, not the block object";
+    EXPECT_THAT(timer, testing::Not(HasSubstr("switch_callout_end((const void *)doit")));
 }
 
 INSTANTIATE_TEST_SUITE_P(BothTrees, XnuSchedCalloutsSource, testing::Values("xnu-10063.141.1", "xnu-12377.121.6"));
