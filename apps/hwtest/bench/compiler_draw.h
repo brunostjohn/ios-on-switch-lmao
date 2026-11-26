@@ -25,6 +25,11 @@ struct Input {
     std::vector<uint8_t> kinds;
     std::vector<Seed> seeds;
 
+    const gm20b::CapturedProgram &program(bool vendor, unsigned stage) const
+    {
+        return vendor ? nvidia[stage] : nak.programs[stage];
+    }
+
     bool compositor() const
     {
         return key == "3ef3a99e4f382ce1";

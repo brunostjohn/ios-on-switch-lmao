@@ -1,13 +1,17 @@
 // SPDX-License-Identifier: MIT
 #include "apps/hwtest/bench/compiler_draw.h"
+#include "apps/hwtest/bench/compiler_pixels.h"
 #include "drivers/TegraGM20BMetal/cache_io.h"
+#include <CommonCrypto/CommonDigest.h>
 #include <algorithm>
 #include <cstring>
-#include "apps/hwtest/bench/compiler_pixels.h"
+#include <iomanip>
 #include <sstream>
 
 namespace bench::compiler {
 namespace {
+constexpr const char *backend[] = {"paired NAK, unsplit", "NVIDIA R32.7.6"};
+
 bool stage(gm20b::Reader &r, uint32_t type, const std::string &key, gm20b::CapturedProgram &p)
 {
     uint32_t gprs = r.value<uint32_t>();
@@ -20,7 +24,7 @@ bool stage(gm20b::Reader &r, uint32_t type, const std::string &key, gm20b::Captu
     if (((head >> 10) & 15) != type)
         return false;
     p.gprs = uint8_t(gprs);
-    p.id = key + (type == 1 ? "-ab-vertex" : "-ab-fragment");
+    p.id = key + (type == 1 ? "-r32-vertex" : "-r32-fragment");
     p.data.resize((p.data.size() + 255) & ~size_t(255));
     p.cbufTypes = {gm20b::CbufRoot};
     if (!p.data.empty())
@@ -71,7 +75,7 @@ std::string pixels(const Input &in, const Result &nak, const Result &nv)
         return "different attachment counts";
     for (size_t i = 0; i < nak.pixels.size(); ++i) {
         const Attachment plane{i, i == in.colors.size(), width, height, in.samples};
-        auto mismatch = difference(plane, nak.pixels[i], nv.pixels[i], "NAK", "NVIDIA");
+        auto mismatch = difference(plane, nak.pixels[i], nv.pixels[i], backend[0], backend[1]);
         if (!mismatch.empty())
             return mismatch;
     }
@@ -85,8 +89,25 @@ void timing(std::ostringstream &s, Result &r)
     s << r.times.front() << "/" << a + (b - a) / 2;
 }
 
+void describe(std::ostringstream &s, const gm20b::CapturedProgram &p)
+{
+    uint8_t digest[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256(p.image.data(), static_cast<CC_LONG>(p.image.size()), digest);
+    s << p.id << " (image sha256 " << std::hex << std::setfill('0');
+    for (uint8_t byte : digest)
+        s << std::setw(2) << unsigned(byte);
+    s << std::dec << ")";
+}
+
 bool compare(const Input &in, std::ostringstream &s)
 {
+    for (unsigned arm = 0; arm < 2; ++arm) {
+        s << backend[arm] << " VS ";
+        describe(s, in.program(arm, 0));
+        s << " FS ";
+        describe(s, in.program(arm, 1));
+        s << "\n";
+    }
     bool ok = true;
     for (size_t i = 0; i < in.seeds.size(); ++i) {
         Result arms[2];
@@ -95,7 +116,7 @@ bool compare(const Input &in, std::ostringstream &s)
             const unsigned arm = (i + k) % 2;
             std::string why;
             if (!run(in, in.seeds[i], arm, i, arms[arm], why)) {
-                s << (arm ? "NVIDIA" : "NAK") << " failed: " << why;
+                s << backend[arm] << " failed: " << why;
                 return false;
             }
         }
@@ -109,12 +130,13 @@ bool compare(const Input &in, std::ostringstream &s)
         ok &= exercised && difference.empty();
         s << (difference.empty() ? (exercised ? "exact match" : "equal bytes, inconclusive coverage/write/variation")
                                  : difference)
-          << " visible NAK/NVIDIA " << arms[0].visible << "/" << arms[1].visible << " changed color NAK/NVIDIA "
-          << arms[0].changed << "/" << arms[1].changed << " GPU ns min/median (100 draws) NAK ";
-        timing(s, arms[0]);
-        s << " NVIDIA ";
-        timing(s, arms[1]);
-        s << "\n";
+          << "\n";
+        for (unsigned arm = 0; arm < 2; ++arm) {
+            s << "  " << backend[arm] << " visible " << arms[arm].visible << " changed color " << arms[arm].changed
+              << " GPU ns min/median (100 draws) ";
+            timing(s, arms[arm]);
+            s << "\n";
+        }
     }
     return ok;
 }

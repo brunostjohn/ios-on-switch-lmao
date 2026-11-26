@@ -142,8 +142,8 @@ bool Arm::setup(std::string &why)
     record.pipeline.variantCount[0] = record.pipeline.variantCount[1] = 0;
     record.pipeline.keyHash ^= vendor_ ? 0x5200000000000000ull : 0x5100000000000000ull;
     if (vendor_) {
-        record.programs[0] = in_.nvidia[0];
-        record.programs[1] = in_.nvidia[1];
+        record.programs[0] = in_.program(vendor_, 0);
+        record.programs[1] = in_.program(vendor_, 1);
     }
     if (!(pipeline_ = d.addRecord(record, false, why)))
         return false;
