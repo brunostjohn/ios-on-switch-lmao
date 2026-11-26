@@ -230,8 +230,12 @@ void Completion::askTwin(const Ask &a, const CacheKey &k, Pipeline *made)
         if (!twinsAsked_.insert(made).second)
             return;
     }
-    // off the creating thread and the answer queue, whose blocks a twin's request would hold up
-    const Ask asked = a;
+    // off the creating thread and the answer queue, whose blocks a twin's request would hold up. The descriptors are
+    // copied here, on the creating thread: the synchronous creation hands over the app's own, which it may change for its
+    // next state while the twin is asked (and Apple's classes are not read safely across threads)
+    Ask asked = a;
+    asked.facade = [a.facade copy];
+    asked.descriptor = [a.descriptor copy];
     const CacheKey key = k;
     dispatch_group_enter(twins_);
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0), ^{

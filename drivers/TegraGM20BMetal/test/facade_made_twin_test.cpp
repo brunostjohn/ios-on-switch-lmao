@@ -123,7 +123,48 @@ void aStateOfNoStorageFormAsksNoTwin()
         EXPECT_NE(r.form, gm20b::RequestForm::Barrier);
 }
 
+// An app that changes its descriptor for its next state right after a creation (Metal's usual reuse) still gets each
+// state's own twin: the twin is asked with the descriptor as the state was made, not as the app left it
+void aReusedDescriptorAsksEachStatesOwnTwin()
+{
+    RenderCompiler compiler;
+    compiler.shapes = [](const gm20b::CompileRequest &request, gm20b::RuntimeRecord &record) {
+        if (request.form == gm20b::RequestForm::Barrier)
+            record.pipeline.flags |= gm20b::PipelineBarrierForm;
+        else
+            storageForm(record);
+    };
+    id<MTLDevice> device = nil;
+    id<MTLLibrary> library = served(compiler, "reused-descriptor", device);
+    ASSERT_TRUE(library != nil);
+    MTLRenderPipelineDescriptor *d = descriptor(library, MTLPixelFormatBGRA8Unorm);
+    d.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
+    NSError *error = nil;
+    id<MTLRenderPipelineState> first = [device newRenderPipelineStateWithDescriptor:d error:&error];
+    ASSERT_TRUE(first != nil) << (error.localizedDescription.UTF8String ?: "");
+    d.colorAttachments[0].blendingEnabled = YES;
+    id<MTLRenderPipelineState> second = [device newRenderPipelineStateWithDescriptor:d error:&error];
+    ASSERT_TRUE(second != nil) << (error.localizedDescription.UTF8String ?: "");
+    ASSERT_TRUE(gRM->completion->settleTwins(uint64_t(5) * NSEC_PER_SEC));
+    uint32_t plain = 0, blended = 0;
+    for (const gm20b::CompileRequest &r : compiler.captured())
+        if (r.form == gm20b::RequestForm::Barrier)
+            (r.fields.color[0].blending ? blended : plain)++;
+    EXPECT_EQ(plain, 1u);
+    EXPECT_EQ(blended, 1u);
+    __unsafe_unretained SwitchMetalPipeline *a = (SwitchMetalPipeline *)first, *b = (SwitchMetalPipeline *)second;
+    gm20b::Pipeline *twinA = twinOf(a->_raw), *twinB = twinOf(b->_raw);
+    ASSERT_NE(twinA, nullptr);
+    ASSERT_NE(twinB, nullptr);
+    EXPECT_NE(twinA, twinB);
+}
+
 }  // namespace
+
+TEST(GM20BFacadeMadeTwin, AReusedDescriptorAsksEachStatesOwnTwin)
+{
+    switch_ios::test::ExpectPassesInFreshProcess(aReusedDescriptorAsksEachStatesOwnTwin);
+}
 
 TEST(GM20BFacadeMadeTwin, AMadeStorageFormGetsItsBarrierTwin)
 {

@@ -5650,6 +5650,20 @@ host_test(
     ] + METAL_HOST_DEPS,
 )
 
+# facade_made_twin_test thread-sanitized: the twin is asked and attached off the creating thread
+facade_test(
+    name = "facade_made_twin_tsan_test",
+    srcs = [
+        "facade_made_twin_test.cpp",
+        "facade_variant_compiler.h",
+        ":librecord_count.dylib",
+    ],
+    copts = ["-fsanitize=thread"],
+    env = {"TSAN_OPTIONS": "halt_on_error=1:report_signal_unsafe=0"},
+    linkopts = ["-fsanitize=thread"],
+    plugin = "_tsan",
+)
+
 # A shader-tested Depth16Unorm beside a turned plane, converted and moved into the plane, a turned pass's depth slice
 # read through its texture's own header, a shader-tested Depth16Unorm slice converted through it: each raw
 host_test(
