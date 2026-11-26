@@ -295,14 +295,15 @@
     // a shared buffer: write-combined (gm20b::Buffer::wc), as every one Core Animation makes is written by the CPU and read by the
     // GPU (its buffer pool, its gamma and weight tables: QuartzCore MetalBufferPool::allocate_buffer, options 0): nothing to clean
     // before a draw reads it, nothing to scan for the vertices an indexed draw reads (r16: 600-1300 KB cleaned a command buffer).
-    // It is L2-cached: each job that uses it drops the L2's lines first (TegraGM20BSurfaceHostWritten) and one that writes it
-    // flushes them before its fence (External). Bound L2-bypassing (VOL=1), every GPU access was a DRAM round trip: a
-    // fragment's atomic took 414 ns, metal.compute went from 1.6 ms to 440 ms, CA's TimgBvcm state from 451 to 763 us.
+    // An app's is L2-cached: each job that uses it drops the L2's lines first (TegraGM20BSurfaceHostWritten) and one that
+    // writes it flushes them before its fence (External). Bound L2-bypassing (VOL=1), every GPU access was a DRAM round trip:
+    // a fragment's atomic took 414 ns, metal.compute went from 1.6 ms to 440 ms. The render server's stay VOL=1 until a
+    // measurement says which binding its frames want: its hot states moved both ways across that change.
     const bool wc = (o & MTLResourceStorageModeMask) == MTLResourceStorageModeShared;
     const bool hostVisible = (o & MTLResourceStorageModeMask) != MTLResourceStorageModePrivate;
-    bool bypassL2 = false;
+    bool bypassL2 = wc && gRM->raw->role() == gm20b::Device::Role::RenderServer;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    bypassL2 = wc && gRM->raw->probeSharedBypassesL2.load(std::memory_order_relaxed);
+    bypassL2 |= wc && gRM->raw->probeSharedBypassesL2.load(std::memory_order_relaxed);
 #endif
     if (!gRM->raw->createBuffer(n ? n : 16, b->_raw, wc, hostVisible, bypassL2, zero)) {
         os_log_error(gm20bLog(), "SwitchMetal: %{public}s: no memory for a %lu-byte buffer: none made", getprogname(),

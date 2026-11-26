@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 // A buffer of private storage, which no CPU reads or writes, takes no CPU lease as it is made: a lease reaches the
 // kernel's whole BO, the pool chunk the buffer lies in, and takes that chunk out of the device's resource set for good
-// (SwitchGpuResourceSet.cpp cpu_reached), so each later job names every resource in it as a use of its own. A shared
-// buffer is L2-cached write-combined memory: it takes its lease, a job that reads it is host-written (the kernel drops
-// the L2's lines first) and one that writes it is External (its lines reach DRAM before the fence). Only HW Test's probe
-// makes one L2-bypassing, which stays in the resource set. A shared fallback into pool memory takes its lease, and a
-// private buffer placed in a chunk a host-visible buffer touched before keeps its lease too.
+// (SwitchGpuResourceSet.cpp cpu_reached), so each later job names every resource in it as a use of its own. An app's
+// shared buffer is L2-cached write-combined memory: it takes its lease, a job that reads it is host-written (the kernel
+// drops the L2's lines first) and one that writes it is External (its lines reach DRAM before the fence). The render
+// server's, and those HW Test's probe asks for, are L2-bypassing and stay in the resource set. A shared fallback into pool
+// memory takes its lease, and a private buffer placed in a chunk a host-visible buffer touched before keeps its lease too.
 #include "facade_harness.h"
 #include "bazel/testing/fresh_process.h"
 
@@ -52,11 +52,22 @@ void aPrivateBufferTakesNoLease()
     ASSERT_TRUE(shared != nil);
     EXPECT_NE(shared.contents, nullptr);
     EXPECT_TRUE(((SwitchMetalBuffer *)shared)->_raw.wc);
-    EXPECT_FALSE(((SwitchMetalBuffer *)shared)->_raw.gpuVolatile) << "a shared buffer is read around the GPU's L2";
+    EXPECT_FALSE(((SwitchMetalBuffer *)shared)->_raw.gpuVolatile) << "an app's shared buffer is L2-cached";
+    const kernel_model::BoState *sharedBo = boAt(((SwitchMetalBuffer *)shared)->_raw.va);
+    ASSERT_NE(sharedBo, nullptr);
+    EXPECT_TRUE(sharedBo->cpuReached) << "a shared buffer's creation lease takes its chunk out of the resource set";
+}
+
+bool namesHostWritten(const kernel_model::Job &job)
+{
+    for (const TegraGM20BAbiSurfaceUse &u : job.uses)
+        if (u.access & TegraGM20BSurfaceHostWritten)
+            return true;
+    return false;
 }
 
 // The job of one blit encoder, committed and waited for
-const kernel_model::Job &blitted(id<MTLDevice> device, void (^encode)(id<MTLBlitCommandEncoder>))
+kernel_model::Job blitted(id<MTLDevice> device, void (^encode)(id<MTLBlitCommandEncoder>))
 {
     id<MTLCommandBuffer> commands = [[device newCommandQueue] commandBuffer];
     id<MTLBlitCommandEncoder> blit = [commands blitCommandEncoder];
@@ -78,15 +89,37 @@ void aSharedBufferIsReadAndWrittenThroughTheL2()
     ASSERT_TRUE(shared != nil && priv != nil);
     ASSERT_FALSE(((SwitchMetalBuffer *)shared)->_raw.gpuVolatile);
     memset(shared.contents, 0x5a, kLength);
-    const kernel_model::Job &read = blitted(device, ^(id<MTLBlitCommandEncoder> b) {
+    const kernel_model::Job read = blitted(device, ^(id<MTLBlitCommandEncoder> b) {
         [b copyFromBuffer:shared sourceOffset:0 toBuffer:priv destinationOffset:0 size:kLength];
     });
     EXPECT_TRUE(read.hostWritten) << "a job reading a shared buffer drops the L2's lines of the CPU's writes first";
-    const kernel_model::Job &written = blitted(device, ^(id<MTLBlitCommandEncoder> b) {
+    // past the creation lease: a bare write through contents, as an app makes every frame, is named by the use itself
+    memset(shared.contents, 0x6b, kLength);
+    const kernel_model::Job again = blitted(device, ^(id<MTLBlitCommandEncoder> b) {
+        [b copyFromBuffer:shared sourceOffset:0 toBuffer:priv destinationOffset:0 size:kLength];
+    });
+    EXPECT_TRUE(again.hostWritten);
+    EXPECT_TRUE(namesHostWritten(again)) << "the shared buffer's use carries TegraGM20BSurfaceHostWritten";
+    const kernel_model::Job filled = blitted(device, ^(id<MTLBlitCommandEncoder> b) {
         [b fillBuffer:shared range:NSMakeRange(0, kLength) value:0x33];
     });
-    EXPECT_NE(written.flags & TegraGM20BJobExternal, 0u)
+    EXPECT_NE(filled.flags & TegraGM20BJobExternal, 0u)
         << "a job writing a shared buffer flushes the L2 for its reader";
+    const kernel_model::Job copiedInto = blitted(device, ^(id<MTLBlitCommandEncoder> b) {
+        [b copyFromBuffer:priv sourceOffset:0 toBuffer:shared destinationOffset:0 size:kLength];
+    });
+    EXPECT_NE(copiedInto.flags & TegraGM20BJobExternal, 0u);
+}
+
+void theRenderServersSharedBuffersBypassTheL2()
+{
+    const std::string pack = writePack(packKey(MTLPixelFormatBGRA8Unorm));
+    metal_prepare(pack.c_str(), 0);
+    id<MTLDevice> device = open(pack);
+    ASSERT_TRUE(device != nil);
+    id<MTLBuffer> shared = [device newBufferWithLength:4096 options:MTLResourceStorageModeShared];
+    ASSERT_TRUE(shared != nil);
+    EXPECT_TRUE(((SwitchMetalBuffer *)shared)->_raw.gpuVolatile) << "the render server's binding is unchanged";
 }
 
 void theProbeMakesAnL2BypassingSharedBuffer()
@@ -164,6 +197,11 @@ TEST(GM20BFacadePrivateBuffer, APrivateBufferInAHostTouchedChunkKeepsItsLease)
 TEST(GM20BFacadePrivateBuffer, ASharedBufferIsReadAndWrittenThroughTheL2)
 {
     switch_ios::test::ExpectPassesInFreshProcess(aSharedBufferIsReadAndWrittenThroughTheL2);
+}
+
+TEST(GM20BFacadePrivateBuffer, TheRenderServersSharedBuffersBypassTheL2)
+{
+    switch_ios::test::ExpectPassesInFreshProcess(theRenderServersSharedBuffersBypassTheL2);
 }
 
 TEST(GM20BFacadePrivateBuffer, TheProbeMakesAnL2BypassingSharedBuffer)

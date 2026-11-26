@@ -203,9 +203,12 @@ static gm20b::ProbeSurface probeSurface(const gm20b::Texture &t, uint32_t fmt2d)
     return [NSString stringWithFormat:@"old=%u readback=%u", reply.old_mode, reply.readback];
 }
 
-// Shared buffers made while `on` is true are bound L2-bypassing (VOL=1); answers whether they were before
+// Shared buffers made while `on` is true are bound L2-bypassing (VOL=1); answers whether they were before, or
+// "unsupported" where the kernel takes no volatile writes and such a buffer would be L2-cached anyway
 - (NSString *)switchMetalSharedBypassesL2:(NSNumber *)on
 {
+    if (!gRM->raw->kernel().volatileWrites() || !gRM->raw->kernel().exactJobs())
+        return @"unsupported";
     return gRM->raw->probeSharedBypassesL2.exchange(on.boolValue, std::memory_order_acq_rel) ? @"1" : @"0";
 }
 
