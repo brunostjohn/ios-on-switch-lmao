@@ -64,7 +64,6 @@ TEST(GM20BFacadeUseRanges, SharedBuffersAreNamedByTheSetAndListNoUseOfTheirOwn)
     NSMutableArray<id<MTLBuffer>> *shared = [NSMutableArray array];
     for (NSUInteger i = 0; i < kBuffers; i++)
         [shared addObject:[opened().device newBufferWithLength:kLength options:MTLResourceStorageModeShared]];
-    fillEveryOther(shared);  // the chunks' first writes, out of the window
     const long before = useAdds();
     const size_t first = kernel_model::model.jobs.size();
     fillEveryOther(shared);

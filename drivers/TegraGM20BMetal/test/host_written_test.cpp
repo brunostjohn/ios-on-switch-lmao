@@ -6,6 +6,7 @@
 #include "../heap_members.h"
 #include "TegraGM20BVolatileABI.h"
 #include <algorithm>
+#include <vector>
 
 namespace {
 
@@ -532,6 +533,32 @@ TEST(HostWrittenVolatileWc, IdleVolatileWcChunksParkAndUnparkResidentWithoutAlia
         EXPECT_FALSE(kernel_model::model.jobs.back().hostWritten);
         EXPECT_EQ(kernel_model::model.jobs.back().flags & TegraGM20BJobHostWritten, 0u);
     }
+    // unparked as it was made, a written member, so a write to it does not make the set again
+    uint32_t access = 0;
+    for (const kernel_model::SetState &set : kernel_model::model.sets)
+        for (const TegraGM20BAbiSurfaceUse &m : set.members)
+            access |= set.live && m.handle == volHandle ? m.access : 0u;
+    EXPECT_TRUE(access & TegraGM20BSurfaceWrite) << "the unparked chunk rejoined the set read";
+    const auto generations = [] {
+        std::vector<uint32_t> g;
+        for (const kernel_model::SetState &set : kernel_model::model.sets)
+            g.push_back(set.live ? set.generation : 0);
+        return g;
+    };
+    const std::vector<uint32_t> setBefore = generations();
+    {
+        gm20b::CommandBuffer *cb = dev.begin();
+        ASSERT_NE(cb, nullptr);
+        gm20b::BlitEncoder *e = cb->blit();
+        ASSERT_NE(e, nullptr);
+        cb->use(privBuf, false);
+        cb->use(volBuf, true);
+        e->copyBytes(privBuf.va, volBuf.va, 4096);
+        e->end();
+        uint32_t seqno = 0;
+        ASSERT_TRUE(cb->commit(seqno));
+    }
+    EXPECT_EQ(generations(), setBefore) << "a write to the unparked chunk made the set again";
 
     // Reclaimed volatile WC chunks drop the dead BO and allocate a fresh VOL=1 chunk.
     dev.destroyBuffer(volBuf);
