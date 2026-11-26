@@ -241,6 +241,7 @@ KIT_COMMON_SRCS = [
 ]
 
 TESTS_DEPTH_SRCS = [
+    "tests/AegirMoonCA.swift",
     "tests/AegirMoonTest.swift",
     "tests/AlphaToCoverageTest.swift",
     "tests/Bgra10XrResolveTest.swift",

@@ -10,8 +10,10 @@ import QuartzCore
 /// the 'A008' mask 255 outside the disc and 0 inside, bloom level 2 0 away from it, the BGR10_XR_sRGB drawable XR 0.0
 /// (code 384) outside and the disc's grey (code 846) inside. Arm `layer` draws into a CAMetalLayer's drawable, which the
 /// kernel lays out as Weather's (block-linear, 64-row blocks: `layer_drawable_facts`, `layer_drawable_layout` where it
-/// is not); arm `surface` into a texture over a 'w30r' IOSurface. Green says the passes, their loads, clears and blends
-/// and the drawable's layout hold Metal's bytes; luna's program and Core Animation's composite are not covered.
+/// is not); arm `surface` into a texture over a 'w30r' IOSurface; arm `ca` draws Core Animation's moon destOut state
+/// (AegirMoonCA) against the Mac's. Green says the passes, their loads, clears and blends, the drawable's layout and
+/// CA's moon state hold Metal's bytes; luna's program is not covered. `ca_verdict` (iOS 27): exact or close pass;
+/// no_state, a bundle whose corpus lacks the state (the state lane's harvest not merged); `ca_pack_hit`, `ca_path`.
 /// `<arm>_<check>_off`: texels unlike Metal's (AegirMoon.misses); `<arm>_<target>_centre`, `_corner`: what the centre
 /// and a corner texel hold; `<arm>_<target>_facts`: the driver's layout of each target, red as `layer_drawable_facts`
 /// where the drawable has none; the 64-row expectation is iOS 27's alone (`layer_block_rows_expected`); path.
@@ -68,6 +70,18 @@ struct AegirMoonTest: HWTest {
             } else if layout["block_linear"] != 1 || (weatherRows != nil && layout["block_rows"] != weatherRows) {
                 wrong.append("layer_drawable_layout")
             }
+        }
+        // the moon's state and its golden are 24B119's harvest; iOS 17's corpus has no such state yet
+        if weatherRows != nil {
+            let ca = await AegirMoonCA.run(gpu)
+            metrics.set("ca_verdict", ca.verdict)
+            metrics.set("ca_pack_hit", ca.packHit.map { $0 ? "1" : "0" } ?? "-")
+            metrics.set("ca_path", ca.path)
+            if ca.verdict != "exact" && ca.verdict != "close" { wrong.append("ca_verdict") }
+            if ca.packHit == false { wrong.append("ca_pack_hit") }
+            if ca.verdict != "no_state" && ca.path != "gm20b" { wrong.append("ca_path") }
+        } else {
+            metrics.set("ca_verdict", "not_harvested_on_this_build")
         }
         return wrong.isEmpty ? .pass(metrics) : .fail(wrong.joined(separator: ","), metrics)
     }
