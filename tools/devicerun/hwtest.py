@@ -685,8 +685,6 @@ TESTS: dict[str, bool] = {
     'ui.launch_hitch': False,
     'system.compiler_alive': False,
     'gpu.x1.texture_extents': False,
-    'gpu.x1.clean_l2_syncpoint': False,
-    'gpu.x1.shadow_ram': False,
     'gpu.gm20b.iterated_blend_passes': False,
     'gpu.gm20b.fetch_rung3': False,
 }
@@ -716,6 +714,8 @@ BY_IOS: dict[str, dict[str, bool]] = {
         'system.no_camera': False,
         'video.frame_processor': False,
         'gpu.x1.buffer_zero': False,
+        'gpu.x1.clean_l2_syncpoint': False,
+        'gpu.x1.shadow_ram': False,
         'gpu.x1.linear_align': False,
         'gpu.x1.rop_conversion': False,
         'gpu.x1.sampler_conversion': False,
