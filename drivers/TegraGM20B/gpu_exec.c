@@ -263,9 +263,11 @@ static u32 chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 ne
 				  NVDEF(NV906F, SEMAPHORED, RELEASE_SIZE, 4BYTE));
 	}
 	/* NOLINTEND(bugprone-signed-bitwise,bugprone-branch-clone) */
-	/* After the releases: host1x reaching the threshold means the job's token already reads complete */
+	/* After the releases: host1x reaching the threshold means the job's token already reads complete. Assumed until the
+	 * device answers: the host's posted semaphore writes land before host1x sees the increments that follow them
+	 * (HW Test gpu.x1.bridge_syncpt_order counts a consumer that saw otherwise, status_lag). */
 	if (flushed) {
-		const u32 syncpt = switch_gpu_timeline_syncpt_next(chan->timeline, next);
+		const u32 syncpt = switch_gpu_timeline_syncpt_next(chan->timeline, first, next);
 		if (syncpt)
 			push->cur += tgm_syncpt_incr_only(push->cur, syncpt);
 	}

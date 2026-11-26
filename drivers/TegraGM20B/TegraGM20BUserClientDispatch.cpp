@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // The ABI dispatch: run's method switch.
 #include "TegraGM20BUserClientInternal.h"
+#include "SwitchGpuBridge.h"
 #include "TegraGM20BClockABI.h"
 #include "TegraGM20BGrPreemptABI.h"
 #include "TegraGM20BZcullABI.h"
@@ -434,7 +435,14 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 #if TGM_STATS
 		else if (op == TegraGM20BPathsOpTargetPeaks)
 			tgm_target_peaks_line(reply->line, sizeof(reply->line));
-		else if (op == TegraGM20BPathsOpForeignWaits) {
+		else if (op == TegraGM20BPathsOpBridge) {
+			uint64_t jobless = 0;
+			uint64_t lag = 0;
+			switch_gpu_bridge_counts(&jobless, &lag);
+			snprintf(reply->line, sizeof(reply->line), "jobless=%llu status_lag=%llu",
+				 static_cast<unsigned long long>(jobless),
+				 static_cast<unsigned long long>(lag));
+		} else if (op == TegraGM20BPathsOpForeignWaits) {
 			struct tgm_foreign_waits totals = {};
 			tgm_foreign_waits_totals(&totals);
 			snprintf(reply->line, sizeof(reply->line),

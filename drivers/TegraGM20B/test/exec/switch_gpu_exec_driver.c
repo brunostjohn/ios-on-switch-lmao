@@ -37,10 +37,11 @@ uint32_t switch_exec_syncpt_marked(void)
 	return test_syncpt_marked;
 }
 
-uint32_t switch_gpu_timeline_syncpt_next(struct switch_gpu_timeline *timeline, uint32_t seqno)
+uint32_t switch_gpu_timeline_syncpt_next(struct switch_gpu_timeline *timeline, uint32_t first,
+					 uint32_t last)
 {
 	if (test_syncpt)
-		test_syncpt_marked = seqno;
+		test_syncpt_marked = last;
 	return test_syncpt;
 }
 

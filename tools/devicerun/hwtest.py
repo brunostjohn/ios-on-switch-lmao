@@ -382,6 +382,7 @@ TESTS: dict[str, bool] = {
             'gpu.gm20b.srgb_encode',
             'gpu.compute.exact_round',
             'gpu.x1.gpu_vic_sync',
+            'gpu.x1.bridge_syncpt_order',
             'gpu.diag.frame_weights',
             'gpu.gm20b.ycbcr_onep_targets',
             'gpu.gm20b.ycbcr_rows_past_page',

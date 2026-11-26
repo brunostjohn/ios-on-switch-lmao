@@ -62,12 +62,14 @@ static void chan_free(struct tgm_chan *chan)
 	if (chan->high || chan->tracked)
 		tgm_sched_forget(tgm_gpu.device, chan->chid);
 	nvif_event_dtor(&chan->kill);
-	switch_gpu_timeline_close(chan->timeline);
-	chan->timeline = NULL;
 	for (i = chan->nobj - 1; i >= 0; i--)
 		nvif_object_dtor(&chan->obj[i]);
 	nvif_object_unmap(&chan->user);
 	nvif_object_dtor(&chan->user);
+	/* After the channel: its last job's syncpoint increments trail its fence release, and the timeline's close can hand
+	 * its syncpoint on (SwitchGpuTimelineInternal.h syncpt_return_locked) */
+	switch_gpu_timeline_close(chan->timeline);
+	chan->timeline = NULL;
 	/* the channel is gone: unmap its ring (TLB invalidated) before the ring's pages go back to the pool */
 	nvif_vmm_put(&chan->vm->vmm, &chan->ring_vma);
 	if (chan->ring_mem) {

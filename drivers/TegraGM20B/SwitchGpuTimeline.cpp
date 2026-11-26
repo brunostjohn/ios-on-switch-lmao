@@ -323,6 +323,7 @@ extern "C" void switch_gpu_timeline_failed(switch_gpu_timeline *timeline, uint32
 	switch_gpu_backing_completed();
 }
 
+// The channel's hardware is gone (chan_free): no increment it pushed can land after this
 extern "C" void switch_gpu_timeline_close(switch_gpu_timeline *timeline)
 {
 	if (!timeline)

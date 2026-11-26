@@ -29,6 +29,10 @@ enum {
 	/* "foreign_jobs=N foreign_fences=N foreign_promises=N foreign_events=N foreign_host1x=N": monotonic compositor
 	 * foreign-wait totals since boot (TGM_STATS) */
 	TegraGM20BPathsOpForeignWaits = 6,
+	/* "jobless=N status_lag=N": since boot, bridges whose consumer waits on the producer's own syncpoint, and consumer
+	 * status reads that found that syncpoint reached while the producer's fence read short (SwitchGpuBridge.h
+	 * switch_gpu_bridge_counts; HW Test gpu.x1.bridge_syncpt_order) */
+	TegraGM20BPathsOpBridge = 8,
 };
 
 struct TegraGM20BAbiPaths {

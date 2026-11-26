@@ -104,6 +104,7 @@ public enum Registry {
             SrgbEncodeTest(),
             ExactRoundTest(),
             X1GpuVicSyncTest(),
+            X1BridgeSyncptOrderTest(),
             FrameWeightsTest(),
             YcbcrOnePlaneTargetsTest(),
             YcbcrRowsPastPageTest(),

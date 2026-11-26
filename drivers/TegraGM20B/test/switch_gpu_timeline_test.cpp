@@ -537,37 +537,56 @@ TEST_F(Timeline, SuccessfulAuthorityWakeDoesNotRequireItsDeferredCallbackToRunFi
 	switch_gpu_timeline_close(timeline);
 }
 
-// A channel's own host1x syncpoint (SwitchGpuTimelineSyncpt.cpp): a token waits for the first draining job at or after
-// it. A token past every draining job so far, a killed channel's, or a timeline with no syncpoint has no answer, and
-// its consumer keeps the bridge's GPU job.
-TEST_F(Timeline, ATokenWaitsForTheFirstDrainingJobAtOrAfterIt)
+// A channel's own host1x syncpoint (SwitchGpuTimelineSyncpt.cpp): a token is answered only inside its own drained job,
+// with that job's threshold and last seqno; a token whose job did not drain would wait on a later job, which can wait on
+// work after the consumer. The covering job's state comes from the fence alone, and a syncpoint goes back with the
+// value every increment its channel pushed promised, for the bridge to make the ones that never ran.
+
+TEST_F(Timeline, ATokenIsAnsweredOnlyInsideItsOwnDrainedJob)
 {
+	uint32_t ids[SWITCH_GPU_TIMELINE_SYNCPTS] = {};
+	uint32_t promised[SWITCH_GPU_TIMELINE_SYNCPTS] = {};
+	switch_gpu_timeline_syncpt_reclaim(ids, promised, SWITCH_GPU_TIMELINE_SYNCPTS);
 	volatile uint32_t fence = 0;
 	auto *timeline = switch_gpu_timeline_create(++nextId, &fence);
 	ASSERT_NE(timeline, nullptr);
 	const auto third = token(timeline, 3);
 	const auto fifth = token(timeline, 5);
-	const auto seventh = token(timeline, 7);
+	const auto sixth = token(timeline, 6);
 	uint32_t id = 0;
 	uint32_t threshold = 0;
-	EXPECT_EQ(switch_gpu_timeline_syncpoint(&third, &id, &threshold), -61);
-	EXPECT_EQ(switch_gpu_timeline_syncpt_next(timeline, 2), 0u);
+	uint32_t last = 0;
+	EXPECT_EQ(switch_gpu_timeline_syncpoint(&third, &id, &threshold, &last), -61);
+	EXPECT_EQ(switch_gpu_timeline_syncpt_next(timeline, 3, 4), 0u);
 	ASSERT_EQ(switch_gpu_timeline_syncpt_adopt(&third, 170, 40), 0);
 	EXPECT_EQ(switch_gpu_timeline_syncpt_adopt(&third, 171, 0), -16);
-	EXPECT_EQ(switch_gpu_timeline_syncpoint(&third, &id, &threshold), 0);
 
-	EXPECT_EQ(switch_gpu_timeline_syncpt_next(timeline, 4), 170u);
-	EXPECT_EQ(switch_gpu_timeline_syncpt_next(timeline, 6), 170u);
-	ASSERT_EQ(switch_gpu_timeline_syncpoint(&third, &id, &threshold), 1);
+	EXPECT_EQ(switch_gpu_timeline_syncpt_next(timeline, 3, 4), 170u);
+	EXPECT_EQ(switch_gpu_timeline_syncpt_next(timeline, 6, 6), 170u);
+	ASSERT_EQ(switch_gpu_timeline_syncpoint(&third, &id, &threshold, &last), 1);
 	EXPECT_EQ(id, 170u);
 	EXPECT_EQ(threshold, 42u);
-	ASSERT_EQ(switch_gpu_timeline_syncpoint(&fifth, &id, &threshold), 1);
+	EXPECT_EQ(last, 4u);
+	EXPECT_EQ(switch_gpu_timeline_syncpoint(&fifth, &id, &threshold, &last), 0)
+		<< "job 5 did not drain: job 6 would cover it, and job 6 may wait on the consumer";
+	ASSERT_EQ(switch_gpu_timeline_syncpoint(&sixth, &id, &threshold, &last), 1);
 	EXPECT_EQ(threshold, 44u);
-	EXPECT_EQ(switch_gpu_timeline_syncpoint(&seventh, &id, &threshold), 0);
 
+	int stopped = -1;
+	EXPECT_EQ(switch_gpu_timeline_covered(&third, 4, &stopped), 0);
+	EXPECT_EQ(stopped, 0);
+	__atomic_store_n(&fence, 4u, __ATOMIC_RELEASE);
+	EXPECT_EQ(switch_gpu_timeline_covered(&third, 4, &stopped), 1);
 	switch_gpu_timeline_failed(timeline, 4, 0);
-	EXPECT_EQ(switch_gpu_timeline_syncpoint(&fifth, &id, &threshold), 0);
+	EXPECT_EQ(switch_gpu_timeline_covered(&sixth, 6, &stopped), -5);
+	EXPECT_EQ(stopped, 1);
+	EXPECT_EQ(switch_gpu_timeline_syncpoint(&sixth, &id, &threshold, &last), 0);
+
 	switch_gpu_timeline_close(timeline);
+	ASSERT_EQ(switch_gpu_timeline_syncpt_reclaim(ids, promised, SWITCH_GPU_TIMELINE_SYNCPTS),
+		  1u);
+	EXPECT_EQ(ids[0], 170u);
+	EXPECT_EQ(promised[0], 44u) << "every increment the channel pushed";
 }
 
 // The syncpoint goes back only with the timeline's last reference: a consumer holding a token may still have a stream
@@ -575,7 +594,8 @@ TEST_F(Timeline, ATokenWaitsForTheFirstDrainingJobAtOrAfterIt)
 TEST_F(Timeline, ASyncpointGoesBackOnlyWithItsTimelinesLastReference)
 {
 	uint32_t ids[SWITCH_GPU_TIMELINE_SYNCPTS] = {};
-	switch_gpu_timeline_syncpt_reclaim(ids, SWITCH_GPU_TIMELINE_SYNCPTS);
+	uint32_t promised[SWITCH_GPU_TIMELINE_SYNCPTS] = {};
+	switch_gpu_timeline_syncpt_reclaim(ids, promised, SWITCH_GPU_TIMELINE_SYNCPTS);
 	volatile uint32_t fence = 0;
 	auto *timeline = switch_gpu_timeline_create(++nextId, &fence);
 	ASSERT_NE(timeline, nullptr);
@@ -583,8 +603,10 @@ TEST_F(Timeline, ASyncpointGoesBackOnlyWithItsTimelinesLastReference)
 	ASSERT_EQ(switch_gpu_timeline_syncpt_adopt(&held, 172, 0), 0);
 	ASSERT_EQ(operations.retain_token(&held), 0);
 	switch_gpu_timeline_close(timeline);
-	EXPECT_EQ(switch_gpu_timeline_syncpt_reclaim(ids, SWITCH_GPU_TIMELINE_SYNCPTS), 0u);
+	EXPECT_EQ(switch_gpu_timeline_syncpt_reclaim(ids, promised, SWITCH_GPU_TIMELINE_SYNCPTS),
+		  0u);
 	operations.release_token(&held);
-	ASSERT_EQ(switch_gpu_timeline_syncpt_reclaim(ids, SWITCH_GPU_TIMELINE_SYNCPTS), 1u);
+	ASSERT_EQ(switch_gpu_timeline_syncpt_reclaim(ids, promised, SWITCH_GPU_TIMELINE_SYNCPTS),
+		  1u);
 	EXPECT_EQ(ids[0], 172u);
 }
