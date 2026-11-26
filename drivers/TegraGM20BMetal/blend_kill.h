@@ -89,6 +89,16 @@ inline uint32_t keyColorFormat(const char *keyString, uint32_t j)
     return at && sscanf(at + strlen(field), "%u", &format) == 1 ? format : 0;
 }
 
+// The colour targets a state key names, bit j its c<j> (record_parts.h targets for a key the runtime holds as a string)
+inline uint8_t keyColorTargets(const char *keyString)
+{
+    uint8_t targets = 0;
+    for (uint32_t j = 0; j < 8; j++)
+        if (keyColorFormat(keyString, j))
+            targets |= uint8_t(1u << j);
+    return targets;
+}
+
 // SET_ITERATED_BLEND_OPTIMIZATION's value for a state: its blob's (method, value) pairs, its targets' SET_CT_WRITE values
 // after them, its key and the targets its program writes as storage images
 inline uint32_t iteratedBlendNoop(const uint32_t *blob, uint32_t dwords, const uint32_t writes[8],
@@ -97,8 +107,9 @@ inline uint32_t iteratedBlendNoop(const uint32_t *blob, uint32_t dwords, const u
 {
     if (!(writes[0] & 0x1111) || (storageBits & 1) || !keyString)
         return kNoopNever;
+    const uint8_t targets = keyColorTargets(keyString);
     for (uint32_t j = 1; j < 8; j++)
-        if ((writes[j] & 0x1111) && keyColorFormat(keyString, j))
+        if ((writes[j] & 0x1111) && (targets >> j & 1))
             return kNoopNever;
     bool blends = false;
     uint32_t perTarget[6] = {};

@@ -3612,6 +3612,13 @@ device_test(
 
 # A private target made plain for want of compressed memory moves onto it once some is made (private_comp.h
 # Device::compressedFromPlain)
+# A state's written colour targets are the ones its key names, whatever SET_CT_WRITE the pack's baseline leaves the others
+# (device_write_bits_test.cpp)
+device_test(
+    name = "device_write_bits_test",
+    srcs = ["device_write_bits_test.cpp"],
+)
+
 device_test(
     name = "device_private_move_test",
     srcs = [

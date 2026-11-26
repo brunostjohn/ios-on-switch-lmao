@@ -583,7 +583,13 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
             w.m(m, v);
     }
     memcpy(pl.ctWrite, writes, sizeof writes);
-    pl.blendKill = iteratedBlendNoop(blob, pp.blobDwords, writes, keyString,
+    // what the state writes: a target its key does not name is no attachment of its passes, whatever SET_CT_WRITE the
+    // pack's baseline leaves it (24B119: targets 6 and 7 at 0x1111; blend_kill.h)
+    const uint8_t keyTargets = keyColorTargets(keyString);
+    uint32_t named[8];
+    for (uint32_t c = 0; c < 8; c++)
+        named[c] = keyTargets >> c & 1 ? writes[c] : 0;
+    pl.blendKill = iteratedBlendNoop(blob, pp.blobDwords, named, keyString,
                                      (pp.flags & PipelineStorageMetadata) ? pp.storageMask : 0, blendPerTarget_,
                                      blendPerTargetSeen_) == kNoopSourceRgba0000;
     if (!prebuilt) {
@@ -593,7 +599,7 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
         SWITCH_METAL_DIAGNOSTIC(stats.blendKillStates += pl.blendKill);
     }
     for (uint32_t c = 0; c < 8; c++)
-        if (writes[c] & 0x1111)  // R_ENABLE, G_ENABLE, B_ENABLE, A_ENABLE
+        if (named[c] & 0x1111)  // R_ENABLE, G_ENABLE, B_ENABLE, A_ENABLE
             pl.writeBits |= uint8_t(1u << c);
     bool exactCbufs = false;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
