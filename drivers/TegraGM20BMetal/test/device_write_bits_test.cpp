@@ -100,7 +100,7 @@ TEST_F(DeviceWriteBits, AColourlessFourSampleStateInAMixedPassIsDrawnWhole)
     gm20b::DepthStencilDesc ds;
     ds.depthCompare = 1;  // Less
     ds.depthWrite = true;
-    EXPECT_EQ(gm20b::mixedDraw(*depth, ds, zs, 1, 4), gm20b::MixedDraw::Whole);
+    EXPECT_EQ(gm20b::mixedDraw(*depth, ds, zs, 1, 4, false), gm20b::MixedDraw::Whole);
 }
 
 // A pass of eight cleared targets whose first draw covers the area with Core Animation's transform state, which names
