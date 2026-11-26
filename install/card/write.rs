@@ -80,6 +80,22 @@ fn unrooted(entry: &Entry, name: &str) -> Entry {
 
 /// One copy's array sectors brought to `entries` (the sector holding entry `last` after the rest), then its header.
 fn update<D: Device>(dev: &mut D, copy: &mut Copy, entries: &[Entry], last: Option<u32>) -> Result<usize, Error> {
+    let count = copy.header.entry_count();
+    let mut writes = 0;
+    for (lba, sector) in copy_writes(copy, entries, count, last) {
+        writes += put(dev, lba, &sector)?;
+    }
+    Ok(writes)
+}
+
+/// The sectors that bring one copy to `entries` with `count` declared, in `update`'s order, as (LBA, contents);
+/// `copy` is left as they leave it. The array must already span `count` entries.
+pub(crate) fn copy_writes(
+    copy: &mut Copy,
+    entries: &[Entry],
+    count: u32,
+    last: Option<u32>,
+) -> Vec<(u64, [u8; SECTOR])> {
     let mut new = copy.clone();
     for (i, e) in entries.iter().enumerate() {
         new.set_entry(i as u32, e);
@@ -89,21 +105,21 @@ fn update<D: Device>(dev: &mut D, copy: &mut Copy, entries: &[Entry], last: Opti
         .filter(|&s| new.array[s * SECTOR..][..SECTOR] != copy.array[s * SECTOR..][..SECTOR])
         .collect();
     changed.sort_by_key(|&s| (Some(s) == last_sector, s));
-    let mut writes = 0;
+    let mut writes = Vec::new();
     for s in changed {
-        writes += put(
-            dev,
-            copy.header.entry_lba() + s as u64,
-            &new.array[s * SECTOR..][..SECTOR],
-        )?;
-        copy.array[s * SECTOR..][..SECTOR].copy_from_slice(&new.array[s * SECTOR..][..SECTOR]);
+        let sector: [u8; SECTOR] = new.array[s * SECTOR..][..SECTOR].try_into().unwrap();
+        writes.push((copy.header.entry_lba() + s as u64, sector));
+        copy.array[s * SECTOR..][..SECTOR].copy_from_slice(&sector);
     }
-    let header = copy.header.with_array_crc(crc32fast::hash(copy.declared()));
+    let declared = count as usize * copy.header.entry_size() as usize;
+    let header = copy
+        .header
+        .with_count_and_crc(count, crc32fast::hash(&copy.array[..declared]));
     if header != copy.header {
-        writes += put(dev, copy.header_lba, &header.0)?;
+        writes.push((copy.header_lba, header.0));
         copy.header = header;
     }
-    Ok(writes)
+    writes
 }
 
 fn put<D: Device>(dev: &mut D, lba: u64, sector: &[u8]) -> Result<usize, Error> {

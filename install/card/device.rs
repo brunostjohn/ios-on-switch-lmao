@@ -56,7 +56,8 @@ impl<T: Read + Write + Seek> StreamDevice<T> {
 
     fn seek_to(&mut self, lba: u64, len: usize) -> io::Result<()> {
         let size = u64::from(self.sector_size);
-        if len as u64 % size != 0 || lba.checked_add(len as u64 / size).is_none_or(|end| end > self.sectors) {
+        if !(len as u64).is_multiple_of(size) || lba.checked_add(len as u64 / size).is_none_or(|end| end > self.sectors)
+        {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "transfer outside the device",

@@ -140,7 +140,7 @@ fn plans_the_owners_root_where_it_starts() {
 fn refuses_a_target_too_small_or_out_of_reach() {
     let mut image = card(&[userdata(1, 2, 129 << 15)]);
     let card = Card::open(&mut image).unwrap();
-    assert!(matches!(card.plan(None, GIB), Ok(_)));
+    assert!(card.plan(None, GIB).is_ok());
     assert!(matches!(
         card.plan(None, GIB + 1),
         Err(Error::TooSmallForImage { index: 1, .. })
@@ -203,4 +203,69 @@ fn refuses_to_demote_a_fat_or_data_partition_named_ios() {
     let mut image = card(&[userdata(1, 2, 129 << 15), data]);
     let read = Card::open(&mut image).unwrap();
     assert!(matches!(read.plan(Some(1), GIB), Err(Error::ForeignRoot(2))));
+}
+
+#[test]
+fn table_writes_checks_count_bounds_before_extending() {
+    let fat = tables::entry(BASIC_DATA_TYPE, 1, "hos_data", 32768, 4 << 20);
+    let mut img128 = tables::card(SECTORS, 128, 128, &[(0, fat)]);
+    let card128 = Card::open(&mut img128).unwrap();
+    assert!(matches!(
+        card128.check_entry_count(129),
+        Err(Error::Header {
+            backup: false,
+            why: "entry count"
+        })
+    ));
+    let extra = tables::entry(LINUX_TYPE, 2, "iOS-setup", 129 << 15, 2 << 20);
+    assert!(matches!(
+        card128.table_writes(&mut img128, &[(128, extra)], 129),
+        Err(Error::Header {
+            backup: false,
+            why: "entry count"
+        })
+    ));
+
+    let mut img256 = tables::card(SECTORS, 256, 64, &[(0, fat)]);
+    let card256 = Card::open(&mut img256).unwrap();
+    assert!(matches!(
+        card256.check_entry_count(65),
+        Err(Error::Header {
+            backup: false,
+            why: "array placement"
+        })
+    ));
+    assert!(matches!(
+        card256.table_writes(&mut img256, &[(64, extra)], 65),
+        Err(Error::Header {
+            backup: false,
+            why: "array placement"
+        })
+    ));
+}
+
+#[test]
+fn table_writes_zeros_extended_entry_bytes_and_stays_clean() {
+    let entries = [
+        (0, tables::entry(BASIC_DATA_TYPE, 1, "hos_data", 32768, 4 << 20)),
+        (1, tables::entry(LINUX_TYPE, 2, "a", 129 << 15, 1 << 20)),
+        (2, tables::entry(LINUX_TYPE, 3, "b", 161 << 15, 1 << 20)),
+        (3, tables::entry(LINUX_TYPE, 4, "c", 193 << 15, 1 << 20)),
+    ];
+    let mut image = tables::card(SECTORS, 256, 4, &entries);
+    let backup_array = SECTORS - 33;
+    let mut sector = image.sector(backup_array + 2);
+    sector[128..256].fill(0xab);
+    image.set(backup_array + 2, &sector);
+
+    let card = Card::open(&mut image).unwrap();
+    let new_entry = tables::entry(LINUX_TYPE, 5, "iOS-setup", 225 << 15, 1 << 20);
+    let writes = card.table_writes(&mut image, &[(4, new_entry)], 5).unwrap();
+    for (lba, data) in writes {
+        image.set(lba, &data);
+    }
+    let reopened = Card::open(&mut image).unwrap();
+    assert!(!reopened.torn());
+    assert_eq!(reopened.entries().len(), 5);
+    assert!(reopened.entries()[4].named("iOS-setup"));
 }

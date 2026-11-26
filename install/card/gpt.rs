@@ -50,14 +50,24 @@ impl Header {
 
     /// The same header for an array whose CRC is `array_crc`: only bytes 88..92 and the header CRC change.
     pub fn with_array_crc(&self, array_crc: u32) -> Header {
+        self.with_count_and_crc(self.entry_count(), array_crc)
+    }
+
+    /// The same header declaring `count` entries: bytes 80..84, 88..92 and the header CRC change.
+    pub fn with_count_and_crc(&self, count: u32, array_crc: u32) -> Header {
         let mut h = Header(self.0);
+        h.0[80..84].copy_from_slice(&count.to_le_bytes());
         h.0[88..92].copy_from_slice(&array_crc.to_le_bytes());
         let crc = h.computed_crc();
         h.0[16..20].copy_from_slice(&crc.to_le_bytes());
         h
     }
 
-    fn check(&self, capacity: u64, backup: bool) -> Result<(), Error> {
+    pub fn disk_guid(&self) -> [u8; 16] {
+        self.0[56..72].try_into().unwrap()
+    }
+
+    pub(crate) fn check(&self, capacity: u64, backup: bool) -> Result<(), Error> {
         let bad = |why: &'static str| Err(Error::Header { backup, why });
         let h = &self.0;
         if &h[..8] != b"EFI PART" || self.u32_at(8) != 0x10000 || self.u32_at(12) != HEADER_BYTES as u32 {
@@ -131,6 +141,18 @@ impl Copy {
         })
     }
 
+    /// The array read on to cover `count` entries, for a table that will declare more than it does.
+    pub(crate) fn extend_to<D: Device>(&mut self, dev: &mut D, count: u32) -> Result<(), Error> {
+        let sectors = (count as usize * self.header.entry_size() as usize).div_ceil(SECTOR);
+        let have = self.array.len() / SECTOR;
+        if sectors > have {
+            let mut more = vec![0; (sectors - have) * SECTOR];
+            dev.read_sectors(self.header.entry_lba() + have as u64, &mut more)?;
+            self.array.extend_from_slice(&more);
+        }
+        Ok(())
+    }
+
     pub fn declared(&self) -> &[u8] {
         let bytes = self.header.entry_count() as usize * self.header.entry_size() as usize;
         &self.array[..bytes]
@@ -151,7 +173,9 @@ impl Copy {
 
     pub fn set_entry(&mut self, index: u32, entry: &Entry) {
         let at = self.entry_at(index);
+        let size = self.header.entry_size() as usize;
         self.array[at..at + ENTRY_BYTES].copy_from_slice(&entry.0);
+        self.array[at + ENTRY_BYTES..at + size].fill(0);
     }
 }
 

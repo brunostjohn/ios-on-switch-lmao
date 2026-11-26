@@ -11,6 +11,7 @@
 //!
 //! LBA 0 is never written; LBA 1 and the backup header change only in their array CRC and header CRC.
 
+mod append;
 mod card;
 mod device;
 mod entry;

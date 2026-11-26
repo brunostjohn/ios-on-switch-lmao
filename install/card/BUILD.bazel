@@ -13,6 +13,7 @@ lint_files()
 rust_library(
     name = "switch_card",
     srcs = [
+        "append.rs",
         "card.rs",
         "device.rs",
         "entry.rs",
@@ -99,8 +100,8 @@ rust_test(
         "SWITCH_BLOCK_CPP": "$(rootpath //drivers/NativeSwitchBlock:NativeSwitchBlock.cpp)",
         "SWITCH_CARD_JSON": "$(rootpath {})".format(_CARD_JSON),
     },
+    link_deps = [":oracle"],
     deps = [
-        ":oracle",
         ":switch_card",
         ":switch_card_testing",
     ],

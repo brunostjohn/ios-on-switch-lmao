@@ -55,7 +55,7 @@ impl Card {
     }
 
     /// `parse_entry`'s rules: every used entry inside the usable range, a non-zero unique GUID, no overlaps.
-    fn check_entries(&self) -> Result<(), Error> {
+    pub(crate) fn check_entries(&self) -> Result<(), Error> {
         let header = &self.tables.primary.header;
         let size = header.entry_size() as usize;
         for (i, e) in self.used() {
