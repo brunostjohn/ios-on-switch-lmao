@@ -41,21 +41,16 @@ py_library(
     ],
 )
 
+# deploy.py runs system_update's cryptex step, and system_update.py checks the card's kind the deploy's way.
 py_library(
     name = "deploy",
-    srcs = ["deploy.py"],
+    srcs = [
+        "data_owner.py",
+        "deploy.py",
+        "system_update.py",
+    ],
     imports = ["../.."],
     deps = [":lib"],
-)
-
-py_library(
-    name = "system_update",
-    srcs = ["system_update.py"],
-    imports = ["../.."],
-    deps = [
-        ":deploy",
-        ":lib",
-    ],
 )
 
 py_test(
@@ -150,8 +145,15 @@ py_test(
 )
 
 py_test(
+    name = "data_owner_test",
+    size = "small",
+    srcs = ["data_owner_test.py"],
+    deps = [":deploy"],
+)
+
+py_test(
     name = "system_update_test",
     size = "small",
     srcs = ["system_update_test.py"],
-    deps = [":system_update"],
+    deps = [":deploy"],
 )

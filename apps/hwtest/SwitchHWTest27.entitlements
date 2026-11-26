@@ -40,6 +40,10 @@
 	<array>
 		<string>kern.bootsessionuuid</string>
 		<string>kern.uuid</string>
+		<string>kern.version</string>
+		<string>kern.switch_motion_reports</string>
+		<string>kern.switch_motion_fastpath_copies</string>
+		<string>kern.switch_motion_gyro_us</string>
 		<string>kern.switch_planes_flips</string>
 		<string>kern.switch_planes_latched</string>
 		<string>kern.switch_planes_maps</string>

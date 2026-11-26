@@ -28,6 +28,7 @@ py_library(
         "owed_all.py",
         "owed_gpu.py",
         "owed_system.py",
+        "pretranslated.py",
         "protection.py",
         "reports.py",
         "rules.py",
@@ -129,6 +130,14 @@ py_test(
     name = "motion_test",
     size = "small",
     srcs = ["motion_test.py"],
+    deps = [":lib"],
+)
+
+# pretranslated.py's checks over the kernel's deploy-update lines.
+py_test(
+    name = "pretranslated_test",
+    size = "small",
+    srcs = ["pretranslated_test.py"],
     deps = [":lib"],
 )
 

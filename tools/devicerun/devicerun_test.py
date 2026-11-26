@@ -69,7 +69,7 @@ class Checks(unittest.TestCase):
                 if c.regex:
                     re.compile(c.regex)
                 self.assertTrue(all(n in names for n in c.needed()), c.name)
-                for other in (c.against, c.after, c.unless, c.followed, c.during, c.per, c.preceded):
+                for other in (c.against, c.after, c.unless, c.followed, c.during, c.per, c.preceded, c.boots):
                     self.assertTrue(not other or other in names, c.name)
                 self.assertTrue(all(n in names for n in c.outside), c.name)
 

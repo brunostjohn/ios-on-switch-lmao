@@ -1,5 +1,6 @@
 """Boot-entry and overlay sync, and the log pull, on plain directories (no card)."""
 
+import argparse
 import base64
 import contextlib
 import hashlib
@@ -16,6 +17,7 @@ from unittest import mock
 
 from tools.deploy import deploy, deployed, joycon_pairing, poster_snapshots, pull_logs, ssh_keys, system_apps
 from tools.install import bootstrap, bootstrap_migration, card as cards, renamed
+from tools.trustcache.trustcache import trust_module
 
 
 class Log:
@@ -384,6 +386,63 @@ class KindTest(unittest.TestCase):
             ):
                 deploy._checked(args, Log())
             self.assertEqual(resolve.call_count, int(build == '24B119'))
+
+    def checked_with_a_translated_tree(self, offered: dict) -> tuple[argparse.Namespace, mock.Mock]:
+        """Return deploy._checked's arguments and mount mock for a card whose translated locationd is stale.
+
+        This build no longer trusts the card's locationd, and offers updates for the paths in `offered`.
+        """
+        root = self.pins.parent
+        data = root / 'data'
+        (data / 'Switch').mkdir(parents=True, exist_ok=True)
+        stale, current = 'ac' * 20, '02' * 20
+        (data / 'Switch/pretranslated.json').write_text(
+            json.dumps({'files': [{'path': '/usr/libexec/locationd', 'trust': True, 'cdhash': [stale]}]})
+        )
+        trust = root / 'os.trustcache'
+        trust.write_bytes(trust_module([bytes.fromhex(current)]))
+        carried = root / 'carried'
+        carried.mkdir(exist_ok=True)
+        (carried / 'updates.json').write_text(json.dumps(dict.fromkeys(offered, current)))
+        argv = ['disk9', '--boot-package', 'unused', '--ipsw', str(self.pins), '--spec', 'unused', '--remove-gpu']
+        argv += ['--pretranslated-trust', str(trust), '--pretranslated-updates', str(carried)]
+        args = deploy._parser().parse_args(argv)
+        target = mock.Mock(content='Apple_APFS')
+        with (
+            mock.patch.object(deploy.host, 'check_tools'),
+            mock.patch.object(pull_logs, 'load_spec', return_value={'volumes': {'data': {'uuid': 'data'}}}),
+            mock.patch.object(cards, 'resolve', return_value=self.card),
+            mock.patch.object(cards, 'check_layout_unprivileged', return_value=(mock.Mock(), target)),
+            mock.patch.object(pull_logs, 'data_volume', return_value='disk9s5'),
+            mock.patch.object(cards, 'mounted', return_value=contextlib.nullcontext(data)) as mounted,
+            mock.patch.object(deploy.data_owner, '_owner', return_value=deploy.data_owner.Owner(0, 0, 0o40755)),
+        ):
+            deploy._checked(args, Log())
+        return args, mounted
+
+    def test_a_stale_translated_file_the_build_carries_is_planned_before_anything_is_written(self):
+        args, mounted = self.checked_with_a_translated_tree({'/usr/libexec/locationd'})
+        self.assertEqual(
+            mounted.call_args_list,
+            [
+                mock.call('disk9s5', mock.ANY, read_only=True),
+                mock.call('disk9s5', mock.ANY, read_only=True, owners=True),
+            ],
+        )
+        self.assertEqual(args.pretranslated_wanted, {'/usr/libexec/locationd': '02' * 20})
+        plan = deploy._plan(args, ['switchroot/ios/bl33.bin'], [], None)
+        self.assertIn('pretranslated updates: /usr/libexec/locationd', plan)
+        self.assertTrue(any(step.startswith('Data Switch/: ') for step in plan), plan)
+        self.assertEqual(plan[-2:], ['boot entry, last: 1 to copy, 0 stale', 'unmount the iPad volumes and eject'])
+
+    def test_a_stale_translated_file_the_build_does_not_carry_refuses_in_the_dry_run(self):
+        with self.assertRaisesRegex(cards.RefusedError, '/usr/libexec/locationd.*--reinstall-container'):
+            self.checked_with_a_translated_tree(set())
+
+    def test_ios_17_plans_no_translated_tree(self):
+        self.assertIsNone(
+            deploy._parser().parse_args(['disk9', '--boot-package', 'x', '--spec', 'y']).pretranslated_trust
+        )
 
 
 class JoyConPairingTest(unittest.TestCase):

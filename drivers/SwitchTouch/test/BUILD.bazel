@@ -59,10 +59,12 @@ host_library(
     ],
 )
 
+# SwitchHID.h has per-build report lengths: 21H461's here (the touch and button reports are every build's).
 host_library(
     name = "switch_touch",
     srcs = ["//drivers/SwitchTouch:SwitchTouch.cpp"],
     copts = ["-Wno-unused-parameter"],
+    defines = ["SWITCH_IPSW_KIND_21H461=1"],
     deps = [
         ":headers",
         ":kernel",
@@ -76,6 +78,7 @@ host_test(
         "tegra_i2c_host_model.h",
     ],
     copts = ["-Wno-unused-parameter"],
+    defines = ["SWITCH_IPSW_KIND_21H461=1"],
     deps = [
         ":headers",
         ":kernel",

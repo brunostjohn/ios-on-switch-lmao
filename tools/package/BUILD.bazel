@@ -88,6 +88,7 @@ py_binary(
         ":loader_abi",
         ":native_oled_adt",
         ":native_xnu_layout",
+        "//tools/install:overlay_index",
         "//tools/trustcache",
     ],
 )

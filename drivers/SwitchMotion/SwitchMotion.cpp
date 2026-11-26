@@ -38,6 +38,13 @@
 //     comes to rest after moving and when the panel comes on, not only on a change.
 //   * Third-party apps' CMMotionManager (accelerometer, gyroscope, device motion) is served by locationd over XPC
 //     (kCLConnectionMessage...), which reads these same services; SpringBoard and backboardd run CoreMotion in process.
+//   * Device motion is fused here, as J120's and J181's motion coprocessor fuses it: CoreMotion's 6-axis device motion
+//     (CLSensorFusionService6AxisSPU: capability bit 3 of J120's word on 21H461, bit 4 of J181's on 24B119, which
+//     switch_ui_scale_sites_24B119.h keeps) opens the device motion service {0xff0c, 5} (SwitchHID.h), sets its
+//     ReportInterval and takes one report per interval instead of streaming both raw services into every client
+//     process and fusing there. The part runs at twice the device motion rate (the gyroscope rate CoreMotion's own
+//     fusion asks for), every sample is fused (SwitchMotionFusion.h) and each report leaves with its last sample's
+//     time; on the ICM-42607 the FIFO watermark is one report's samples, so one interrupt per report.
 // Sampling: the part converts only while a client has a nonzero report interval (the services' Report Interval
 // feature, SwitchHID.h) or the orientation detector runs, which it does while the panel is lit
 // (switch_motion_display_power, SwitchMotion.h): with the panel off nothing converts for it and nothing wakes the CPU.
@@ -74,6 +81,7 @@
 #include "../TegraGPIO/TegraGPIO.h"
 #include "../TegraSPI/TegraSPI.h"
 #include "SwitchMotion.h"
+#include "SwitchMotionFusion.h"
 #if DEVELOPMENT || DEBUG
 #include "SwitchMotionStats.h"
 #endif
@@ -114,7 +122,8 @@ enum : uint8_t {
 
 enum Sensor : unsigned {
     Accel = 0,
-    Gyro = 1
+    Gyro = 1,
+    DeviceMotion = 2,  // a channel only: fused from the other two
 };
 enum class Family : uint8_t {
     ST,
@@ -138,16 +147,21 @@ struct Part {
     const char *name;
     Family family;
     uint8_t whoAmI;
+    uint32_t zeroRateMilliDps;  // the gyroscope's zero-rate offset bound: SwitchMotionFusion's zeroRateNanoRad
 };
 
 // The ICM parts first: their WHO_AM_I at 0x75 decides before the ST one at 0x0f, which on an ICM-42607 is
 // ACCEL_DATA_Z1 and holds live data if an earlier OS left the accelerometer on. On the ST parts 0x75 is not WHO_AM_I
 // (not checked against their datasheets: reserved or a user register). WHO_AM_I 0x67 is the ICM-42607 and also the
 // ICM-42670-P (DS-000451): one map.
+// Zero-rate bounds: typical initial offset plus its drift over 40 degrees C. ICM-42670-P (DS-000451) and LSM6DSO:
+// 1 dps and 0.015 / 0.010 dps/C, so 2 dps. LSM6DS3H: 10 dps and 0.05 dps/C, so 12 dps. No ICM-40607 or LSM6DSE
+// figure was found: the ICM-40607 takes its family's (ICM-42605/42688-P 0.5 dps, ICM-40609-D 1 dps; 0.03 dps/C) and the
+// LSM6DSE the LSM6DS3H's. The bound only caps the offset the fusion holds (SwitchMotionFusion's biasLimit).
 const Part kParts[] = {
-    {"ICM-42607-P", Family::ICM42607, 0x60}, {"ICM-42607", Family::ICM42607, 0x67},
-    {"ICM-40607", Family::ICM40607, 0x38},   {"LSM6DS3H", Family::ST, 0x69},
-    {"LSM6DSE", Family::ST, 0x6a},           {"LSM6DSO", Family::ST, 0x6c},
+    {"ICM-42607-P", Family::ICM42607, 0x60, 2000}, {"ICM-42607", Family::ICM42607, 0x67, 2000},
+    {"ICM-40607", Family::ICM40607, 0x38, 2200},   {"LSM6DS3H", Family::ST, 0x69, 12000},
+    {"LSM6DSE", Family::ST, 0x6a, 12000},          {"LSM6DSO", Family::ST, 0x6c, 2000},
 };
 
 // Per family: the DT mount matrix (rows: console X, Y, Z), data rates, LSB scale to micro-g and micro-rad/s, and how
@@ -464,13 +478,13 @@ class SwitchMotion : public IOService {
     IOInterruptEventSource *irq = nullptr;   // PX2, data-ready
     IOInterruptEventSource *kick = nullptr;  // no provider: a report interval changed (feature handler)
     IOTimerEventSource *watchdog = nullptr;
-    IOService *hid[2] = {}, *orientationHid = nullptr;
+    IOService *hid[2] = {}, *orientationHid = nullptr, *motionHid = nullptr;
     bool displayLit = true;  // the panel is on (switch_motion_display_power; atomics), so the detector runs
-    Channel channels[2] = {};
+    Channel channels[3] = {};
     const Part *part = nullptr;
     const FamilyInfo *info = nullptr;
-    uint32_t intervalUS[2] = {};  // the clients' report intervals, written by the feature handler (atomics)
-    uint32_t batchUS[2] = {};     // and their batch intervals (BatchInterval, the Report Latency feature; atomics)
+    uint32_t intervalUS[3] = {};  // the clients' report intervals, written by the feature handler (atomics)
+    uint32_t batchUS[3] = {};     // and their batch intervals (BatchInterval, the Report Latency feature; atomics)
 
     // Work loop state.
     bool converting = false, suspended = false, on[2] = {};
@@ -501,6 +515,12 @@ class SwitchMotion : public IOService {
     bool timedOrientation = false;
     unsigned orientationSet = 0;
     uint64_t orientationStamp = 0;
+    // Device motion (file comment): the filter, gyroscope samples per report, and the last report's time.
+    SwitchMotionFusion fusion;
+    bool fusing = false;
+    unsigned motionEvery = 1, motionCount = 0;
+    uint32_t periodUS = 0;
+    uint64_t lastMotion = 0, lastGyro = 0;  // 0: the session's first
 #if DEVELOPMENT || DEBUG
     SwitchMotionStats stats;  // the 10 s line's window (SwitchMotionStats.h)
     void statsInterrupt();
@@ -513,7 +533,11 @@ class SwitchMotion : public IOService {
     void statsPosted(Sensor sensor)
     {
         ++stats.posted[sensor];
+        if (sensor == DeviceMotion)
+            __atomic_fetch_add(&motionReports, 1, __ATOMIC_RELAXED);
     }
+
+    uint64_t motionReports = 0;  // since boot (SwitchMotionTotals.cpp)
 #else
     void statsInterrupt()
     {}
@@ -544,10 +568,18 @@ class SwitchMotion : public IOService {
     void sample();
     void drainFifo(uint64_t now);
     void post(Sensor sensor, const int16_t raw[3], uint64_t now);
+    void fuse(Sensor sensor, const SwitchMotionReport &report, uint64_t now);
     void detectOrientation(const int32_t accel[3]);
     void announce(uint8_t which);
 
 public:
+#if DEVELOPMENT || DEBUG
+    void totals(uint64_t *reports, uint32_t *gyroIntervalUS) const
+    {
+        *reports = __atomic_load_n(&motionReports, __ATOMIC_RELAXED);
+        *gyroIntervalUS = __atomic_load_n(&intervalUS[Gyro], __ATOMIC_RELAXED);
+    }
+#endif
     bool start(IOService *provider) override;
     void free() override;
     void suspend();
@@ -610,6 +642,7 @@ bool SwitchMotion::identify()
             continue;
         part = &p;
         info = familyInfo(p.family);
+        fusion.zeroRateNanoRad = static_cast<int64_t>(p.zeroRateMilliDps) * 17453293 / 1000;
         return true;
     }
     char sck[256];
@@ -878,13 +911,25 @@ void SwitchMotion::apply()
         candidateCount = still = detectorCount = 0;
         announced = false;
     }
-    const bool want[2] = {interval[Accel] != 0 || detector, interval[Gyro] != 0};
+    const uint32_t motionUS = __atomic_load_n(&intervalUS[DeviceMotion], __ATOMIC_ACQUIRE);
+    if ((motionUS != 0) != fusing) {
+        fusing = motionUS != 0;
+        fusion.restart();
+        motionCount = 0;
+        lastGyro = 0;
+        switch_hid_forget_latest(motionHid);
+    }
+    const bool want[2] = {interval[Accel] != 0 || detector || fusing, interval[Gyro] != 0 || fusing};
     uint32_t need = detector ? kOrientationMilliHz : 0;
     for (const uint32_t us : interval) {
         const uint32_t milliHz = us ? static_cast<uint32_t>((1000000000ULL + us - 1) / us) : 0;
         if (milliHz > need)
             need = milliHz;
     }
+    const uint32_t motionMilliHz =
+        motionUS ? static_cast<uint32_t>(2 * ((1000000000ULL + motionUS - 1) / motionUS)) : 0;
+    if (motionMilliHz > need)
+        need = motionMilliHz;
     unsigned next = 0;
     while (next + 1 < 5 && info->rates[next].milliHz < need)
         ++next;
@@ -903,6 +948,8 @@ void SwitchMotion::apply()
                 batch = b;
             seen = true;
         }
+        if (fusing && (!seen || motionUS < batch))
+            batch = motionUS;  // each report as soon as its samples are in
         fifoWatermark = watermarkFor(batch, static_cast<uint32_t>(1000000000ULL / info->rates[next].milliHz));
     }
 
@@ -931,13 +978,17 @@ void SwitchMotion::apply()
         if (!converting) {
             converting = true;
             samples = empty = 0;
+            fusion.restart();  // after sleep or the panel off, the console may lie any way up
+            lastGyro = 0;
+            switch_hid_forget_latest(motionHid);
             irq->enable();
             switch_check_after_ms(watchdog, kWatchdogMS);
         }
         // Log only (not the console): one line per change of what the part converts.
         os_log(OS_LOG_DEFAULT,
-               "SwitchMotion: %u mHz, accel %d (%u us), gyro %d (%u us), batch %u us, FIFO watermark %u",
-               info->rates[rate].milliHz, on[Accel], interval[Accel], on[Gyro], interval[Gyro], batch, watermark);
+               "SwitchMotion: %u mHz, accel %d (%u us), gyro %d (%u us), motion %u us, batch %u us, FIFO watermark %u",
+               info->rates[rate].milliHz, on[Accel], interval[Accel], on[Gyro], interval[Gyro], motionUS, batch,
+               watermark);
     } else if (part->family == Family::ICM42607 && fifoWatermark != watermark) {
         // Only the batch interval changed: the FIFO again from empty (route), the sensors untouched.
         writeRegister(icm42607::IntSource3, 0);
@@ -951,6 +1002,10 @@ void SwitchMotion::apply()
     }
     const uint32_t perDetector = info->rates[rate].milliHz / kOrientationMilliHz;
     detectorEvery = perDetector > 1 ? perDetector : 1;
+    const uint64_t perMotion = static_cast<uint64_t>(info->rates[rate].milliHz) * motionUS / 1000000000ULL;
+    motionEvery = perMotion > 1 ? static_cast<unsigned>(perMotion) : 1;
+    motionCount = 0;
+    periodUS = static_cast<uint32_t>(1000000000ULL / info->rates[rate].milliHz);
 }
 
 // One trusted sample to its HID service (deviceReport has the frames). The boot's first accelerometer sample is logged
@@ -970,6 +1025,8 @@ void SwitchMotion::post(Sensor sensor, const int16_t raw[3], uint64_t now)
               "-1000; upright: x near +1000)\n",
               part->name, raw[0], raw[1], raw[2], report.x / 1000, report.y / 1000, report.z / 1000);
     }
+    if (fusing)
+        fuse(sensor, report, now);
     if (sensor == Accel && detecting && ++detectorCount >= detectorEvery) {
         detectorCount = 0;
         const int32_t vector[3] = {report.x, report.y, report.z};
@@ -987,6 +1044,38 @@ void SwitchMotion::post(Sensor sensor, const int16_t raw[3], uint64_t now)
         (void)switch_hid_post_at(hid[sensor], &report, sizeof(report), now);
     } else {
         (void)switch_hid_post(hid[sensor], &report, sizeof(report));
+    }
+}
+
+// Work loop: one trusted sample into the filter; every motionEvery gyroscope samples, one device motion report with the
+// last one's time. Nothing leaves before the first accelerometer sample has seeded the attitude.
+void SwitchMotion::fuse(Sensor sensor, const SwitchMotionReport &report, uint64_t now)
+{
+    const int32_t sample[3] = {report.x, report.y, report.z};
+    if (sensor == Accel) {
+        fusion.addAccel(sample);
+        return;
+    }
+    uint64_t gapNS = 0;
+    if (lastGyro && now > lastGyro)
+        absolutetime_to_nanoseconds(now - lastGyro, &gapNS);
+    lastGyro = now;
+    fusion.addGyro(sample, switchGyroGapMicros(gapNS / 1000, periodUS));
+    if (++motionCount < motionEvery)
+        return;
+    motionCount = 0;
+    if (!fusion.seeded)
+        return;
+    SwitchDeviceMotionReport motion = {1, {}};
+    switchDeviceMotionPayload(fusion, sample, motion.payload, sizeof(motion.payload));
+    if (now <= lastMotion)
+        now = lastMotion + 1;
+    lastMotion = now;
+    statsPosted(DeviceMotion);
+    if (timedPosts) {
+        (void)switch_hid_post_at(motionHid, &motion, sizeof(motion), now);
+    } else {
+        (void)switch_hid_post(motionHid, &motion, sizeof(motion));
     }
 }
 
@@ -1138,10 +1227,11 @@ void SwitchMotion::sample()
     }
     empty = 0;
     ++samples;
-    if (fresh[Gyro])
-        post(Gyro, gyro, now);
+    // The accelerometer first: device motion fuses each gyroscope sample with its own record's acceleration.
     if (fresh[Accel])
         post(Accel, accel, now);
+    if (fresh[Gyro])
+        post(Gyro, gyro, now);
 }
 
 // Work loop, PX2 masked until return, FIFO batching: INT_STATUS through FIFO_COUNTL in one burst (the read clears
@@ -1215,10 +1305,10 @@ void SwitchMotion::drainFifo(uint64_t now)
             }
             const uint64_t at = newest - static_cast<uint64_t>(n - 1 - (done + i)) * periodAbs;
             ++taken;
-            if (fresh[Gyro] && on[Gyro])
-                post(Gyro, gyro, at);
             if (fresh[Accel] && on[Accel])
                 post(Accel, accel, at);
+            if (fresh[Gyro] && on[Gyro])
+                post(Gyro, gyro, at);
         }
         if (done < n)
             done += chunk;
@@ -1263,6 +1353,7 @@ void SwitchMotion::statsInterrupt()
         drains,
         records,
         overflows,
+        __atomic_load_n(&intervalUS[DeviceMotion], __ATOMIC_RELAXED),
     };
     const uint64_t now = mach_absolute_time();
     if (!switchMotionInterrupt(stats, now, msToAbs(10000), msToAbs(2000), state))
@@ -1357,13 +1448,17 @@ bool SwitchMotion::start(IOService *provider)
         hid[s] = switch_hid_create(s == Accel ? kSwitchHIDAccelerometer : kSwitchHIDGyro);
         switch_hid_set_feature_handler(hid[s], &SwitchMotion::featureReceived, &channels[s]);
     }
+    channels[DeviceMotion] = {this, DeviceMotion};
+    motionHid = switch_hid_create(kSwitchHIDDeviceMotion);
+    switch_hid_set_feature_handler(motionHid, &SwitchMotion::featureReceived, &channels[DeviceMotion]);
     if (kOrientationPolicy != OrientationPolicy::Off) {
         orientationHid = switch_hid_create(kSwitchHIDOrientation);
         timedOrientation = switch_hid_supports_timestamps(orientationHid);
     }
     __atomic_store_n(&displayLit, switch_display_is_on(), __ATOMIC_RELEASE);
     // FIFO batching needs every sample's own time on its HID report (SwitchHID.h switch_hid_post_at).
-    timedPosts = switch_hid_supports_timestamps(hid[Accel]) && switch_hid_supports_timestamps(hid[Gyro]);
+    timedPosts = switch_hid_supports_timestamps(hid[Accel]) && switch_hid_supports_timestamps(hid[Gyro]) &&
+                 switch_hid_supports_timestamps(motionHid);
     if (part->family == Family::ICM42607 && !timedPosts) {
         IOLog("SwitchMotion: %s FIFO batching off: HID reports cannot carry sample times here (SwitchHID); data-ready "
               "per sample as before\n",
@@ -1461,8 +1556,19 @@ extern "C" int switch_motion_start(void)
     }
     __atomic_store_n(&gMotion, candidate, __ATOMIC_RELEASE);
     candidate->release();  // the attachment keeps it
+    switch_motion_totals_register();
     return 0;
 }
+
+#if DEVELOPMENT || DEBUG
+extern "C" void switch_motion_totals(uint64_t *reports, uint32_t *gyroIntervalUS)
+{
+    *reports = 0;
+    *gyroIntervalUS = 0;
+    if (const SwitchMotion *motion = __atomic_load_n(&gMotion, __ATOMIC_ACQUIRE))
+        motion->totals(reports, gyroIntervalUS);
+}
+#endif
 
 extern "C" void switch_motion_suspend(void)
 {

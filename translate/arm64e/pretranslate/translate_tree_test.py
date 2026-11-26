@@ -365,6 +365,7 @@ class Locationd24B119EditTest(unittest.TestCase):
         return pc, x19, x21
 
     def test_24b119_locationd_edit_clears_exact_coprocessor_bits(self):
+        # Bit 4, 6-axis device motion, stays: SwitchMotion publishes {0xff0c, 5}, as for CoreMotion's word in the cache.
         edits = translate_tree.load_edits(EDITS_24B119)
         self.assertIn('/usr/libexec/locationd', edits)
         entries = edits['/usr/libexec/locationd']
@@ -375,10 +376,10 @@ class Locationd24B119EditTest(unittest.TestCase):
         self.assertEqual((end_patched, x19_patched), (0x7F0F1C, 0))
         self.assertEqual(x21_patched & ~0x0000001314618BF2, 0)
         cleared = 0
-        for bit in (1, 4, 5, 6, 7, 9, 11, 15, 16, 22, 26, 33, 36):
+        for bit in (1, 5, 6, 7, 9, 11, 15, 16, 22, 26, 33, 36):
             cleared |= 1 << bit
         self.assertEqual(0x0000001314618BF2 & ~x21_patched, cleared)
-        self.assertEqual(x21_patched, (1 << 8) | (1 << 21) | (1 << 28) | (1 << 32))
+        self.assertEqual(x21_patched, (1 << 4) | (1 << 8) | (1 << 21) | (1 << 28) | (1 << 32))
 
 
 if __name__ == '__main__':

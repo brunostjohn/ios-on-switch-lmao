@@ -285,6 +285,13 @@ filegroup(
     output_group = "constants",
 )
 
+# The device tree the boot package hands the kernel (kits/SwitchPretranslated's test parses its /chosen update list).
+filegroup(
+    name = "package_adt",
+    srcs = [":package"],
+    output_group = "adt",
+)
+
 # The staged kernel window decodes (lz4 -d, block by block from the table the loader compiles in) to exactly the image
 # the layout made: the compression changes the staged bytes, never the kernel the loader copies into place.
 filegroup(

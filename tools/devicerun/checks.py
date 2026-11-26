@@ -28,6 +28,7 @@ from tools.devicerun.memory import MEMORY
 from tools.devicerun.morning import MORNING
 from tools.devicerun.motion import MOTION
 from tools.devicerun.owed_all import GROUPS as OWED
+from tools.devicerun.pretranslated import PRETRANSLATED
 from tools.devicerun.protection import PROTECTION
 from tools.devicerun.rules import REPORT, TIMELINE, Check
 from tools.devicerun.shared_cache import SHARED_CACHE
@@ -1450,6 +1451,7 @@ GROUPS: dict[str, list[Check]] = {
     'audio': AUDIO,
     'battery': BATTERY,
     'motion': MOTION,
+    'pretranslated': PRETRANSLATED,
     'm2v-cut': CUT,
     'textures': TEXTURES,
     'dispatch': DISPATCH,

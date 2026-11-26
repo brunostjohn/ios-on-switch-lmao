@@ -127,7 +127,7 @@ class IconCacheTest(unittest.TestCase):
             mock.patch.object(deploy.system_apps, 'apps'),
             mock.patch.object(deploy.system_apps, 'register'),
         ):
-            self.assertEqual(deploy._write(args, self.data, deploy.Volumes('disk9s1', None), None, Log()), [])
+            self.assertEqual(deploy._write(args, self.data, deploy.Volumes(None, ''), None, Log()), [])
         self.assertEqual(order[order.index('_stage_gpu') :][:2], ['_stage_gpu', 'icon_cache'])
 
 

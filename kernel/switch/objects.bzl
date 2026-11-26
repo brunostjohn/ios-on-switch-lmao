@@ -51,6 +51,7 @@ SWITCH_OBJECTS = {
         ("bsd/kern/lockdown_mode.c", "sysctl/lockdown.c", [], ["12377.121.6"]),
         ("bsd/kern/kern_shutdown.c", "shutdown/shutdown.c", []),
         ("bsd/vfs/vfs_lookup.c", "vfs/pretranslated.c", []),
+        ("bsd/vfs/vfs_lookup.c", "vfs/pretranslated_updates.c", []),
         ("bsd/vfs/vfs_cluster.c", "vm/prefetch.c", ["-include", "{owner_header}"]),
         ("bsd/vfs/vfs_cluster.c", "vm/prefetch_save.c", []),
         ("bsd/vfs/kpi_vfs.c", "vfs/auth_fs.c", []),

@@ -10,6 +10,7 @@
 #include <cstring>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 using IOReturn = int;
@@ -26,6 +27,11 @@ inline uint64_t mach_absolute_time()
 inline void nanoseconds_to_absolutetime(uint64_t ns, uint64_t *abs)
 {
     *abs = ns;
+}
+
+inline void absolutetime_to_nanoseconds(uint64_t abs, uint64_t *ns)
+{
+    *ns = abs;
 }
 
 inline void IODelay(unsigned us)
@@ -97,7 +103,7 @@ struct Panic : std::runtime_error {
     } while (0)
 
 class OSObject {
-    int refs = 1;
+    mutable int refs = 1;
 
 public:
     virtual ~OSObject() = default;
@@ -105,17 +111,49 @@ public:
     virtual void free()
     {}
 
-    void retain()
+    // const, as libkern's: a const pointer releases too
+    void retain() const
     {
         ++refs;
     }
 
-    void release()
+    void release() const
     {
         if (--refs == 0) {
-            free();
+            const_cast<OSObject *>(this)->free();
             delete this;
         }
+    }
+};
+
+// SwitchMotion's debug-kernel registry counter (serializeProperties): just enough to compile and call.
+class OSSerialize : public OSObject {};
+
+class OSNumber : public OSObject {
+public:
+    uint64_t value = 0;
+
+    static OSNumber *withNumber(uint64_t number, unsigned)
+    {
+        auto *n = new OSNumber;
+        n->value = number;
+        return n;
+    }
+};
+
+class OSDictionary : public OSObject {
+public:
+    std::vector<std::pair<std::string, uint64_t>> numbers;
+
+    bool setObject(const char *key, const OSNumber *number)
+    {
+        numbers.emplace_back(key, number->value);
+        return true;
+    }
+
+    bool serialize(OSSerialize *) const
+    {
+        return true;
     }
 };
 
@@ -156,6 +194,16 @@ public:
     void registerService()
     {
         registered = true;
+    }
+
+    virtual bool serializeProperties(OSSerialize *) const
+    {
+        return true;
+    }
+
+    OSDictionary *dictionaryWithProperties() const
+    {
+        return new OSDictionary;
     }
 
     bool setProperty(const char *key, const char *value)
