@@ -296,29 +296,40 @@ static bool switch_icon_cache_key(const char *bytes, size_t length, char key[kBu
     return n > 0;
 }
 
+/* Whether a drop began and stopped: an attempt record the marker does not hold (switch_icon_cache_attempt). */
+static bool switch_icon_cache_stopped(const struct switch_icon_cache_ops *ops)
+{
+#if SWITCH_ICON_CACHE_SALTED
+    char attempt[kBuild];
+    size_t length = 0;
+    return !ops->read(ops->context, switch_icon_cache_attempt, attempt, sizeof(attempt), &length) &&
+           !ops->holds(ops->context, switch_icon_cache_marker, attempt, length);
+#else
+    (void)ops;
+    return false;
+#endif
+}
+
 void switch_icon_cache_drop(const struct switch_icon_cache_ops *ops, struct switch_icon_cache_result *result)
 {
     char build[kBuild], marker[kBuild], kept_for[kBuildKey];
     size_t length = 0, marker_length = 0;
     memset(result, 0, sizeof(*result));
     int error = ops->read(ops->context, switch_icon_cache_request, build, sizeof(build), &length);
+    /* A stopped drop is redone even for the marker's own build: the cache may hold another build's folders, and the
+     * marker's are in the keep. */
+    const bool stopped = !error && length && switch_icon_cache_stopped(ops);
     if (error != ENOENT && (error || length) &&
-        (error || !ops->holds(ops->context, switch_icon_cache_marker, build, length))) {
+        (error || stopped || !ops->holds(ops->context, switch_icon_cache_marker, build, length))) {
         result->requested = true;
         if (!error) {
             switch_icon_cache_key(build, length, result->build);
         }
-        bool known = SWITCH_ICON_CACHE_SALTED && !error &&
-                     !ops->read(ops->context, switch_icon_cache_marker, marker, sizeof(marker), &marker_length) &&
-                     switch_icon_cache_key(marker, marker_length, kept_for);
+        const bool known = SWITCH_ICON_CACHE_SALTED && !error && !stopped &&
+                           !ops->read(ops->context, switch_icon_cache_marker, marker, sizeof(marker), &marker_length) &&
+                           switch_icon_cache_key(marker, marker_length, kept_for);
 #if SWITCH_ICON_CACHE_SALTED
         if (!error) {
-            char attempt[kBuild];
-            size_t attempt_length = 0;
-            if (!ops->read(ops->context, switch_icon_cache_attempt, attempt, sizeof(attempt), &attempt_length) &&
-                !ops->holds(ops->context, switch_icon_cache_marker, attempt, attempt_length)) {
-                known = false;
-            }
             error = ops->write(ops->context, switch_icon_cache_attempt, build, length);
         }
 #endif

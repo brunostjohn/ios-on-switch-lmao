@@ -404,6 +404,36 @@ TEST_F(SwitchIconCache, FailedRenameFailsClosedWithoutAdvancingMarker)
 // Review S4 (a): a drop for A moves A's kept folders back, then stops before the marker is written (here, its write
 // fails). The agent then draws into the cache on that boot, and the next deploy names C. The marker still names B, but
 // the cache is not B's: it goes to the trash, and keep/B is not given anything.
+// Review F1: the same stopped drop for A, but the next deploy names B again, the marker's own build. The drop is redone:
+// the cache (A's folders, and what A's agent drew) goes to the trash and B gets its kept folders back.
+TEST_F(SwitchIconCache, ADropThatStoppedIsRedoneForTheMarkersOwnBuild)
+{
+    Put(data.root / "Switch/icon-cache-gpu", kBuildB);
+    Put(data.root / "Switch/icon-cache-reset", kBuildA);
+    ASSERT_EQ(Drop().kept, 2);
+    for (const char *salt : kSalts)
+        Put(data.root / kCache / salt / "__cache_info__", std::string("drawn by B ") + salt);
+    Put(data.root / "Switch/icon-cache-gpu", kBuildA);
+    data.writeFailAt = "Switch/icon-cache-reset";
+    ASSERT_NE(Drop().error, 0);
+    data.writeFailAt = nullptr;
+    for (const char *salt : kSalts)
+        Put(data.root / kCache / salt / "store.index", "drawn by A's agent");
+
+    Put(data.root / "Switch/icon-cache-gpu", kBuildB);
+    const switch_icon_cache_result again = Drop();
+    EXPECT_TRUE(again.requested);
+    EXPECT_EQ(again.error, 0);
+    EXPECT_EQ(again.kept, 0);
+    EXPECT_EQ(again.dropped, 2);
+    EXPECT_EQ(again.restored, 2);
+    for (const char *salt : kSalts) {
+        EXPECT_EQ(Contents(data.root / kCache / salt / "__cache_info__"), std::string("drawn by B ") + salt);
+        EXPECT_FALSE(fs::exists(data.root / kCache / salt / "store.index")) << "nothing of A's is left";
+    }
+    EXPECT_EQ(Contents(data.root / "Switch/icon-cache-reset"), kBuildB);
+}
+
 TEST_F(SwitchIconCache, ADropThatStoppedKeepsNothingUnderTheMarkersBuild)
 {
     Put(data.root / "Switch/icon-cache-gpu", kBuildB);
