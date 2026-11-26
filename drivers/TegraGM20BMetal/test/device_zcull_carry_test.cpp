@@ -150,9 +150,9 @@ TEST_F(DeviceZcullCarry, AnAbandonedJobInBetweenTakesNotTheCarriedSlot)
     EXPECT_EQ(addressOf(loaded, kStorageA), storage);
 }
 
-// A range that resumed the carry and is then abandoned (an event producer pending, its commit's admission blocked) is
-// encoded again later with no carry: the loss is counted
-TEST_F(DeviceZcullCarry, AnAbandonedResumeCountsTheCarryLost)
+// A range that resumed the carry and is then abandoned for good (its command buffer failed) ends the carry: the loss
+// is counted once, and nothing resumes it after
+TEST_F(DeviceZcullCarry, AnAbandonedResumeCountsTheCarryLostAndEndsIt)
 {
     ASSERT_FALSE(job({true}, nullptr, &commandBuffer, 1).empty());
     gm20b::CommandBuffer *cb = dev.begin();
@@ -160,6 +160,50 @@ TEST_F(DeviceZcullCarry, AnAbandonedResumeCountsTheCarryLost)
     cb->resumeZcull(&commandBuffer, kRange);
     cb->abandon();
     EXPECT_EQ(dev.stats.zcullCarriesLost.load(), 1u);
+    const auto loaded = job({false}, &commandBuffer);
+    ASSERT_FALSE(loaded.empty());
+    EXPECT_EQ(values(loaded, kLoadZcullMethod).size(), 0u);
+    EXPECT_EQ(dev.stats.zcullCarriesLost.load(), 1u);
+}
+
+// A range whose commit the kernel refuses for a CPU-locked surface (admissionBlocked) is encoded again once the lock
+// goes: that encode resumes the carry and loads the region from the same storage. An encode abandoned in between
+// takes none of the carry's slots.
+TEST_F(DeviceZcullCarry, AnAdmissionBlockedCommitKeepsTheCarryForItsRetry)
+{
+    const auto stored = job({true}, nullptr, &commandBuffer, 1);
+    ASSERT_FALSE(stored.empty());
+    const uint64_t storage = addressOf(stored, kStorageA);
+    ASSERT_NE(storage, 0u);
+    static uint8_t pages[0x4000] __attribute__((aligned(0x4000)));
+    gm20b::Import surface;
+    ASSERT_TRUE(gm20b::DeviceHarness::kernel(dev).import(pages, sizeof pages, surface.bo));
+    ASSERT_EQ(kernel_model::model.cpuLock(surface.bo.handle), KERN_SUCCESS);
+    gm20b::CommandBuffer *blocked = dev.begin();
+    ASSERT_NE(blocked, nullptr);
+    blocked->resumeZcull(&commandBuffer, kRange);
+    blocked->use(&surface, false);
+    const char *rule = nullptr;
+    gm20b::RenderEncoder *e = blocked->render(depthPass(false), &rule);
+    ASSERT_NE(e, nullptr) << (rule ? rule : "");
+    e->end();
+    blocked->carryZcull(nullptr, kRange, 0);
+    uint32_t seqno = 0;
+    ASSERT_FALSE(blocked->commit(seqno));
+    ASSERT_TRUE(blocked->admissionBlocked);
+    blocked->abandonForRetry();
+    kernel_model::model.cpuLocked.clear();
+    gm20b::CommandBuffer *between = dev.begin();
+    ASSERT_NE(between, nullptr);
+    e = between->render(depthPass(true), &rule);
+    ASSERT_NE(e, nullptr) << (rule ? rule : "");
+    e->end();
+    between->abandon();
+    const auto loaded = job({false}, &commandBuffer);
+    ASSERT_FALSE(loaded.empty());
+    EXPECT_EQ(values(loaded, kLoadZcullMethod).size(), 1u);
+    EXPECT_EQ(addressOf(loaded, kStorageA), storage);
+    EXPECT_EQ(dev.stats.zcullCarriesLost.load(), 0u);
 }
 
 // A pass whose draws invalidate its region (a depth write under Always) records none and gives its slot back: after five

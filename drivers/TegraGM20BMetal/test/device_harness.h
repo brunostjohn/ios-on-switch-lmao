@@ -26,6 +26,11 @@ struct DeviceHarness {
         return d.placePackedRecord(pp, false);
     }
 
+    static Kernel &kernel(Device &d)
+    {
+        return d.k_;
+    }
+
     // What the GPU's root table holds at push word `word` after everything submitted
     static uint32_t rootPush(const Device &d, uint32_t word)
     {

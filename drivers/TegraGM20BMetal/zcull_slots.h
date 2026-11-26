@@ -45,6 +45,16 @@ public:
         owner_[slot] = 0;
     }
 
+    // The slots `held`'s regions are in belong to `owner` again, and `owner` holds no other
+    void keepFor(uint64_t owner, const ZcullPlanes &held)
+    {
+        for (uint32_t i = 0; i < made_; i++)
+            if (held.holdsSlot(int(i)))
+                owner_[i] = owner;
+            else if (owner_[i] == owner)
+                owner_[i] = 0;
+    }
+
     uint64_t va(int slot) const
     {
         return bo_[slot].va;

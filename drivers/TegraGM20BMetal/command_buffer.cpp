@@ -100,6 +100,7 @@ CommandBuffer *Device::begin()
     cb.zcullOwner_ = ++zcullOwners_;
     cb.zcullTo_ = nullptr;
     cb.zcullKept_ = 0;
+    cb.zcullResumed_ = false;
     set_.view(setView_);
     cb.memberUses_.clear();
     cb.memberRemovals_ = setView_.removals;
@@ -643,9 +644,12 @@ void CommandBuffer::parkZcull()
     SWITCH_METAL_DIAGNOSTIC(d.stats.zcullPasses += zcullCounts_.passes; d.stats.zcullLoads += zcullCounts_.loads;
                             d.stats.zcullCarried += zcullCounts_.carried; d.stats.zcullStores += zcullPlanes_.stores();
                             d.stats.zcullUnstored += zcullPlanes_.unstored());
+    ZcullCarry &carry = d.zcullCarry_;
+    if (zcullResumed_)
+        carry.to = nullptr;
+    zcullResumed_ = false;
     if (!zcullTo_ || zcullPlanes_.empty())
         return;
-    ZcullCarry &carry = d.zcullCarry_;
     carry.planes.carryFrom(zcullPlanes_);
     carry.to = zcullTo_;
     carry.from = zcullFrom_;
@@ -660,27 +664,44 @@ void CommandBuffer::resumeZcull(const void *cb, uint64_t from)
     ZcullCarry &carry = d.zcullCarry_;
     if (!carry.to || carry.to != cb || carry.from != from)
         return;
-    const bool live = carry.live(d.channelGeneration(), d.lastSubmitted());
-    carry.to = nullptr;
-    if (!live) {
+    if (!carry.live(d.channelGeneration(), d.lastSubmitted())) {
+        carry.to = nullptr;
         SWITCH_METAL_DIAGNOSTIC(d.stats.zcullCarriesLost++);
         return;
     }
-    zcullPlanes_.carryFrom(carry.planes);
+    zcullPlanes_.copyFrom(carry.planes);
     zcullOwner_ = carry.owner;
+    zcullResumed_ = true;
+}
+
+// A resumed carry once its job is abandoned. Retried, the job submitted nothing, so the parked regions still hold what
+// their storing job wrote; the abandoned encode's slot takes and settle's releases are undone for the retry.
+void CommandBuffer::endResumedCarry(bool retried)
+{
+    if (!zcullResumed_)
+        return;
+    zcullResumed_ = false;
+    Device &d = *dev_;
+    ZcullCarry &carry = d.zcullCarry_;
+    if (retried && carry.live(d.channelGeneration(), d.lastSubmitted())) {
+        d.zcullSlots_.keepFor(carry.owner, carry.planes);
+        return;
+    }
+    carry.to = nullptr;
+    SWITCH_METAL_DIAGNOSTIC(d.stats.zcullCarriesLost++);
+}
+
+void CommandBuffer::abandonForRetry()
+{
+    endResumedCarry(true);
+    abandon();
 }
 
 void CommandBuffer::abandon()
 {
+    endResumedCarry(false);
     releaseNativeReads();
     Device &d = *dev_;
-#if SWITCH_METAL_DIAGNOSTICS
-    for (const ZcullStored &r : zcullPlanes_.regions())
-        if (r.carried) {
-            d.stats.zcullCarriesLost++;
-            break;
-        }
-#endif
     d.closedCount_.store(d.closedCount_.load(std::memory_order_relaxed) + 1, std::memory_order_release);
     d.overflowing_ = false;
     d.overflow_.clear();

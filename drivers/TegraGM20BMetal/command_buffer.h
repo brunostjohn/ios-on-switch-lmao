@@ -235,8 +235,12 @@ public:
     // a multisampled attachment's resolve by the 2D engine (probe_ops.h); false: none for its format or grid
     bool probeResolve(const Texture &multisampled, const Texture &into);
 #endif
-    // Nothing of it is on the GPU any more: the rings get back what it took, the root table's shadow what it was.
+    // Nothing of it is on the GPU any more: the rings get back what it took, the root table's shadow what it was. A carry
+    // it resumed is lost (counted in zcull_carries_lost) and ends.
     void abandon();
+    // abandon() of a range that is encoded again (its commit's admission waits for a resource): a carry it resumed stays
+    // parked for that encode, its slots held for it
+    void abandonForRetry();
 
     // A host import the submission reads or writes (a surface's, a no-copy buffer's), for the kernel's order with other
     // processes' GPU work on it (kernel.h exec)
@@ -286,7 +290,8 @@ public:
         zcullKept_ = kept;
     }
 
-    // After begin(): the regions parked for the range of `cb` that begins at `from`, where no job was submitted since
+    // After begin(): the regions parked for the range of `cb` that begins at `from`, where no job was submitted since. The
+    // carry stays parked until this job submits or is abandoned, so a retried encode of the range resumes it again.
     void resumeZcull(const void *cb, uint64_t from);
 
     uint32_t draws = 0, passes = 0, blits = 0, bands = 0;
@@ -319,10 +324,12 @@ private:
     const void *zcullTo_ = nullptr;
     uint64_t zcullFrom_ = 0;
     uint32_t zcullKept_ = 0;
+    bool zcullResumed_ = false;  // resumeZcull took the parked carry
     // A slot for the region of the depth at `zetaVa`, `bytes` long; 0: none
     uint64_t zcullSlot(uint64_t zetaVa, uint64_t bytes, int &slot);
     void settleZcull();
     void parkZcull();
+    void endResumedCarry(bool retried);
     bool namingResources_ = false;
     std::vector<SetUse> memberUses_;
     uint32_t memberRemovals_ = 0;

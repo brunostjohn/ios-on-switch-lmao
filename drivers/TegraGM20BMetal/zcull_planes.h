@@ -181,6 +181,13 @@ public:
         return unstored_;
     }
 
+    // A copy of `from`'s regions, which keeps them; its counts stay its own
+    void copyFrom(const ZcullPlanes &from)
+    {
+        stored_ = from.stored_;
+        stores_ = unstored_ = 0;
+    }
+
     // `from`'s regions, which leaves none; its counts stay its own
     void carryFrom(ZcullPlanes &from)
     {
