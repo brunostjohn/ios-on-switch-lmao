@@ -31,8 +31,9 @@ MAGIC = b'GM20BPK1'
 # section's tier 0 first, a stride twin as its record's index + 1), programs' facts (PackProgram.facts); 34: pre-built
 # tier-0 state segments in tier 0 of PackHeap (PackSegments) and tier0SlmPerWarp in PackHeader; 35: programs' header
 # facts (PackProgram.facts), a variant's set-0 memory reads (PackVariant.memoryEntries), the segments' words block
-# (PackSegmentTable)
-VERSION = 36
+# (PackSegmentTable); 36: a record's buffers' Metal address words (PIPELINE_V36); 37: the rules' identity, 16 bytes
+# after the tier-0 table (big/nohash rules_identity fills them; zero here)
+VERSION = 37
 SECTIONS = 17  # runtime/pack.h PackSectionCount
 ENTRY_COMPARES = 1  # runtime/pack.h kEntryCompares: a handle's sampler slot the state samples by comparison
 ENTRY_ARRAY_VIEW = 2  # runtime/pack.h kEntryArrayView: a handle bound as a 2D-array view (m2v cube_as_array)
@@ -930,8 +931,8 @@ def pack_bytes(pack: Pack, hashes: list[int] | None = None) -> tuple[bytes, list
     sections.append(pack.segments)
     assert len(sections) == SECTIONS
     tier0 = tier0_prefixes(pack, *tier0_strings_variants, fast_rows, sections)
-    # the section table, then the stack key, chip facts and tier0SlmPerWarp, then the tier-0 table
-    header_size = 8 + 4 * 4 + 8 * 2 * len(sections) + 16 + 8 * len(sections)
+    # the section table, then the stack key, chip facts and tier0SlmPerWarp, then the tier-0 table and the rules' identity
+    header_size = 8 + 4 * 4 + 8 * 2 * len(sections) + 16 + 8 * len(sections) + 16
     offs, at = [], (header_size + 255) // 256 * 256
     body = bytearray()
     for i, s in enumerate(sections):
@@ -943,6 +944,7 @@ def pack_bytes(pack: Pack, hashes: list[int] | None = None) -> tuple[bytes, list
     hdr += struct.pack(f'<{2 * len(sections)}Q', *[x for o in offs for x in o])
     hdr += struct.pack('<QII', 0, chip_facts(), pack.tier0_slm_per_warp)  # stack (make_pack.py), chip facts, tier0 SLM
     hdr += struct.pack(f'<{len(sections)}Q', *tier0)
+    hdr += bytes(16)
     return hdr + bytes((header_size + 255) // 256 * 256 - len(hdr)) + body, blob
 
 

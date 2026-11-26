@@ -39,7 +39,7 @@ enum PackSectionId {
     PackSectionCount
 };
 
-constexpr uint32_t kPackVersion = 36;
+constexpr uint32_t kPackVersion = 37;
 
 // What a record or a program variant (PackVariant) assumes, as bits of a mask: a draw takes a variant only where all of them
 // hold. Bits 0-15 are facts of the draw's bindings, bit 16 of its pipeline, bit 26 of its pass, bits 17-25 of the chip
@@ -90,6 +90,9 @@ struct PackHeader {
     uint32_t chipFacts;
     uint32_t tier0SlmPerWarp;          // v34: max slmPerWarpOfHeader across tier-0 graphics programs
     uint64_t tier0[PackSectionCount];  // v33
+    // v37: the identity of the rules a device-made record is made by (PackRules::of), which the pack's writer names
+    // (big/nohash packfile.py rules_identity) and the shader compiler names its store by; zero until that writer fills it
+    uint8_t rules[16];
 };
 
 constexpr uint64_t kPackTierAlign = 128 << 10;
@@ -810,7 +813,7 @@ static_assert(sizeof(PackComputeFacts) == 24, "pack layout: packfile.py compute_
 static_assert(sizeof(PackReflection) == 16, "pack layout: packfile.py reflection_bytes");
 static_assert(sizeof(PackFastKey) == 16, "pack layout: packfile.py fast_key_bytes");
 static_assert(sizeof(PackSegment) == 8 && sizeof(PackSegmentTable) == 16, "pack layout: segments.py _SEGMENT_TABLE");
-static_assert(sizeof(PackHeader) == 24 + 16 * PackSectionCount + 16 + 8 * PackSectionCount,
+static_assert(sizeof(PackHeader) == 24 + 16 * PackSectionCount + 16 + 8 * PackSectionCount + 16,
               "pack layout: packfile.py pack_bytes header_size");
 static_assert(sizeof(PackKernel) == 18 + 256 + 14 + 128 + 8 * kKernelEntries + 84 + 12, "pack layout");
 static_assert(offsetof(PackKernel, stageInRegionWord) == 1012, "pack layout: packfile.py KERNEL_V21");
