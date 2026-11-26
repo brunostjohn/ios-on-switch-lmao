@@ -48,8 +48,9 @@ struct XrBesideNativeTest: HWTest {
         }
         let read = try gpu.render(fragment: "texel_read", format: .rgba32Float)
         let left = try gpu.buffer(XrSrgb.drawn), right = try gpu.buffer(XrSrgb.blended)
+        let targets = Targets(xr: xr, neighbour: beside ? r8 : nil, state: draw)
         try await gpu.run { commands in
-            Self.pass(commands, xr, beside ? r8 : nil, .clear, draw, left, x0: -1, x1: 0)
+            Self.pass(commands, targets, .clear, left, across: -1 ... 0)
             let b = MTLRenderPassDescriptor()
             b.colorAttachments[0].texture = sampled
             b.colorAttachments[0].loadAction = .dontCare
@@ -61,16 +62,24 @@ struct XrBesideNativeTest: HWTest {
             e.setFragmentTexture(xr, index: 0)
             e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
             e.endEncoding()
-            Self.pass(commands, xr, beside ? r8 : nil, .load, draw, right, x0: 0, x1: 1)
+            Self.pass(commands, targets, .load, right, across: 0 ... 1)
         }
         return (try await gpu.read(xr, bytesPerPixel: 4), try await gpu.read(sampled, bytesPerPixel: 16))
     }
 
-    /// A pass into the 555 (and `neighbour` at colour 1) that `load`s them and draws `values` over x0..x1 of the target
+    /// The 555, `neighbour` at colour 1 when there is one, and the state that draws them
+    struct Targets {
+        let xr: MTLTexture
+        let neighbour: MTLTexture?
+        let state: MTLRenderPipelineState
+    }
+
+    /// A pass into `t` that `load`s them and draws `values` over `across` of the target, in clip space
     static func pass(
-        _ commands: MTLCommandBuffer, _ xr: MTLTexture, _ neighbour: MTLTexture?, _ load: MTLLoadAction,
-        _ state: MTLRenderPipelineState, _ values: MTLBuffer, x0: Float, x1: Float
+        _ commands: MTLCommandBuffer, _ t: Targets, _ load: MTLLoadAction, _ values: MTLBuffer,
+        across: ClosedRange<Float>
     ) {
+        let (xr, neighbour, state) = (t.xr, t.neighbour, t.state)
         let p = MTLRenderPassDescriptor()
         p.colorAttachments[0].texture = xr
         p.colorAttachments[0].loadAction = load
@@ -83,7 +92,7 @@ struct XrBesideNativeTest: HWTest {
             p.colorAttachments[1].storeAction = .store
         }
         let e = commands.makeRenderCommandEncoder(descriptor: p)!
-        var corners = GPU.quad(x0: x0, y0: -1, x1: x1, y1: 1, z: 0.5)
+        var corners = GPU.quad(x0: across.lowerBound, y0: -1, x1: across.upperBound, y1: 1, z: 0.5)
         var width = UInt32(xr.width)
         e.setRenderPipelineState(state)
         e.setVertexBytes(&corners, length: MemoryLayout<SIMD4<Float>>.stride * 4, index: 0)
