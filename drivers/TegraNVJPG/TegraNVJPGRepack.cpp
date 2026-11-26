@@ -19,21 +19,47 @@ namespace {
 // one before it has ended, its re-pack included (tegra_nvjpg_repack_end), so the next may write it.
 switch_dma_pages *gPages;
 switch_gpu_backing *gBacking;
-// The last 8 bytes of gPages, past every byte a decode writes: the copy engine's re-pack runs only while they are not
-// zero (tegra_gm20b_ce_wait.when). A cancelled decode zeroes them before its fence passes, so the re-pack copies none
-// of the buffer, which may still hold an earlier decode's picture, another process's.
-constexpr uint64_t kGuardBytes = 8;
+// The last 16 bytes of gPages, past every byte a decode writes: the copy engine's re-pack runs only while the word at
+// their start is not zero (tegra_gm20b_ce_wait.when). A cancelled decode zeroes it before its fence passes, so the
+// re-pack copies none of the buffer, which may still hold an earlier decode's picture, another process's. 16 bytes and
+// 16-byte aligned: the only hardware evidence for the predicate (Mesa's nak hw_tests) reads a 16-byte structure there.
+constexpr uint64_t kGuardBytes = 16;
 
 uint64_t guardOffset()
 {
     return gPages->size - kGuardBytes;
 }
 
-void setGuard(uint64_t value)
+void storeGuard(uint64_t value)
 {
     auto *guard = reinterpret_cast<volatile uint64_t *>(gPages->va + guardOffset());
-    *guard = value;
-    switch_dcache_clean(guard, kGuardBytes);
+    guard[0] = value;
+    guard[1] = 0;
+}
+
+// Before the copies are queued: published as a CPU write of the backing, so their submission invalidates the GPU L2's
+// sysmem lines ahead of their syncpoint wait, and the predicate reads this value or the cancel's from DRAM, never a
+// line an earlier decode's copy left there. AVOID_SYNC: the earlier decode's re-pack has ended, so no engine use is
+// pending, and this thread never sleeps on one.
+int openGuard(uint64_t value)
+{
+    constexpr uint32_t access =
+        SWITCH_GPU_BACKING_WRITE | SWITCH_GPU_BACKING_CPU_NO_CACHE | SWITCH_GPU_BACKING_CPU_AVOID_SYNC;
+    int error = switch_gpu_backing_cpu_acquire(gBacking, guardOffset(), kGuardBytes, access);
+    if (error)
+        return error;
+    storeGuard(value);
+    error = switch_gpu_backing_cpu_publish(gBacking, guardOffset(), kGuardBytes);
+    const int released = switch_gpu_backing_cpu_release(gBacking, guardOffset(), kGuardBytes, access);
+    return error ? error : released;
+}
+
+// On the engine thread after the copies are queued: no backing CPU access, whose write would wait for them, and they
+// wait for this decode's fence. The L2 already dropped the guard's line at their submission (openGuard).
+void closeGuard()
+{
+    storeGuard(0);
+    switch_dcache_clean(gPages->va + guardOffset(), kGuardBytes);
 }
 
 void releasePages(void *owner)
@@ -125,12 +151,16 @@ void queueCeRepack(void *context, uint32_t syncpt, uint32_t fence)
     switch_gpu_cpu_lease *lease = run->access.owned;
     const switch_gpu_copy_ownership ownership = {lease ? &lease : nullptr, lease ? 1u : 0u, &run->access.guard, 1};
     const switch_gpu_event_submission none = {};
-    setGuard(run->guardClosed ? 0 : 1);
     // One count for the queueing itself, so no plane's completion ends the re-pack while later planes are queued
     __atomic_store_n(&run->pending, 1u, __ATOMIC_RELEASE);
     bool queued = false;
     const char *why = nullptr;
-    for (uint32_t i = 0; i < p->planes; ++i) {
+    const int guard = openGuard(run->guardClosed ? 0 : 1);
+    if (guard) {
+        __atomic_store_n(&run->status, guard, __ATOMIC_RELEASE);
+        why = "the copy guard was not published";
+    }
+    for (uint32_t i = 0; !guard && i < p->planes; ++i) {
         const tegra_gm20b_ce_plane src = {gPages->memory, p->planeStart[i], p->target.pitch[i]};
         const tegra_gm20b_ce_plane dst = {run->destination->memory, run->destination->baseOffset + p->copyDstStart[i],
                                           p->copyDstPitch[i]};
@@ -158,7 +188,7 @@ void queueCeRepack(void *context, uint32_t syncpt, uint32_t fence)
 // The decode was cancelled: the copies queued behind its fence launch with the guard zero and write nothing
 void ceCancelled(void *)
 {
-    setGuard(0);
+    closeGuard();
 }
 
 // The decode was cancelled: VIC's job queued behind its fence renders its background, not the buffer

@@ -421,7 +421,7 @@ extern "C" int tegra_gm20b_ce_copy_plane_checked(
 		result = layout(destination, destinationOffset, rowBytes, rows, to);
 	if (!result && ((from.tiled && to.tiled) || (!from.tiled && src->pitch < rowBytes) ||
 			(!to.tiled && dst->pitch < rowBytes) ||
-			(wait && wait->predicated && (from.tiled || (wait->when & 7)))))
+			(wait && wait->predicated && (from.tiled || (wait->when & 15)))))
 		result = -22;
 	const uint64_t sourceBytes =
 		from.tiled ? from.value.bytes : uint64_t(src->pitch) * (rows - 1) + rowBytes;

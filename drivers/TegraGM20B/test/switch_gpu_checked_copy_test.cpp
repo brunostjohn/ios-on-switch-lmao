@@ -860,6 +860,17 @@ TEST_F(CheckedCopy, ARewrittenSlotIsFetchedAsWritten)
 	EXPECT_EQ(syncpts[0].threshold, 3u);
 }
 
+// The copy engine's predicate is proven only on a 16-byte-aligned structure (Mesa's nak
+// hw_tests): a guard word at 8 mod 16 is refused, not left to a unit that may read the 16 bytes
+// below it.
+TEST_F(CheckedCopy, APredicateWordOffSixteenBytesIsRefused)
+{
+	auto a = allocation(), b = allocation();
+	const tegra_gm20b_ce_wait off = {7, 3, 1, 8}, on = {7, 3, 1, 16};
+	EXPECT_EQ(copy(a, b, 0, nullptr, &off), -22);
+	EXPECT_EQ(copy(a, b, 0, nullptr, &on), 0);
+}
+
 // The same push length in a rewritten slot: a stale fetch would run the slot's last copy again, and report success.
 TEST_F(CheckedCopy, ASameShapeCopyInARewrittenSlotMovesItsOwnPlanes)
 {
