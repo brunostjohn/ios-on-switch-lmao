@@ -6,6 +6,7 @@ the next one.
 
 import gzip
 import importlib.util
+import plistlib
 import tempfile
 import unittest
 from pathlib import Path
@@ -19,6 +20,7 @@ SPEC.loader.exec_module(stage)
 
 SELF = '_main/gpu/bundle.stage'
 SEED = 'ngpu/addons/TegraGM20BMetal.seed/shared'
+PREF_LINE = 'pref\tmobile/Library/Preferences/com.apple.backboardd.plist\t501\tCAEnableDeepFramebuffer\tfalse'
 
 
 class Card:
@@ -51,16 +53,40 @@ class Card:
             source.write_bytes(data)
             mode = '755' if path.endswith('/TegraGM20BMetal') else '644'
             digest = stage.hashlib.sha256(data).hexdigest()
-            lines.append(f'{path}\t{digest}\t{len(data)}\t{mode}\t_main/out/{path}')
+            lines.append(f'file\t{path}\t{digest}\t{len(data)}\t{mode}\t_main/out/{path}')
+        lines.append(PREF_LINE)
         manifest = self.runfiles / SELF
         manifest.parent.mkdir(parents=True, exist_ok=True)
         kext = stage.MANIFEST_KEXT + self.kext + '\n' if self.kext else ''
-        manifest.write_text(stage.MANIFEST_HEADER + SELF + '\n' + kext + ''.join(line + '\n' for line in lines))
+        manifest.write_text(
+            stage.MANIFEST_HEADER + 'runfiles ' + SELF + '\n' + kext + ''.join(line + '\n' for line in lines)
+        )
         return manifest
+
+    def stage_tree(self) -> Path:
+        build = self.root / 'tree'
+        manifest_lines = self.manifest().read_text().splitlines()
+        lines = [stage.MANIFEST_HEADER + 'tree']
+        for line in manifest_lines[1:]:
+            if line.startswith(stage.MANIFEST_KEXT):
+                lines.append(line)
+                continue
+            kind, *fields = line.split('\t')
+            if kind == 'file':
+                path, digest, size, mode, _ = fields
+                (build / path).parent.mkdir(parents=True, exist_ok=True)
+                (build / path).write_bytes(self.files[path])
+                fields = [path, digest, size, mode, path]
+            lines.append('\t'.join([kind, *fields]))
+        (build / stage.TREE_MANIFEST).write_text(''.join(line + '\n' for line in lines))
+        return build
+
+    def wanted(self, manifest: Path) -> dict:
+        return stage.from_manifest(manifest)[0]
 
     def sync(self) -> str:
         manifest = self.manifest()
-        return stage.sync(self.data, stage.from_manifest(manifest), lambda _: None, stage.manifest_kext(manifest))
+        return stage.sync(self.data, self.wanted(manifest), lambda _: None, stage.manifest_kext(manifest))
 
     def card(self) -> dict[str, bytes]:
         top = self.data / 'ngpu/addons'
@@ -92,7 +118,7 @@ class StageTest(Card, unittest.TestCase):
         for source in (self.runfiles / '_main/out').rglob('*'):
             if source.is_file():
                 source.unlink()
-        self.assertTrue(stage.sync(self.data, stage.from_manifest(manifest), lambda _: None).startswith('unchanged'))
+        self.assertTrue(stage.sync(self.data, self.wanted(manifest), lambda _: None).startswith('unchanged'))
 
     def test_a_change_copies_that_file_and_a_dropped_file_goes(self):
         self.sync()
@@ -113,16 +139,44 @@ class StageTest(Card, unittest.TestCase):
         self.sync()
         with gzip.open(self.data / stage.STATE, 'rt') as f:
             lines = f.read().splitlines()
-        self.assertEqual(lines[0], '# ' + stage.digest(stage.from_manifest(self.manifest())))
+        self.assertEqual(lines[0], '# ' + stage.digest(self.wanted(self.manifest())))
         self.assertEqual(sorted(line.split('\t')[0] for line in lines[1:]), sorted(self.files))
 
-    def test_a_directory_build_stages_as_its_manifest_does(self):
-        build = self.root / 'base'
-        for path, data in self.files.items():
-            (build / path).parent.mkdir(parents=True, exist_ok=True)
-            (build / path).write_bytes(data)
-        (build / 'TegraGM20BMetal.trustcache').write_bytes(b'trust')
-        self.assertEqual(stage.digest(stage.from_directory(build)), stage.digest(stage.from_manifest(self.manifest())))
+    def test_a_stage_tree_stages_as_its_runfiles_manifest_does(self):
+        self.kext = 'a' * 64
+        build = self.stage_tree()
+        tree, tree_prefs = stage.from_directory(build)
+        manifest, manifest_prefs = stage.from_manifest(self.manifest())
+        self.assertEqual(stage.digest(tree), stage.digest(manifest))
+        self.assertEqual({p: source.read_bytes() for p, (source, *_) in tree.items()}, self.files)
+        self.assertEqual(tree_prefs, manifest_prefs)
+        self.assertEqual(stage.manifest_kext(build), self.kext)
+
+    def test_preferences_merge_without_clobbering_existing_keys(self):
+        plist = self.data / 'mobile/Library/Preferences/com.apple.backboardd.plist'
+        plist.parent.mkdir(parents=True)
+        plist.write_bytes(plistlib.dumps({'ExistingKey': 42}, fmt=plistlib.FMT_BINARY))
+        _, prefs = stage.from_manifest(self.manifest())
+        stage._merge_preferences(self.data, prefs)
+        self.assertEqual(plistlib.loads(plist.read_bytes()), {'ExistingKey': 42, 'CAEnableDeepFramebuffer': False})
+
+    def test_malformed_manifests_are_refused(self):
+        bad = self.root / 'bad.stage'
+        for text in (
+            '# gpu stage 1 _main/gpu/bundle.stage\n',
+            '# gpu stage 2 tree extra\n',
+            '# gpu stage 2 tree\nother\tx\n',
+            '# gpu stage 2 tree\nfile\t../escape\taa\t1\t644\tx\n',
+            '# gpu stage 2 tree\nfile\tngpu/a\taa\t1\t644\t../escape\n',
+            (
+                '# gpu stage 2 tree\n'
+                'pref\tmobile/Library/Preferences/a.plist\t501\tk1\tfalse\n'
+                'pref\tmobile/Library/Preferences/a.plist\t0\tk2\tfalse\n'
+            ),
+        ):
+            bad.write_text(text)
+            with self.assertRaises(SystemExit):
+                stage.from_manifest(bad)
 
 
 class IconCacheRecordTest(Card, unittest.TestCase):
@@ -164,6 +218,18 @@ class IconCacheRecordTest(Card, unittest.TestCase):
         self.assertTrue(self.sync().startswith('unchanged'))
         self.assertNotEqual(self.record(), first)
         self.assertNotEqual(self.record()[:12], first[:12])  # the kernel keys its keep on the first 12 characters
+
+    def test_a_stage_tree_folds_its_kext_line_into_the_icon_record(self):
+        self.kext = 'c' * 64
+        build = self.stage_tree()
+        with (
+            mock.patch.object(stage, '_check_volume'),
+            mock.patch.object(stage.subprocess, 'run'),
+            mock.patch.object(stage.sys, 'argv', ['stage', str(self.data), '--build', str(build)]),
+        ):
+            stage.main()
+        expected = stage.icon_build(stage.digest(self.wanted(self.manifest())), self.kext) + '\n'
+        self.assertEqual(self.record(), expected)
 
     def test_a_manifest_without_a_kext_line_names_the_list_alone(self):
         self.sync()

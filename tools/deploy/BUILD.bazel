@@ -88,7 +88,10 @@ py_test(
         "deployed_test.py",
         "//tools/package:snapshot.py",
     ],
-    deps = [":lib"],
+    deps = [
+        ":lib",
+        "//tools/gpu:stage_format",
+    ],
 )
 
 py_test(

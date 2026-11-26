@@ -4,6 +4,7 @@
 #   bazel build //gpu:bundle        what deploy stages: base + the shader seed and the pack (//gpu/seed, which reads
 #                                   the IPSW's Metal libraries), as a manifest over their outputs in deploy's runfiles
 #   bazel build //gpu:trustcache    only the trust-cache module the boot package appends (both CDHashes)
+#   bazel build //gpu:stage_tree    //gpu:bundle's files copied out at their Data volume paths, with its gpu.stage
 #   bazel build //gpu:plugin --output_groups=debug   the plugin's dSYM
 #
 # Inputs: m2v's translator (third_party/m2v: steelbrain/metal2vulkan 720ef1ce and our patches as commits), its crates.io
@@ -369,6 +370,13 @@ gpu_stage(
     base = ":base",
     raw = "//gpu/seed:pack",
     seed = "//gpu/seed:seed",
+    tags = ["manual"],
+)
+
+filegroup(
+    name = "stage_tree",
+    srcs = [":bundle"],
+    output_group = "tree",
     tags = ["manual"],
 )
 
