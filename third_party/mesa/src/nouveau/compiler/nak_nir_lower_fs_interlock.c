@@ -110,6 +110,26 @@ interlock_ticket_word(nir_builder *b, const struct interlock_data *tdata,
    return nir_iadd(b, base, nir_u2u64(b, offset));
 }
 
+/* SPIR-V ends an interlock behind a device-scope release barrier on image,
+ * SSBO and global memory (spirv_to_nir), which NAK gives as MEMBAR.GL. On
+ * GM20B the release's MEMBAR.VC orders those writes ahead of the ticket's
+ * atomic add, as NVIDIA's compiler orders them, with no MEMBAR.GL.
+ */
+static void
+remove_release_barrier_before(nir_instr *instr)
+{
+   nir_instr *prev = nir_instr_prev(instr);
+   if (prev == NULL || prev->type != nir_instr_type_intrinsic)
+      return;
+
+   nir_intrinsic_instr *barrier = nir_instr_as_intrinsic(prev);
+   if (barrier->intrinsic == nir_intrinsic_barrier &&
+       nir_intrinsic_execution_scope(barrier) == SCOPE_NONE &&
+       nir_intrinsic_memory_scope(barrier) == SCOPE_DEVICE &&
+       nir_intrinsic_memory_semantics(barrier) == NIR_MEMORY_RELEASE)
+      nir_instr_remove(prev);
+}
+
 static bool
 nak_nir_lower_fs_interlock_intrin(nir_builder *b, nir_intrinsic_instr *intrin,
                                   UNUSED void *data)
@@ -147,6 +167,8 @@ nak_nir_lower_fs_interlock_intrin(nir_builder *b, nir_intrinsic_instr *intrin,
       ticket_wait = false;
       ticket_update = true;
 
+      if (tdata->nak->sm >= 50 && tdata->nak->sm < 70)
+         remove_release_barrier_before(&intrin->instr);
       b->cursor = nir_instr_remove(&intrin->instr);
       break;
    default:

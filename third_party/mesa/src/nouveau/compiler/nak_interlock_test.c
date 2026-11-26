@@ -383,8 +383,11 @@ test_release_order(void)
    struct section s = lower_spirv_section(53);
    require(s.releases == 2, "sm53: a release for the demote and the end");
    require(s.vc_membars == s.releases, "sm53: a MEMBAR.VC before every release");
+   require(s.device_releases == 0,
+           "sm53: the release barrier before the end is MEMBAR.VC alone");
    s = lower_spirv_section(75);
    require(s.vc_membars == 0, "sm75 has no MEMBAR.VC");
+   require(s.device_releases == 1, "sm75 keeps the release barrier");
 }
 
 int
