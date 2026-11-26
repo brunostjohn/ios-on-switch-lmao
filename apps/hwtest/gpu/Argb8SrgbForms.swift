@@ -80,7 +80,11 @@ public enum Argb8SrgbForms {
             encoder.setTexture(texture, index: 0)
             encoder.setBuffer(out, offset: 0, index: 0)
             encoder.dispatchThreads(
-                MTLSize(width: width, height: 1, depth: 1), threadsPerThreadgroup: MTLSize(width: 64, height: 1, depth: 1)
+                MTLSize(width: width, height: 1, depth: 1), threadsPerThreadgroup: MTLSize(
+                    width: 64,
+                    height: 1,
+                    depth: 1
+                )
             )
             encoder.endEncoding()
         }
@@ -125,7 +129,11 @@ public enum Argb8SrgbForms {
             encoder.setTexture(target, index: 0)
             encoder.setBuffer(data, offset: 0, index: 0)
             encoder.dispatchThreads(
-                MTLSize(width: width, height: 1, depth: 1), threadsPerThreadgroup: MTLSize(width: 64, height: 1, depth: 1)
+                MTLSize(width: width, height: 1, depth: 1), threadsPerThreadgroup: MTLSize(
+                    width: 64,
+                    height: 1,
+                    depth: 1
+                )
             )
             encoder.endEncoding()
         }
