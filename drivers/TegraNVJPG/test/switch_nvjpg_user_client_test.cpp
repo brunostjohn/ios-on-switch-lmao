@@ -242,6 +242,13 @@ void tegra_nvjpg_stats_line(void)
 void tegra_nvjpg_count_route(int, uint32_t)
 {}
 
+std::vector<int> gCancelled;
+
+void tegra_nvjpg_count_cancelled(int pid)
+{
+    gCancelled.push_back(pid);
+}
+
 std::vector<uint32_t> gRoutes;
 
 void tegra_nvjpg_note_route(uint32_t route, bool, uint32_t, uint32_t, uint32_t, const nvjpg_dec_drv_pic_setup_s *,
@@ -846,6 +853,51 @@ TEST_F(NVJPGUserClient, ACancelledDecodeLetsTheCopyEngineQueuedBehindItEnd)
 }
 
 // The same for VIC's re-pack of a '444f' decode.
+// HW Test's tile probe (image.nvjpg_tile_probe) tells NVJPG a tiling no driver uses. One the engine never finishes is
+// bounded by its picture (50 ms and a microsecond per 16 pixels), cancelled once with its tiling named and counted for
+// its process, and never run again; its destination's mapping runs the sink past every byte the worst reading of its
+// tiling reaches; and the next decode runs.
+TEST_F(NVJPGUserClient, AHungTileProbeIsCancelledOnceAndTheNextDecodeRuns)
+{
+    Destination d(64, 0x9d000000);
+    gSurfaceTiled = 1;
+    gSurfaceLayout = {256, 256, 4, 1024, 256, 4, 8192, 262144};
+    Job *probe = decodeInto(d, 64 * 4096, 64 * 4096);
+    probe->tileProbe = true;
+    probe->tileMode = 1;
+    probe->tileGob = 3;
+    probe->plan.extent.rowBytes[0] = 1024;
+    probe->plan.extent.rows[0] = 256;
+    probe->engine.pixels = 256 * 256;
+    probe->pid = 77;
+    gCancelled.clear();
+    const size_t streams = gEngine.streams.size();
+    gEngine.stallDecodes = true;
+    EXPECT_EQ(engineRuns(probe), kIOReturnIOError);
+    gEngine.stallDecodes = false;
+    EXPECT_EQ(gEngine.fenceBoundUs, 50000u + 256u * 256u / 16u);
+    EXPECT_TRUE(logged("tile mode 1 block height 3"));
+    EXPECT_TRUE(logged("engine reset: running again"));
+    EXPECT_EQ(gCancelled, std::vector<int>{77});
+    EXPECT_EQ(std::count_if(gEngine.streams.begin() + long(streams), gEngine.streams.end(),
+                            [](const std::vector<uint32_t> &s) { return s.size() > 3; }),
+              1)
+        << "the probe's decode is sent once";
+    EXPECT_EQ(gRoutes, std::vector<uint32_t>{TEGRA_NVJPG_ROUTE_TILE_PROBE});
+    ASSERT_NE(d.mapping(), nullptr);
+    EXPECT_GE(uint64_t(d.mapping()->mapped) * 4096, 256ull * 1024 * 64 + 1024ull * 2048);
+    EXPECT_EQ(gHolds, 0);
+
+    Destination next(4, 0x9e000000);
+    gSurfaceTiled = 0;
+    const size_t before = gEngine.streams.size();
+    EXPECT_EQ(engineRuns(decodeInto(next, 4 * 4096, 4 * 4096)), kIOReturnIOError) << "the model's engine writes no status";
+    EXPECT_EQ(gEngine.streams.size(), before + 1);
+    EXPECT_EQ(gCancelled.size(), 1u);
+    retire(&d.backing);
+    retire(&next.backing);
+}
+
 TEST_F(NVJPGUserClient, ACancelledDecodeLetsVICsRepackQueuedBehindItEnd)
 {
     gEngine.stallDecodes = true;

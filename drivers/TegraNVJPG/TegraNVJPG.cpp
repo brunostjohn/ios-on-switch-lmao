@@ -189,6 +189,8 @@ IOLock *gFlightLock;
 #if TEGRA_NVJPG_STATS
 // Written by jobs and under gStateLock, taken by the decode line's caller holding neither (relaxed).
 uint64_t gWaitsUnlocked, gStateWaitMaxUs;
+// Jobs cancelled since boot (cancelled()), read by the service per decode (relaxed)
+uint64_t gCancellations;
 #endif
 SwitchEngineGate<SwitchEngineGateKernel> gGate;
 uint32_t gSyncpt, gNext, gPicture;
@@ -425,19 +427,22 @@ int cancelled(const TegraNVJPGJob *job, uint32_t fence, uint64_t us)
 {
     char host[200];
     char falcon[400];
-    char what[200];
+    char what[240];
     char why[288];
+#if TEGRA_NVJPG_STATS
+    __atomic_fetch_add(&gCancellations, 1, __ATOMIC_RELAXED);
+#endif
     if (!gErrors.failed(why, sizeof(why)))
         snprintf(why, sizeof(why), "not reached in %llu ms", us / 1000);
     gErrors.lostCheckStart();
     const nvjpg_dec_drv_pic_setup_s &s = job->setup;
     snprintf(
         what, sizeof(what),
-        "selector %u, %dx%d (MCU %dx%d) at 1/%u, stream chroma %d to chroma %d pixel format %d memory mode %d block "
-        "height %d, %d bitstream bytes, %u planes, target format %u",
+        "selector %u, %dx%d (MCU %dx%d) at 1/%u, stream chroma %d to chroma %d pixel format %d memory mode %d tile "
+        "mode %d block height %d, %d bitstream bytes, %u planes, target format %u",
         job->selector, s.frame_width, s.frame_height, s.mcu_width, s.mcu_height, 1u << (s.power2_downscale & 3),
-        s.stream_chroma_mode, s.output_chroma_mode, s.output_pixel_format, s.memory_mode, s.block_linear_height,
-        s.bitstream_size, job->planes, job->target);
+        s.stream_chroma_mode, s.output_chroma_mode, s.output_pixel_format, s.memory_mode, s.tile_mode,
+        s.block_linear_height, s.bitstream_size, job->planes, job->target);
     tegra_host1x_describe_channel(TEGRA_HOST1X_CHANNEL_NVJPG, host, sizeof(host));
     const uint32_t reached = tegra_host1x_syncpt_read(gSyncpt);
     switch_falcon_stall(gJpg, falcon, sizeof(falcon));
@@ -658,6 +663,11 @@ void tegra_nvjpg_lock_counts(uint64_t *waitsUnlocked, uint64_t *stateWaitMaxUs)
 {
     *waitsUnlocked = __atomic_exchange_n(&gWaitsUnlocked, 0, __ATOMIC_RELAXED);
     *stateWaitMaxUs = __atomic_exchange_n(&gStateWaitMaxUs, 0, __ATOMIC_RELAXED);
+}
+
+uint64_t tegra_nvjpg_cancellations(void)
+{
+    return __atomic_load_n(&gCancellations, __ATOMIC_RELAXED);
 }
 #endif
 

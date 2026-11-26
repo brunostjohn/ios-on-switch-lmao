@@ -374,8 +374,11 @@ int main(void)
     }
 
     // HW Test's tile probe: the whole 256x256 BGRA picture into GM20B's 16-GOB blocks, the setup's tiling as asked and
-    // the plan's rows a row of GOBs apart; a placed picture, or block rows past the destination, refused
+    // the plan's rows a row of GOBs apart, its writes bounded for the mapping by the worst reading of the tiling (a
+    // stride of 64-byte GOB columns: 256 rows of 64 KiB, and a block row of 2^8 GOBs, 2 MiB); a placed picture, block
+    // rows past the destination, or a worst reading past one mapping's window, refused
     {
+        const uint64_t window = 256ull << 20;
         TegraNVJPGImage tile = image(256, 256, TEGRA_NVJPG_CHROMA_420);
         TegraNVJPGDecodeRequest rt = request(256, 256, TEGRA_NVJPG_SUB_420, 0);
         TegraNVJPGSurface dt = surface(bgra, 256, 256);
@@ -389,21 +392,23 @@ int main(void)
         expect("probe", &rt, &tile, &dt, &kAll, TEGRA_NVJPG_PLAN_OK, NULL, &p);
         memset(&st, 0, sizeof(st));
         CHECK(!tegra_nvjpg_setup_output(&tile, &p.target, true, &st, &et), "probe: setup");
-        const char *why = tegra_nvjpg_route_tile_probe(&rt, dt.length, &held, 1, 3, &p, &st, &route);
+        const char *why = tegra_nvjpg_route_tile_probe(&rt, dt.length, window, &held, 1, 3, &p, &st, &route);
         CHECK(!why && route == TEGRA_NVJPG_ROUTE_TILE_PROBE && st.tile_mode == 1 && st.block_linear_height == 3 &&
                   st.output_stride_luma == 1024 && p.target.pitch[0] == 1024 && p.planeStart[0] == 0 &&
-                  p.writeEnd == 256ull * 1024 && p.repack == TEGRA_NVJPG_REPACK_NONE,
+                  p.writeEnd == 256ull * 1024 * 64 + 1024ull * 2048 && p.repack == TEGRA_NVJPG_REPACK_NONE,
               "probe: the blocks as asked (%s)", why ? why : "ok");
-        why = tegra_nvjpg_route_tile_probe(&rt, dt.length - 4096, &held, 2, 3, &p, &st, &route);
+        why = tegra_nvjpg_route_tile_probe(&rt, dt.length - 4096, window, &held, 2, 3, &p, &st, &route);
         CHECK(why && strstr(why, "past the destination"), "probe: block rows past it: %s", why ? why : "written");
-        why = tegra_nvjpg_route_tile_probe(&rt, dt.length, &held, 2, 4, &p, &st, &route);
+        why = tegra_nvjpg_route_tile_probe(&rt, dt.length, window, &held, 2, 4, &p, &st, &route);
         CHECK(!why, "probe: code 4, 32-GOB blocks at most, lie inside 256 rows (%s)", why ? why : "ok");
-        why = tegra_nvjpg_route_tile_probe(&rt, dt.length, &held, 2, 5, &p, &st, &route);
+        why = tegra_nvjpg_route_tile_probe(&rt, dt.length, window, &held, 2, 5, &p, &st, &route);
         CHECK(why && strstr(why, "past the destination"), "probe: code 5 may ask 64-GOB blocks: %s",
               why ? why : "written");
+        why = tegra_nvjpg_route_tile_probe(&rt, dt.length, 16ull << 20, &held, 1, 3, &p, &st, &route);
+        CHECK(why && strstr(why, "worst reading"), "probe: a worst reading past the window: %s", why ? why : "written");
         TegraNVJPGDecodeRequest placed = request(64, 64, TEGRA_NVJPG_SUB_420, 0);
         placed.x_offset = 64;
-        why = tegra_nvjpg_route_tile_probe(&placed, dt.length, &held, 2, 4, &p, &st, &route);
+        why = tegra_nvjpg_route_tile_probe(&placed, dt.length, window, &held, 2, 4, &p, &st, &route);
         CHECK(why && strstr(why, "placed"), "probe: a placed picture: %s", why ? why : "written");
     }
 

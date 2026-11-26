@@ -72,9 +72,13 @@ static inline const char *tegra_nvjpg_route(const TegraNVJPGDecodeRequest *r, co
 // unchanged, which the T210's firmware passes to PDMA_PIC_INFO1. Told tile_mode 2 the engine wrote rows
 // (TegraNVJPGJpeg.h); this settles every mode and block height on the device. The code's GOBs a block are 2^gob, or
 // 2^(gob + 1) if the decoder takes the encoder's gobHeight coding (nvjpg_drv.h): the block rows the larger reaches lie
-// inside the destination. NULL with *route, or why not.
+// inside the destination. Where tile mode 1 puts its bytes is unproven: its stride may count 64-byte GOB columns, not
+// bytes, and its blocks run to 2^8 GOBs. The plan's writeEnd covers every byte those readings reach, so the mapping's
+// sink takes a misread write instead of the output window's next mapping, another surface. `window` the most one
+// mapping may span. NULL with *route, or why not.
 static inline const char *tegra_nvjpg_route_tile_probe(const TegraNVJPGDecodeRequest *r, uint64_t length,
-                                                       const TegraNVJPGDestinationLayout *l, uint32_t tileMode,
+                                                       uint64_t window, const TegraNVJPGDestinationLayout *l,
+                                                       uint32_t tileMode,
                                                        uint32_t gob, TegraNVJPGPlan *p, nvjpg_dec_drv_pic_setup_s *s,
                                                        uint32_t *route)
 {
@@ -88,9 +92,13 @@ static inline const char *tegra_nvjpg_route_tile_probe(const TegraNVJPGDecodeReq
     const uint64_t end = (p->extent.rows[0] + blockRows - 1) / blockRows * blockRows * l->layout.row_bytes;
     if (p->extent.rowBytes[0] > l->layout.row_bytes || end > length)
         return "a tile probe whose block rows run past the destination";
+    const uint64_t worst =
+        (uint64_t)p->extent.rows[0] * l->layout.row_bytes * 64 + (uint64_t)l->layout.row_bytes * (8u << 8);
+    if (worst > window)
+        return "a tile probe whose worst reading of its tiling runs past one mapping's window";
     p->target.pitch[0] = l->layout.row_bytes;
     p->planeStart[0] = 0;
-    p->writeEnd = end;
+    p->writeEnd = end > worst ? end : worst;
     s->output_stride_luma = (int)l->layout.row_bytes;
     s->tile_mode = (int)tileMode;
     s->block_linear_height = (int)gob;

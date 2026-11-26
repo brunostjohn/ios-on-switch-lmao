@@ -111,6 +111,8 @@ constexpr uint32_t kRouteMagic = 0x5050;  // 'PP', as TegraGM20BMethodPaths
 // image.nvjpg_tile_probe (TegraNVJPGRoute.h tegra_nvjpg_route_tile_probe)
 constexpr uint32_t kTileProbeMagic = 0x5054;
 #endif
+static_assert(sizeof(TegraNVJPGRouteCounts::routes) / sizeof(uint64_t) == TEGRA_NVJPG_ROUTE_COUNT,
+              "a route count for every route");
 #endif
 
 uint32_t gFirstLogged;  // bit n: a decode into TEGRA_NVJPG_OUT_n has been logged (engine thread)
@@ -158,6 +160,7 @@ struct Job {
 #if TEGRA_NVJPG_STATS
     bool tileProbe;  // HW Test's tile probe (kTileProbeMagic): tileMode and tileGob go to the setup unchanged
     uint32_t tileMode, tileGob;
+    uint64_t cancelsBefore;  // tegra_nvjpg_cancellations() as the job began
 #endif
 
     union {
@@ -262,9 +265,9 @@ const char *routeJob(Job *job, const SwitchNVJPGBacking &target, void **hold, ui
     const TegraNVJPGSurface d = surfaceDesc(job->dst.desc);
 #if TEGRA_NVJPG_STATS
     const char *why = job->tileProbe
-                          ? tegra_nvjpg_route_tile_probe(&job->request.base, job->dst.desc.length, &layout,
-                                                         job->tileMode, job->tileGob, &job->plan, &job->engine.setup,
-                                                         route)
+                          ? tegra_nvjpg_route_tile_probe(&job->request.base, job->dst.desc.length,
+                                                         kTegraNVJPGOutputBytes, &layout, job->tileMode, job->tileGob,
+                                                         &job->plan, &job->engine.setup, route)
                           : tegra_nvjpg_route(&job->request.base, &d, kTegraNVJPGOutputBytes,
                                               job->dst.memory != nullptr, &layout, &job->plan, &job->engine.setup,
                                               route);
@@ -282,6 +285,10 @@ const char *routeJob(Job *job, const SwitchNVJPGBacking &target, void **hold, ui
 
 IOReturn ended(Job *job, int error, const nvjpg_dec_status &status, uint64_t busy)
 {
+#if TEGRA_NVJPG_STATS
+    if (tegra_nvjpg_cancellations() != job->cancelsBefore)
+        tegra_nvjpg_count_cancelled(job->pid);
+#endif
     IOReturn ret = ioreturn(error);
     if (!ret && (status.error_status || !status.bytes_offset))
         ret = kIOReturnIOError;
@@ -417,6 +424,9 @@ bool beginDirect(Job *job, const SwitchNVJPGBacking &target, uint32_t extent)
 // VIC's own view of the destination. True: in flight; false: ended, job->status its result.
 bool beginJob(Job *job)
 {
+#if TEGRA_NVJPG_STATS
+    job->cancelsBefore = tegra_nvjpg_cancellations();
+#endif
     if (job->plan.repack == TEGRA_NVJPG_REPACK_VIC)
         return beginRepack(job);
     uint32_t extent = static_cast<uint32_t>(switch_div_round_up(job->dst.desc.length, SWITCH_HW_PAGE_SIZE));

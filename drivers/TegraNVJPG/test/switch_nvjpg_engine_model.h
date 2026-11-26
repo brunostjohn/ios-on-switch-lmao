@@ -48,6 +48,7 @@ struct Engine {
     // a job's host1x waits and fence armings taken with gStateLock held; the power lock taken inside gStateLock
     int waitsUnderStateLock = 0, powerUnderStateLock = 0;
     uint32_t syncpt = 369427729, lastBoundUs = 0;
+    uint32_t fenceBoundUs = 0;  // the last job fence's bound
     std::vector<std::vector<uint32_t>> streams;
     std::map<unsigned, bool> clocks, resets;
 
@@ -147,7 +148,7 @@ void switch_host1x_fence_init(switch_host1x_fence *fence, uint32_t syncpt, uint3
 int switch_host1x_fence_add(switch_host1x_fence *fence, uint32_t boundUs)
 {
     gEngine.waitsUnderStateLock += gStateLock && gStateLock->locked;
-    gEngine.lastBoundUs = boundUs;
+    gEngine.lastBoundUs = gEngine.fenceBoundUs = boundUs;
     if (const int error = std::exchange(gEngine.armError, 0))
         return error;
     EXPECT_EQ(gEngine.armed, nullptr) << "one job on the engine at a time";
