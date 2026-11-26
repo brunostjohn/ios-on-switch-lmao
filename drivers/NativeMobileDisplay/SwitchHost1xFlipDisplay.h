@@ -12,10 +12,10 @@
 #if SWITCH_FRAME_TIMELINE
 struct Host1xFlipState {
     switch_host1x_flip::Run run;
-    uint32_t syncpts[2] = {};  // producer, display
+    uint32_t syncpts[4] = {};  // producer, display, window A's REG_WR_SAFE and LINE_FLIPPED
     bool syncptsReady = false, holding = false;
     int aliasSlot = -1;
-    char line[360] = "host1x_flip=not_run";
+    char line[480] = "host1x_flip=not_run";
 };
 
 static Host1xFlipState host1xFlip;
@@ -92,7 +92,7 @@ void host1xFlipLine(char *line, size_t size)
 int host1xFlipStart(uint32_t request)
 {
     const uint32_t flips = request & 0xffff;
-    if (!flips || flips > switch_host1x_flip::kMaxFlips || (request & ~(0xffffu | switch_host1x_flip::kForcedFailure)))
+    if (!flips || flips > switch_host1x_flip::kMaxFlips || (request & ~(0xffffu | switch_host1x_flip::kModes)))
         return EINVAL;
     if (!getWorkLoop())
         return ENODEV;
@@ -115,7 +115,7 @@ int host1xFlipStart(uint32_t request)
             snprintf(host1xFlip.line, sizeof(host1xFlip.line), "host1x_flip=not_run reason=%s", why);
             return;
         }
-        host1xFlip.run.begin(flips, (request & switch_host1x_flip::kForcedFailure) != 0u);
+        host1xFlip.run.begin(flips, request);
         host1xFlip.holding = true;
         native_legacy_frame_end_hold();
     });
@@ -207,6 +207,32 @@ struct Host1xFlipIo {
     static uint32_t displayValue()
     {
         return tegra_host1x_syncpt_read(display());
+    }
+
+    static uint32_t window(uint32_t i)
+    {
+        return host1xFlip.syncpts[2 + i];
+    }
+
+    static uint32_t windowValue(uint32_t i)
+    {
+        return tegra_host1x_syncpt_read(window(i));
+    }
+
+    static uint32_t vblankValue()
+    {
+        return tegra_host1x_syncpt_read(switch_host1x_flip::kVblankSyncpt);
+    }
+
+    // After a teardown: window A's syncpoint client drops what its FIFO holds (TRM 24.6.5 SOFT_RESET), then the CPU
+    // raises both syncpoints to where the torn-down stream would have.
+    void settleWindow(uint32_t regWrSafeAt, uint32_t lineFlippedAt) const
+    {
+        constexpr uint32_t kWinASyncptControl = 0x009;  // DC_CMD_WIN_A_INCR_SYNCPT_CNTRL
+        d->dc[kWinASyncptControl] = 1;
+        d->dc[kWinASyncptControl] = 0;
+        tegra_host1x_syncpt_release_failed(window(0), regWrSafeAt, switch_host1x_flip::kMaxFlips);
+        tegra_host1x_syncpt_release_failed(window(1), lineFlippedAt, switch_host1x_flip::kMaxFlips);
     }
 
     static uint32_t *reserve(uint32_t capacity)
@@ -363,13 +389,16 @@ void host1xFlipFinished()
         planeDropSlot(static_cast<unsigned>(s.aliasSlot));
     s.aliasSlot = -1;
     const auto &t = r.totals;
+    const auto &w = t.window;
     snprintf(s.line, sizeof(s.line),
              "host1x_flip=%s flips=%u forced=%d host1x=%u gate=%u latched=%u not_as_written=%u unwritten=%u "
-             "teardowns=%u after_teardown=%u written=%u display_delta=%u underflows=%u waited=%u stop=%s",
+             "teardowns=%u after_teardown=%u written=%u display_delta=%u underflows=%u waited=%u stop=%s modes=%#x "
+             "reg_wr_safe=%u/%u/%u/%u line_flipped=%u/%u/%u/%u vblank=%u/%u/%u/%u",
              r.issued || r.why == nullptr ? "done" : "not_run", r.flips, r.failAt != r.kNoFlip, t.host1x, t.gate,
              t.latched, t.notAsWritten, t.unwritten, t.teardowns, t.afterTeardown, t.written,
              r.issued ? Host1xFlipIo::displayValue() - r.displayStart : 0u, t.underflows, t.waited,
-             r.why ? r.why : "none");
+             r.why ? r.why : "none", r.modes, w[0][0], w[0][1], w[0][2], w[0][3], w[1][0], w[1][1], w[1][2], w[1][3],
+             t.vblank[0], t.vblank[1], t.vblank[2], t.vblank[3]);
     IOLog("SwitchDisplay: host1x flip run: %s\n", s.line);
     if (s.holding) {
         s.holding = false;
