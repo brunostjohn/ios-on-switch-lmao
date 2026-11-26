@@ -69,6 +69,24 @@ fn f2f_immediates_are_float_bits() {
 
 /// Two SELs of 32-bit immediates in one block, the second `gap` instructions
 /// after the first: the copies legalize put before them and their sources
+/// RRO needs no scoreboard; the MUFU it feeds still does
+#[test]
+fn rro_is_fixed_latency() {
+    let dst: Dst = RegRef::new(RegFile::GPR, 1, 1).into();
+    let rro = Op::Rro(Box::new(OpRro {
+        dst: dst.clone(),
+        op: RroOp::Exp2,
+        src: Src::ZERO,
+    }));
+    let mufu = Op::MuFu(Box::new(OpMuFu {
+        dst,
+        op: MuFuOp::Exp2,
+        src: Src::ZERO,
+        op_type: FloatType::F32,
+    }));
+    assert!(rro.has_fixed_latency(53) && !mufu.has_fixed_latency(53));
+}
+
 fn sels_of(imms: [u32; 2], gap: usize) -> (usize, [Src; 2]) {
     let sm = ShaderModelInfo::new(53, 64);
     let mut alloc = SSAValueAllocator::new();

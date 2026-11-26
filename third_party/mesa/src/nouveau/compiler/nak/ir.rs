@@ -8337,7 +8337,10 @@ impl Op {
             | Op::FSwzAdd(_) => true,
 
             // Multi-function unit is variable latency
-            Op::Rro(_) | Op::MuFu(_) => false,
+            Op::MuFu(_) => false,
+            // ios-on-switch-lmao: RRO is not, on GM20B: NVIDIA's code sets
+            // no barrier on it and reads it 2 cycles later
+            Op::Rro(_) => true,
 
             // Double-precision float ALU
             Op::DAdd(_)
