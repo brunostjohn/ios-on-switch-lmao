@@ -136,6 +136,7 @@ struct BlendKillTest: HWTest {
             if arm.wrong != 0 { wrong.append("\(label)_wrong") }
             if arm.colourChanged != 0 { wrong.append("\(label)_colour_changed_bytes") }
         }
+        try await Self.reachArms(gpu, &metrics, &wrong, &paths)
         metrics.set("paths", paths.filter { $0 != "gm20b" }.isEmpty ? "gm20b" : paths.joined(separator: ","))
         if paths.contains(where: { $0 != "gm20b" }) { wrong.append("paths") }
         return wrong.isEmpty ? .pass(metrics) : .fail(wrong.joined(separator: ","), metrics)

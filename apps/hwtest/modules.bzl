@@ -241,6 +241,7 @@ TESTS_DEPTH_SRCS = [
     "tests/AegirMoonTest.swift",
     "tests/AlphaToCoverageTest.swift",
     "tests/Bgra10XrResolveTest.swift",
+    "tests/BlendKillReachArms.swift",
     "tests/BlendKillTest.swift",
     "tests/BlendTwinTest.swift",
     "tests/CoherenceBench.swift",
