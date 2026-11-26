@@ -43,25 +43,6 @@ std::string besidePlugin(const char *name, bool up = false)
     return path + "/" + name;
 }
 
-gm20b::Digest rulesDigest(const gm20b::PackRules &r)
-{
-    std::string bytes;
-    const auto word = [&](uint32_t v) {
-        bytes.append(reinterpret_cast<const char *>(&v), sizeof v);
-    };
-    word(uint32_t(r.varying.size()));
-    for (uint32_t v : r.varying)
-        word(v);
-    for (const auto *registers : {&r.baseline, &r.context}) {
-        word(uint32_t(registers->size()));
-        for (const auto &[method, value] : *registers) {
-            word(method);
-            word(value);
-        }
-    }
-    return gm20b::sha256(bytes.data(), bytes.size());
-}
-
 }  // namespace
 
 struct Engine::State {
@@ -96,7 +77,7 @@ bool Engine::open(uint64_t stack, const EngineInputs &inputs, std::string &why)
     s.inputs = inputs;
     if (!s.pack.load(inputs.pack.c_str(), stack, why))
         return why = "the pack: " + why, false;
-    s.rules = rulesDigest(gm20b::PackRules::of(s.pack));
+    memcpy(s.rules.data(), s.pack.header()->rules, sizeof s.pack.header()->rules);
     s.libraries = std::make_shared<LibraryCache>(inputs.systemRoot);
     s.codeGen = std::make_unique<CodeGen>(inputs.codeGen);
     s.stages = std::make_unique<CompiledStages>(kKeptStageBytes);

@@ -2156,6 +2156,17 @@ py_test(
 )
 
 py_test(
+    name = "pack_rules_identity_test",
+    srcs = ["pack_rules_identity_test.py"],
+    data = [
+        "//drivers/TegraGM20BMetal:chip_facts.h",  # packfile.py stamps its chip facts
+        "//drivers/TegraGM20BMetal:own_states.h",
+        "//drivers/TegraGM20BMetal:owned.h",
+    ],
+    deps = ["//drivers/TegraGM20BMetal:pack"],
+)
+
+py_test(
     name = "pack_reflections_test",
     srcs = ["pack_reflections_test.py"],
     data = [
@@ -6944,6 +6955,7 @@ genrule(
     outs = ["pack_v34_fixture.bin"],
     cmd = "$(execpath :pack_v34_fixture_bin) $@",
     tools = [":pack_v34_fixture_bin"],
+    visibility = ["//drivers/TegraGM20B/test:__pkg__"],
 )
 
 [host_test(

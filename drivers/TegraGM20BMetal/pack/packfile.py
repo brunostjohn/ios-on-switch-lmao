@@ -29,8 +29,9 @@ MAGIC = b'GM20BPK1'
 # blob section); 28: the selector section (PackSelectors), a state's shader-side stencil push word (shadow_stencil_word)
 # 31: the selector section gone; 32: the fast keys section (PackFastKeys); 33: two tiers (the header's tier0 table, each
 # section's tier 0 first, a stride twin as its record's index + 1), programs' facts (PackProgram.facts); 34: pre-built
-# tier-0 state segments in tier 0 of PackHeap (PackSegments) and tier0SlmPerWarp in PackHeader
-VERSION = 34
+# tier-0 state segments in tier 0 of PackHeap (PackSegments) and tier0SlmPerWarp in PackHeader; 35: the rules' identity
+# (rules_identity) after the tier-0 table
+VERSION = 35
 SECTIONS = 17  # runtime/pack.h PackSectionCount
 ENTRY_COMPARES = 1  # runtime/pack.h kEntryCompares: a handle's sampler slot the state samples by comparison
 ENTRY_ARRAY_VIEW = 2  # runtime/pack.h kEntryArrayView: a handle bound as a 2D-array view (m2v cube_as_array)
@@ -849,6 +850,23 @@ def sections_line(data: bytes) -> str:
     )
 
 
+def rules_identity(pack: Pack) -> bytes:
+    """The first 16 bytes of the SHA-256 of the rules a device-made record is made by (record_parts.cpp
+    PackRules::of): the registers the pack's states set apart, the baseline, and the context its init leaves, as
+    little-endian words, each list's count first. The shader compiler names its store by it (compiler_store.h)."""
+    varying = sorted({m for rec in pack.pipes for m, _ in rec['blob']})
+    context: dict[int, int] = {}
+    for subc, method, data, reloc in pack.init:
+        if subc == 0 and reloc == 0 and data:
+            context[method] = data
+        elif subc == 0:
+            context.pop(method, None)
+    words = [len(varying), *varying]
+    for registers in (pack.baseline, context):
+        words += [len(registers), *[x for m, v in sorted(registers.items()) for x in (m, v)]]
+    return hashlib.sha256(struct.pack(f'<{len(words)}I', *words)).digest()[:16]
+
+
 def pack_bytes(pack: Pack, hashes: list[int] | None = None) -> tuple[bytes, list[int]]:
     tier0_strings_variants: list[int] = []
     vnames = [variant_name(rec['key']) for rec in pack.pipes]
@@ -918,8 +936,8 @@ def pack_bytes(pack: Pack, hashes: list[int] | None = None) -> tuple[bytes, list
     sections.append(pack.segments)
     assert len(sections) == SECTIONS
     tier0 = tier0_prefixes(pack, *tier0_strings_variants, fast_rows, sections)
-    # the section table, then the stack key, chip facts and tier0SlmPerWarp, then the tier-0 table
-    header_size = 8 + 4 * 4 + 8 * 2 * len(sections) + 16 + 8 * len(sections)
+    # the section table, then the stack key, chip facts and tier0SlmPerWarp, then the tier-0 table and the rules' identity
+    header_size = 8 + 4 * 4 + 8 * 2 * len(sections) + 16 + 8 * len(sections) + 16
     offs, at = [], (header_size + 255) // 256 * 256
     body = bytearray()
     for i, s in enumerate(sections):
@@ -931,6 +949,7 @@ def pack_bytes(pack: Pack, hashes: list[int] | None = None) -> tuple[bytes, list
     hdr += struct.pack(f'<{2 * len(sections)}Q', *[x for o in offs for x in o])
     hdr += struct.pack('<QII', 0, chip_facts(), pack.tier0_slm_per_warp)  # stack (make_pack.py), chip facts, tier0 SLM
     hdr += struct.pack(f'<{len(sections)}Q', *tier0)
+    hdr += rules_identity(pack)
     return hdr + bytes((header_size + 255) // 256 * 256 - len(hdr)) + body, blob
 
 

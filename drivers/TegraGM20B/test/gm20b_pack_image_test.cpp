@@ -774,11 +774,25 @@ TEST_F(PackImageTest, PackHeaderAndAbiLayoutMatchMetalPackH)
 	static_assert(offsetof(SwitchGpuPackHeader, tier0SlmPerWarp) ==
 		      offsetof(gm20b::PackHeader, tier0SlmPerWarp));
 	static_assert(offsetof(SwitchGpuPackHeader, tier0) == offsetof(gm20b::PackHeader, tier0));
+	static_assert(offsetof(SwitchGpuPackHeader, rules) == offsetof(gm20b::PackHeader, rules));
 
 	EXPECT_EQ(TGM_PACK_WINDOW_VA, (1ULL << 39) - (4ULL << 30));
 	EXPECT_EQ(TGM_PACK_WINDOW_BYTES, 4ULL << 30);
 	EXPECT_STREQ(TGM_PACK_PATH, "/System/Library/Extensions/TegraGM20BMetal.pack/pack.bin");
 	EXPECT_EQ(TegraGM20BMethodPackImageMap, 41u);
+}
+
+// The pack packfile.py writes, at the version it writes, is one the kernel maps: a version the writer moved alone would
+// refuse every image at boot
+TEST_F(PackImageTest, ThePackTheWriterMakesPassesTheKernelsHeaderCheck)
+{
+	const std::string pack = SourceText("../../TegraGM20BMetal/test/pack_v34_fixture.bin");
+	ASSERT_GE(pack.size(), sizeof(SwitchGpuPackHeader));
+	SwitchGpuPackHeader hdr = {};
+	std::memcpy(&hdr, pack.data(), sizeof(hdr));
+	EXPECT_EQ(hdr.version, kSwitchGpuPackVersion);
+	const char *why = nullptr;
+	EXPECT_TRUE(switch_gpu_pack_validate_header(&hdr, pack.size(), &why)) << (why ? why : "");
 }
 
 TEST_F(PackImageTest, HeaderValidationRefusesMalformedHeaders)
