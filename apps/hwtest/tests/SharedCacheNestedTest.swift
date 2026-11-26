@@ -5,8 +5,8 @@ import SwitchSharedCacheProbe
 
 /// The dyld shared cache's read-only data (each subcache's __DATA_CONST and __AUTH_CONST mappings) as the app's own map
 /// holds it: still the shared region's nested pmap. dyld remaps all of them VM_PROT_COPY in every process when it has
-/// to store into the cache without TPRO pagers; on iOS 27 its function-variant slots did that until the shared region
-/// pager delivered them filled (kernel/switch/include/switch/fvariant.h). This covers an app process, and the kernel's
+/// to store into the cache without TPRO pagers. iOS 27's function-variant slots would make it do so; the shared region
+/// pager delivers them filled (kernel/switch/include/switch/fvariant.h). This covers an app process, and the kernel's
 /// lookup of the cache it maps, on the device.
 struct SharedCacheNestedTest: HWTest {
     let id = "system.shared_cache_nested"

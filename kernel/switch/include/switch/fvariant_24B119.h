@@ -4,7 +4,8 @@
  * __TPRO_CONST) and the default implementation of each. Every table is per-process and picks its other
  * implementation only for per-process flag 2, MTE availability (has_sec_transition in apple[]), which this kernel never
  * passes (bsd/kern/kern_exec.c pushes it only under HAS_MTE). kernel/tests/switch_fvariant_test.cpp derives these from
- * the caches' bytes.
+ * the caches' bytes. 24B119's dyld compares a slot with its choice before it stores (0x1804a7d88: ldr, cmp, b.eq over
+ * makeWriteable, str).
  */
 #ifndef SWITCH_FVARIANT_24B119_H
 #define SWITCH_FVARIANT_24B119_H

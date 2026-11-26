@@ -14,7 +14,7 @@
 
 const struct switch_fvariant_cache *switch_fvariant_for_region(struct vm_shared_region *sr)
 {
-    static uint32_t unpinned_logged;
+    static uint32_t unread_logged, unpinned_logged;
     uint8_t header[SWITCH_FVARIANT_HEADER_SIZE];
     const struct switch_fvariant_cache *cache = NULL;
 
@@ -24,6 +24,11 @@ const struct switch_fvariant_cache *switch_fvariant_for_region(struct vm_shared_
      */
     if (sr->sr_first_mapping == (mach_vm_offset_t)-1 ||
         copyin((user_addr_t)(sr->sr_base_address + sr->sr_first_mapping), header, sizeof(header)) != 0) {
+        if (OSCompareAndSwap(0, 1, &unread_logged)) {
+            os_log_error(OS_LOG_DEFAULT,
+                         "SwitchFvariant: a shared region's cache header could not be read: its "
+                         "function-variant slots stay unfilled, and dyld will remap its read-only data");
+        }
         return NULL;
     }
     const uint8_t *uuid = header + SWITCH_FVARIANT_HEADER_UUID;

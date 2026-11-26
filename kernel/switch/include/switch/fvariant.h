@@ -9,9 +9,8 @@
  * which takes about 356 MB of read-only cache out of the shared nested pmap in each process. The pager delivers the
  * page with the value dyld selects on this system already stored, dyld's compare matches, and it writes nothing.
  *
- * dyld compares each slot with its own choice and stores that whenever they differ (24B119 dyld 0x1804a7d88: ldr,
- * cmp, b.eq over makeWriteable and str), so a pinned value it would not choose is overwritten and the process remaps
- * the cache as it would without the fill.
+ * dyld compares each slot with its own choice and stores that whenever they differ, so a pinned value it would not
+ * choose is overwritten and the process remaps the cache as it would without the fill.
  */
 #ifndef SWITCH_FVARIANT_H
 #define SWITCH_FVARIANT_H

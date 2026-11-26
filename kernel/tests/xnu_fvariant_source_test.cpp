@@ -80,7 +80,15 @@ TEST(XnuFvariantSource, TheLookupReadsTheMainHeaderAndClassifiesIt)
     // What it returns is what the classifier picked: NULL only for a cache with no pinned slots.
     EXPECT_NE(lookup.find("&cache)) {", classify), std::string::npos);
     EXPECT_NE(lookup.find("\n    return cache;", classify), std::string::npos);
-    EXPECT_EQ(lookup.find("return NULL;", classify), std::string::npos);
+    // The one NULL return is the header read's failure branch, which logs once.
+    const size_t failure = Find(lookup, ") != 0) {", read);
+    const size_t null = Find(lookup, "return NULL;");
+    EXPECT_EQ(lookup.find("return NULL;", null + 1), std::string::npos);
+    EXPECT_LT(failure, null);
+    EXPECT_LT(null, classify);
+    EXPECT_NE(lookup.substr(failure, null - failure).find("os_log_error("), std::string::npos);
+    EXPECT_EQ(lookup.find("cache = NULL", lookup.find("cache = NULL") + 1), std::string::npos)
+        << "only its declaration";
     EXPECT_NE(lookup.find("os_log_error(", classify), std::string::npos) << "an unpinned cache logs in release too";
 
     const std::string region = SourceText("../xnu-12377.121.6/osfmk/vm/vm_shared_region.c");
