@@ -171,6 +171,11 @@ static enum tgm_wait_source semaphore_source(struct tgm_chan *chan,
 		at = READ_ONCE(*word);
 		if (!tgm_acquire_blocked(w->operation, at, w->payload))
 			return TGM_WAITS_NONE;
+		if (!owner && switch_gpu_pack_failed_word(tgm_fence_offset(word))) {
+			scnprintf(what, len, "the pack image's stream, stopped at chunk %u of %u",
+				  at, w->payload);
+			return TGM_WAITS_FAILED;
+		}
 		scnprintf(what, len, "%s ch %d fence %u (at %u)", owner ? owner->owner : "a gone",
 			  owner ? (int)owner->chid : -1, w->payload, at);
 		*source = owner;
@@ -513,4 +518,32 @@ void tgm_acquire_suspend(void)
 	nvxnu_work_cancel_wait(acq.recheck);
 	for (i = 0; i < ACQUIRE_WORDS; i++)
 		__atomic_store_n(&acq.pending[i], 0, __ATOMIC_RELAXED);
+}
+
+/* A stopped producer's waiters, failed one at a time: a recovery may end channels, so the walk starts again after each */
+void tgm_acquire_recover_failed(const char *why)
+{
+	struct tgm_chan *chan = NULL;
+	struct tgm_chan *source = NULL;
+	char what[112];
+	int recovered = 1;
+	u32 rounds = 0;
+
+	while (recovered && rounds++ < ACQUIRE_CHIDS) {
+		const u64 now = nvxnu_nanotime();
+		recovered = 0;
+		mutex_lock(&tgm_live_lock);
+		list_for_each_entry(chan, &tgm_live_chans, live)
+		{
+			if (READ_ONCE(chan->error) || chan->isolating ||
+			    tgm_chan_wait_source(chan, &source, what, sizeof(what)) !=
+				    TGM_WAITS_FAILED)
+				continue;
+			tgm_hang_recover(chan, why, tgm_chan_completed(chan) + 1,
+					 chan->submit_ns ? now - chan->submit_ns : 0);
+			recovered = 1;
+			break;
+		}
+		mutex_unlock(&tgm_live_lock);
+	}
 }

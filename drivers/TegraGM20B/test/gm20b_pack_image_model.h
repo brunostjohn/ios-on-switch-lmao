@@ -122,6 +122,13 @@ struct Model {
 	bool releaseFirstPagein = false;
 	uint32_t sleepers = 0;
 	uint32_t unintSleepers = 0;
+	// The pack image's stream: page-ins of its heap (past the header's pages), the heap page-in to hold at (1 its first,
+	// 0 none), the kernel fence page's words its frontier is one of, and the failed waits recovered
+	uint32_t heapPageins = 0;
+	uint32_t pauseHeapPagein = 0;
+	bool callPaused = false, releaseCall = false;
+	uint32_t fenceWords[64] = {};
+	std::vector<std::string> recovered;
 
 	void reset()
 	{
@@ -159,6 +166,11 @@ struct Model {
 		pauseFirstPagein = false;
 		firstPageinEntered = false;
 		releaseFirstPagein = false;
+		heapPageins = 0;
+		pauseHeapPagein = 0;
+		callPaused = releaseCall = false;
+		std::memset(fenceWords, 0, sizeof(fenceWords));
+		recovered.clear();
 		sleepers = 0;
 		unintSleepers = 0;
 		memorystatus_vm_pressure_level = 0;
@@ -481,11 +493,21 @@ int vnode_pagein(vnode_t, upl_t, upl_offset_t, uint64_t f_offset, upl_size_t siz
 {
 	std::unique_lock<std::mutex> g(gModel.mu);
 	const int callIdx = int(gModel.pageinCalls++);
+	const bool heap = f_offset >= kSwitchGpuPackTierAlign;
+	if (heap)
+		++gModel.heapPageins;
 	if (gModel.pauseFirstPagein && callIdx == 0) {
 		gModel.firstPageinEntered = true;
 		gModel.cv.notify_all();
 		gModel.cv.wait(g, [] {
 			return gModel.releaseFirstPagein;
+		});
+	}
+	if (heap && gModel.heapPageins == gModel.pauseHeapPagein) {
+		gModel.callPaused = true;
+		gModel.cv.notify_all();
+		gModel.cv.wait(g, [] {
+			return gModel.releaseCall;
 		});
 	}
 	if (gModel.failPageinOnCall == callIdx) {
@@ -627,6 +649,29 @@ thread_t current_thread(void)
 kern_return_t thread_terminate(thread_t)
 {
 	return KERN_SUCCESS;
+}
+
+int tgm_fence_kernel(unsigned int which, volatile uint32_t **va, uint64_t *page_pa,
+		     uint32_t *offset)
+{
+	if (which >= TGM_FENCE_KERNEL_CHANNELS)
+		return -22;
+	*va = &gModel.fenceWords[which * 4];
+	*page_pa = 0x7f000000ULL;
+	*offset = which * 16u;
+	return 0;
+}
+
+uint32_t tgm_fence_offset(const volatile uint32_t *word)
+{
+	return 0x100000u + uint32_t(reinterpret_cast<uintptr_t>(word) -
+				    reinterpret_cast<uintptr_t>(&gModel.fenceWords[0]));
+}
+
+void tgm_acquire_recover_failed(const char *why)
+{
+	std::lock_guard<std::mutex> g(gModel.mu);
+	gModel.recovered.push_back(why);
 }
 
 void tgm_cpu_clean_pages(const uint64_t *, uint32_t)

@@ -472,8 +472,17 @@ enum tgm_fence_kernel_channel {
 	TGM_FENCE_KERNEL_RELAYOUT,
 	TGM_FENCE_KERNEL_BRIDGE,
 	TGM_FENCE_KERNEL_CACHED_ZERO,
+	/* no channel: the pack image's stream raises its word to the chunks landed (SwitchGpuPackImage.cpp) */
+	TGM_FENCE_KERNEL_PACK,
 	TGM_FENCE_KERNEL_CHANNELS,
 };
+
+/* SwitchGpuPackImage.cpp: whether `pool` (a fence-pool offset) is the word of a pack image whose stream stopped before
+ * its end. A channel parked on it is failed, not a victim (gpu_acquire.c semaphore_source). */
+int switch_gpu_pack_failed_word(uint32_t pool);
+/* gpu_acquire.c: every channel parked on a failed word (switch_gpu_pack_failed_word) recovered as a hang, its work
+ * failed with `why`. Thread context, tgm_live_lock not held. */
+void tgm_acquire_recover_failed(const char *why);
 
 int tgm_fence_kernel(unsigned int which, volatile uint32_t **va, uint64_t *page_pa,
 		     uint32_t *offset);

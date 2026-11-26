@@ -648,7 +648,8 @@ static int words_valid(const struct tgm_chan *chan, const struct switch_gpu_word
 {
 	u32 i;
 
-	if (count && (!chan->vm->fences_va || count > TegraGM20BMaxJobEvents))
+	/* the job's event waits and the kernel's own pack image wait (TegraGM20BUserClientJobSubmit.cpp) */
+	if (count && (!chan->vm->fences_va || count > TegraGM20BMaxJobEvents + 1))
 		return 0;
 	for (i = 0; i < count; ++i)
 		if ((words[i].pool & 3) || words[i].pool >= TGM_FENCE_BYTES)

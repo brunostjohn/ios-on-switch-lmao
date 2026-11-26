@@ -180,6 +180,17 @@ void switch_gpu_pack_volumes_mounted(void);
 }
 #endif
 
+/* A job of a connection that mapped the image, at its submission: 1, it acquires on the GPU (ACQ_GEQ) the fence-pool word
+ * at *pool until it holds *payload, the image's last chunk, while the image streams in; 0, nothing to wait for; -1, the
+ * stream stopped before its end, and the job is refused (the GPU never runs a page it did not write). */
+#ifdef __cplusplus
+extern "C" {
+#endif
+int switch_gpu_pack_job_wait(uint32_t *pool, uint32_t *payload);
+#ifdef __cplusplus
+}
+#endif
+
 #ifdef SWITCH_GPU_PACK_IMAGE_HOST_TEST
 void switch_gpu_pack_image_reset_for_test(void);
 uint32_t switch_gpu_pack_image_refused_count_for_test(void);

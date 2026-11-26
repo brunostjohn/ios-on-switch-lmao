@@ -41,6 +41,12 @@ struct PackImageStore {
 	uint32_t npages;
 	tgm_mem *mem;
 	IOMemoryDescriptor *cpuMemory;
+	// The stream: its phase (kPhase*, read without the lock at each job's submission), the word it raises to the chunks
+	// landed (in the kernel's fence page, every address space's fence view), that word's offset in the fence pool, and
+	// the chunks it ends at
+	uint32_t phase;
+	volatile uint32_t *frontier;
+	uint32_t frontierPool, chunks;
 #if TGM_STATS
 	char firstProc[17];
 #endif
@@ -50,6 +56,11 @@ PackImageStore gPack = {};
 volatile uint32_t gShutdown = 0;
 
 constexpr uint8_t kVolumesMounted = 1, kGpuUsable = 2;
+constexpr uint32_t kPhaseNone = 0, kPhaseStreaming = 1, kPhaseComplete = 2, kPhaseFailed = 3;
+#if TGM_STATS
+uint64_t gGatedFirstNs = 0;
+uint32_t gGatedJobs = 0;
+#endif
 
 IOLock *packLock()
 {
@@ -143,40 +154,39 @@ void buildThread(void *, wait_result_t)
 		thread_terminate(current_thread());
 		return;
 	}
-	const bool streamed = switch_gpu_pack_stream_tier0(vp, heapOff, tier0Bytes, pas, chunkCpu,
-							   &why, &err, &stats);
-	vnode_close(vp, FREAD, ctx);
-	IODelete(chunkCpu, void *, chunkCount);
-	if (!streamed) {
-		multi->complete(kIODirectionInOut);
-		multi->release();
-		IODelete(pas, uint64_t, totalGpuPages);
-		const bool shuttingDown = switch_gpu_pack_shutdown_requested();
-		finishRefused(lock, why ? why : "stream failed", err, shuttingDown);
-		thread_terminate(current_thread());
-		return;
-	}
 	tgm_mem *mem = nullptr;
+	volatile uint32_t *frontier = nullptr;
+	uint64_t frontierPage = 0;
+	uint32_t frontierInPage = 0;
 	err = tgm_mem_new(nullptr, pas, totalGpuPages, &mem);
+	if (err == 0 && mem)
+		err = tgm_fence_kernel(TGM_FENCE_KERNEL_PACK, &frontier, &frontierPage,
+				       &frontierInPage);
 	if (err != 0 || !mem) {
+		const char *refused = mem ? "no frontier word" : "tgm_mem_new failed";
+		vnode_close(vp, FREAD, ctx);
+		IODelete(chunkCpu, void *, chunkCount);
+		if (mem)
+			tgm_mem_del(&mem);
 		multi->complete(kIODirectionInOut);
 		multi->release();
 		IODelete(pas, uint64_t, totalGpuPages);
-		finishRefused(lock, "tgm_mem_new failed", err, false);
+		finishRefused(lock, refused, err, false);
 		thread_terminate(current_thread());
 		return;
 	}
+	switch_gpu_pack_raise(frontier, 0);
+	const bool tablesRead = switch_gpu_pack_prefetch_tables(vp, hdr, ctx);
 	IOLockLock(lock);
 	if (switch_gpu_pack_shutdown_requested()) {
-		gPack.state = SwitchGpuPackState::Refused;
-		gPack.buildActive = false;
-		IOLockWakeup(lock, &gPack.state, false);
-		IOLockWakeup(lock, &gPack.buildActive, false);
 		IOLockUnlock(lock);
+		vnode_close(vp, FREAD, ctx);
+		IODelete(chunkCpu, void *, chunkCount);
 		tgm_mem_del(&mem);
 		multi->complete(kIODirectionInOut);
 		multi->release();
 		IODelete(pas, uint64_t, totalGpuPages);
+		finishRefused(lock, "shutdown", ECANCELED, true);
 		thread_terminate(current_thread());
 		return;
 	}
@@ -186,24 +196,66 @@ void buildThread(void *, wait_result_t)
 	gPack.npages = totalGpuPages;
 	gPack.mem = mem;
 	gPack.cpuMemory = multi;
+	gPack.frontier = frontier;
+	gPack.frontierPool = tgm_fence_offset(frontier);
+	gPack.chunks = uint32_t((tier0Bytes + kSwitchGpuPackTransferBytes - 1) /
+				kSwitchGpuPackTransferBytes);
+	__atomic_store_n(&gPack.phase, kPhaseStreaming, __ATOMIC_RELEASE);
 	gPack.state = SwitchGpuPackState::Ready;
-	gPack.buildActive = false;
 #if TGM_STATS
+	const uint64_t publishedNs = switch_gpu_pack_now_ns();
 	char firstProc[sizeof(gPack.firstProc)] = {};
 	memcpy(firstProc, gPack.firstProc, sizeof(firstProc));
 #endif
 	IOLockWakeup(lock, &gPack.state, false);
+	IOLockUnlock(lock);
+
+	const bool streamed = switch_gpu_pack_stream_tier0(vp, heapOff, tier0Bytes, pas, chunkCpu,
+							   &why, &err, &stats, frontier);
+	vnode_close(vp, FREAD, ctx);
+	IODelete(chunkCpu, void *, chunkCount);
+	const bool shuttingDown = switch_gpu_pack_shutdown_requested();
+	IOLockLock(lock);
+	__atomic_store_n(&gPack.phase, streamed ? kPhaseComplete : kPhaseFailed, __ATOMIC_RELEASE);
+	if (!streamed) {
+		gPack.state = SwitchGpuPackState::Refused;
+#ifdef SWITCH_GPU_PACK_IMAGE_HOST_TEST
+		if (!shuttingDown)
+			++gPack.refusedCount;
+#endif
+	}
+	gPack.buildActive = false;
+	IOLockWakeup(lock, &gPack.state, false);
 	IOLockWakeup(lock, &gPack.buildActive, false);
 	IOLockUnlock(lock);
+	if (!streamed) {
+		if (!shuttingDown)
+			IOLog("tegra-gm20b: pack image: its stream stopped after %u of %u chunks "
+			      "(%s, err %d): the work "
+			      "waiting on it fails\n",
+			      *frontier, gPack.chunks, why ? why : "stream failed", err);
+		tgm_acquire_recover_failed("the pack image's stream stopped");
+	}
 #if TGM_STATS
-	const uint64_t totalMs = (switch_gpu_pack_now_ns() - startedNs) / 1000000ULL;
-	const uint64_t copyMs = stats.copyNs / 1000000ULL;
-	const uint64_t bigBytes =
-		switch_gpu_mapping_big_bytes(pas, totalGpuPages, TGM_PACK_WINDOW_VA, 0, tier0Bytes);
-	IOLog("tegra-gm20b: pack image: tier 0 %llu MiB built in %llu ms for %s (pagein requests "
-	      "%u, copy %llu ms, big-page bytes %llu)\n",
-	      (unsigned long long)(tier0Bytes >> 20), (unsigned long long)totalMs, firstProc,
-	      stats.pageinReqs, (unsigned long long)copyMs, (unsigned long long)bigBytes);
+	const uint64_t endNs = switch_gpu_pack_now_ns();
+	const uint64_t gatedNs = __atomic_load_n(&gGatedFirstNs, __ATOMIC_ACQUIRE);
+	IOLog("tegra-gm20b: pack image: tier 0 %llu MiB for %s, open %llu ms after the build began "
+	      "(tables %s), "
+	      "streamed %llu ms after that (pagein requests %u, copy %llu ms, big-page bytes "
+	      "%llu); %u jobs "
+	      "waited on it on the GPU, the first submitted %llu ms before its end\n",
+	      (unsigned long long)(tier0Bytes >> 20), firstProc,
+	      (unsigned long long)((publishedNs - startedNs) / 1000000ULL),
+	      tablesRead ? "read" : "unread",
+	      (unsigned long long)((endNs - publishedNs) / 1000000ULL), stats.pageinReqs,
+	      (unsigned long long)(stats.copyNs / 1000000ULL),
+	      (unsigned long long)switch_gpu_mapping_big_bytes(pas, totalGpuPages,
+							       TGM_PACK_WINDOW_VA, 0, tier0Bytes),
+	      __atomic_load_n(&gGatedJobs, __ATOMIC_RELAXED),
+	      (unsigned long long)(gatedNs && gatedNs < endNs ? (endNs - gatedNs) / 1000000ULL
+							      : 0));
+#else
+	(void)tablesRead;
 #endif
 	thread_terminate(current_thread());
 }
@@ -262,6 +314,36 @@ extern "C" void switch_gpu_pack_volumes_mounted(void)
 void switch_gpu_pack_gpu_usable(void)
 {
 	bootCondition(kGpuUsable);
+}
+
+extern "C" int switch_gpu_pack_job_wait(uint32_t *pool, uint32_t *payload)
+{
+	switch (__atomic_load_n(&gPack.phase, __ATOMIC_ACQUIRE)) {
+	case kPhaseStreaming:
+		*pool = gPack.frontierPool;
+		*payload = gPack.chunks;
+#if TGM_STATS
+		{
+			uint64_t none = 0;
+			__atomic_compare_exchange_n(&gGatedFirstNs, &none, switch_gpu_pack_now_ns(),
+						    false, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED);
+			__atomic_fetch_add(&gGatedJobs, 1u, __ATOMIC_RELAXED);
+		}
+#endif
+		return 1;
+	case kPhaseFailed:
+		return -1;
+	case kPhaseNone:
+	case kPhaseComplete:
+	default:
+		return 0;
+	}
+}
+
+extern "C" int switch_gpu_pack_failed_word(uint32_t pool)
+{
+	return __atomic_load_n(&gPack.phase, __ATOMIC_ACQUIRE) == kPhaseFailed &&
+	       pool == gPack.frontierPool;
 }
 
 bool switch_gpu_pack_shutdown_requested(void)

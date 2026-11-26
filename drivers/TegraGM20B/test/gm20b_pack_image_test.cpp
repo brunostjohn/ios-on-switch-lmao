@@ -136,6 +136,7 @@ TEST_F(PackImageTest, SingleBuildDeduplicationConcurrentCallersReceiveSameImageA
 	ASSERT_EQ(f1.get(), kIOReturnSuccess);
 	ASSERT_EQ(f2.get(), kIOReturnSuccess);
 	ASSERT_EQ(f3.get(), kIOReturnSuccess);
+	gModel.joinThreads();
 
 	EXPECT_TRUE(v1.ready);
 	EXPECT_EQ(v1.mem, v2.mem);
@@ -189,6 +190,7 @@ TEST_F(PackImageTest, MixedBigPageAndFallbackMapsAtWindowVaInTwoVms)
 	SwitchGpuPackImageView view = {};
 	ASSERT_EQ(switch_gpu_pack_image_acquire("backboardd", &view, nullptr), kIOReturnSuccess);
 	ASSERT_TRUE(view.ready);
+	gModel.joinThreads();
 
 	struct switch_gpu_mapping_run run0 = {}, run1 = {};
 	ASSERT_TRUE(switch_gpu_mapping_next(view.mem->pages, view.mem->npages, TGM_PACK_WINDOW_VA,
@@ -229,6 +231,7 @@ TEST_F(PackImageTest, CompositorCpuRangeWiringDropsOnCloseWhileSharedImageSurviv
 	SwitchGpuPackImageView view = {};
 	ASSERT_EQ(switch_gpu_pack_image_acquire("backboardd", &view, nullptr), kIOReturnSuccess);
 	ASSERT_TRUE(view.ready);
+	gModel.joinThreads();
 
 	switch_pack_task compositorTask = {42};
 	SwitchGpuPackClient client = {};
@@ -269,6 +272,7 @@ TEST_F(PackImageTest, WiredOrAbsentUplFallsBackToExactReadWithoutRefusingPack)
 	SwitchGpuPackImageView view = {};
 	ASSERT_EQ(switch_gpu_pack_image_acquire("proc", &view, nullptr), kIOReturnSuccess);
 	ASSERT_TRUE(view.ready);
+	gModel.joinThreads();
 	EXPECT_EQ(gModel.copyCalls, 0u);
 	EXPECT_EQ(gModel.openVnodes, 0);
 	EXPECT_EQ(gModel.activeUpls, 0);
@@ -287,23 +291,31 @@ TEST_F(PackImageTest, PartialAbsentUplRetriesAndCopyFailureCleansUpAllState)
 	SwitchGpuPackImageView view = {};
 	ASSERT_EQ(switch_gpu_pack_image_acquire("proc", &view, nullptr), kIOReturnSuccess);
 	EXPECT_TRUE(view.ready);
+	gModel.joinThreads();
 	EXPECT_EQ(gModel.activeUpls, 0);
 	EXPECT_EQ(gModel.abortedUpls, 0u);
 	EXPECT_GE(gModel.committedUpls, 2u);
-	EXPECT_EQ(gModel.pageinCalls, 2u);
+	EXPECT_EQ(gModel.heapPageins, 2u);
 
-	// Case 2: CE failure commits the UPL, closes vnode, frees all descriptors, and refuses cleanly.
+	// Case 2: a copy failure after the image opened commits the UPL, closes the vnode and stops the stream: the jobs
+	// that wait on it fail and the next open is refused. The image stays, its clients mapped it.
 	switch_gpu_pack_image_reset_for_test();
 	gModel.reset();
 	gModel.fileBytes = makePackFile(256ULL << 10, 0);
 	gModel.failCopyOnCall = 0;
 	SwitchGpuPackImageView failed = {};
 	ASSERT_EQ(switch_gpu_pack_image_acquire("proc", &failed, nullptr), kIOReturnSuccess);
-	EXPECT_FALSE(failed.ready);
+	EXPECT_TRUE(failed.ready);
+	gModel.joinThreads();
+	uint32_t pool = 0, payload = 0;
+	EXPECT_EQ(switch_gpu_pack_job_wait(&pool, &payload), -1);
 	EXPECT_EQ(gModel.openVnodes, 0);
 	EXPECT_EQ(gModel.activeUpls, 0);
-	EXPECT_EQ(gModel.liveDescriptors, 0);
 	EXPECT_EQ(switch_gpu_pack_image_refused_count_for_test(), 1u);
+	EXPECT_EQ(gModel.recovered.size(), 1u);
+	SwitchGpuPackImageView later = {};
+	ASSERT_EQ(switch_gpu_pack_image_acquire("later", &later, nullptr), kIOReturnSuccess);
+	EXPECT_FALSE(later.ready);
 }
 
 TEST_F(PackImageTest, ShutdownDrainsActiveBuildClosesVnodeAndWakesWaiter)

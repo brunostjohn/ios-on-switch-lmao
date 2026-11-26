@@ -180,8 +180,10 @@ bool switch_gpu_pack_alloc_tier0(uint64_t tier0Bytes, IOMemoryDescriptor **multi
 
 bool switch_gpu_pack_stream_tier0(vnode_t vp, uint64_t heapOff, uint64_t tier0Bytes,
 				  uint64_t *dstPas, void **chunkCpu, const char **whyOut,
-				  int *errOut, SwitchGpuPackStreamStats *stats)
+				  int *errOut, SwitchGpuPackStreamStats *stats,
+				  volatile uint32_t *frontier)
 {
+	uint32_t landed = 0;
 	constexpr uint32_t kMaxChunkGpuPages = uint32_t(kSwitchGpuPackTransferBytes >> 12);
 	auto *srcPas = IONew(uint64_t, kMaxChunkGpuPages);
 	if (!srcPas) {
@@ -306,6 +308,8 @@ bool switch_gpu_pack_stream_tier0(vnode_t vp, uint64_t heapOff, uint64_t tier0By
 			if (!ok)
 				break;
 			off += chunkBytes;
+			if (frontier)
+				switch_gpu_pack_raise(frontier, ++landed);
 			continue;
 		}
 		// Flush any APFS CPU-decrypted or CPU-decompressed page-cache lines to DRAM.
@@ -328,7 +332,63 @@ bool switch_gpu_pack_stream_tier0(vnode_t vp, uint64_t heapOff, uint64_t tier0By
 			switch_dcache_invalidate(chunkCpu[firstChunk + c],
 						 size_t(kSwitchGpuPackTierAlign));
 		off += chunkBytes;
+		if (frontier)
+			switch_gpu_pack_raise(frontier, ++landed);
 	}
 	IODelete(srcPas, uint64_t, kMaxChunkGpuPages);
+	return ok;
+}
+
+namespace
+{
+bool prefetchRange(vnode_t vp, uint64_t offset, uint64_t bytes, uint64_t fileSize)
+{
+	if (!bytes || offset >= fileSize)
+		return true;
+	uint64_t at = offset & ~uint64_t(PAGE_SIZE - 1);
+	const uint64_t end = (offset + bytes + PAGE_SIZE - 1) & ~uint64_t(PAGE_SIZE - 1);
+	for (; at < end && at < fileSize; at += kSwitchGpuPackTransferBytes) {
+		const uint64_t length = end - at < kSwitchGpuPackTransferBytes
+						? end - at
+						: kSwitchGpuPackTransferBytes;
+		int pagerErr = 0;
+		if (vnode_pagein(vp, nullptr, 0, at, upl_size_t(length), UPL_IOSYNC, &pagerErr) !=
+			    0 ||
+		    pagerErr != 0)
+			return false;
+	}
+	return true;
+}
+}  // namespace
+
+bool switch_gpu_pack_prefetch_tables(vnode_t vp, const SwitchGpuPackHeader &hdr, vfs_context_t ctx)
+{
+	static constexpr uint32_t kTables[] = {
+		kSwitchGpuPackFastKeys, kSwitchGpuPackPipelines, kSwitchGpuPackPrograms,
+		kSwitchGpuPackSegments, kSwitchGpuPackVariants,  kSwitchGpuPackBlob,
+		kSwitchGpuPackStrings,  kSwitchGpuPackSplits,    kSwitchGpuPackIterated,
+		kSwitchGpuPackInit,     kSwitchGpuPackBaseline,  kSwitchGpuPackSamplers,
+	};
+	uint64_t fileSize = 0;
+	for (const SwitchGpuPackSection &s : hdr.section)
+		if (s.offset <= UINT64_MAX - s.bytes && s.offset + s.bytes > fileSize)
+			fileSize = s.offset + s.bytes;
+	bool ok = true;
+	for (const uint32_t id : kTables) {
+		const SwitchGpuPackSection &s = hdr.section[id];
+		const uint64_t bytes = id == kSwitchGpuPackFastKeys ? s.bytes
+				       : hdr.tier0[id] < s.bytes    ? hdr.tier0[id]
+								    : s.bytes;
+		ok = prefetchRange(vp, s.offset, bytes, fileSize) && ok;
+	}
+	// PackSegmentTable: pipelineCount, variantComboCount, wordsOffset, wordsBytes (the words in the heap's tier 0)
+	uint32_t table[4] = {};
+	const SwitchGpuPackSection &segments = hdr.section[kSwitchGpuPackSegments];
+	if (segments.bytes >= sizeof table &&
+	    switch_gpu_pack_read_exact(vp, table, sizeof table, off_t(segments.offset), ctx) == 0 &&
+	    table[3] && uint64_t(table[2]) + table[3] <= hdr.tier0[kSwitchGpuPackHeap])
+		ok = prefetchRange(vp, hdr.section[kSwitchGpuPackHeap].offset + table[2], table[3],
+				   fileSize) &&
+		     ok;
 	return ok;
 }
