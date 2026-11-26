@@ -26,14 +26,20 @@ switch_gpu_bridge *oldestWaitedJob()
 // own fence inside that job releases with no L2 flush (gpu_exec.c chan_job_fence): the tokens' writes reach DRAM only
 // at the covering job's drain, and its increments follow that drain. So a job that died before its fence put them in
 // DRAM exactly when the syncpoint reached the threshold, and only short of it are they lost and the increments owed
-// (`owed`). A token that failed elsewhere leaves a running producer's syncpoint alone. The tokens are read before the
-// channel, so a kill that failed one of them is already in `stopped`.
+// (`owed`). The tokens are read before the channel, so a kill that failed one of them is already in `stopped`.
 bool settleJobless(switch_gpu_bridge &job, bool &owed)
 {
 	const int source = producers(job);
 	int stopped = 0;
 	const int cover = switch_gpu_producer_covered(job.covering, &stopped);
-	if (source >= 0 && (cover == 0 || source == 0))
+	if (cover == 0) {
+		// The producer still runs: a token that failed elsewhere fails the slot now, which stays for that producer (a
+		// release if it stops short, the hang check's look at it) until the covering job resolves
+		if (source < 0)
+			__atomic_store_n(&job.result, source, __ATOMIC_RELEASE);
+		return false;
+	}
+	if (cover == 1 && source == 0)
 		return false;
 	const bool drained = cover == 1 ||
 			     (source == 1 &&
@@ -41,6 +47,26 @@ bool settleJobless(switch_gpu_bridge &job, bool &owed)
 	__atomic_store_n(&job.result, source < 0 ? source : drained ? 1 : -5, __ATOMIC_RELEASE);
 	owed = stopped && !drained;
 	return true;
+}
+
+// A retired slot: its tokens promoted when it succeeded, its waiters' marks dropped, its sleepers woken
+void finish(switch_gpu_bridge &job)
+{
+	if (job.result == 1)
+		for (uint32_t i = 0; i < job.count; ++i)
+			if (job.tokens[i].engine == SWITCH_GPU_ENGINE_GM20B)
+				(void)switch_gpu_timeline_promote(&job.tokens[i]);
+	job.active = false;
+	if (job.notified) {
+		job.notified = false;
+		--job.waiters;
+	}
+	if (job.watched) {
+		job.watched = false;
+		--job.waiters;
+	}
+	IOLockWakeup(queue.lock, &job, false);
+	releaseLocked(job);
 }
 }  // namespace
 
@@ -163,22 +189,20 @@ void retire(thread_call_param_t, thread_call_param_t)
 				job.syncpoint = 0;
 			}
 		}
-		if (job.result == 1)
-			for (uint32_t i = 0; i < job.count; ++i)
-				if (job.tokens[i].engine == SWITCH_GPU_ENGINE_GM20B)
-					(void)switch_gpu_timeline_promote(&job.tokens[i]);
-		job.active = false;
-		if (job.notified) {
-			job.notified = false;
-			--job.waiters;
-		}
-		if (job.watched) {
-			job.watched = false;
-			--job.waiters;
-		}
-		IOLockWakeup(queue.lock, &job, false);
-		releaseLocked(job);
+		finish(job);
 	}
+	// A kill can land between two slots' reads in one pass: a slot on an owed syncpoint that read its producer running
+	// reads it again before a release passes its threshold, and sees the stop the owing slot saw
+	for (uint32_t i = 0; i < owing; ++i)
+		for (auto &job : queue.jobs) {
+			bool owes = false;
+			if (!job.active || job.producer != owed[i].syncpoint ||
+			    !settleJobless(job, owes))
+				continue;
+			if (owes)
+				owed[owing++] = {job.producer, job.threshold};
+			finish(job);
+		}
 	// After every slot of the pass stored its failure: a release cancels each stream waiting on that producer syncpoint,
 	// whichever slot it came through, and a stream queued after it finds its own slot's failure (switch_gpu_bridge_failed)
 	for (uint32_t i = 0; i < owing; ++i)

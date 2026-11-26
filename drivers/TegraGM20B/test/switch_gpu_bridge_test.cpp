@@ -38,7 +38,8 @@ namespace
 {
 using Key = std::tuple<uint32_t, uint64_t, uint64_t>;
 std::map<Key, int> statuses, refs, external;
-std::function<void()> onTokenRead;  // runs at a token's status read, before it answers
+std::function<void(const switch_gpu_backing_token &)>
+	onTokenRead;  // at a token's status read, before it answers
 std::array<uint32_t, 256> syncpoints;
 std::array<uint32_t, 8192> pushWords;
 tgm_vm space;
@@ -452,7 +453,7 @@ extern "C" void switch_gpu_backing_token_release(const switch_gpu_backing_token 
 extern "C" int switch_gpu_backing_token_status(const switch_gpu_backing_token *token)
 {
 	if (onTokenRead)
-		onTokenRead();
+		onTokenRead(*token);
 	return statuses[key(*token)];
 }
 
@@ -1368,7 +1369,7 @@ TEST_F(Bridge, AKillBetweenTheTokenAndTheChannelReadsStillHasTheCpuMakeTheIncrem
 	const uint32_t releasesBefore = failureReleases;
 	auto *bridge = submit({source});
 	ASSERT_NE(bridge, nullptr);
-	onTokenRead = [&] {
+	onTokenRead = [&](const switch_gpu_backing_token &) {
 		statuses[key(source)] = -5;
 		coveringStatus[{7, 1, 320}] = -5;
 		stoppedChannels.insert(7);
@@ -1427,7 +1428,84 @@ TEST_F(Bridge, AnotherTokensFailureLeavesARunningProducersSyncpointAlone)
 	EXPECT_EQ(switch_gpu_bridge_status(bridge), -5);
 	EXPECT_EQ(failureReleases, releasesBefore);
 	EXPECT_EQ(syncpoints[kProducerSyncpoint + 4], 28u);
+	coveringStatus[{7, 1, 302}] = 1;
+	switch_gpu_bridge_completed();
+	pump();
+	EXPECT_EQ(failureReleases, releasesBefore) << "its covering job drained";
 	release(bridge);
+}
+
+// The same failure elsewhere, then the producer stops short of its covering job: the slot failed at once and stayed for
+// its producer, so its consumers are cancelled and the CPU makes the increments, as for any slot on a stopped producer.
+TEST_F(Bridge, ASlotFailedElsewhereStaysForItsProducerAndIsReleasedWhenItStopsShort)
+{
+	const auto other = token(380, 26);
+	const auto source = token(381, 27);
+	statuses[key(other)] = 1;
+	statuses[key(source)] = 0;
+	covered[key(source)] = {kProducerSyncpoint + 18, 120, 381};
+	syncpoints[kProducerSyncpoint + 18] = 118;
+	const uint32_t releasesBefore = failureReleases;
+	auto *bridge = submit({other, source});
+	ASSERT_NE(bridge, nullptr);
+	ASSERT_EQ(switch_gpu_bridge_jobless(bridge), 1);
+	statuses[key(other)] = -5;
+	switch_gpu_bridge_completed();
+	pump();
+	EXPECT_EQ(switch_gpu_bridge_failed(bridge), -5);
+	EXPECT_EQ(failureReleases, releasesBefore) << "its producer still runs";
+	statuses[key(source)] = -5;
+	coveringStatus[{27, 1, 381}] = -5;
+	stoppedChannels.insert(27);
+	switch_gpu_bridge_completed();
+	pump();
+	stoppedChannels.erase(27);
+	EXPECT_EQ(failureReleases, releasesBefore + 1);
+	EXPECT_EQ(syncpoints[kProducerSyncpoint + 18], 120u);
+	release(bridge);
+}
+
+// A kill landing between two jobless slots' reads in one pass: the first read its producer running, the second its stop.
+// The first reads it again before the release passes its threshold, so a stream queued after that release finds it failed.
+TEST_F(Bridge, AKillBetweenTwoSlotsReadsFailsBothBeforeTheRelease)
+{
+	const auto first = token(382, 28);
+	const auto second = token(383, 28);
+	statuses[key(first)] = 0;
+	statuses[key(second)] = 0;
+	covered[key(first)] = {kProducerSyncpoint + 19, 130, 382};
+	covered[key(second)] = {kProducerSyncpoint + 19, 132, 383};
+	syncpoints[kProducerSyncpoint + 19] = 128;
+	auto *a = submit({first});
+	auto *b = submit({second});
+	ASSERT_NE(a, nullptr);
+	ASSERT_NE(b, nullptr);
+	onTokenRead = [&](const switch_gpu_backing_token &read) {
+		if (key(read) != key(second))
+			return;
+		onTokenRead = nullptr;
+		statuses[key(first)] = -5;
+		statuses[key(second)] = -5;
+		coveringStatus[{28, 1, 382}] = -5;
+		coveringStatus[{28, 1, 383}] = -5;
+		stoppedChannels.insert(28);
+	};
+	std::vector<int> firstAtRelease;
+	onReleaseFailed = [&] {
+		firstAtRelease.push_back(switch_gpu_bridge_failed(a));
+	};
+	switch_gpu_bridge_completed();
+	pump();
+	onTokenRead = nullptr;
+	onReleaseFailed = nullptr;
+	stoppedChannels.erase(28);
+	ASSERT_FALSE(firstAtRelease.empty());
+	for (const int failed : firstAtRelease)
+		EXPECT_LT(failed, 0) << "the first slot read failed at every release";
+	EXPECT_EQ(switch_gpu_bridge_status(a), -5);
+	EXPECT_EQ(switch_gpu_bridge_status(b), -5);
+	release(a);
+	release(b);
 }
 
 // A waiter on a jobless bridge waits on the producer's covering job, so the hang rule checks that channel at that job;
