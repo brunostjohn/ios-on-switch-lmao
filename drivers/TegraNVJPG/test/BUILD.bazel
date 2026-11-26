@@ -58,6 +58,7 @@ host_test(
     srcs = ["tegra_nvjpg_layout_source_test.cpp"],
     data = [
         "//drivers/TegraNVJPG:TegraNVJPG.cpp",
+        "//drivers/TegraNVJPG:TegraNVJPGFlight.cpp",
         "//drivers/TegraNVJPG:TegraNVJPGJobs.cpp",
         "//drivers/TegraNVJPG:TegraNVJPGRepack.cpp",
     ],
@@ -100,6 +101,7 @@ ENGINE_MODEL = [
     "//drivers/TegraHost1x:SwitchHost1xFence.h",
     "//drivers/TegraHost1x:TegraHost1x.h",
     "//drivers/TegraNVJPG:TegraNVJPG.h",
+    "//drivers/TegraNVJPG:TegraNVJPGEngine.h",
     "//drivers/TegraNVJPG:TegraNVJPGJpeg.h",
     "//drivers/TegraNVJPG:TegraNVJPGRequest.h",
     "//drivers/TegraNVJPG:TegraNVJPGStats.h",
@@ -131,6 +133,7 @@ ENGINE_MODEL = [
 
 ENGINE_SOURCES = [
     "//drivers/TegraNVJPG:TegraNVJPG.cpp",
+    "//drivers/TegraNVJPG:TegraNVJPGFlight.cpp",
     "//kits/SwitchFalcon:SwitchFalconInterrupt.cpp",
 ]
 

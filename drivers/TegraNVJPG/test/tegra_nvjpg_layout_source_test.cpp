@@ -70,7 +70,7 @@ TEST(NVJPGLayoutWiring, TheDestinationIsMappedForThePlanTheRouteLeavesAndOnlyThe
 // and the re-pack's completion end the decode by callback, and the engine thread sleeps only on its own queue.
 TEST(NVJPGLayoutWiring, TheRepackWaitsOnTheHardwareAndNoThreadWaitsOnAnEngine)
 {
-    const std::string engine = SourceText("../TegraNVJPG.cpp");
+    const std::string engine = SourceText("../TegraNVJPGFlight.cpp");
     const std::string start = Body(engine, "extern \"C\" int tegra_nvjpg_start(const TegraNVJPGJob *job, const "
                                            "TegraNVJPGSignal *signal,\n                                 const "
                                            "TegraNVJPGFollow *follow)\n{");

@@ -11,6 +11,7 @@
 #define SWITCH_DCACHE_OP(op, address) ((void)(address))
 #define SWITCH_DCACHE_BARRIER()       ((void)0)
 #include "../TegraNVJPG.cpp"
+#include "../TegraNVJPGFlight.cpp"
 #include "../../../kits/SwitchFalcon/SwitchFalconInterrupt.cpp"
 
 // A falcon v1 image: magic, version 1, 0x200 bytes, the OS header at 0x100 naming 0x80 bytes of code and of data.

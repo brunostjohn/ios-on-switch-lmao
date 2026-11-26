@@ -122,6 +122,7 @@ host_test(
         "//drivers/TegraNVDEC:TegraNVDEC.cpp",
         "//drivers/TegraNVENC:TegraNVENC.cpp",
         "//drivers/TegraNVJPG:TegraNVJPG.cpp",
+        "//drivers/TegraNVJPG:TegraNVJPGFlight.cpp",
         "//drivers/TegraVIC:SwitchVICJobs.cpp",
         "//drivers/TegraVIC:TegraVIC.cpp",
     ],
