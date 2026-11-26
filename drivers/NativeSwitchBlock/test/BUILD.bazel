@@ -10,6 +10,12 @@ load("//bazel/testing:defs.bzl", "host_test")
 
 lint_files()
 
+# The installer's card checks test their layouts against the same model cards the kernel's rules are tested on.
+exports_files(
+    ["sd_card_model.h"],
+    visibility = ["//install:__subpackages__"],
+)
+
 # The randomized tests run their thousands of cases at -O1 (as the cryptex map's always did): ASan at -O0 took
 # minutes.
 host_test(
