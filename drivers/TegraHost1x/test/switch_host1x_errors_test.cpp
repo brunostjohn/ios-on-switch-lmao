@@ -53,9 +53,20 @@ struct Host1xErrors : testing::Test {
         gErrorsSource = nullptr;
     }
 
-    bool start()
+    static bool start()
     {
-        return switch_host1x_errors_start(IOWorkLoop::workLoop(), reinterpret_cast<volatile uint8_t *>(kSync));
+        switch_host1x_errors_start(IOWorkLoop::workLoop(), reinterpret_cast<volatile uint8_t *>(kSync));
+        return source() && source()->enabled;
+    }
+
+    static std::string panicOf(bool (*run)())
+    {
+        try {
+            run();
+        } catch (const std::runtime_error &e) {
+            return e.what();
+        }
+        return "no panic";
     }
 };
 }  // namespace
@@ -106,19 +117,33 @@ TEST_F(Host1xErrors, TheAttachUnmasksEveryChannelKeepsIntmaskBit4AndClearsWhatLa
     EXPECT_TRUE(gFailedChannels.empty()) << "what latched before the channels were programmed fails nothing";
 }
 
-TEST_F(Host1xErrors, AnIntmaskThatDoesNotTakeLeavesItOffWithALine)
+TEST_F(Host1xErrors, AnIntmaskThatDoesNotTakePanics)
 {
     gIntmaskStuck = true;
-    EXPECT_FALSE(start());
+    EXPECT_EQ(panicOf(&start), "TegraHost1x: general interrupt (INTID 99) not enabled: INTMASK reads 0x10 after CPU0's "
+                               "enable was written");
     EXPECT_FALSE(source()->enabled);
-    EXPECT_TRUE(anyLine("not enabled: INTMASK reads 0x10"));
 }
 
-TEST_F(Host1xErrors, NoInterruptNubLeavesItOffWithALine)
+TEST_F(Host1xErrors, NoInterruptNubPanics)
 {
     gNoNub = true;
-    EXPECT_FALSE(start());
-    EXPECT_TRUE(anyLine("could not be attached"));
+    EXPECT_EQ(panicOf(&start), "TegraHost1x: general interrupt (INTID 99) could not be attached: no interrupt nub");
+}
+
+TEST_F(Host1xErrors, AnIntmaskThatDoesNotTakeAfterSleepPanics)
+{
+    ASSERT_TRUE(start());
+    switch_host1x_errors_stop();
+    gRegs = {{kIntMask, 0x10}};
+    gIntmaskStuck = true;
+    EXPECT_EQ(panicOf([] {
+                  switch_host1x_errors_resume();
+                  return true;
+              }),
+              "TegraHost1x: general interrupt (INTID 99) not enabled: INTMASK reads 0x10 after CPU0's enable was "
+              "written");
+    EXPECT_FALSE(source()->enabled);
 }
 
 // The channel stays stopped, so its bit may latch again: taken once, masked until the channel's restart rearms it.

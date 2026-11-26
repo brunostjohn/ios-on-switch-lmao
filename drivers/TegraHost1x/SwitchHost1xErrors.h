@@ -80,9 +80,9 @@ template <class Registers> struct Unit {
 };
 }  // namespace switch_host1x_errors
 
-// Thread context, once the channels are programmed: the interrupt attached on host1x's work loop and unmasked. False,
-// with one line, when it could not be: a stopped channel's jobs then fail only at their bound.
-bool switch_host1x_errors_start(IOWorkLoop *loop, volatile uint8_t *sync);
+// Thread context, once the channels are programmed: the interrupt attached on host1x's work loop and unmasked. One that
+// cannot be attached, or an INTMASK that does not take CPU0's enable, panics (here and at the SC7 resume).
+void switch_host1x_errors_start(IOWorkLoop *loop, volatile uint8_t *sync);
 // SC7: off before the sync unit powers down, configured and on again once it is back and the channels programmed.
 void switch_host1x_errors_stop();
 void switch_host1x_errors_resume();

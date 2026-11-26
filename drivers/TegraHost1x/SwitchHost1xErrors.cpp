@@ -111,12 +111,21 @@ void errorsOccurred(OSObject *, IOInterruptEventSource *, int)
         channelStopped(static_cast<uint32_t>(__builtin_ctz(channels)));
 }
 
-bool errorsConfigure()
+[[noreturn]] void notAttached(const char *why)
+{
+    panic("TegraHost1x: general interrupt (INTID %u) could not be attached: %s", kGeneralIntid, why);
+}
+
+void errorsConfigure()
 {
     uint32_t latched = 0, intc0 = 0, hintmaskExt = 0;
     IOInterruptState state = IOSimpleLockLockDisableInterrupt(gErrorsLock);
     const bool on = gErrorsUnit.configure(gErrorRegisters, &latched, &intc0, &hintmaskExt);
     IOSimpleLockUnlockEnableInterrupt(gErrorsLock, state);
+    if (!on)
+        panic("TegraHost1x: general interrupt (INTID %u) not enabled: INTMASK reads %#x after CPU0's enable was "
+              "written",
+              kGeneralIntid, gErrorRegisters.read(kIntMask));
     if (intc0)
         IOLog("TegraHost1x: the module interrupts' mask (INTC0MASK) read %#x: cleared, they do not reach host1x's "
               "general interrupt\n",
@@ -124,43 +133,36 @@ bool errorsConfigure()
     if (latched)
         IOLog("TegraHost1x: illegal opcodes latched before the general interrupt was on: channels %#x (cleared)\n",
               latched);
+    // The emulator's host1x model does not store HINTMASK_EXT, so this one stays a line.
     if (hintmaskExt != kIllegalAll)
         IOLog("TegraHost1x: general interrupt: HINTMASK_EXT reads %#x after %#x was written\n", hintmaskExt,
               kIllegalAll);
-    if (!on)
-        IOLog("TegraHost1x: general interrupt (INTID %u) not enabled: INTMASK reads %#x; a stopped channel's jobs fail "
-              "only at their bound\n",
-              kGeneralIntid, gErrorRegisters.read(kIntMask));
-    return on;
 }
 }  // namespace
 
-bool switch_host1x_errors_start(IOWorkLoop *loop, volatile uint8_t *sync)
+void switch_host1x_errors_start(IOWorkLoop *loop, volatile uint8_t *sync)
 {
     gErrorRegisters.sync = sync;
     gErrorsLock = IOSimpleLockAlloc();
+    if (!gErrorsLock)
+        notAttached("no lock");
 #if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
     gExpectLock = IOLockAlloc();
     if (!gExpectLock)
-        gErrorsLock = nullptr;
+        notAttached("no lock");
 #endif
-    IOService *nub = gErrorsLock ? switch_interrupt_nub(kGeneralIntid, false) : nullptr;
+    IOService *nub = switch_interrupt_nub(kGeneralIntid, false);
+    if (!nub)
+        notAttached("no interrupt nub");
     IOFilterInterruptEventSource *made =
-        nub ? IOFilterInterruptEventSource::filterInterruptEventSource(loop, &errorsOccurred, &errorsFilter, nub, 0)
-            : nullptr;
-    if (!made || loop->addEventSource(made) != kIOReturnSuccess) {
-        IOLog("TegraHost1x: general interrupt (INTID %u) could not be attached: a stopped channel's jobs fail only at "
-              "their bound\n",
-              kGeneralIntid);
-        return false;
-    }
-    if (!errorsConfigure()) {
-        made->disable();
-        return false;
-    }
+        IOFilterInterruptEventSource::filterInterruptEventSource(loop, &errorsOccurred, &errorsFilter, nub, 0);
+    if (!made)
+        notAttached("no event source");
+    if (loop->addEventSource(made) != kIOReturnSuccess)
+        notAttached("the work loop refused the event source");
+    errorsConfigure();
     made->enable();
     __atomic_store_n(&gErrorsSource, made, __ATOMIC_RELEASE);
-    return true;
 }
 
 void switch_host1x_errors_stop()
@@ -171,9 +173,10 @@ void switch_host1x_errors_stop()
 
 void switch_host1x_errors_resume()
 {
-    IOFilterInterruptEventSource *source = __atomic_load_n(&gErrorsSource, __ATOMIC_ACQUIRE);
-    if (source && errorsConfigure())
+    if (IOFilterInterruptEventSource *source = __atomic_load_n(&gErrorsSource, __ATOMIC_ACQUIRE)) {
+        errorsConfigure();
         source->enable();
+    }
 }
 
 extern "C" void switch_host1x_errors_rearm(uint32_t channel)

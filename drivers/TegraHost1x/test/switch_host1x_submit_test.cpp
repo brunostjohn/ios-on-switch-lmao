@@ -246,10 +246,8 @@ void switch_host1x_fences_resume(uint32_t id)
     gFencesResumed.push_back(id);
 }
 
-bool switch_host1x_errors_start(IOWorkLoop *, volatile uint8_t *)
-{
-    return true;
-}
+void switch_host1x_errors_start(IOWorkLoop *, volatile uint8_t *)
+{}
 
 void switch_host1x_errors_stop()
 {}
