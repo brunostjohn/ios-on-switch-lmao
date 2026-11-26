@@ -1,5 +1,5 @@
 {
-  "checksum": "68bc4b6d3ed1a10deca083243436e50e252b822d5fa049d50c9136a41e05eec1",
+  "checksum": "3d29c4e4ca8c13c08bfa227cf5853cabb99e1808e006425d64f60f1976d54ae2",
   "conditions": {
     "aarch64-apple-darwin": [
       "aarch64-apple-darwin"
@@ -13472,6 +13472,10 @@
               "target": "plist"
             },
             {
+              "id": "quick-xml 0.42.0",
+              "target": "quick_xml"
+            },
+            {
               "id": "ratatui 0.30.2",
               "target": "ratatui"
             },
@@ -18362,6 +18366,7 @@
     "lzfse_rust 0.2.1",
     "object 0.41.0",
     "plist 1.10.4",
+    "quick-xml 0.42.0",
     "ratatui 0.30.2",
     "rayon 1.12.0",
     "reqwest 0.13.5",
