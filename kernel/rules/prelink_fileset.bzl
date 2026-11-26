@@ -16,11 +16,23 @@ load("//ipsw:ipsw.bzl", "IpswInfo")
 load(":common.bzl", "XCODE_EXECUTION")
 load(":kernel.bzl", "KernelObjectsInfo")
 
+PrelinkFilesetInfo = provider(
+    doc = "A fileset prelink's kernel and the inputs a prelink from its bindings alone reads.",
+    fields = {
+        "kernel": "File: the unprelinked kernel",
+        "kernelcache": "File: the fileset kernelcache",
+        "sites": "list of File: the declared sites",
+        "prelinked": "File: the prelinked kernel",
+        "bindings": "File: the bindings it resolved (translate/arm64e/xnu/prelink26/kernel_bindings.py)",
+    },
+)
+
 def _kernel_prelink_fileset_impl(ctx):
     stem = ctx.attr.out[:-len(".macho")]
     out = ctx.actions.declare_file(ctx.attr.out)
     report = ctx.actions.declare_file(stem + ".json")
     names = ctx.actions.declare_file(stem + ".names.json")
+    bindings = ctx.actions.declare_file(stem + ".bindings.json")
     lists = ctx.attr.kernel[KernelObjectsInfo]
     kernel = lists.objects[0]
     args = ctx.actions.args()
@@ -43,23 +55,34 @@ def _kernel_prelink_fileset_impl(ctx):
     args.add("--out", out)
     args.add("--report", report)
     args.add("--names", names)
+    args.add("--bindings", bindings)
     ctx.actions.run(
         executable = ctx.executable._prelink,
         arguments = [args],
         inputs = [kernel, ctx.file.kernelcache, ctx.file.kernelcache_17, ctx.file.symbolsets] + ctx.files._signature_tree +
                  ctx.files.sites,
         tools = [ctx.executable._arm64e, ctx.executable._ipsw],
-        outputs = [out, report, names],
+        outputs = [out, report, names, bindings],
         env = {"DEVELOPER_DIR": DEVELOPER_DIR},
         mnemonic = "KernelPrelinkFileset",
         progress_message = "Prelinking the fileset kernelcache's kexts into %{label}",
         execution_requirements = XCODE_EXECUTION,
     )
-    return [DefaultInfo(files = depset([out])), OutputGroupInfo(report = depset([report, names]))]
+    return [
+        DefaultInfo(files = depset([out])),
+        OutputGroupInfo(report = depset([report, names]), bindings = depset([bindings])),
+        PrelinkFilesetInfo(
+            kernel = kernel,
+            kernelcache = ctx.file.kernelcache,
+            sites = ctx.files.sites,
+            prelinked = out,
+            bindings = bindings,
+        ),
+    ]
 
 kernel_prelink_fileset = rule(
     implementation = _kernel_prelink_fileset_impl,
-    doc = "Our kernel with a fileset kernelcache's kexts prelinked (out); its report (.json) and kernel names (.names.json) in the report output group.",
+    doc = "Our kernel with a fileset kernelcache's kexts prelinked (out); its report (.json) and kernel names (.names.json) in the report output group, the bindings it resolved (.bindings.json) in the bindings group.",
     attrs = {
         "kernel": attr.label(mandatory = True, providers = [KernelObjectsInfo], doc = "the unprelinked kernel"),
         "base_roots": attr.string_list(mandatory = True, doc = "the kexts prelinked before any driver's list"),
@@ -78,5 +101,40 @@ kernel_prelink_fileset = rule(
         # it names half the functions and the prelink refuses its GOT bindings. Only a remote worker, whose inputs are
         # the declared files, showed it: in the sandbox, xnu.json's link led into the whole repository.
         "_signature_tree": attr.label(default = "@symbolicator//:kernel", allow_files = True),
+    },
+)
+
+def _kernel_prelink_bindings_impl(ctx):
+    prelink = ctx.attr.prelinked[PrelinkFilesetInfo]
+    out = ctx.actions.declare_file(ctx.attr.out)
+    rebuilt = ctx.actions.declare_file(ctx.attr.out[:-len(".json")] + ".macho")
+    args = ctx.actions.args()
+    args.add("--from-bindings", prelink.bindings)
+    args.add("--kernel", prelink.kernel)
+    args.add("--kernelcache", prelink.kernelcache)
+    args.add("--arm64e", ctx.executable._arm64e)
+    args.add_all(prelink.sites, before_each = "--sites")
+    args.add("--expect", prelink.prelinked)
+    args.add("--rebuilt", rebuilt)
+    args.add("--out", out)
+    ctx.actions.run(
+        executable = ctx.executable._prelink,
+        arguments = [args],
+        inputs = [prelink.bindings, prelink.kernel, prelink.kernelcache, prelink.prelinked] + prelink.sites,
+        tools = [ctx.executable._arm64e],
+        outputs = [out, rebuilt],
+        mnemonic = "KernelPrelinkFromBindings",
+        progress_message = "Prelinking %{label}'s kernel from its bindings alone",
+    )
+    return [DefaultInfo(files = depset([out])), OutputGroupInfo(rebuilt = depset([rebuilt]))]
+
+kernel_prelink_bindings = rule(
+    implementation = _kernel_prelink_bindings_impl,
+    doc = "A fileset prelink's bindings (out), written only when a prelink from them, the kernelcache, the unprelinked kernel and the sites alone rebuilds the prelinked kernel byte for byte; that kernel is in the rebuilt output group. The release publishes out (release/ipsw_free.bzl DECLASSIFIED).",
+    attrs = {
+        "prelinked": attr.label(mandatory = True, providers = [PrelinkFilesetInfo], doc = "a kernel_prelink_fileset"),
+        "out": attr.string(mandatory = True, doc = "the bindings' path in the package, ending in .json"),
+        "_arm64e": attr.label(default = "//translate/arm64e", executable = True, cfg = "exec"),
+        "_prelink": attr.label(default = "//translate/arm64e:prelink", executable = True, cfg = "exec"),
     },
 )

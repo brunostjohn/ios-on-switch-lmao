@@ -108,10 +108,12 @@ filegroup(
 
 ipsw_free_tests(
     name = "ipsw_free_test",
+    bindings = "//kernel:prelink_bindings_12377",
     declassified = [
         "//boot:loader",
         "//boot:loader_constants",
     ],
     member = "@ipsw//:app_cryptex_trust_cache",
+    prelinked = "//kernel:kernel_12377",
     window = "//boot:kernel_window",
 )

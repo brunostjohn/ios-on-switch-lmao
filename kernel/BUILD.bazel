@@ -8,7 +8,7 @@ load("//kernel:prelink.bzl", "PRELINK", "kernel_prelink_switch")
 load("//kernel/rules:firehose.bzl", "kernel_firehose")
 load("//kernel/rules:inputs.bzl", "tool_output")
 load("//kernel/rules:kernel.bzl", "kernel_archive", "kernel_driver", "kernel_objects_digest")
-load("//kernel/rules:prelink_fileset.bzl", "kernel_prelink_fileset")
+load("//kernel/rules:prelink_fileset.bzl", "kernel_prelink_bindings", "kernel_prelink_fileset")
 load("//kernel/rules:sdk.bzl", "outer_headers")
 load("//kernel/rules:version.bzl", "xnu_versions")
 load("//kernel/rules:xnu.bzl", "xnu_tree")
@@ -599,6 +599,14 @@ kernel_prelink_fileset(
     signatures = "@symbolicator//:kernel_27_2",
     slide = "-0x4088000",
     symbolsets = "//kernel/xnu-12377.121.6/config:symbolsets_plist",
+)
+
+# kernel_12377's bindings as the release publishes them (release/ipsw_free.bzl DECLASSIFIED), so a computer without
+# Xcode, the ipsw CLI or iOS 17's kernelcache can prelink the released kernel.
+kernel_prelink_bindings(
+    name = "prelink_bindings_12377",
+    out = "build/xnu-12377/prelink-bindings.json",
+    prelinked = ":kernel_12377",
 )
 
 # The prelinked kernel of the selected IPSW kind's XNU: what the boot package carries.

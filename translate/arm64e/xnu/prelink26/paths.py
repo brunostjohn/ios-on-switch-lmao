@@ -1,11 +1,11 @@
 """Where the prelinker's steps read and write: PRELINK_WORK holds every intermediate (prelink-lists.json, ours.nm,
 cpp26.json, sym/, symbolsets26.txt, closure.json, kernel-names.json, the discriminator cache). The other variables name
 the inputs: the kernelcache, our kernel, iOS 17's kernelcache (the GOT names kexts imported there) and the arm64e
-CLI."""
+CLI. A prelink from the bindings export (emit26.py --from-bindings) has no work directory."""
 import json
 import os
 
-WORK = os.environ["PRELINK_WORK"]
+WORK = os.environ.get("PRELINK_WORK")
 KERNELCACHE = os.environ.get("PRELINK_KERNELCACHE", "")
 OURS = os.environ.get("PRELINK_OURS", "")
 KERNELCACHE_17 = os.environ.get("PRELINK_KERNELCACHE_17", "")
@@ -14,6 +14,8 @@ SLIDE = int(os.environ["PRELINK_SLIDE"], 0) if os.environ.get("PRELINK_SLIDE") e
 
 
 def work(name):
+    if not WORK:
+        raise SystemExit("PRELINK_WORK is not set: %s is a work directory's file" % name)
     return os.path.join(WORK, name)
 
 
