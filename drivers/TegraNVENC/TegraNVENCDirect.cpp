@@ -78,6 +78,7 @@ int bridgeGpuWriters(TegraNVENCDirect *d)
     if (held || writers.submitBridge())
         return -11;
     d->bridge = writers.takeBridge();
+    switch_gpu_bridge_watch(d->bridge);
     return 0;
 }
 

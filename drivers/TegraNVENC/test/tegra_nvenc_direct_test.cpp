@@ -10,6 +10,7 @@ namespace {
 constexpr uint32_t kSyncpt = 170, kBridgeSyncpt = 190;
 std::vector<switch_host1x_fence *> gRetirements;
 int gBridgesLive, gBridgesSubmitted, gBridgeSubmitError;
+std::vector<const switch_gpu_bridge *> gBridgesWatched;
 IOReturn gLookupResult = -1;
 int gAcquireResult = -95;
 OSObject *gAcquireOwner = nullptr;
@@ -174,6 +175,12 @@ void switch_gpu_bridge_syncpoint(const switch_gpu_bridge *bridge, uint32_t *sync
     *threshold = bridge->threshold;
 }
 
+int switch_gpu_bridge_watch(const switch_gpu_bridge *bridge)
+{
+    gBridgesWatched.push_back(bridge);
+    return 0;
+}
+
 void switch_gpu_bridge_release(switch_gpu_bridge **bridge)
 {
     if (!*bridge)
@@ -264,15 +271,18 @@ TEST_F(NVENCDirect, APendingDecodeIsWaitedForAndTheReadStillCommits)
 
 // A picture a GM20B job still writes (a GPU-rendered frame) is read in place behind the GPU-to-host1x bridge: prepare's
 // pass submits the bridge for the writer, the job's stream waits on the bridge's syncpoint with the writer as its
-// input's producer, and the bridge goes with the job's fence.
+// input's producer, and the bridge goes with the job's fence. No callback waits on the bridge, so it is watched: the
+// GPU's hang check covers a stalled writer.
 TEST_F(NVENCDirect, AGpuWriterIsOrderedOnTheBridge)
 {
     Picture picture;
     const auto render = token(9, 21, SWITCH_GPU_ENGINE_GM20B);
     ASSERT_EQ(publish(picture.native, SWITCH_GPU_BACKING_WRITE, render), 0);
     auto d = picture.direct();
+    gBridgesWatched.clear();
     ASSERT_EQ(bridgeGpuWriters(&d), 0);
     ASSERT_NE(d.bridge, nullptr);
+    EXPECT_EQ(gBridgesWatched, std::vector<const switch_gpu_bridge *>{d.bridge});
     TegraNVENCAfter waits[TEGRA_NVENC_ORDER_WAITS] = {};
     uint32_t count = 0;
     ASSERT_EQ(begin(&d, 44, waits, &count), 0);
