@@ -16,7 +16,7 @@ public final class GPURates {
         public var aluThreads = 1 << 18, aluIterations: UInt32 = 256
         public var bytes = 64 << 20, readThreads = 1 << 16
         public var triangles = 1 << 20, heavyIterations: UInt32 = 64
-        public var atomics = 921_600, fetchTriangles = 1 << 18
+        public var atomics = 65536, fetchTriangles = 1 << 18, smallJobs = 60
         public var repeats = 5
 
         public static let device = Sizes()
@@ -34,6 +34,7 @@ public final class GPURates {
             s.heavyIterations = 4
             s.atomics = 4096
             s.fetchTriangles = 4096
+            s.smallJobs = 8
             s.repeats = 2
             return s
         }()
@@ -64,7 +65,7 @@ public final class GPURates {
         try await b.hidden()
         for (mode, bypass) in [("cached", false), ("volatile", true)] {
             guard let made = try b.sharedBuffers(bypass) else {
-                notes.append("no \(mode) shared arm: the device has no switchMetalSharedBypassesL2: probe")
+                notes.append("no \(mode) shared arm: the device cannot make L2-bypassing shared buffers")
                 continue
             }
             try await b.sharedArms(mode, made)
@@ -295,17 +296,18 @@ public final class GPURates {
         }
     }
 
-    /// Shared buffers made from now on bypass the GPU's L2 (`on`) or not; false where `on` and the facade has no probe
+    /// Shared buffers made from now on bypass the GPU's L2 (`on`) or not; false where `on` and the facade cannot (no probe,
+    /// or a kernel that takes no volatile writes, where such a buffer would be L2-cached anyway)
     @discardableResult
     public static func bypassL2(_ device: MTLDevice, _ on: Bool) -> Bool {
         let selector = NSSelectorFromString("switchMetalSharedBypassesL2:")
         guard let object = device as? NSObject, object.responds(to: selector) else { return !on }
-        _ = object.perform(selector, with: NSNumber(value: on))
-        return true
+        let answer = object.perform(selector, with: NSNumber(value: on))?.takeUnretainedValue() as? String
+        return !on || answer != "unsupported"
     }
 
     struct SharedBuffers {
-        let counter: MTLBuffer, corners: MTLBuffer, table: MTLBuffer
+        let counter: MTLBuffer, corners: MTLBuffer, table: MTLBuffer, small: MTLBuffer, smallOut: MTLBuffer
     }
 
     /// The shared arms' buffers, made L2-bypassing where `bypass`; nil where the device cannot make them so
@@ -325,7 +327,8 @@ public final class GPURates {
         }
         let table = (0 ..< 256).map { SIMD4<Float>(Float($0) / 255, 0.5, 0.25, 1) }
         return SharedBuffers(
-            counter: try gpu.buffer([UInt32(0)]), corners: try gpu.buffer(corners), table: try gpu.buffer(table)
+            counter: try gpu.buffer([UInt32(0)]), corners: try gpu.buffer(corners), table: try gpu.buffer(table),
+            small: try gpu.buffer(256), smallOut: try gpu.buffer(256)
         )
     }
 
@@ -369,5 +372,30 @@ public final class GPURates {
             e.endEncoding()
         }
         metrics.set("table_us_" + mode, tTable * 1000, digits: 1)
+        try await smallJobs(mode, b)
+    }
+
+    /// `smallJobs` command buffers one after another, each after the CPU rewrote 256 bytes of a shared buffer: a blit
+    /// reads them into a private buffer and fills another shared one. The median commit-to-completed time is what a job's
+    /// L2 maintenance (the host-written invalidate, the External flush) costs on top of its tiny work.
+    func smallJobs(_ mode: String, _ b: SharedBuffers) async throws {
+        guard let priv = gpu.device.makeBuffer(length: 256, options: .storageModePrivate) else {
+            throw TestFailure("no private buffer of 256 bytes")
+        }
+        var walls: [Double] = []
+        for i in 0 ..< s.smallJobs + 1 {
+            b.small.contents().initializeMemory(as: UInt8.self, repeating: UInt8(truncatingIfNeeded: i), count: 256)
+            let t = try await gpu.run { c in
+                let e = c.makeBlitCommandEncoder()!
+                e.copy(from: b.small, sourceOffset: 0, to: priv, destinationOffset: 0, size: 256)
+                e.fill(buffer: b.smallOut, range: 0 ..< 256, value: UInt8(truncatingIfNeeded: i))
+                e.endEncoding()
+            }
+            if i > 0 { walls.append(t.wallMilliseconds) }
+            if b.smallOut.contents().load(as: UInt8.self) != UInt8(truncatingIfNeeded: i) {
+                problems.append("jobs_\(mode): job \(i)'s fill was not in memory at its completion")
+            }
+        }
+        metrics.set("jobs_us_" + mode, Stats.percentile(walls, 0.5) * 1000, digits: 1)
     }
 }

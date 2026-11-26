@@ -23,6 +23,7 @@ final class GPURatesTests: XCTestCase {
             "read_gbps_shared_pages", "fill_gpix_s", "blend_gpix_s", "fill_shared_gpix_s", "fill4x_gpix_s",
             "depth_gpix_s", "texel_gtexel_s", "tri_mtri_s", "clipped_mtri_s", "hidden_us_per_layer",
             "shaded_us_per_layer", "atomic_ns_cached", "fetch_mtri_s_cached", "table_us_cached",
+            "jobs_us_cached",
         ]
         let line = result.metrics.ordered.map { "\($0)=\($1.logText)" }.joined(separator: " ")
         print("GPURates \(HostFacts.fields(device)) \(line)")
