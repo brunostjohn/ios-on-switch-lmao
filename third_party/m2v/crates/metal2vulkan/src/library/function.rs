@@ -16,7 +16,7 @@
 use std::collections::BTreeMap;
 use std::ops::{Deref, Range};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use crate::air::abi::Stage as AbiStage;
 use crate::air::container::{self, ContainerConstant, Library as Container, LibraryFunction};
@@ -67,14 +67,11 @@ struct LibraryInner {
     /// (`pipeline::compile::kept`); otherwise an id this library alone has, assigned once, which keeps that to
     /// compiles of its own functions: its `HASH` tags are taken as stated, and another library could state them too.
     scope: u64,
-    /// Made at its first use: only a dynamic library's key reads it (`pipeline::compile`).
-    content_hash: OnceLock<Hash256>,
     functions: Vec<FunctionEntry>,
     /// What a metallib says of dynamic libraries; a bare module says nothing.
     dynamic: Dynamic,
 }
 
-// The content hash is a function of the bytes, made or not
 impl PartialEq for LibraryInner {
     fn eq(&self, other: &Self) -> bool {
         *self.bytes == *other.bytes && self.functions == other.functions && self.dynamic == other.dynamic
@@ -234,11 +231,12 @@ impl Library {
         self.0.scope
     }
 
-    /// SHA-256 of the whole container.
-    pub fn content_hash(&self) -> &Hash256 {
-        self.0
-            .content_hash
-            .get_or_init(|| container::sha256(&self.0.bytes))
+    /// What a compile that links this library reads of its code: its functions' content key. A dynamic library's
+    /// functions all list its one module, whose SHA-256 the toolchain states as each one's `HASH` (taken as stated, as
+    /// every tag is); zero for a library with no function.
+    pub fn code_identity(&self) -> &Hash256 {
+        const NONE: Hash256 = [0; 32];
+        self.0.functions.first().map_or(&NONE, |f| &f.air_hash)
     }
 
     /// The number of functions in the table.
@@ -422,7 +420,6 @@ fn from_metallib(
     Ok(Library(Arc::new(LibraryInner {
         bytes: keep,
         scope: if sealed { 0 } else { own_scope() },
-        content_hash: OnceLock::new(),
         functions,
         dynamic,
     })))
@@ -485,7 +482,6 @@ fn from_module(bytes: &[u8], hash: Hash256) -> Result<Library, Error> {
     Ok(Library(Arc::new(LibraryInner {
         bytes: LibraryBytes::Owned(bytes.into()),
         scope: own_scope(),
-        content_hash: OnceLock::from(hash),
         functions,
         dynamic: Dynamic::none(),
     })))
@@ -894,7 +890,7 @@ mod held_tests {
         let bytes = held(false);
         let library = Library::from_held_metallib(Arc::clone(&bytes), false).expect("library");
         assert_eq!(library.bytes().as_ptr(), bytes.bytes().as_ptr());
-        assert_eq!(library.content_hash(), &container::sha256(bytes.bytes()));
+        assert_eq!(library.code_identity(), &container::sha256(BITCODE), "its function's stated HASH");
     }
 
     #[test]

@@ -303,14 +303,14 @@ pub(crate) struct DynamicOrder<'a> {
 }
 
 impl DynamicOrder<'_> {
-    /// What the compile key reads of the order: each library's install name and content hash,
+    /// What the compile key reads of the order: each library's install name and code identity,
     /// and the install name not loaded.
     pub(crate) fn key(&self) -> DynamicKey<'_> {
         DynamicKey {
             libraries: self
                 .libraries
                 .iter()
-                .map(|l| (l.install_name(), l.library().content_hash()))
+                .map(|l| (l.install_name(), l.library().code_identity()))
                 .collect(),
             unloaded: self.unloaded,
         }
