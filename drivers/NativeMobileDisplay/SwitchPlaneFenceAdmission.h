@@ -10,6 +10,12 @@ void planeFenceWork()
         planeBridgeWork(producers, count);
         return;
     }
+    planeFenceProducers(producers, count);
+}
+
+// The copy thread: the set's completion once every producer is done, or once the scanout fence of a set with none.
+void planeFenceProducers(const switch_gpu_backing_token *producers, unsigned count)
+{
     const uint64_t pa = count ? 0 : planeFencePa(planeFencing);
     int error = kIOReturnAborted;
     while (!__atomic_load_n(&copyStopping, __ATOMIC_ACQUIRE)) {

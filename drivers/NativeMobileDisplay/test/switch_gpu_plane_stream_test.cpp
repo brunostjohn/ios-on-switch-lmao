@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// SwitchGpuPlaneStream.h: a GPU-rendered window B/C set is armed at its offer, the copy thread submits the bridge, and
-// back under the gate the display stream takes the bridge; a stale arm or a refused stream completes through the
-// bridge, counted.
+// SwitchGpuPlaneStream.h: a GPU-rendered window B/C set is armed at its offer, the copy thread submits a bridge over its
+// GPU producers and watches it, and back under the gate the display stream takes a jobless bridge. A bridge with a GPU
+// job, a stale arm or a refused stream leaves the set to the copy thread: a notify for a GPU-only set, a fence over
+// every producer for a mixed one. Each case is counted and named once a boot.
 #include <gtest/gtest.h>
 #include <cstdint>
+#include <string>
 #include <vector>
 #include "../../TegraGM20B/SwitchGpuBacking.h"
 
@@ -12,15 +14,18 @@ constexpr int kIOReturnAborted = -14, kIOReturnSuccess = 0;
 using IOReturn = int;
 
 struct switch_gpu_bridge {
-    uint32_t releases = 0, notifies = 0;
+    uint32_t releases = 0, notifies = 0, watches = 0;
+    int jobless = 1;
     void (*completed)(void *, int) = nullptr;
 };
 
 switch_gpu_bridge theBridge;
-std::vector<switch_gpu_backing_token> bridged;
+std::vector<switch_gpu_backing_token> bridged, fenced;
+std::vector<std::string> logged;
 int submitError, busy, roomError, notifyError;
 unsigned roomWaits, completions;
 int completedStatus;
+bool watchedAtGate;
 
 int switch_gpu_bridge_submit(const switch_gpu_backing_token *tokens, uint32_t count, switch_gpu_bridge **bridge)
 {
@@ -39,6 +44,17 @@ int switch_gpu_bridge_wait_room()
     return roomError;
 }
 
+int switch_gpu_bridge_watch(const switch_gpu_bridge *bridge)
+{
+    ++const_cast<switch_gpu_bridge *>(bridge)->watches;
+    return 0;
+}
+
+int switch_gpu_bridge_jobless(const switch_gpu_bridge *bridge)
+{
+    return bridge->jobless;
+}
+
 int switch_gpu_bridge_notify(const switch_gpu_bridge *bridge, void (*completed)(void *, int), void *)
 {
     auto *b = const_cast<switch_gpu_bridge *>(bridge);
@@ -53,8 +69,10 @@ void switch_gpu_bridge_release(switch_gpu_bridge **bridge)
     *bridge = nullptr;
 }
 
-void IOLog(const char *, ...)
-{}
+void IOLog(const char *format, ...)
+{
+    logged.emplace_back(format);
+}
 
 void native_legacy_gpu_complete(void *, int status)
 {
@@ -84,7 +102,7 @@ struct NativeLegacyDisplay : OSObject {
     int streamError = 0;
     switch_gpu_bridge *streamBridge = nullptr;
     std::vector<switch_gpu_backing_token> streamed;
-    uint32_t stPlaneGpuStreamed = 0, stPlaneGpuByCpu = 0, stPlaneGpuStreamRefused = 0;
+    uint32_t stPlaneGpuStreamed = 0, stPlaneGpuByCpu = 0, stPlaneGpuStreamRefused = 0, stPlaneGpuJobful = 0;
     PlaneSet planeFencing = {};
 
     struct Flip {
@@ -129,11 +147,16 @@ struct NativeLegacyDisplay : OSObject {
         return 0;
     }
 
+    void planeFenceProducers(const switch_gpu_backing_token *producers, unsigned count)
+    {
+        fenced.assign(producers, producers + count);
+    }
+
     struct WorkLoop {
-        IOReturn runAction(IOReturn (*action)(OSObject *, void *, void *, void *, void *), OSObject *target, void *arg0,
-                           void *arg1)
+        IOReturn runAction(IOReturn (*action)(OSObject *, void *, void *, void *, void *), OSObject *target, void *arg0)
         {
-            return action(target, arg0, arg1, nullptr, nullptr);
+            watchedAtGate = theBridge.watches != 0;
+            return action(target, arg0, nullptr, nullptr, nullptr);
         }
     } loop;
 
@@ -157,10 +180,15 @@ protected:
     {
         theBridge = {};
         bridged.clear();
+        fenced.clear();
+        logged.clear();
         submitError = busy = roomError = notifyError = 0;
         roomWaits = completions = 0;
         completedStatus = 1;
+        watchedAtGate = false;
         NativeLegacyDisplay::planeBridgeArmed = 0;
+        for (bool &told : NativeLegacyDisplay::planeStreamTold)
+            told = false;
     }
 
     void offer(std::initializer_list<switch_gpu_backing_token> producers)
@@ -179,13 +207,15 @@ protected:
     }
 };
 
-TEST_F(GpuPlaneStream, AGpuSetIsArmedAndItsStreamTakesTheBridgeWithNoCpuCompletion)
+TEST_F(GpuPlaneStream, AJoblessGpuSetIsWatchedAndItsStreamTakesTheBridgeWithNoCpuCompletion)
 {
     offer({kRender});
     EXPECT_EQ(NativeLegacyDisplay::planeBridgeArmed, 1u);
     copyThread();
     ASSERT_EQ(bridged.size(), 1u);
     EXPECT_EQ(bridged[0].value, kRender.value);
+    EXPECT_EQ(theBridge.watches, 1u);
+    EXPECT_TRUE(watchedAtGate);
     EXPECT_EQ(display.streams, 1u);
     EXPECT_EQ(display.streamBridge, &theBridge);
     EXPECT_TRUE(display.streamed.empty());
@@ -195,29 +225,42 @@ TEST_F(GpuPlaneStream, AGpuSetIsArmedAndItsStreamTakesTheBridgeWithNoCpuCompleti
     EXPECT_EQ(display.stPlaneGpuStreamed, 1u);
 }
 
-// The bridge takes every producer, VIC's too; the stream also WAITs on VIC's syncpoint itself.
-TEST_F(GpuPlaneStream, AMixedSetsBridgeCoversEveryProducerAndItsStreamWaitsOnVIC)
+// The bridge takes the GPU's producers alone (a promise's too); the stream WAITs on VIC's syncpoint itself.
+TEST_F(GpuPlaneStream, AMixedSetsBridgeCoversTheGpuAloneAndItsStreamWaitsOnVic)
 {
     offer({kConvert, kRender, kPromise});
     copyThread();
-    ASSERT_EQ(bridged.size(), 3u);
-    EXPECT_EQ(bridged[0].engine, uint32_t(SWITCH_GPU_ENGINE_VIC));
-    EXPECT_EQ(bridged[1].engine, uint32_t(SWITCH_GPU_ENGINE_GM20B));
-    EXPECT_EQ(bridged[2].engine, uint32_t(SWITCH_GPU_ENGINE_PROMISE));
+    ASSERT_EQ(bridged.size(), 2u);
+    EXPECT_EQ(bridged[0].engine, uint32_t(SWITCH_GPU_ENGINE_GM20B));
+    EXPECT_EQ(bridged[1].engine, uint32_t(SWITCH_GPU_ENGINE_PROMISE));
     ASSERT_EQ(display.streamed.size(), 1u);
     EXPECT_EQ(display.streamed[0].value, kConvert.value);
 }
 
-// A mixed set whose arm went stale completes through a bridge that waited for VIC's producer too.
-TEST_F(GpuPlaneStream, AMixedSetsFallbackWaitsForEveryProducer)
+TEST_F(GpuPlaneStream, ABridgeWithAGpuJobNeverStreamsAndCompletesThroughItsNotify)
 {
-    offer({kConvert, kRender});
-    display.mediaFlip.armed = SwitchCompletionFlip::kIdle;
+    theBridge.jobless = 0;
+    offer({kRender});
     copyThread();
-    ASSERT_EQ(bridged.size(), 2u);
-    EXPECT_EQ(bridged[0].value, kConvert.value);
-    EXPECT_EQ(theBridge.notifies, 1u);
     EXPECT_EQ(display.streams, 0u);
+    EXPECT_EQ(theBridge.notifies, 1u);
+    EXPECT_EQ(theBridge.completed, native_legacy_gpu_complete);
+    EXPECT_EQ(theBridge.releases, 1u);
+    EXPECT_EQ(display.stPlaneGpuJobful, 1u);
+    EXPECT_EQ(display.stPlaneGpuStreamRefused, 0u);
+}
+
+// A mixed set that does not stream: its GPU-only bridge goes, and a fence over every producer completes it.
+TEST_F(GpuPlaneStream, AMixedSetThatDoesNotStreamIsFencedOnEveryProducer)
+{
+    theBridge.jobless = 0;
+    offer({kConvert, kRender});
+    copyThread();
+    EXPECT_EQ(theBridge.notifies, 0u);
+    EXPECT_EQ(theBridge.releases, 1u);
+    ASSERT_EQ(fenced.size(), 2u);
+    EXPECT_EQ(fenced[0].value, kConvert.value);
+    EXPECT_EQ(fenced[1].value, kRender.value);
 }
 
 TEST_F(GpuPlaneStream, ABridgeOutOfRoomIsWaitedForOnTheCopyThread)
@@ -238,7 +281,6 @@ TEST_F(GpuPlaneStream, AStaleArmCompletesThroughTheBridge)
     copyThread();
     EXPECT_EQ(display.streams, 0u);
     EXPECT_EQ(theBridge.notifies, 1u);
-    EXPECT_EQ(theBridge.completed, native_legacy_gpu_complete);
     EXPECT_EQ(theBridge.releases, 1u);
     EXPECT_EQ(completions, 0u);
     EXPECT_EQ(display.stPlaneGpuStreamRefused, 1u);
@@ -254,6 +296,38 @@ TEST_F(GpuPlaneStream, ARefusedStreamCompletesThroughTheBridge)
     EXPECT_EQ(theBridge.releases, 1u);
     EXPECT_EQ(display.stPlaneGpuStreamRefused, 1u);
     EXPECT_EQ(display.stPlaneGpuStreamed, 0u);
+}
+
+TEST_F(GpuPlaneStream, ANotifyThatCannotBeTakenFailsTheSet)
+{
+    theBridge.jobless = 0;
+    notifyError = -16;
+    offer({kRender});
+    copyThread();
+    EXPECT_EQ(completions, 1u);
+    EXPECT_EQ(completedStatus, -16);
+    EXPECT_EQ(theBridge.releases, 1u);
+}
+
+// Each case is named once a boot, by its own line.
+TEST_F(GpuPlaneStream, EachCaseThatDoesNotStreamIsNamed)
+{
+    theBridge.jobless = 0;
+    offer({kRender});
+    copyThread();
+    theBridge.jobless = 1;
+    offer({kRender});
+    display.mediaFlip.armed = SwitchCompletionFlip::kIdle;
+    copyThread();
+    display.streamError = -16;
+    offer({kRender});
+    copyThread();
+    ASSERT_EQ(logged.size(), 3u);
+    for (const auto &line : logged)
+        EXPECT_NE(line.find("%s"), std::string::npos);
+    offer({kRender});
+    copyThread();
+    EXPECT_EQ(logged.size(), 3u) << "once a boot each";
 }
 
 TEST_F(GpuPlaneStream, ABridgeThatCannotBeSubmittedFailsTheSet)

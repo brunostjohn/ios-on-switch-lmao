@@ -49,10 +49,14 @@ struct HostStream {
 inline HostStream gHost;
 inline std::function<void(void *, int)> gDelivered;
 
-// The GPU-to-host1x bridge a GPU-rendered set's stream waits on (SwitchGpuPlaneStream.h).
+// The GPU-to-host1x bridge a GPU-rendered set's stream waits on (SwitchGpuPlaneStream.h), as SwitchGpuBridge.h
+// describes it. held: the bridge retains its producers, so their reason (why) is readable only until its release.
+// failed: the failure stored before the release of its syncpoint; status: its producers' outcome.
 struct BridgeModel {
-    unsigned submits = 0, notifies = 0, releases = 0;
-    std::vector<switch_gpu_backing_token> tokens;
+    unsigned submits = 0, notifies = 0, releases = 0, watches = 0;
+    int jobless = 1, failed = 0, status = 0, why = 0;
+    bool held = false, watchedAtGate = false;
+    std::vector<switch_gpu_backing_token> tokens, fenced;
     void (*completed)(void *, int) = nullptr;
     void *context = nullptr;
 };
@@ -72,8 +76,30 @@ extern "C" inline int switch_gpu_bridge_submit(const switch_gpu_backing_token *t
 {
     ++media_flip_test::gBridge.submits;
     media_flip_test::gBridge.tokens.assign(tokens, tokens + count);
+    media_flip_test::gBridge.held = true;
     *bridge = &gTheBridge;
     return 0;
+}
+
+extern "C" inline int switch_gpu_bridge_watch(const switch_gpu_bridge *)
+{
+    ++media_flip_test::gBridge.watches;
+    return 0;
+}
+
+extern "C" inline int switch_gpu_bridge_jobless(const switch_gpu_bridge *)
+{
+    return media_flip_test::gBridge.jobless;
+}
+
+extern "C" inline int switch_gpu_bridge_failed(const switch_gpu_bridge *)
+{
+    return media_flip_test::gBridge.failed;
+}
+
+extern "C" inline int switch_gpu_bridge_why(const switch_gpu_bridge *)
+{
+    return media_flip_test::gBridge.held ? media_flip_test::gBridge.why : 0;
 }
 
 extern "C" inline int switch_gpu_bridge_wait_room()
@@ -92,6 +118,7 @@ extern "C" inline int switch_gpu_bridge_notify(const switch_gpu_bridge *, void (
 extern "C" inline void switch_gpu_bridge_release(switch_gpu_bridge **bridge)
 {
     ++media_flip_test::gBridge.releases;
+    media_flip_test::gBridge.held = false;
     *bridge = nullptr;
 }
 
@@ -104,12 +131,19 @@ inline int switch_host1x_display_start(SwitchHost1xDisplayStream *stream)
 inline int switch_host1x_display_submit(SwitchHost1xDisplayStream *stream, const switch_gpu_backing_token *producers,
                                         uint32_t count, const uint32_t *registers, const uint32_t *values,
                                         uint32_t stores, uint32_t update, uint32_t request,
-                                        void (*completed)(void *, int), void *context, switch_gpu_bridge *)
+                                        void (*completed)(void *, int), void *context, switch_gpu_bridge *bridge)
 {
     using namespace media_flip_test;
     ++gFences;
     if (gFenceResult)
         return gFenceResult;
+    if (bridge && gBridge.failed)
+        return gBridge.failed;
+    stream->bridge = bridge;
+    stream->bridgeWhy = 0;
+    stream->count = count;
+    for (uint32_t i = 0; i < count; ++i)
+        stream->producers[i] = producers[i];
     gHost.owner = stream;
     gHost.stores.clear();
     for (uint32_t i = 0; i < stores; ++i)
@@ -570,11 +604,36 @@ struct Display : OSObject {
             }
             gWaiters.clear();
             gHost.owner = nullptr;
-            stream->completed(stream->context, stream->status ? stream->status : status);
+            stream->completed(stream->context, signaled(*stream, stream->status ? stream->status : status));
         } else {
             gWaiters.clear();
             deliver(status);
         }
+    }
+
+    // SwitchHost1xDisplayChannel.h displaySignaled's part for a bridged stream: the reason read before the release.
+    static int signaled(SwitchHost1xDisplayStream &stream, int status)
+    {
+        if (!stream.bridge)
+            return status;
+        const int why = status || gBridge.status < 0 ? switch_gpu_bridge_why(stream.bridge) : 0;
+        stream.bridgeWhy = why;
+        if (why < 0)
+            status = why;
+        else if (!status && gBridge.status < 0)
+            status = gBridge.status;
+        switch_gpu_bridge_release(&stream.bridge);
+        return status;
+    }
+
+    // A jobless bridge's producer fails with `why`: stored first, then its syncpoint's release cancels a stream queued on
+    // it that has not written its set (host1x's displayCancelLocked).
+    void bridgeFails(int why)
+    {
+        gBridge.failed = gBridge.why = why;
+        gBridge.status = -5;
+        if (gHost.owner && gHost.owner->bridge && !gHost.executed)
+            gHost.owner->status = SwitchHost1xDisplayStream::kCancelled;
     }
 
     void deliver(int status)
@@ -751,7 +810,7 @@ struct Display : OSObject {
     switch_gpu_backing_token gpuProducers[3] = {};
     unsigned gpuProducerCount = 0;
     bool copyStopping = false;
-    uint32_t stPlaneGpuStreamed = 0, stPlaneGpuByCpu = 0, stPlaneGpuStreamRefused = 0;
+    uint32_t stPlaneGpuStreamed = 0, stPlaneGpuByCpu = 0, stPlaneGpuStreamRefused = 0, stPlaneGpuJobful = 0;
 
     unsigned planeDependencies(const PlaneSet &, switch_gpu_backing_token tokens[3]) const
     {
@@ -761,10 +820,11 @@ struct Display : OSObject {
     }
 
     struct WorkLoop {
-        IOReturn runAction(IOReturn (*action)(OSObject *, void *, void *, void *, void *), OSObject *target, void *arg0,
-                           void *arg1)
+        IOReturn runAction(IOReturn (*action)(OSObject *, void *, void *, void *, void *), OSObject *target,
+                           void *arg0 = nullptr, void *arg1 = nullptr, void *arg2 = nullptr, void *arg3 = nullptr)
         {
-            return action(target, arg0, arg1, nullptr, nullptr);
+            gBridge.watchedAtGate = gBridge.watches != 0;
+            return action(target, arg0, arg1, arg2, arg3);
         }
     } loop;
 
@@ -775,7 +835,7 @@ struct Display : OSObject {
 
     // planeFence for a set the GPU renders: armed for its stream (SwitchGpuPlaneStream.h) when its layout is the
     // newest requested one; the copy thread's half is copyThread.
-    bool offerGpu(PlaneSet p, uint64_t seq)
+    bool offerGpu(PlaneSet p, uint64_t seq, bool convertedByVic = false)
     {
         p.seq = seq;
         swaps.push_back(seq);
@@ -783,9 +843,18 @@ struct Display : OSObject {
         planeFencePending = gpuScanout = transferred = true;
         planeTarget = p;
         gpuProducers[0] = {seq, 1, SWITCH_GPU_ENGINE_GM20B, 3};
-        gpuProducerCount = 1;
+        gpuProducers[1] = {seq << 8, 1, SWITCH_GPU_ENGINE_VIC, 161};
+        gpuProducerCount = convertedByVic ? 2 : 1;
         planeBridgeArm(p);
         return planeBridgeArmed != 0;
+    }
+
+    // SwitchPlaneFenceAdmission.h's: the set's completion once every producer is done.
+    void planeFenceProducers(const switch_gpu_backing_token *producers, unsigned count)
+    {
+        gBridge.fenced.assign(producers, producers + count);
+        gBridge.completed = native_legacy_gpu_complete;
+        gBridge.context = this;
     }
 
     void copyThread()
@@ -834,10 +903,18 @@ extern "C" inline int switch_gpu_backing_token_filter_status(const switch_gpu_ba
     return media_flip_test::gUncertain.count(token->value) ? 0 : media_flip_test::gProducerCertain;
 }
 
-// Why the stream's producers failed, as the GPU driver answers.
-extern "C" inline int switch_gpu_backing_tokens_failure(const switch_gpu_backing_token *, uint32_t)
+// Why the producers failed, as the GPU driver answers: a VIC or NVDEC token by gTokensWhy, a GPU one by its bridge's
+// reason while the bridge still holds it.
+extern "C" inline int switch_gpu_backing_tokens_failure(const switch_gpu_backing_token *tokens, uint32_t count)
 {
-    return media_flip_test::gTokensWhy;
+    using media_flip_test::gBridge;
+    for (uint32_t i = 0; i < count; ++i) {
+        const bool engine = tokens[i].engine == SWITCH_GPU_ENGINE_VIC || tokens[i].engine == SWITCH_GPU_ENGINE_NVDEC;
+        const int why = engine ? media_flip_test::gTokensWhy : gBridge.held ? gBridge.why : 0;
+        if (why)
+            return why;
+    }
+    return 0;
 }
 
 extern "C" inline int switch_gpu_backing_token_status(const switch_gpu_backing_token *token)
