@@ -30,7 +30,8 @@
 #   xnu_sched_cpu_test       kernel/switch/sched/cpu.h: each process's CPU in a window, counted once across its exit and
 #                            an exec, a full table's misses counted; the cores and tasks lines
 #   xnu_sched_limit_shadow_test  kernel/switch/sched/limit_shadow.h: Apple's blocking CPU limit replayed beside a lifted
-#                            one, its blocks and the time run past each budget
+#                            one, its blocks and the time run past each budget; thread slots ended and reused, rows by
+#                            process and limit; both trees end a slot for any limit but a lifted one and at exit
 #   xnu_sched_callouts_test  kernel/switch/sched/callouts.h: thread call functions and timer actions by CPU, each window's
 #                            top four; both trees bracket thread_call_invoke's function and IOTimerEventSource's actions
 #   xnu_diag_deployed_test   kernel/switch/diag/deployed.h: the commit, branch, build and dirty flag deployed.json gives
@@ -593,6 +594,11 @@ host_test(
     srcs = [
         "sched/limit_shadow.h",
         "xnu_sched_limit_shadow_test.cpp",
+    ],
+    data = [
+        "//kernel/switch:include/switch/sched.h",
+        "//kernel/xnu-10063.141.1/osfmk:kern/thread.c",
+        "//kernel/xnu-12377.121.6/osfmk:kern/thread.c",
     ],
     includes = ["."],
 )

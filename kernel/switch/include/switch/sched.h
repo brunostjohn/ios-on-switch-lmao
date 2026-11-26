@@ -89,10 +89,12 @@ void switch_sched_systime_report(char *line, size_t size, uint64_t window_ns);
 void switch_sched_callout_report(char *line, size_t size, uint64_t window_ns);
 
 /* limit_shadow.c: Apple's blocking CPU limits replayed beside the ones switch_cpulimit_lift lifts (sched/limit_shadow.h);
- * the dispatch hooks below feed it once a thread has one. */
+ * the dispatch hooks below feed it once a thread has one. thread_set_cpulimit, on the thread itself, ends it for any
+ * call but a lifted limit, and thread_terminate_self at the thread's exit. */
 extern uint32_t switch_sched_limit_watching;
 
 void switch_sched_limit_shadow(uint8_t percentage, uint64_t interval_ns);
+void switch_sched_limit_ended(void);
 void switch_sched_limit_dispatched(thread_t thread, uint64_t now);
 void switch_sched_limit_departed(thread_t thread, uint64_t now);
 void switch_sched_limit_report(char *line, size_t size, uint64_t window_ns);
@@ -168,6 +170,9 @@ static inline void switch_systime_absorb(__unused thread_t thread, __unused task
 {}
 
 static inline void switch_systime_returned(__unused thread_t thread)
+{}
+
+static inline void switch_sched_limit_ended(void)
 {}
 
 #endif /* DEVELOPMENT || DEBUG */
