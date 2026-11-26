@@ -7,22 +7,23 @@ lint_files()
 
 _DEPS = [
     "//install/apfs_format:switch_apfs_format",
+    "@installer_crates//:sha2",
     "@installer_crates//:thiserror",
     "@installer_crates//:zerocopy",
 ]
 
 rust_library(
     name = "switch_apfs_btree",
-    srcs = ["lib.rs"],
+    srcs = glob(
+        ["*.rs"],
+        exclude = ["tests*.rs"],
+    ),
     deps = _DEPS,
 )
 
 rust_test(
     name = "switch_apfs_btree_test",
-    srcs = [
-        "lib.rs",
-        "tests.rs",
-    ],
+    srcs = glob(["*.rs"]),
     crate_root = "lib.rs",
     deps = _DEPS,
 )

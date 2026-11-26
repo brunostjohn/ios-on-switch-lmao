@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Nodes macOS 27.2's kext and newfs_apfs wrote, rebuilt byte for byte.
+use switch_apfs_format::BLOCK_SIZE;
+
 use super::*;
 
 fn block_from_rows(rows: &[(usize, [u8; 16])]) -> Vec<u8> {

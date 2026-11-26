@@ -1,18 +1,30 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! B-tree nodes laid out as Apple's kext lays out a node it filled in key order: keys packed from the start of the
-//! key area, values packed back from the end, and a table of contents sized the way Apple's nodes are.
+//! B-trees built from records already in key order, laid out node for node as Apple's B-tree code lays out a tree it
+//! fills by sequential insertion: the kext's own extent-reference trees and the sealer's fs and fext trees.
+//!
+//! `Layout::new` decides every node without addresses, so a caller can count the nodes before it allocates them;
+//! `Layout::emit` then numbers the nodes in Apple's allocation order and writes them.
 
+mod emit;
+mod layout;
+mod node;
+
+pub use emit::{Built, BuiltNode};
+pub use layout::Layout;
+
+use switch_apfs_format::Block;
 use switch_apfs_format::btree::{
-    BTNODE_FIXED_KV_SIZE, BTNODE_LEAF, BTNODE_ROOT, BTOFF_INVALID, BTREE_ALLOW_GHOSTS, BTREE_EPHEMERAL,
-    BTREE_INFO_SIZE, BTREE_KV_NONALIGNED, BTREE_NODE_DATA_AT, BTREE_PHYSICAL, BTREE_SEQUENTIAL_INSERT,
-    BTREE_TOC_ENTRY_INCREMENT, BtreeInfo, BtreeNodePhys, Kvloc, Kvoff, Nloc,
+    BTREE_ALLOW_GHOSTS, BTREE_EPHEMERAL, BTREE_HASHED, BTREE_KV_NONALIGNED, BTREE_NOHEADER, BTREE_PHYSICAL,
+    BTREE_SEQUENTIAL_INSERT, INDEX_VALUE_SIZE,
 };
 use switch_apfs_format::object::{
-    OBJ_EPHEMERAL, OBJ_PHYSICAL, OBJ_VIRTUAL, ObjPhys, TYPE_BLOCKREFTREE, TYPE_BTREE, TYPE_FSTREE, TYPE_OMAP,
-    TYPE_SNAPMETATREE, TYPE_SPACEMAN_FREE_QUEUE,
+    OBJ_EPHEMERAL, OBJ_PHYSICAL, OBJ_VIRTUAL, TYPE_BLOCKREFTREE, TYPE_FSTREE, TYPE_OMAP, TYPE_SNAPMETATREE,
+    TYPE_SPACEMAN_FREE_QUEUE,
 };
-use switch_apfs_format::{BLOCK_SIZE, Block, put, seal};
-use zerocopy::little_endian::{U16, U32, U64};
+
+/// `OBJECT_TYPE_FEXT_TREE`, the subtype of a sealed volume's file-extent tree.
+const TYPE_FEXT_TREE: u32 = 0x1F;
+pub const SHA256_SIZE: usize = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TreeShape {
@@ -41,6 +53,14 @@ impl TreeShape {
         info_flags: BTREE_SEQUENTIAL_INSERT | BTREE_KV_NONALIGNED,
         fixed: None,
     };
+    /// A sealed volume's fs tree: no object headers, and each index value is the child's oid less the root's,
+    /// then the SHA-256 of the child's whole node.
+    pub const SEALED_FS_TREE: TreeShape = TreeShape {
+        storage: OBJ_VIRTUAL,
+        subtype: TYPE_FSTREE,
+        info_flags: BTREE_SEQUENTIAL_INSERT | BTREE_KV_NONALIGNED | BTREE_HASHED | BTREE_NOHEADER,
+        fixed: None,
+    };
     pub const EXTENT_REF: TreeShape = TreeShape {
         storage: OBJ_PHYSICAL,
         subtype: TYPE_BLOCKREFTREE,
@@ -53,6 +73,24 @@ impl TreeShape {
         info_flags: BTREE_SEQUENTIAL_INSERT | BTREE_PHYSICAL | BTREE_KV_NONALIGNED,
         fixed: None,
     };
+    pub const FEXT: TreeShape = TreeShape {
+        storage: OBJ_PHYSICAL,
+        subtype: TYPE_FEXT_TREE,
+        info_flags: BTREE_SEQUENTIAL_INSERT | BTREE_PHYSICAL,
+        fixed: Some((16, 16)),
+    };
+
+    pub fn hashed(&self) -> bool {
+        self.info_flags & BTREE_HASHED != 0
+    }
+
+    pub fn headerless(&self) -> bool {
+        self.info_flags & BTREE_NOHEADER != 0
+    }
+
+    pub fn index_value_len(&self) -> usize {
+        INDEX_VALUE_SIZE + if self.hashed() { SHA256_SIZE } else { 0 }
+    }
 }
 
 /// A leaf record; a `None` value is a ghost, which only a tree with `BTREE_ALLOW_GHOSTS` may hold.
@@ -62,6 +100,8 @@ pub type Record = (Vec<u8>, Option<Vec<u8>>);
 pub enum BuildError {
     #[error("{records} records ({bytes} bytes) don't fit one root leaf")]
     Overflow { records: usize, bytes: usize },
+    #[error("record {0} doesn't fit an empty node")]
+    TooBig(usize),
     #[error("record {0} doesn't have the tree's fixed key or value size")]
     WrongSize(usize),
     #[error("record {0} is a ghost in a tree that doesn't allow them")]
@@ -70,113 +110,37 @@ pub enum BuildError {
     Aligned,
 }
 
-/// One node that is both the root and the only leaf. Records must already be in the tree's key order.
-pub fn leaf_root(shape: &TreeShape, oid: u64, xid: u64, records: &[Record]) -> Result<Box<Block>, BuildError> {
-    if shape.fixed.is_none() && shape.info_flags & BTREE_KV_NONALIGNED == 0 {
-        return Err(BuildError::Aligned);
-    }
-    check_records(shape, records)?;
-    let values_end = BLOCK_SIZE - BTREE_INFO_SIZE;
-    let toc_entries = toc_entries(shape, records.len(), values_end);
-    let entry_size = if shape.fixed.is_some() {
-        size_of::<Kvoff>()
-    } else {
-        size_of::<Kvloc>()
-    };
-    let key_area = BTREE_NODE_DATA_AT + toc_entries * entry_size;
-    let key_bytes: usize = records.iter().map(|(k, _)| k.len()).sum();
-    let value_bytes: usize = records.iter().filter_map(|(_, v)| v.as_ref()).map(Vec::len).sum();
-    if records.len() > toc_entries || key_area + key_bytes + value_bytes > values_end {
-        return Err(BuildError::Overflow {
-            records: records.len(),
-            bytes: key_bytes + value_bytes,
-        });
-    }
-
-    let mut block = Box::new([0u8; BLOCK_SIZE]);
-    let mut key_at = 0usize;
-    let mut value_back = 0usize;
-    for (i, (key, value)) in records.iter().enumerate() {
-        block[key_area + key_at..key_area + key_at + key.len()].copy_from_slice(key);
-        let value_off = match value {
-            Some(value) => {
-                value_back += value.len();
-                let at = values_end - value_back;
-                block[at..at + value.len()].copy_from_slice(value);
-                value_back as u16
-            }
-            None => BTOFF_INVALID,
-        };
-        let toc_at = BTREE_NODE_DATA_AT + i * entry_size;
-        if shape.fixed.is_some() {
-            put(
-                &mut block[..],
-                toc_at,
-                &Kvoff {
-                    k: U16::new(key_at as u16),
-                    v: U16::new(value_off),
-                },
-            );
-        } else {
-            let value_len = value.as_ref().map_or(0, Vec::len) as u16;
-            let entry = Kvloc {
-                k: Nloc::new(key_at as u16, key.len() as u16),
-                v: Nloc::new(value_off, value_len),
-            };
-            put(&mut block[..], toc_at, &entry);
-        }
-        key_at += key.len();
-    }
-
-    let fixed_flag = if shape.fixed.is_some() { BTNODE_FIXED_KV_SIZE } else { 0 };
-    let node = BtreeNodePhys {
-        o: ObjPhys::new(oid, xid, shape.storage | TYPE_BTREE, shape.subtype),
-        flags: U16::new(BTNODE_ROOT | BTNODE_LEAF | fixed_flag),
-        level: U16::ZERO,
-        nkeys: U32::new(records.len() as u32),
-        table_space: Nloc::new(0, (toc_entries * entry_size) as u16),
-        free_space: Nloc::new(
-            key_bytes as u16,
-            (values_end - value_bytes - key_area - key_bytes) as u16,
-        ),
-        key_free_list: Nloc::EMPTY_LIST,
-        val_free_list: Nloc::EMPTY_LIST,
-    };
-    put(&mut block[..], 0, &node);
-    let (key_size, val_size) = shape.fixed.unwrap_or((0, 0));
-    let info = BtreeInfo {
-        flags: U32::new(shape.info_flags),
-        node_size: U32::new(BLOCK_SIZE as u32),
-        key_size: U32::new(key_size.into()),
-        val_size: U32::new(val_size.into()),
-        longest_key: U32::new(records.iter().map(|(k, _)| k.len()).max().unwrap_or(0) as u32),
-        longest_val: U32::new(
-            records
-                .iter()
-                .filter_map(|(_, v)| v.as_ref())
-                .map(Vec::len)
-                .max()
-                .unwrap_or(0) as u32,
-        ),
-        key_count: U64::new(records.len() as u64),
-        node_count: U64::new(1),
-    };
-    put(&mut block[..], values_end, &info);
-    seal(&mut block[..]);
-    Ok(block)
+/// The whole tree, its nodes numbered by `ids` in Apple's allocation order, root first.
+pub fn build(
+    shape: &TreeShape,
+    xid: u64,
+    records: &[Record],
+    ids: &mut dyn FnMut() -> u64,
+) -> Result<Built, BuildError> {
+    Ok(Layout::new(shape, records)?.emit(xid, ids))
 }
 
-/// Apple sizes a fixed-size node's table for as many entries as the node could hold, and a variable-size node's for
-/// its keys; both round up to whole increments of 8 entries.
-fn toc_entries(shape: &TreeShape, records: usize, values_end: usize) -> usize {
-    let wanted = match shape.fixed {
-        Some((k, v)) => (values_end - BTREE_NODE_DATA_AT) / (usize::from(k) + usize::from(v) + size_of::<Kvoff>()),
-        None => records.max(1),
-    };
-    wanted.div_ceil(BTREE_TOC_ENTRY_INCREMENT) * BTREE_TOC_ENTRY_INCREMENT
+/// One node that is both the root and the only leaf.
+pub fn leaf_root(shape: &TreeShape, oid: u64, xid: u64, records: &[Record]) -> Result<Box<Block>, BuildError> {
+    let layout = Layout::new(shape, records)?;
+    if layout.node_count() > 1 {
+        let bytes = records
+            .iter()
+            .map(|(k, v)| k.len() + v.as_ref().map_or(0, Vec::len))
+            .sum();
+        return Err(BuildError::Overflow {
+            records: records.len(),
+            bytes,
+        });
+    }
+    let mut built = layout.emit(xid, &mut || oid);
+    Ok(built.nodes.swap_remove(0).block)
 }
 
 fn check_records(shape: &TreeShape, records: &[Record]) -> Result<(), BuildError> {
+    if shape.fixed.is_none() && shape.info_flags & BTREE_KV_NONALIGNED == 0 {
+        return Err(BuildError::Aligned);
+    }
     for (i, (key, value)) in records.iter().enumerate() {
         if value.is_none() && shape.info_flags & BTREE_ALLOW_GHOSTS == 0 {
             return Err(BuildError::Ghost(i));
@@ -192,3 +156,5 @@ fn check_records(shape: &TreeShape, records: &[Record]) -> Result<(), BuildError
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_multi;

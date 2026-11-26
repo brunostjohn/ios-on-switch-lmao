@@ -111,3 +111,63 @@ fn parses_versions() {
     assert_eq!("15.1".parse(), Ok(V15));
     assert_eq!("17".parse(), Ok(V17));
 }
+
+/// Names macOS 27.2 created on a case-sensitive volume, and the `name_len_and_hash` it stored for each: Hangul, both
+/// precomposed and as jamo; combining marks that reorder; emoji sequences; CJK with compatibility singletons; and
+/// letters new in Unicode 16.0 and 17.0.
+const MACOS_27_NAMES: &[(&[u32], u32)] = &[
+    (&[0xD55C, 0xAE00, 0xAC01], 0x2741c9),
+    (&[0x1112, 0x1161, 0x11AB], 0x10ad04),
+    (&[0xE9, 0xF1, 0xFC, 0x1EC7], 0x3dc82b),
+    (&[0x61, 0x308, 0x323, 0x301], 0x3d22e4),
+    (&[0x1F600, 0x1F680], 0x0f1ce3),
+    (&[0x1F468, 0x200D, 0x1F469, 0x200D, 0x1F467], 0x0a5b89),
+    (&[0x1F44D, 0x1F3FD], 0x084149),
+    (&[0x1F1EF, 0x1F1F5], 0x399008),
+    (&[0x2764, 0xFE0F], 0x34307d),
+    (&[0x6F22, 0x5B57, 0x65E5, 0x672C], 0x12df22),
+    (&[0x20000, 0x2A6D6], 0x2b928f),
+    (&[0xF900, 0xF91D], 0x330063),
+    (&[0x2F800, 0x2FA1D], 0x10f60e),
+    (&[0x2126, 0x212B, 0x212A], 0x18dec1),
+    (&[0x41, 0x2000, 0x2001, 0x42], 0x076017),
+    (&[0x386, 0x1F71, 0x385], 0x05787f),
+    (&[0x915, 0x93C, 0x958], 0x326351),
+    (&[0xF73, 0xF75, 0xF81], 0x288cd6),
+    (&[0x1D15E, 0x1D160], 0x03d681),
+    (&[0x41, 0x61, 0x130, 0x131, 0x3A3, 0x3C2], 0x046aed),
+    (&[0xC5], 0x267b74),
+    (&[0x41, 0x30A, 0x5F], 0x0940e4),
+    (&[0x10D40, 0x10D41], 0x269c9d),
+    (&[0x11380, 0x113B8, 0x113C2], 0x04a8e7),
+    (&[0x7A, 0x897, 0x316], 0x00c708),
+    (&[0x16D40, 0x16D63, 0x16D67], 0x29c2cc),
+    (&[0x79, 0x1ACF, 0x316], 0x1919e3),
+    (&[0x323B0, 0x323B1], 0x2bdfcc),
+    (&[0x10940, 0x10941], 0x18fd56),
+    (&[0x1FAC8], 0x22c4bd),
+];
+
+/// The first entry of `MACOS_27_NAMES` that holds a letter Unicode 15.1 doesn't assign.
+const FIRST_AFTER_15_1: usize = 22;
+
+#[test]
+fn macos_27_non_ascii_names() {
+    for &(codes, stored) in MACOS_27_NAMES {
+        let name = s(codes);
+        let packed = name_len_and_hash(&name, V17).unwrap_or_else(|e| panic!("{codes:x?}: {e}"));
+        assert_eq!(packed, stored << 10 | (name.len() as u32 + 1), "{codes:x?}");
+    }
+}
+
+#[test]
+fn ios_17_refuses_letters_after_15_1() {
+    for (i, &(codes, _)) in MACOS_27_NAMES.iter().enumerate() {
+        let got = check(&s(codes), V15);
+        if i < FIRST_AFTER_15_1 {
+            assert_eq!(got, Ok(()), "{codes:x?}");
+        } else {
+            assert!(matches!(got, Err(NameError::Unassigned { .. })), "{codes:x?}: {got:?}");
+        }
+    }
+}
