@@ -32,7 +32,7 @@ MAGIC = b'GM20BPK1'
 # tier-0 state segments in tier 0 of PackHeap (PackSegments) and tier0SlmPerWarp in PackHeader; 35: programs' header
 # facts (PackProgram.facts), a variant's set-0 memory reads (PackVariant.memoryEntries), the segments' words block
 # (PackSegmentTable)
-VERSION = 35
+VERSION = 36
 SECTIONS = 17  # runtime/pack.h PackSectionCount
 ENTRY_COMPARES = 1  # runtime/pack.h kEntryCompares: a handle's sampler slot the state samples by comparison
 ENTRY_ARRAY_VIEW = 2  # runtime/pack.h kEntryArrayView: a handle bound as a 2D-array view (m2v cube_as_array)
@@ -70,6 +70,9 @@ PIPELINE_V22 = struct.Struct(f'<{WRITTEN_SLOTS}HH2x')
 # PackPipeline's record-v24 tail: tessPrograms[2], strideTwin, amplificationLayerWord, amplificationViewportWord,
 # restoreDwords, restoreAt
 PIPELINE_V24 = struct.Struct('<2IQBBHI')
+# PackPipeline's record-v36 tail: guestBaseWord[4], guestBaseSlot[4] (m2v's SlotGuestBase fields)
+GUEST_BASES = 4  # runtime/pack.h kPackGuestBases
+PIPELINE_V36 = struct.Struct(f'<{GUEST_BASES}s{GUEST_BASES}s')
 NO_UNIFORM = b'\xff\x00\x00\x00' * 8
 
 
@@ -382,6 +385,7 @@ def pipeline_bytes(
         + v21_tail(rec)
         + v22_tail(rec)
         + v24_tail(rec, restore_at=restore_at, stride_twin=stride_twin)
+        + v36_tail(rec)
     )
     return head + entries + push_bytes(rec['push']) + dynamic + storage + tests + tails
 
@@ -450,6 +454,11 @@ def v24_tail(rec: dict, *, restore_at: int | None = None, stride_twin: int | Non
         2 * len(restore) if restore else 0,
         (rec.get('restore_at', 0) if restore_at is None else restore_at) if restore else 0,
     )
+
+
+def v36_tail(rec: dict) -> bytes:
+    """Give a record's PIPELINE_V36 tail: the push words each draw writes a buffer slot's Metal address to, and the slots."""
+    return PIPELINE_V36.pack(bytes(rec.get('guest_base_word', ())), bytes(rec.get('guest_base_slot', ())))
 
 
 def kernel_window(e: dict) -> int:

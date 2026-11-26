@@ -48,9 +48,11 @@ PIPELINE_BYTES = (
     + packfile.PIPELINE_V21.size
     + packfile.PIPELINE_V22.size
     + packfile.PIPELINE_V24.size
+    + packfile.PIPELINE_V36.size
 )
 # Where each record tail starts in a PackPipeline
-V24_AT = PIPELINE_BYTES - packfile.PIPELINE_V24.size
+V36_AT = PIPELINE_BYTES - packfile.PIPELINE_V36.size
+V24_AT = V36_AT - packfile.PIPELINE_V24.size
 V22_AT = V24_AT - packfile.PIPELINE_V22.size
 V21_AT = V22_AT - packfile.PIPELINE_V21.size
 V20_AT = V21_AT - packfile.PIPELINE_V20.size
@@ -469,6 +471,7 @@ def pipeline_of(
     *written_format, xr_slots = packfile.PIPELINE_V22.unpack_from(p, V22_AT)
     head, array_length_word, pulled, streams, viewport_count_word = packfile.PIPELINE_V21.unpack_from(p, V21_AT)
     stride_twin, layer_word, viewport_word = packfile.PIPELINE_V24.unpack_from(p, V24_AT)[2:5]
+    guest_base_word, guest_base_slot = packfile.PIPELINE_V36.unpack_from(p, V36_AT)
     streams = streams[: streams.index(0)] if 0 in streams else streams
     tail = V20_AT - packfile.PIPELINE_V18.size - packfile.PIPELINE_V15.size
     half, _reserved = HALF_UNPACK(p, tail - 56)
@@ -524,6 +527,8 @@ def pipeline_of(
         'stride_twin': stride_twin,
         'amplification_layer_word': layer_word,
         'amplification_viewport_word': viewport_word,
+        'guest_base_word': list(guest_base_word),
+        'guest_base_slot': list(guest_base_slot),
         'push': [(0x700 + 4 * i, words[i]) for i in range(32) if mask >> i & 1] if mask else [],
         'push_metadata': bool(flags & 4),
         'turn_refused': bool(flags & 64),

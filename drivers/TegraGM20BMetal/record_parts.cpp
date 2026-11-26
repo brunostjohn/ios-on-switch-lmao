@@ -459,6 +459,8 @@ bool assembleRecord(const RecordParts &parts, const std::string &key, const Pack
     memcpy(p.storageTic, parts.storageTic, sizeof p.storageTic);
     memcpy(p.rootTableWord, parts.heap.rootTableWord, sizeof p.rootTableWord);
     memcpy(p.statusWord, parts.heap.statusWord, sizeof p.statusWord);
+    memcpy(p.guestBaseWord, parts.heap.guestBaseWord, sizeof p.guestBaseWord);
+    memcpy(p.guestBaseSlot, parts.heap.guestBaseSlot, sizeof p.guestBaseSlot);
     memcpy(p.rootSlots, parts.heap.rootSlots, sizeof p.rootSlots);
     p.heapArrays = parts.heap.arrays;
     p.heapBytes = parts.heap.bytes;

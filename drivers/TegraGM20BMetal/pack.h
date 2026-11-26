@@ -39,7 +39,7 @@ enum PackSectionId {
     PackSectionCount
 };
 
-constexpr uint32_t kPackVersion = 35;
+constexpr uint32_t kPackVersion = 36;
 
 // What a record or a program variant (PackVariant) assumes, as bits of a mask: a draw takes a variant only where all of them
 // hold. Bits 0-15 are facts of the draw's bindings, bit 16 of its pipeline, bit 26 of its pass, bits 17-25 of the chip
@@ -458,6 +458,9 @@ struct PackHeapArray {
 };
 
 constexpr uint32_t kPackHeapArrays = 8;
+// PackPipeline::guestBaseWord's length, and the fragment stage's bit in guestBaseSlot
+constexpr uint32_t kPackGuestBases = 4;
+constexpr uint8_t kGuestBaseFragment = 0x80;
 // Every heap array's elements: the texture header pool's (Device kTicCount), which the sampler header pool's fits
 constexpr uint32_t kPackHeapElements = 8192;
 
@@ -555,6 +558,11 @@ struct PackPipeline {
     // blob section from restoreAt
     uint16_t restoreDwords;
     uint32_t restoreAt;
+    // v36. m2v's SlotGuestBase fields (pipeline.h Pipeline::GuestBase): a buffer slot whose Metal address its programs read
+    // (a pointer compare, ptrtoint or a stored pointer), as the push word + 1 each draw writes that address to (0: no more)
+    // and the slot's Metal buffer index, kGuestBaseFragment set for the fragment stage's. A set*Bytes binding's address is
+    // its upload copy's.
+    uint8_t guestBaseWord[kPackGuestBases], guestBaseSlot[kPackGuestBases];
 };
 
 // PackPipeline::arrayLengthWord of a record of one layer whose vertex function chooses its slice
@@ -774,8 +782,8 @@ struct InitAddresses {
 
 uint32_t relocated(const PackInitMethod &m, const InitAddresses &a);
 static_assert(sizeof(PackShaderTests) == 16, "shader test layout");
-static_assert(sizeof(PackPipeline) ==
-                  40 + kPackEntries * 8 + 4 + 32 * 4 + 4 + 36 + 16 + 56 + 4 + 92 + 32 + 2 * kWrittenSlots + 4 + 24,
+static_assert(sizeof(PackPipeline) == 40 + kPackEntries * 8 + 4 + 32 * 4 + 4 + 36 + 16 + 56 + 4 + 92 + 32 +
+                                          2 * kWrittenSlots + 4 + 24 + 2 * kPackGuestBases,
               "pack layout");
 static_assert(offsetof(PackPipeline, storageBlendMask) == 490 && offsetof(PackPipeline, fetchRung) == 528,
               "pack layout: packfile.py PIPELINE_V15");
@@ -790,6 +798,8 @@ static_assert(offsetof(PackPipeline, writtenFormat) == 668 && offsetof(PackPipel
 static_assert(offsetof(PackPipeline, tessPrograms) == 704 && offsetof(PackPipeline, strideTwin) == 712 &&
                   offsetof(PackPipeline, restoreAt) == 724,
               "pack layout: packfile.py PIPELINE_V24");
+static_assert(offsetof(PackPipeline, guestBaseWord) == 728 && offsetof(PackPipeline, guestBaseSlot) == 732,
+              "pack layout: packfile.py PIPELINE_V36");
 static_assert(offsetof(PackPipeline, entriesHigh) == 31 && offsetof(PackPipeline, farEntriesAt) == 557 &&
                   offsetof(PackPipeline, spillEntryHigh) == 702,
               "pack layout: packfile.py PIPELINE_V27");

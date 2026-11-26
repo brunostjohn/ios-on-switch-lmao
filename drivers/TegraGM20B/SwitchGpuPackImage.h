@@ -16,7 +16,7 @@ struct tgm_vm;
 struct switch_gpu_mapping;
 
 inline constexpr char kSwitchGpuPackMagic[8] = {'G', 'M', '2', '0', 'B', 'P', 'K', '1'};
-inline constexpr uint32_t kSwitchGpuPackVersion = 35u;
+inline constexpr uint32_t kSwitchGpuPackVersion = 36u;
 inline constexpr uint64_t kSwitchGpuPackTierAlign = 128ULL << 10;
 inline constexpr uint32_t kSwitchGpuPackChunkPages = uint32_t(kSwitchGpuPackTierAlign >> 12);
 inline constexpr uint64_t kSwitchGpuPackTransferBytes = 1ULL << 20;

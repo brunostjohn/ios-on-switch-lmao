@@ -52,6 +52,7 @@ struct LayoutEntry {
 // What a state's reads through argument buffers take of a draw: PackPipeline's root-table and heap fields
 struct RecordHeap {
     uint8_t rootTableWord[2] = {}, statusWord[2] = {};
+    uint8_t guestBaseWord[kPackGuestBases] = {}, guestBaseSlot[kPackGuestBases] = {};
     uint32_t rootSlots[2] = {};
     uint8_t arrays = 0;
     uint32_t bytes = 0;

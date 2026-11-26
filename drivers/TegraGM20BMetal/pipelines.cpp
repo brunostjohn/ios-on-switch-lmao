@@ -225,6 +225,19 @@ static uint8_t setCbufSlot(const PackProgram &prog)
     return 0;
 }
 
+static void guestBasesOf(const PackPipeline &pp, Pipeline::GuestBase (&out)[kGuestBases])
+{
+    static_assert(kGuestBases == kPackGuestBases, "pack.h kPackGuestBases");
+    bool more = true;
+    for (uint32_t k = 0; k < kPackGuestBases; k++) {
+        const uint8_t slot = pp.guestBaseSlot[k];
+        more = more && pp.guestBaseWord[k];
+        out[k] = more ? Pipeline::GuestBase{uint8_t(slot & kGuestBaseFragment ? 1 : 0),
+                                            uint8_t(slot & ~kGuestBaseFragment), pp.guestBaseWord[k]}
+                      : Pipeline::GuestBase{};
+    }
+}
+
 static bool needsArguments(const PackPipeline &pp)
 {
     return pp.rootTableWord[0] || pp.rootTableWord[1] || pp.statusWord[0] || pp.statusWord[1] || pp.heapArrays;
@@ -669,6 +682,7 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     pl.stagesOff = !pixelStage(pp) || rasterOff(keyString);
     memcpy(pl.push, pp.pushWords, sizeof pl.push);
     pl.pushMask = pp.pushMask;
+    guestBasesOf(pp, pl.guestBases);
     pl.heapSlot[0] = heapCbufSlot(*vs.record);
     pl.heapSlot[1] = heapCbufSlot(*fs.record);
     if (needsArguments(pp))

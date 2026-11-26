@@ -362,6 +362,34 @@ class RecordsTest(unittest.TestCase):
         self.assertEqual(packfile.PIPELINE_V24.unpack_from(pipes, directlink.V24_AT), (2, 3, 0, 3, 4, 4, 2))
         self.assertEqual(blob, [0x1A00, 9, 0x2080, 0x20, 0x20C0, 0x30])
 
+    def test_a_buffers_metal_address_words_round_trip(self):
+        rec = {
+            'key': 'samples=1 c0=80:15:0',
+            'vs': 0,
+            'fs': 1,
+            'blob': [],
+            'entries': [],
+            'push': [],
+            'vbs': [],
+            'set_size': 0,
+            'fetch': False,
+            'guest_base_word': [7, 21],
+            'guest_base_slot': [5, 0x80 | 2],
+        }
+        data = packfile.pipeline_bytes(rec, 0, 0)
+        self.assertEqual(len(data), directlink.PIPELINE_BYTES)
+        self.assertEqual(data[directlink.V36_AT :], bytes([7, 21, 0, 0, 5, 0x82, 0, 0]))
+        programs = [{'image': bytes([i]), 'data': b'', 'cbufs': []} for i in range(2)]
+        ids = {directlink.program_id(p): i for i, p in enumerate(programs)}
+        probe = {'index': 0, 'form': '', 'targets': 1, 'records': [{'regs': {}}]}
+        record = {'pipeline': data, 'key': rec['key'], 'programs': programs, 'samplers': [], 'probe': probe}
+        back = directlink.pipeline_of(record, [], ids, [])
+        self.assertEqual(back['guest_base_word'], [7, 21, 0, 0])
+        self.assertEqual(back['guest_base_slot'], [5, 0x82, 0, 0])
+        self.assertEqual(
+            packfile.pipeline_bytes(dict(back, blob=[]), 0, 0)[directlink.V36_AT :], data[directlink.V36_AT :]
+        )
+
     def test_a_stride_twin_is_its_records_index_of_the_same_form(self):
         base = {'vs': 0, 'fs': 1, 'blob': [], 'entries': [], 'push': [], 'vbs': [], 'set_size': 0, 'fetch': False}
         twin_key = 'samples=1 c0=80:15:0 a0=30:0:1:4096:1:1 | v t | f u'
@@ -509,7 +537,13 @@ class RecordsTest(unittest.TestCase):
         self.assertEqual(data[v20 - 8 : v20 - 4], bytes(4))
         self.assertEqual(struct.unpack_from('<I', data, v20 - 4), (packfile.ALL_ENTRIES,))
         self.assertEqual(
-            data[v21:], bytes(packfile.PIPELINE_V21.size + packfile.PIPELINE_V22.size + packfile.PIPELINE_V24.size)
+            data[v21:],
+            bytes(
+                packfile.PIPELINE_V21.size
+                + packfile.PIPELINE_V22.size
+                + packfile.PIPELINE_V24.size
+                + packfile.PIPELINE_V36.size
+            ),
         )
 
     def test_shader_test_views_and_push_placements_round_trip(self):
