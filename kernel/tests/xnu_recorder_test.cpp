@@ -232,7 +232,9 @@ TEST(XnuRecorder, ACaptureReplacesOtherBootsThenLaterAutomaticCapturesAndNeverAM
 
 TEST(XnuRecorder, TheStoreTakesATenthOfTheFreeSpaceWithinItsBounds)
 {
-    EXPECT_EQ(switch_recorder_slots_for(0), SWITCH_RECORDER_SLOTS_MIN);
+    EXPECT_EQ(switch_recorder_slots_for(0), 0u) << "a nearly full volume gets no slot";
+    EXPECT_EQ(switch_recorder_slots_for((60ULL << 20) - 1), 0u);
+    EXPECT_EQ(switch_recorder_slots_for(60ULL << 20), 1u) << "a tenth of 60 MiB holds one 6 MiB slot";
     EXPECT_EQ(switch_recorder_slots_for(2ULL << 30), 2048u / 10 / 6);
     EXPECT_EQ(switch_recorder_slots_for(1ULL << 40), SWITCH_RECORDER_SLOTS_MAX);
 }

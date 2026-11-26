@@ -38,7 +38,6 @@ static inline const char *switch_recorder_reason_name(uint32_t reason)
 #define SWITCH_RECORDER_REFUSALS   16u  /* refusals not yet logged */
 #define SWITCH_RECORDER_RECENT     8u   /* automatic captures, and refusals logged, remembered for their spacing */
 #define SWITCH_RECORDER_BOOT_KEEP  8u   /* a boot's first automatic captures, kept against its later ones */
-#define SWITCH_RECORDER_SLOTS_MIN  16u
 #define SWITCH_RECORDER_SLOTS_MAX  128u
 #define SWITCH_RECORDER_SLOT_BYTES (6ull << 20) /* a slot's share of the volume: a compressed ring and stackshot */
 #define SWITCH_RECORDER_FREE_SHARE 10u          /* the store takes at most 1/10 of the volume's free space */
@@ -303,14 +302,11 @@ struct switch_recorder_slot {
     uint32_t seq; /* the capture's number in its boot */
 };
 
-/* The slots the store keeps for `free_bytes` on the volume. */
+/* The slots the store keeps for `free_bytes` on the volume: as many as a tenth of it holds, none on a nearly full one. */
 static inline unsigned switch_recorder_slots_for(uint64_t free_bytes)
 {
     const uint64_t n = free_bytes / SWITCH_RECORDER_FREE_SHARE / SWITCH_RECORDER_SLOT_BYTES;
 
-    if (n < SWITCH_RECORDER_SLOTS_MIN) {
-        return SWITCH_RECORDER_SLOTS_MIN;
-    }
     return n > SWITCH_RECORDER_SLOTS_MAX ? SWITCH_RECORDER_SLOTS_MAX : (unsigned)n;
 }
 

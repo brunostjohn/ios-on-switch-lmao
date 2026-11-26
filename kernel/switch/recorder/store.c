@@ -51,6 +51,7 @@
 #define STORE_MEMLEVEL  8
 
 extern uuid_string_t bootsessionuuid_string;
+extern int unlink1(vfs_context_t, vnode_t, user_addr_t, enum uio_seg, int);
 
 static LCK_GRP_DECLARE(store_grp, "switch_recorder_store");
 static LCK_MTX_DECLARE(store_mtx, &store_grp);
@@ -234,12 +235,14 @@ static void store_path(char *out, size_t size, unsigned slot)
     snprintf(out, size, STORE_DIR "/Switch-recorder-%u.rec", slot);
 }
 
-/* The slots for this boot: as many as the volume's free space holds, each as its file's header says. False while the
+/* The slots for this boot: as many as the volume's free space holds, each as its file's header says. Files past them,
+ * left by a boot with more free space, are removed, so less free space never keeps more files. False while the
  * directory cannot be found (Data not mounted yet): the next capture scans again. */
 static bool store_scan(vfs_context_t ctx)
 {
     char path[96], h[SWITCH_RECORDER_HEADER];
     uint64_t free_bytes = 0;
+    unsigned removed = 0;
     vnode_t dvp = NULLVP;
     mount_t mp = NULL;
 
@@ -268,8 +271,13 @@ static bool store_scan(vfs_context_t ctx)
         }
         vnode_close(vp, FREAD, ctx);
     }
-    os_log(OS_LOG_DEFAULT, "SwitchRecorder: store of %u slots in " STORE_DIR " (%llu MiB free)", store.nslots,
-           free_bytes >> 20);
+    for (unsigned i = store.nslots; i < SWITCH_RECORDER_SLOTS_MAX; i++) {
+        store_path(path, sizeof(path), i);
+        removed += unlink1(ctx, NULLVP, CAST_USER_ADDR_T(path), UIO_SYSSPACE, VNODE_REMOVE_NOFOLLOW_ANY) == 0;
+    }
+    os_log(OS_LOG_DEFAULT,
+           "SwitchRecorder: store of %u slots in " STORE_DIR " (%llu MiB free), %u files past them removed",
+           store.nslots, free_bytes >> 20, removed);
     return true;
 }
 
@@ -356,6 +364,12 @@ static bool store_persist(struct switch_recorder_capture *c, struct switch_recor
 
     if (!store.scanned && !store_scan(ctx)) {
         os_log(OS_LOG_DEFAULT, "SwitchRecorder: capture %u (%s) dropped: no " STORE_DIR " yet", h->seq,
+               switch_recorder_reason_name(h->reason));
+        return false;
+    }
+    if (store.nslots == 0) {
+        os_log(OS_LOG_DEFAULT,
+               "SwitchRecorder: capture %u (%s) dropped: a tenth of the volume's free space holds no slot", h->seq,
                switch_recorder_reason_name(h->reason));
         return false;
     }
