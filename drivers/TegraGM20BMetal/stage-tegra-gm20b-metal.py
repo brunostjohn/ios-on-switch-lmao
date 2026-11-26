@@ -26,7 +26,8 @@ Only files whose sha256 differs from what the card holds are copied, and files t
 nothing else), and <Data>/ngpu/stage.pending the files a stage was writing, which the next one copies again if it was
 cut short. A card without the list has the three directories replaced whole.
 <Data>/Switch/icon-cache-gpu names the staged build (the list's digest with the manifest's `# kext` identity of the
-kernel's GPU kext folded in, empty once removed), on every path that stages:
+kernel's GPU kext folded in, empty once removed), on every path that stages. The kext identity covers the three
+TegraGM20B libraries only: a change to IOSurface, the SMMU, host1x or display flip code keeps the name.
 iconservicesagent keeps the icons it drew while __cache_info__ names the system's ProductBuildVersion, which a GPU build
 does not change, so the next boot's kernel lets them go once per build it names (kernel/switch/boot/icon_cache.c).
 --remove deletes the three directories and the list (the preferences stay; without a Metal device they change nothing).
