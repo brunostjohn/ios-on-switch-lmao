@@ -80,6 +80,7 @@
 #include "fetch_free.h"
 #include "fetch_order.h"
 #include "kernel.h"
+#include "zcull_slots.h"
 #include "channel_recovery.h"
 #include "fence.h"
 #include "host_access.h"
@@ -1103,6 +1104,10 @@ public:
         std::atomic<uint64_t> resolveRoute[3][3] = {};
         // passes given a zcull region, and the regions a draw's state invalidated (zcull.h)
         std::atomic<uint64_t> zcullPasses{0}, zcullInvalidations{0}, zcullLoads{0};
+        // of those loads, the regions an earlier range of the command buffer stored; STORE_ZCULL words made stores and
+        // left NO_OPERATIONs (no pass loaded their region); regions parked for a range that found another job submitted
+        // first
+        std::atomic<uint64_t> zcullCarried{0}, zcullStores{0}, zcullUnstored{0}, zcullCarriesLost{0};
         // stencil plane draws encoded: the eight-draw route's (stencil_bits.h) and the one-draw route's
         // (zeta_colour.h)
         std::atomic<uint64_t> stencilBitDraws{0}, zetaColourDraws{0};
@@ -2319,6 +2324,11 @@ private:
     // zcull's layout where the kernel reports one (zcull.h), from open
     TegraGM20BAbiZcullInfo zcullInfo_ = {};
     bool zcullOn_ = false;
+    // The zcull regions' storage, the regions parked for a command buffer's next range, and the last job's slot owner
+    // (zcull_slots.h, zcull_planes.h): the encoding thread's alone
+    ZcullSlots zcullSlots_;
+    ZcullCarry zcullCarry_;
+    uint64_t zcullOwners_ = 0;
     // Whether a full clear to `e` writes comptags only; one this process never asked for is asked for
     bool zbcHeld(const TegraGM20BAbiZbc &e);
     // compThread_ asks the kernel for the ZBC entries wanted, `l` dropped around each call
