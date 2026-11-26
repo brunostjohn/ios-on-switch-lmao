@@ -22,6 +22,22 @@ extern "C" bool switch_vic_host1x_cancelled(uint32_t, uint32_t)
     return false;
 }
 
+// No stream here waits on a GPU bridge.
+extern "C" void switch_gpu_bridge_syncpoint(const switch_gpu_bridge *, uint32_t *syncpoint, uint32_t *threshold)
+{
+    *syncpoint = *threshold = 0;
+}
+
+extern "C" int switch_gpu_bridge_status(const switch_gpu_bridge *)
+{
+    return 1;
+}
+
+extern "C" void switch_gpu_bridge_release(switch_gpu_bridge **bridge)
+{
+    *bridge = nullptr;
+}
+
 extern "C" int switch_gpu_backing_token_status(const switch_gpu_backing_token *)
 {
     return 1;

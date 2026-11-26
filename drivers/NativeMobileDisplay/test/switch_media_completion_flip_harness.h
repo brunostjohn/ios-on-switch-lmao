@@ -57,7 +57,7 @@ inline int switch_host1x_display_start(SwitchHost1xDisplayStream *stream)
 inline int switch_host1x_display_submit(SwitchHost1xDisplayStream *stream, const switch_gpu_backing_token *producers,
                                         uint32_t count, const uint32_t *registers, const uint32_t *values,
                                         uint32_t stores, uint32_t update, uint32_t request,
-                                        void (*completed)(void *, int), void *context)
+                                        void (*completed)(void *, int), void *context, switch_gpu_bridge *)
 {
     using namespace media_flip_test;
     ++gFences;

@@ -102,6 +102,33 @@ extern "C" int switch_gpu_backing_token_status(const switch_gpu_backing_token *)
     return 1;
 }
 
+// A GPU producer's bridge as the display stream sees it: its syncpoint, its status, and its owner's release.
+struct switch_gpu_bridge {
+    uint32_t syncpoint, threshold;
+    int status;
+    uint32_t releases;
+    bool lockedWhenAsked;
+};
+
+extern "C" void switch_gpu_bridge_syncpoint(const switch_gpu_bridge *bridge, uint32_t *syncpoint, uint32_t *threshold)
+{
+    *syncpoint = bridge->syncpoint;
+    *threshold = bridge->threshold;
+}
+
+extern "C" int switch_gpu_bridge_status(const switch_gpu_bridge *bridge)
+{
+    const_cast<switch_gpu_bridge *>(bridge)->lockedWhenAsked |= gSubmitLock->held;
+    return bridge->status;
+}
+
+extern "C" void switch_gpu_bridge_release(switch_gpu_bridge **bridge)
+{
+    EXPECT_FALSE(gSubmitLock->held);
+    ++(*bridge)->releases;
+    *bridge = nullptr;
+}
+
 extern "C" int switch_gpu_backing_token_physical_status(const switch_gpu_backing_token *token, int)
 {
     for (const auto &node : gFailedNodes)
@@ -647,6 +674,114 @@ TEST_F(Host1xSubmit, AFailedProducerTearsDownTheControllerStreamBeforeEitherSync
         switch_host1x_display_submit(&stream, &token, 1, &word, &address, 1, 0x500, 5, DisplayCompletion::heard, &done),
         -5);
     EXPECT_EQ(gDisplayStream, nullptr);
+}
+
+// The bridged tests share one stream, as the display does, and two syncpoints: the suite's pool has 32, never freed.
+struct Bridged {
+    SwitchHost1xDisplayStream stream;
+    uint32_t bridgeSyncpt = 0, unrelated = 0;
+
+    static Bridged &get()
+    {
+        static Bridged shared;
+        if (!shared.bridgeSyncpt) {
+            EXPECT_EQ(switch_host1x_display_start(&shared.stream), 0);
+            EXPECT_EQ(tegra_host1x_syncpt_alloc(&shared.bridgeSyncpt), 0);
+            EXPECT_EQ(tegra_host1x_syncpt_alloc(&shared.unrelated), 0);
+        }
+        return shared;
+    }
+};
+
+// A GPU-rendered window B set: the stream WAITs on the bridge's syncpoint before anything else, writes once it is
+// reached, and takes the producers' outcome from the bridge, which it lets go outside the channel lock.
+TEST_F(Host1xSubmit, ABridgedStreamWaitsOnTheBridgeAndTakesItsOutcome)
+{
+    auto &stream = Bridged::get().stream;
+    const uint32_t bridgeSyncpt = Bridged::get().bridgeSyncpt;
+    for (const int outcome : {1, -5}) {
+        SCOPED_TRACE(outcome);
+        switch_gpu_bridge bridge = {bridgeSyncpt, syncpoint(bridgeSyncpt) + 2, 0, 0, false};
+        const uint32_t word = 0xdc0, address = 0x20000000;
+        DisplayCompletion done;
+        ASSERT_EQ(switch_host1x_display_submit(&stream, nullptr, 0, &word, &address, 1, 0x500, 5,
+                                               DisplayCompletion::heard, &done, &bridge),
+                  0);
+        DisplayExecution execution;
+        execution.run();
+        EXPECT_TRUE(execution.controller.empty());
+        syncpoint(bridge.syncpoint) = bridge.threshold;
+        bridge.status = outcome;
+        execution.run();
+        EXPECT_EQ(execution.controller,
+                  (std::vector<std::pair<uint32_t, uint32_t>>{{word, address}, {0x041, 0x500}, {0x041, 5}}));
+        EXPECT_EQ(bridge.releases, 0u);
+        stream.fence.signaled(&stream.fence, 0);
+        EXPECT_EQ(done.calls, 1u);
+        EXPECT_EQ(done.status, outcome < 0 ? outcome : 0);
+        EXPECT_EQ(bridge.releases, 1u);
+        EXPECT_FALSE(bridge.lockedWhenAsked);
+        EXPECT_EQ(stream.bridge, nullptr);
+    }
+}
+
+// A GPU producer that fails releases the bridge's syncpoint as failed: the stream waiting on it is torn down before
+// that release can let it write, as for a failed VIC or NVDEC producer.
+TEST_F(Host1xSubmit, AFailedBridgeTearsDownItsStreamBeforeItsSyncpointRelease)
+{
+    auto &stream = Bridged::get().stream;
+    const uint32_t unrelated = Bridged::get().unrelated;
+    switch_gpu_bridge bridge = {Bridged::get().bridgeSyncpt, syncpoint(Bridged::get().bridgeSyncpt) + 2, 0, 0, false};
+    const uint32_t word = 0xdc0, address = 0x20000000;
+    DisplayCompletion done;
+    ASSERT_EQ(switch_host1x_display_submit(&stream, nullptr, 0, &word, &address, 1, 0x500, 5, DisplayCompletion::heard,
+                                           &done, &bridge),
+              0);
+    DisplayExecution execution;
+    execution.run();
+    gCpuIncrements = true;
+    ASSERT_EQ(tegra_host1x_syncpt_release_failed(unrelated, syncpoint(unrelated) + 1, 1), 0);
+    EXPECT_EQ(gDisplayTeardowns, 0u) << "a syncpoint the stream does not wait on";
+    gRegisterWrites.clear();
+    bridge.status = -5;
+    ASSERT_EQ(tegra_host1x_syncpt_release_failed(bridge.syncpoint, bridge.threshold, 2), 0);
+    execution.run();
+    EXPECT_TRUE(execution.controller.empty());
+    auto teardown = gRegisterWrites.end(), release = gRegisterWrites.end();
+    for (auto it = gRegisterWrites.begin(); it != gRegisterWrites.end(); ++it) {
+        if (it->first == kSyncOffset + SYNC_CH_TEARDOWN && teardown == gRegisterWrites.end())
+            teardown = it;
+        if (it->first >= kSyncOffset + 0xf60 && it->first < kSyncOffset + 0xf78 && release == gRegisterWrites.end())
+            release = it;
+    }
+    ASSERT_NE(teardown, gRegisterWrites.end());
+    ASSERT_NE(release, gRegisterWrites.end());
+    EXPECT_LT(teardown, release);
+    stream.fence.signaled(&stream.fence, 0);
+    EXPECT_EQ(done.calls, 1u);
+    EXPECT_EQ(done.status, SwitchHost1xDisplayStream::kCancelled);
+    EXPECT_EQ(bridge.releases, 1u);
+}
+
+// A bridge whose producers already failed is refused, and stays its caller's.
+TEST_F(Host1xSubmit, AnAlreadyFailedBridgeIsRefusedAndStaysTheCallers)
+{
+    auto &stream = Bridged::get().stream;
+    const switch_gpu_bridge refused = {0, 2, -5, 0, false};
+    switch_gpu_bridge bridge = refused;
+    const uint32_t word = 0xdc0, address = 0x20000000;
+    DisplayCompletion done;
+    EXPECT_EQ(switch_host1x_display_submit(&stream, nullptr, 0, &word, &address, 1, 0x500, 5, DisplayCompletion::heard,
+                                           &done, &bridge),
+              -5);
+    EXPECT_EQ(bridge.releases, 0u);
+    EXPECT_EQ(stream.bridge, nullptr);
+    EXPECT_EQ(gDisplayStream, nullptr);
+    EXPECT_FALSE(bridge.lockedWhenAsked);
+    EXPECT_EQ(switch_host1x_display_submit(&stream, nullptr, 0, &word, &address, 1, 0x500, 5, DisplayCompletion::heard,
+                                           &done),
+              TEGRA_HOST1X_EINVAL)
+        << "a stream needs a producer to wait on";
 }
 
 namespace {

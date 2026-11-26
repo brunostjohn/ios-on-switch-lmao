@@ -19,20 +19,29 @@ void displaySignaled(switch_host1x_fence *fence, int failure)
     }
     auto *completed = stream->completed;
     void *context = stream->context;
+    switch_gpu_bridge *bridge = stream->bridge;
+    stream->bridge = nullptr;
     if (gDisplayStream == stream)
         gDisplayStream = nullptr;
     IOLockUnlock(gChannelLock);
+    if (bridge) {
+        const int produced = switch_gpu_bridge_status(bridge);
+        if (!status && produced < 0)
+            status = produced;
+        switch_gpu_bridge_release(&bridge);
+    }
     completed(context, status);
 }
 
-void displayCancelLocked(bool force = false)
+// released: a syncpoint whose producer failed; the stream is affected when it waits on it, directly or through its bridge.
+void displayCancelLocked(bool force = false, uint32_t released = 0)
 {
     auto *stream = gDisplayStream;
     if (!stream || stream->status ||
         static_cast<int32_t>(tegra_host1x_syncpt_read(stream->syncpt) - stream->fence.threshold) >= 0)
         return;
     if (!force) {
-        bool affected = false;
+        bool affected = stream->bridge && released && stream->bridgeSyncpt == released;
         for (uint32_t i = 0; i < stream->count && !affected; ++i)
             affected = switch_gpu_backing_token_physical_status(&stream->producers[i], 0) < 0;
         if (!affected)
@@ -49,7 +58,7 @@ void displayCancelLocked(bool force = false)
 
 void switch_host1x_channels_release_failed(uint32_t id, uint32_t threshold)
 {
-    displayCancelLocked();
+    displayCancelLocked(false, id);
     releaseLocked(id, threshold);
 }
 
@@ -65,13 +74,22 @@ int switch_host1x_display_start(SwitchHost1xDisplayStream *stream)
 
 int switch_host1x_display_submit(SwitchHost1xDisplayStream *stream, const switch_gpu_backing_token *producers,
                                  uint32_t count, const uint32_t *registers, const uint32_t *values, uint32_t stores,
-                                 uint32_t update, uint32_t request, void (*completed)(void *, int), void *context)
+                                 uint32_t update, uint32_t request, void (*completed)(void *, int), void *context,
+                                 switch_gpu_bridge *bridge)
 {
-    if (!stream || !stream->syncpt || !producers || !count || count > SwitchHost1xDisplayStream::kProducers ||
-        !registers || !values || !stores || stores > 4 || !completed || !gChannelLock)
+    if (!stream || !stream->syncpt || (count && !producers) || (!count && !bridge) ||
+        count > SwitchHost1xDisplayStream::kProducers || !registers || !values || !stores || stores > 4 || !completed ||
+        !gChannelLock)
         return TEGRA_HOST1X_EINVAL;
+    uint32_t bridgeSyncpt = 0, bridgeThreshold = 0;
+    int produced = 0;
+    if (bridge) {
+        // Outside gChannelLock: the bridge releases a failed syncpoint into host1x under its own lock.
+        switch_gpu_bridge_syncpoint(bridge, &bridgeSyncpt, &bridgeThreshold);
+        produced = switch_gpu_bridge_status(bridge);
+    }
     IOLockLock(gChannelLock);
-    int error = !gRunning ? TEGRA_HOST1X_ENODEV : gDisplayStream ? TEGRA_HOST1X_EAGAIN : 0;
+    int error = !gRunning ? TEGRA_HOST1X_ENODEV : gDisplayStream ? TEGRA_HOST1X_EAGAIN : produced < 0 ? produced : 0;
     for (uint32_t i = 0; i < count && !error; ++i) {
         const auto &token = producers[i];
         if (token.engine != SWITCH_GPU_ENGINE_VIC && token.engine != SWITCH_GPU_ENGINE_NVDEC) {
@@ -83,7 +101,7 @@ int switch_host1x_display_submit(SwitchHost1xDisplayStream *stream, const switch
         }
     }
     Channel &channel = gChannels[TEGRA_HOST1X_CHANNEL_DISPLAY];
-    const uint32_t capacity = count * SWITCH_HOST1X_WAIT_WORDS + 1 + 2 * (stores + 2) + 1;
+    const uint32_t capacity = (count + (bridge ? 1 : 0)) * SWITCH_HOST1X_WAIT_WORDS + 1 + 2 * (stores + 2) + 1;
     uint32_t at = SwitchHost1xArena::kNone;
     if (!error) {
         reclaim(channel);
@@ -94,6 +112,8 @@ int switch_host1x_display_submit(SwitchHost1xDisplayStream *stream, const switch
     if (!error) {
         uint32_t *words = arenaWords(channel) + at;
         uint32_t n = 0;
+        if (bridge)
+            n += tegra_host1x_op_wait_syncpt(words + n, bridgeSyncpt, bridgeThreshold);
         for (uint32_t i = 0; i < count; ++i)
             n += tegra_host1x_op_wait_syncpt(words + n, producers[i].queue, uint32_t(producers[i].value));
         words[n++] = tegra_host1x_op_setclass(TEGRA_HOST1X_CLASS_DC, 0, 0);
@@ -111,6 +131,8 @@ int switch_host1x_display_submit(SwitchHost1xDisplayStream *stream, const switch
         stream->count = count;
         for (uint32_t i = 0; i < count; ++i)
             stream->producers[i] = producers[i];
+        stream->bridge = bridge;
+        stream->bridgeSyncpt = bridgeSyncpt;
         stream->completed = completed;
         stream->context = context;
         switch_host1x_fence_init(&stream->fence, stream->syncpt, tegra_host1x_syncpt_read(stream->syncpt) + 1,
@@ -123,8 +145,10 @@ int switch_host1x_display_submit(SwitchHost1xDisplayStream *stream, const switch
             if (error) {
                 switch_host1x_fence_remove(&stream->fence);
                 gDisplayStream = nullptr;
+                stream->bridge = nullptr;
             }
         } else {
+            stream->bridge = nullptr;
             endReservation(channel);
         }
     }

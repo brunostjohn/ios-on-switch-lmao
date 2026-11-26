@@ -2,6 +2,7 @@
 #pragma once
 #include "SwitchHost1xFence.h"
 #include "../TegraGM20B/SwitchGpuBacking.h"
+#include "../TegraGM20B/SwitchGpuBridge.h"
 
 struct SwitchHost1xDisplayStream {
     static constexpr int kCancelled = -5;
@@ -9,6 +10,10 @@ struct SwitchHost1xDisplayStream {
     switch_host1x_fence fence = {};
     uint32_t syncpt = 0, count = 0;
     switch_gpu_backing_token producers[kProducers] = {};
+    // A GPU producer's: the GPU-to-host1x bridge the stream waits on first, owned from a successful submit until the
+    // completion has its status.
+    switch_gpu_bridge *bridge = nullptr;
+    uint32_t bridgeSyncpt = 0;
     int status = 0;
     bool restore = false;
     void (*completed)(void *, int) = nullptr;
@@ -16,8 +21,11 @@ struct SwitchHost1xDisplayStream {
 };
 
 int switch_host1x_display_start(SwitchHost1xDisplayStream *stream);
+// producers: VIC and NVDEC tokens the stream WAITs on. bridge, when not null, is a GPU producer's bridge: on success the
+// stream owns it; on failure the caller still does.
 int switch_host1x_display_submit(SwitchHost1xDisplayStream *stream, const switch_gpu_backing_token *producers,
                                  uint32_t count, const uint32_t *registers, const uint32_t *values, uint32_t stores,
-                                 uint32_t update, uint32_t request, void (*completed)(void *, int), void *context);
+                                 uint32_t update, uint32_t request, void (*completed)(void *, int), void *context,
+                                 switch_gpu_bridge *bridge = nullptr);
 // Stops every outstanding controller write before returning; the existing fence still owns its completion.
 int switch_host1x_display_cancel(SwitchHost1xDisplayStream *stream);
