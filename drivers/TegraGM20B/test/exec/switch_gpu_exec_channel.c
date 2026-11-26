@@ -251,7 +251,8 @@ void switch_exec_chan_count_wfis(struct switch_exec_chan *chan, uint32_t from_dw
 				out->method_wfis++;
 			} else if (cur == NVB06F_FB_FLUSH) {
 				out->fb_flushes++;
-				drained |= l2_flushed;
+				if (l2_flushed)
+					drained = 1;
 			} else if (cur == NVB06F_MEM_OP_D &&
 				   data == NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY) {
 				out->l2_flushes++;
