@@ -65,6 +65,7 @@ unsafe extern "C" {
         result: *mut KextResult,
     ) -> c_int;
     pub fn switch_a64x_kext_result_size() -> usize;
+    pub safe static switch_a64x_kext_stub_cap: u32;
     pub fn a64x_class_name(class: c_int) -> *const c_char;
     pub fn a64x_fips_find(header: *const u8, len: usize, fips: *mut Fips) -> c_int;
     pub fn a64x_fips_rewrite(original: *const u8, translated: *const u8, size: usize, mac: *mut u8) -> c_int;

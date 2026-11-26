@@ -24,6 +24,7 @@ cc_library(
         "//translate/arm64e:macho/sha256.c",
         "//translate/arm64e:macho/sha256.h",
         "//translate/arm64e:tools/kext.c",
+        "stub_cap.c",
     ],
     hdrs = [
         "//translate/arm64e:a64x/a64x.h",

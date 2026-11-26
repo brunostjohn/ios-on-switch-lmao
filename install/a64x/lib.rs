@@ -6,7 +6,7 @@ mod ffi;
 pub mod fips;
 mod kext;
 
-pub use kext::{CLASSES, Error, Island, Kext, KextResult, STUB_CAP, Stats, Translated, class_name, translate_kexts};
+pub use kext::{CLASSES, Error, Island, Kext, KextResult, Stats, Translated, class_name, stub_cap, translate_kexts};
 
 #[cfg(test)]
 mod tests;

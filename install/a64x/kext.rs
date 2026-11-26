@@ -5,9 +5,11 @@ use crate::ffi;
 
 pub use ffi::{CLASSES, Stats};
 
-/// `SWITCH_A64X_KEXT_STUB_CAP`: the stub region `arm64e kext` gives the kexts, in words. A stub past it leaves its
-/// site untranslated, so the cap is part of the output.
-pub const STUB_CAP: u32 = 1 << 22;
+/// `SWITCH_A64X_KEXT_STUB_CAP`, the one the CLI that made CI's kernel used: the stub region `arm64e kext` gives the
+/// kexts, in words. A stub past it leaves its site untranslated, so the cap is part of the output.
+pub fn stub_cap() -> u32 {
+    ffi::switch_a64x_kext_stub_cap
+}
 
 /// One kext's code, as `emit26.py` lists it for `arm64e kext`.
 pub struct Kext<'a> {
@@ -61,7 +63,8 @@ pub fn translate_kexts(original: &[u8], va: u64, stubs_va: u64, kexts: &[Kext]) 
         "switch_a64x_kext_result's layout differs from ffi::KextResult"
     );
     let mut text = original.to_vec();
-    let mut stubs = vec![0u32; STUB_CAP as usize];
+    let stub_cap = stub_cap();
+    let mut stubs = vec![0u32; stub_cap as usize];
     let mut region = ffi::Kexts {
         original: original.as_ptr(),
         text: text.as_mut_ptr(),
@@ -69,7 +72,7 @@ pub fn translate_kexts(original: &[u8], va: u64, stubs_va: u64, kexts: &[Kext]) 
         va,
         stubs_va,
         stubs: stubs.as_mut_ptr(),
-        stub_cap: STUB_CAP,
+        stub_cap,
         stub_words: 0,
     };
     let mut results = Vec::with_capacity(kexts.len());

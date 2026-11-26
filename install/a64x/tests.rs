@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 use sha2::{Digest, Sha256};
 
-use crate::{Kext, STUB_CAP, class_name, fips, translate_kexts};
+use crate::{Kext, class_name, fips, stub_cap, translate_kexts};
 
 const CASAL_X2_X3_X0: u32 = 0xC8E2_FC03;
 const RETAB: u32 = 0xD65F_0FFF;
@@ -36,7 +36,7 @@ fn translates_a_kext_into_its_stub_region() {
     .unwrap();
     let kext = &out.kexts[0];
     assert_eq!((kext.words, kext.changed, kext.stub_first), (2, 2, 0));
-    assert!(kext.stub_end > 0 && kext.stub_end < STUB_CAP);
+    assert!(kext.stub_end > 0 && kext.stub_end < stub_cap());
     assert_eq!(out.stubs.len(), 4 * kext.stub_end as usize);
     assert_eq!(
         word(&out.text, 0) >> 26,
