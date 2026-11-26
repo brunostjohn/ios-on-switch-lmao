@@ -1093,8 +1093,9 @@ public:
         std::atomic<uint64_t> compCopies{0}, compZetaCopies{0};
         // compute launches encoded (compute.h)
         std::atomic<uint64_t> dispatches{0};
-        // states made with the zero-source pixel kill on (blend_kill.h), and their binds encoded
-        std::atomic<uint64_t> blendKillStates{0}, blendKillBinds{0};
+        // states made with the zero-source pixel kill on (blend_kill.h), and their binds encoded; prebuilt states whose
+        // pack segment pushes another kill than the runtime's rule gives
+        std::atomic<uint64_t> blendKillStates{0}, blendKillBinds{0}, blendKillPackDisagreements{0};
         std::atomic<uint64_t> fillTwod{0};               // fillTexture: regions by the 2D engine (twod_fill.h)
         std::atomic<uint64_t> resolveTwod{0};            // MSAA resolves by the 2D engine (resolve_twod.cpp)
         std::atomic<uint64_t> resolveExact{0};           // those through the grid's complement (the probe's)
