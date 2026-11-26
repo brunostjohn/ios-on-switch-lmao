@@ -3661,6 +3661,12 @@ device_test(
 # Device::compressedFromPlain)
 # A state's written colour targets are the ones its key names, whatever SET_CT_WRITE the pack's baseline leaves the others
 # (device_write_bits_test.cpp)
+# A state's SlotGuestBase holes filled at each draw: a set*Bytes slot's upload copy, a buffer's address and offset
+device_test(
+    name = "device_guest_base_test",
+    srcs = ["device_guest_base_test.cpp"],
+)
+
 device_test(
     name = "device_write_bits_test",
     srcs = ["device_write_bits_test.cpp"],

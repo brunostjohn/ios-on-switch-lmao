@@ -637,9 +637,10 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                                   amplificationDirty_) ||
                                  r.pulledStride[0][1] || r.arrayLengthWord || r.viewportCountWord;
     const bool rebinds = pl != emitted_;
+    const bool guestBases = pl->guestBases[0].word != 0;
     if (pl != emitted_ || residualMask || residualsPushed_ || (dynamicBlend && blendColorDirty_) ||
         r.shaderTests.flags || shadowStencil(r.shaderTests) || slotRoots || (patches && tessWordsDirty_) ||
-        drawnWordsDirty) {
+        drawnWordsDirty || guestBases) {
         if (pl != emitted_) {
             blendColorDirty_ |= pl->constantBlend || dynamicBlend;
             if (cb_->extrasLive_ && cb_->extrasLive_ != pl) {
@@ -686,13 +687,14 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                 want[word - 1] = uint32_t(table);
                 want[word] = uint32_t(table >> 32);
             }
+        const uint32_t pushMask = pl->pushMask | guestBaseWords(*pl, want);
         for (int i = 0; i < 32;) {
-            if (!(pl->pushMask >> i & 1) || root[i] == want[i]) {
+            if (!(pushMask >> i & 1) || root[i] == want[i]) {
                 i++;
                 continue;
             }
             int j = i;
-            while (j < 32 && (pl->pushMask >> j & 1) && root[j] != want[j])
+            while (j < 32 && (pushMask >> j & 1) && root[j] != want[j])
                 j++;
             p.m(LOAD_CB_OFFSET, 0x700 + 4 * i);
             p.nonInc(LOAD_CB, want + i, j - i);

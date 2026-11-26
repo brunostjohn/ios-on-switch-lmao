@@ -393,6 +393,9 @@ private:
         return amplifications_ > 1 && !amplifying_;
     }
 
+    // Each SlotGuestBase hole of `pl` (Pipeline::guestBases) given its slot's bound address in `want`; the push words it
+    // wrote
+    uint32_t guestBaseWords(const Pipeline &pl, uint32_t (&want)[32]);
     // How a draw of `pl` keeps a mixed pass's sample rule (mixed_samples.h), whole where HW Test's probe row asks
     // (kTirProbeWhole)
     MixedDraw mixedForm(const Pipeline &pl) const
