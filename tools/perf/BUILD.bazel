@@ -13,6 +13,8 @@ py_library(
         "gpu.py",
         "host1x.py",
         "ips.py",
+        "kprof.py",
+        "kprof_fmt.py",
         "ktrace.py",
         "pacing.py",
         "perf.py",
@@ -60,6 +62,20 @@ py_test(
     name = "cpu_test",
     size = "small",
     srcs = ["cpu_test.py"],
+    deps = [":lib"],
+)
+
+py_test(
+    name = "pacing_test",
+    size = "small",
+    srcs = ["pacing_test.py"],
+    deps = [":lib"],
+)
+
+py_test(
+    name = "vm_test",
+    size = "small",
+    srcs = ["vm_test.py"],
     deps = [":lib"],
 )
 

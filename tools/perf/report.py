@@ -142,8 +142,12 @@ def window_rows(s: Session, kind: str, ws: list[Window]) -> list[str]:
         )
         if kind == 'press' and (after := hangs_after(s, w)):
             out.append('    hangs starting within 6 s after it: ' + after)
-        if cycle := pacing.periodic(slows_in(s, w)):
+        inside = slows_in(s, w)
+        if cycle := pacing.periodic(inside):
             out.append('    ' + cycle)
+        if w.ms >= 15000:
+            w_recs = [r for r in s.recs if w.holds(r.time)]
+            out += ['    ' + line for line in pacing.periodic_correlations(inside, w_recs)]
     return out
 
 
@@ -163,6 +167,9 @@ def hangs_after(s: Session, w: Window) -> str:
 
 def pacing_section(s: Session) -> list[str]:
     out = ['', '## Frame pacing by scenario', 'whole boot: ' + pacing_row(s, whole(s)), *labels_row(s)]
+    if cycle := pacing.periodic(s.slows):
+        out.append('whole boot cycle: ' + cycle)
+    out += ['periodic correlation: ' + line for line in pacing.periodic_correlations(s.slows, s.recs)]
     for kind in ('press', 'mark', 'launch', 'touch'):
         out += window_rows(s, kind, s.windows[kind])
     tests = s.windows['test']
@@ -217,6 +224,10 @@ def cpu_section(s: Session, syms: symbols.Symbols) -> list[str]:
         if top
         else 'processes by CPU: not in this kernel (probes-kernel 1 adds SwitchSched tasks)'
     )
+    out += cpu.interrupt_summary(s.irqs, s.busy)
+    out += cpu.systime_summary(s.systime)
+    out += cpu.callout_summary(s.callouts, syms)
+    out += cpu.pinned_summary(cpu.CpuWindows(s.busy, s.tasks, s.kprof, s.irqs, s.systime, s.callouts), syms)
     out += cpu.cpu_floor(s.busy, s.tasks, s.kprof, syms)
     waits = cpu.core_waits(s.recs)
     named = [n for n in FRAME_THREADS if n in waits]
@@ -237,6 +248,7 @@ def cpu_section(s: Session, syms: symbols.Symbols) -> list[str]:
         )
     state, lines = cpu.kprof(s.recs)
     out.append(f'kprof: {state}')
+    out += cpu.kprof_summary(s.kprof, syms)
     out += [f'  {r.time:%H:%M:%S} {r.msg[:300]}' for r in lines[-12:]]
     return out
 

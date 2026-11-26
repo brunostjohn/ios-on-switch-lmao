@@ -20,8 +20,11 @@ FAMILIES = (
     'SwitchSched 1/2',
     'SwitchSched cores',
     'SwitchSched tasks',
+    'SwitchSched system',
+    'SwitchSched callouts',
     'SwitchSched page-ins',
     'SwitchPower: ',
+    'SwitchPower interrupts',
     'SwitchKprof',
     'SwitchStall',
     'SwitchUnnest',
@@ -39,7 +42,10 @@ class Session:
     stats: list[pacing.Stats] = field(default_factory=list)
     slows: list[pacing.Slow] = field(default_factory=list)  # in time order
     busy: list[cpu.Busy] = field(default_factory=list)
+    irqs: list[cpu.IrqWindow] = field(default_factory=list)
     tasks: list = field(default_factory=list)
+    systime: list[cpu.SystimeWindow] = field(default_factory=list)
+    callouts: list[cpu.CalloutWindow] = field(default_factory=list)
     kprof: list[cpu.KprofWindow] = field(default_factory=list)
     pageins: list[vm.PageinWindow] = field(default_factory=list)
     unnests: list[vm.UnnestEvent] = field(default_factory=list)
@@ -64,7 +70,10 @@ def build(boot: str, recs: list[Rec]) -> Session:
     s.slows = sorted(pacing.slow_presents(recs), key=lambda x: x.time)
     s.slow_times = [x.time for x in s.slows]
     s.busy = cpu.busy_windows(recs)
+    s.irqs = cpu.irq_windows(recs)
     s.tasks = cpu.tasks(recs)
+    s.systime = cpu.systime_windows(recs)
+    s.callouts = cpu.callout_windows(recs)
     s.kprof = cpu.kprof_windows(recs)
     s.pageins = vm.pagein_windows(recs)
     s.unnests = vm.unnest_lines(recs)
