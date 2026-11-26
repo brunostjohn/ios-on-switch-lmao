@@ -340,6 +340,7 @@ TESTS_DISPLAY_SRCS = [
     "tests/AnimTimingRun.swift",
     "tests/AnimTimingStage.swift",
     "tests/AnimTimingTest.swift",
+    "tests/AnimTurnCost.swift",
     "tests/AnimTurns.swift",
     "tests/CompletionFlipTest.swift",
     "tests/DisplayRefreshTest.swift",

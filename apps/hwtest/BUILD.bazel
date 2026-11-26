@@ -985,6 +985,7 @@ swift_library(
     module_name = "HWTestDisplay",
     target_compatible_with = ["@platforms//os:ios"],
     deps = [
+        ":cpu_clock",
         ":core",
         ":gpu",
         ":gpu_scenes",
