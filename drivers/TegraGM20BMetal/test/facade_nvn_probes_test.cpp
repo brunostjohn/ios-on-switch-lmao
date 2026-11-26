@@ -111,7 +111,7 @@ TEST(GM20BFacadeNvnProbes, TheFactsLineNamesAPlainTexturesKindAsNone)
     probe("switchMetalProbePlainPrivate:", @NO);
     NSString *facts = probe("switchMetalProbeFacts:", plain);
     EXPECT_TRUE([facts containsString:@"comptags=0"]) << facts.UTF8String;
-    EXPECT_TRUE([facts hasSuffix:@" kind=0x0"]) << facts.UTF8String;
+    EXPECT_TRUE([facts containsString:@" kind=0x0 "]) << facts.UTF8String;
 }
 
 long compressed(NSString *key)

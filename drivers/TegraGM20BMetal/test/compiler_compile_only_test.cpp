@@ -341,7 +341,7 @@ id engineRenderReflection(switch_compiler::Engine &engine, gm20b::CompileRequest
         return nil;
     }
     bool reflected = false;
-    if (!gm20b::decodeReflectionEntry(entry, p.key, reflected, blob) || !reflected) {
+    if (!gm20b::decodeReflectionEntry(entry, p.content, reflected, blob) || !reflected) {
         ADD_FAILURE() << state << ": no reflection: " << blob;
         return nil;
     }

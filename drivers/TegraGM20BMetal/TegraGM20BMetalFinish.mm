@@ -72,6 +72,19 @@ const gm20b::RetirementWrites *captureWrittenRange(SwitchMetalCommandBuffer *cb,
     writes.captureInto(
         [&](auto visit) {
             plan.forEachWritten(from, to, visit);
+            for (const auto &snapshot : cb->_residencySnapshots)
+                for (const SwitchMetalResidencyEntry &entry : snapshot->hostVisible) {
+                    if (entry.kind == SwitchMetalResidencyEntry::Kind::Buffer) {
+                        SwitchMetalBuffer *b = (SwitchMetalBuffer *)entry.allocation;
+                        if (b->_raw.hostVisible && !b->_raw.wc)
+                            visit((__bridge void *)entry.allocation);
+                    } else if (entry.kind == SwitchMetalResidencyEntry::Kind::Texture && entry.write) {
+                        SwitchMetalTexture *t = (SwitchMetalTexture *)entry.allocation;
+                        if (t->_idNamed.load(std::memory_order_acquire) ||
+                            t->_viewIdNamed.load(std::memory_order_acquire))
+                            visit((__bridge void *)entry.allocation);
+                    }
+                }
         },
         [&](void *value) {
             if (const SwitchMetalResourceFacts *facts = plan.factsOf(value))

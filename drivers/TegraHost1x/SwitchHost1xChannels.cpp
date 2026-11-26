@@ -306,10 +306,15 @@ bool validChannel(uint32_t channel)
     return channel < TEGRA_HOST1X_CHANNELS && gChannelLock && channelMade(gChannels[channel]);
 }
 
+bool allocChannelMemory(Channel &c)
+{
+    return (c.pushMemory.va || switch_dma_alloc(&c.pushMemory, SwitchHost1xPush::kBytes + 4)) &&
+           (c.arenaMemory.va || switch_dma_alloc(&c.arenaMemory, SWITCH_HOST1X_ARENA_WORDS * 4));
+}
+
 bool makeChannel(Channel &c)
 {
-    if (!(c.pushMemory.va || switch_dma_alloc(&c.pushMemory, SwitchHost1xPush::kBytes + 4)) ||
-        !(c.arenaMemory.va || switch_dma_alloc(&c.arenaMemory, SWITCH_HOST1X_ARENA_WORDS * 4)))
+    if (!allocChannelMemory(c))
         return false;
     __atomic_store_n(&c.made, true, __ATOMIC_RELEASE);
     return true;
@@ -357,6 +362,8 @@ uint32_t switch_host1x_channels_buffers(const switch_dma_buffer **out, uint32_t 
 {
     uint32_t count = 0;
     for (const Channel &c : gChannels) {
+        if (!channelMade(c))
+            continue;
         if (count + 2 > room)
             break;
         out[count++] = &c.pushMemory;
@@ -390,10 +397,14 @@ extern "C" int switch_host1x_probe_channels_take(void)
     for (uint32_t n = TEGRA_HOST1X_CHANNEL_DISPLAY + 1; n < TEGRA_HOST1X_CHANNELS && !result; n++) {
         if (channelMade(gChannels[n]))
             continue;
-        if (!makeChannel(gChannels[n]))
+        if (!allocChannelMemory(gChannels[n]) ||
+            !switch_host1x_channels_confine_channel(&gChannels[n].pushMemory, &gChannels[n].arenaMemory)) {
             result = TEGRA_HOST1X_ENOMEM;
-        else if (gRunning && programChannel(n))
-            gFilterStuck |= 1u << n;
+        } else {
+            __atomic_store_n(&gChannels[n].made, true, __ATOMIC_RELEASE);
+            if (gRunning && programChannel(n))
+                gFilterStuck |= 1u << n;
+        }
     }
     IOLockUnlock(gChannelLock);
     return result;

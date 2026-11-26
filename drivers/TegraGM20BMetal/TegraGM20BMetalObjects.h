@@ -198,6 +198,7 @@ enum class SwitchMetalShareable : uint8_t {
     bool _aliasable;
     std::atomic<bool>
         _idNamed;  // its gpuResourceID was asked: the device's handle tables name it (TegraGM20BMetalResourceIds.mm)
+    std::atomic<bool> _viewIdNamed;                // a view over this texture had its gpuResourceID asked
     std::atomic<SwitchMetalShareable> _shareable;  // its surface's creation properties name a Metal device (read once)
     // Made plain for want of compressed memory (private_comp.h): the submit worker may move its memory
     // (compressedFromPlain), so allocatedSize answers this, its plain allocation's bytes; 0: it wants none

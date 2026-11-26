@@ -738,10 +738,8 @@ TEST(GM20BRawReopenSource, ReopenKeepsTheHeapAndReplaysTheContext)
 	EXPECT_TRUE(reopen.before("emitContext(p);", "fx::emitTwodInit(p);"));
 	// the interlock's ticket buffer zeroed by the copy engine in the new channel, after the context names it and before
 	// the 3D engine runs again
-	EXPECT_TRUE(
-		reopen.before("emitContext(p);",
-			      "uint32_t(tickets_.va >> 32), uint32_t(tickets_.va)}, SUBC_COPY);"));
-	EXPECT_TRUE(reopen.before("uint32_t(tickets_.va)}, SUBC_COPY);",
+	EXPECT_TRUE(reopen.before("emitContext(p);", "const uint64_t to = tickets_.va + done;"));
+	EXPECT_TRUE(reopen.before("uint32_t(to >> 32), uint32_t(to)}, SUBC_COPY);",
 				  "p.m(CE_LAUNCH_DMA, kLaunchPitch, SUBC_COPY);"));
 	EXPECT_TRUE(reopen.before("p.m(CE_LAUNCH_DMA, kLaunchPitch, SUBC_COPY);",
 				  "p.m(WAIT_FOR_IDLE, 0);"));

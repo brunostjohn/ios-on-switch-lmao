@@ -307,6 +307,8 @@ void gm20bQueueRemoveResidencySet(SwitchMetalQueue *queue, id set)
 
 void gm20bUseResidencySet(SwitchMetalCommandBuffer *cb, id set)
 {
+    if (!cb)
+        return;
     if (@available(iOS 18.0, macOS 15.0, *)) {
         if (![set isKindOfClass:[SwitchMetalResidencySet class]])
             return;
@@ -342,6 +344,7 @@ void gm20bSnapshotResidencySets(SwitchMetalCommandBuffer *cb)
             if (!cb->_residencySets || ![cb->_residencySets containsObject:set])
                 take(set);
     }
+    cb->_residencySets = nil;
 }
 
 static void nameResident(gm20b::CommandBuffer *rc, const SwitchMetalResidencyEntry &entry)
@@ -359,10 +362,12 @@ static void nameResident(gm20b::CommandBuffer *rc, const SwitchMetalResidencyEnt
         SwitchMetalTexture *t = (SwitchMetalTexture *)entry.allocation;
         // A shader reaches a texture through a residency set only via gpuResourceID (render targets and direct binds
         // name themselves on their encoders), so drawables and unbound IOSurfaces in a set ask nothing of unrelated jobs
-        if (!t->_idNamed.load(std::memory_order_acquire))
+        if (!t->_idNamed.load(std::memory_order_acquire) && !t->_viewIdNamed.load(std::memory_order_acquire))
             return;
         SWITCH_METAL_DIAGNOSTIC(gRM->raw->stats.residencyNamed++);
         __unsafe_unretained SwitchMetalTexture *root = (t->_levelsOwner && !t->_ownForm) ? t->_levelsOwner : t;
+        if (entry.write && root->_surface)
+            declareGpuWrites(root);
         if (root->_buffer && root->_buffer->_raw.hostVisible && !root->_buffer->_raw.wc)
             rc->clean(root->_buffer->_raw.cpu, root->_buffer->_raw.length, entry.write);
         useTexture(rc, t, entry.write);
@@ -371,7 +376,7 @@ static void nameResident(gm20b::CommandBuffer *rc, const SwitchMetalResidencyEnt
     case SwitchMetalResidencyEntry::Kind::Heap:
         SWITCH_METAL_DIAGNOSTIC(gRM->raw->stats.residencyNamed++);
         if (const auto &members = ((SwitchMetalHeap *)entry.allocation)->_members)
-            rc->useHeap(*members);
+            rc->useHeap(*members, true);
         break;
     }
 }

@@ -262,9 +262,10 @@ DMA = [
         SUMS,
         regex=(
             r'tlb (?P<tlb_hits>\d+) hits (?P<tlb_misses>\d+) misses \([\d.]+% hit\), ptc (?P<ptc_hits>\d+) hits '
-            r'(?P<ptc_misses>\d+) misses.*?retirement L2 invalidates (?P<invalidates>\d+)'
+            r'(?P<ptc_misses>\d+) misses.*?retirement: (?P<objects>\d+) objects, (?P<gpu_flushes>\d+) GPU-ordered '
+            r'flushes, (?P<invalidates>\d+) CPU-waited fallbacks'
         ),
-        show=('tlb_hits', 'tlb_misses', 'ptc_hits', 'ptc_misses', 'invalidates'),
+        show=('tlb_hits', 'tlb_misses', 'ptc_hits', 'ptc_misses', 'gpu_flushes', 'invalidates'),
         source='drivers/TegraGM20B/gpu_stats_tick.c (big/dma 5b7117aa0)',
     ),
     line(

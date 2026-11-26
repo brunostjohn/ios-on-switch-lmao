@@ -7,8 +7,15 @@ if [ "$(uname -sm)" != "Linux aarch64" ] || [ ! -e /.dockerenv ]; then
 fi
 case $# in
     1) out=$1 ;;
-    3) out=$1; capture=$(realpath "$2"); corpus=$(realpath "$3") ;;
-    *) echo 'usage: compile.sh OUTPUT [TRANSLATED_STAGE_DIR CORPUS_LOG]' >&2; exit 1 ;;
+    3)
+        out=$1
+        capture=$(realpath "$2")
+        corpus=$(realpath "$3")
+        ;;
+    *)
+        echo 'usage: compile.sh OUTPUT [TRANSLATED_STAGE_DIR CORPUS_LOG]' >&2
+        exit 1
+        ;;
 esac
 mkdir -p "$out"
 cd "$out"

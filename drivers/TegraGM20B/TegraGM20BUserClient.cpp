@@ -609,7 +609,8 @@ IOReturn AGXDeviceUserClient::packImageMap(const TegraGM20BAbiPackImageMap *in,
 			if (mapErr != 0) {
 				ret = ioreturn(mapErr);
 			} else {
-				packClient_.gpuMapping = gpuMapping;
+				__atomic_store_n(&packClient_.gpuMapping, gpuMapping,
+						 __ATOMIC_RELEASE);
 				packClient_.gpuBytes = view.tier0HeapBytes;
 				packClient_.cpuWiredCount = staged.cpuWiredCount;
 				packClient_.cpuWiredBytes = staged.cpuWiredBytes;

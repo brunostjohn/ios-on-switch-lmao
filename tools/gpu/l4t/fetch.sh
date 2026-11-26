@@ -1,12 +1,18 @@
 #!/bin/sh
 set -eu
-if [ "$#" != 1 ]; then echo 'usage: fetch.sh SCRATCH' >&2; exit 1; fi
+if [ "$#" != 1 ]; then
+    echo 'usage: fetch.sh SCRATCH' >&2
+    exit 1
+fi
 mkdir -p "$1/packages" "$1/run" "$1/l4t"
 cd "$1"
 fetch() {
     df -h /
     available=$(df -Pk . | awk 'NR==2 {print $4}')
-    test "$available" -gt 6500000 || { echo 'Less than 6 GiB plus extraction headroom' >&2; exit 1; }
+    test "$available" -gt 6500000 || {
+        echo 'Less than 6 GiB plus extraction headroom' >&2
+        exit 1
+    }
     curl -fLsS --retry 2 "$1" -o "$2.partial"
     printf '%s  %s\n' "$3" "$2.partial" | shasum -a 256 -c -
     mv "$2.partial" "$2"

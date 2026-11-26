@@ -14,6 +14,7 @@ uint32_t switch_host1x_channels_buffers(const switch_dma_buffer **out, uint32_t 
 // After alloc, before the first program: host1x's command DMA through the SMMU (SwitchHost1xSmmu.cpp), reaching those
 // buffers and nothing else. False with one line in `line` when it could not be.
 bool switch_host1x_channels_confine(char *line, size_t size);
+bool switch_host1x_channels_confine_channel(const switch_dma_buffer *push, const switch_dma_buffer *arena);
 // Boot and resume: every channel stopped, emptied and started again on its push buffer; submits are taken from here on.
 // `clockKHz`: host1x's clock, which debug builds' channel counters count (163200 from PLLP / 2.5).
 void switch_host1x_channels_program(uint32_t clockKHz);

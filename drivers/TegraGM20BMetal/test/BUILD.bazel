@@ -4249,6 +4249,7 @@ host_test(
     srcs = [
         "pack_far_test.cpp",
         "//drivers/TegraGM20BMetal:dynamic_push.h",
+        "//drivers/TegraGM20BMetal:guest_bases.h",
         "//drivers/TegraGM20BMetal:pack.cpp",
         "//drivers/TegraGM20BMetal:pack.h",
         "//drivers/TegraGM20BMetal:pack_scan.h",
@@ -6226,6 +6227,7 @@ host_test(
         "facade_harness.h",
         "facade_pass_scene.h",
         "facade_variant_compiler.h",
+        "request_store_key.h",
         "job_methods.h",
         "facade_ycbcr_store_backing_test.cpp",
         "translate_absent.cpp",

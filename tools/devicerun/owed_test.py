@@ -78,8 +78,8 @@ SAMPLES = {
         'invalidates 0 for 0 objects, 0 us CPU'
     ),
     'owed.dma.gpu-smmu-hits': (
-        'tegra-gm20b: smmu tlb 100 hits 5 misses (95.2% hit), ptc 200 hits 10 misses (95.2% hit); retirement L2 '
-        'invalidates 3 for 4 objects, 12 us CPU'
+        'tegra-gm20b: smmu tlb 100 hits 5 misses (95.2% hit), ptc 200 hits 10 misses (95.2% hit); '
+        'retirement: 4 objects, 7 GPU-ordered flushes, 3 CPU-waited fallbacks (12 us)'
     ),
     'owed.display.requested': (
         'SwitchDisplay requested: 5000 ms: shown minus requested presentation, periods <=-1:0 0:290 1:3 >=2:1, '

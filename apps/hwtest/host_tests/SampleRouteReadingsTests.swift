@@ -11,7 +11,9 @@ final class SampleRouteReadingsTests: XCTestCase {
         XCTAssertEqual(checks.map { $0.1 }, [true, true, false])
         var metrics = Metrics()
         read.record("f85_x2", &metrics)
-        XCTAssertEqual(metrics.keys, ["f85_x2_samples_off_fragment", "f85_x2_samples_off", "f85_x2_routes_differ"])
+        XCTAssertEqual(metrics.keys, [
+            "f85_x2_samples_off_fragment", "f85_x2_samples_off", "f85_x2_routes_differ", "f85_x2_first_differ",
+        ])
         XCTAssertEqual(metrics["f85_x2_routes_differ"], .integer(3))
     }
 

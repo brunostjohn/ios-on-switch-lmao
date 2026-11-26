@@ -137,6 +137,11 @@ int switch_gpu_bridge_covers(const switch_gpu_bridge *, const switch_gpu_backing
     return 0;
 }
 
+int switch_gpu_bridge_failed(const switch_gpu_bridge *)
+{
+    return 0;
+}
+
 int switch_gpu_bridge_source_failure(const switch_gpu_bridge *)
 {
     return 0;

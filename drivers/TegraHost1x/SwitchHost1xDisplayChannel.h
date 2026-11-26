@@ -65,6 +65,8 @@ void displayCancelLocked(bool force = false, uint32_t released = 0)
 
 }  // namespace
 
+#define SWITCH_HOST1X_DISPLAY_CHANNEL_DEFINED 1
+
 void switch_host1x_display_channel_stopped_locked()
 {
     const auto *stream = gDisplayStream;

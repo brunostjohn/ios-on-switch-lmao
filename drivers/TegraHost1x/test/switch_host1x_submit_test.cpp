@@ -795,7 +795,7 @@ uint32_t &channelRegister(uint32_t channel, uint32_t reg)
 
 TEST_F(Host1xSubmit, ADebugProgramStartsEveryChannelsTickAndStallCountersFromZero)
 {
-    for (uint32_t channel = 0; channel < TEGRA_HOST1X_CHANNELS; ++channel) {
+    for (uint32_t channel = 0; channel <= TEGRA_HOST1X_CHANNEL_DISPLAY; ++channel) {
         channelRegister(channel, CH_CHANNELCTRL) = 0x4;
         for (const uint32_t reg : {CH_TICKCOUNT_HI, CH_TICKCOUNT_LO, CH_STALLCOUNT_HI, CH_STALLCOUNT_LO})
             channelRegister(channel, reg) = 0x1234;
@@ -804,7 +804,7 @@ TEST_F(Host1xSubmit, ADebugProgramStartsEveryChannelsTickAndStallCountersFromZer
     IOLockLock(gSubmitLock);
     switch_host1x_channels_program(163200);
     IOLockUnlock(gSubmitLock);
-    for (uint32_t channel = 0; channel < TEGRA_HOST1X_CHANNELS; ++channel) {
+    for (uint32_t channel = 0; channel <= TEGRA_HOST1X_CHANNEL_DISPLAY; ++channel) {
         EXPECT_EQ(channelRegister(channel, CH_CHANNELCTRL), 0x1u) << channel;
         EXPECT_EQ(channelRegister(channel, CH_STALLCTRL), 0x1u) << channel;
         for (const uint32_t reg : {CH_TICKCOUNT_HI, CH_TICKCOUNT_LO, CH_STALLCOUNT_HI, CH_STALLCOUNT_LO})

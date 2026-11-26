@@ -2,9 +2,9 @@
 
 These batches put the questions NAK's SM50 backend has about GM20B to the Switch. The generators live in
 `tools/benchloop` (`sm53/affinity.py`, `sm53/int3.py`, `sm53/overlap.py`, `sm53/icache.py`, `store2fma.py`,
-`sm53/hsetp2.py`, `sm53/interlock_spin.py`, `sm53/powr_native.py`, `sm53/readers.py`, `sm53/dualclock.py`). After changing one, rewrite the files with
-`python3 -m tools.benchloop.nakbatches` from the repo root. `families_test` fails while a file and its generator
-disagree.
+`sm53/hsetp2.py`, `sm53/interlock_spin.py`, `sm53/powr_native.py`, `sm53/readers.py`, `sm53/dualclock.py`). After
+changing one, rewrite the files with `python3 -m tools.benchloop.nakbatches` from the repo root. `families_test` fails
+while a file and its generator disagree.
 
 ## Running them
 

@@ -13,6 +13,7 @@
 
 namespace {
 TegraSMMURamView gView;
+bool gAttached;
 // host1xdmar and host1xr (TRANSLATION_ENABLE_0 bits 22/23), host1xw (TRANSLATION_ENABLE_1 bit 22): T210 TRM
 // 18.11.1.66-67.
 constexpr uint32_t kHostReads = 1u << 22 | 1u << 23, kHostWrites = 1u << 22, kChannelFetch = 1u << 22;
@@ -51,5 +52,22 @@ bool switch_host1x_channels_confine(char *line, size_t size)
             tegra_smmu_detach(TEGRA_SMMU_ASID_HOST1X, kSwgroups[j].asidReg);
         return false;
     }
+    gAttached = true;
+    return true;
+}
+
+bool switch_host1x_channels_confine_channel(const switch_dma_buffer *push, const switch_dma_buffer *arena)
+{
+    if (!gAttached)
+        return true;
+    if (!push || !arena || push->pa + push->size > (1ULL << 32) || arena->pa + arena->size > (1ULL << 32))
+        return false;
+    if (!gView.hold(push->pa, push->size))
+        return false;
+    if (!gView.hold(arena->pa, arena->size)) {
+        gView.release(push->pa, push->size);
+        return false;
+    }
+    gView.commit();
     return true;
 }

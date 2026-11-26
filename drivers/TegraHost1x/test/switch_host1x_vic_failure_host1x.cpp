@@ -96,6 +96,11 @@ bool switch_host1x_channels_confine(char *line, size_t size)
     return false;
 }
 
+bool switch_host1x_channels_confine_channel(const switch_dma_buffer *, const switch_dma_buffer *)
+{
+    return true;
+}
+
 extern "C" void tegra_mc_hot_reset(uint32_t, uint32_t, bool)
 {}
 

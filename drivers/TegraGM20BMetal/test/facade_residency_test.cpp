@@ -179,6 +179,21 @@ TEST(GM20BFacadeResidency, SurfaceDrawablesAreNotNamedWrittenAndTextureAccessFol
     const kernel_model::Job writeJob = filled(queue, target, setOf(device, @[ writableBufTex ]));
     EXPECT_TRUE(coherent(writeJob)) << "a ShaderWrite Shared texture is host-written and External";
 
+    id<MTLTexture> parentTex = makeBufferTexture(device, MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite);
+    id<MTLTexture> viewTex = [parentTex newTextureViewWithPixelFormat:MTLPixelFormatBGRA8Unorm];
+    ASSERT_NE(viewTex, nil);
+    (void)viewTex.gpuResourceID;
+    const kernel_model::Job viewJob = filled(queue, target, setOf(device, @[ parentTex ]));
+    EXPECT_TRUE(coherent(viewJob)) << "a view's gpuResourceID activates its parent texture in a residency set";
+
+    MTLHeapDescriptor *hd = [MTLHeapDescriptor new];
+    hd.size = 64 * 1024;
+    hd.storageMode = MTLStorageModeShared;
+    id<MTLHeap> sharedHeap = [device newHeapWithDescriptor:hd];
+    ASSERT_NE(sharedHeap, nil);
+    const kernel_model::Job heapJob = filled(queue, target, setOf(device, @[ sharedHeap ]));
+    EXPECT_TRUE(coherent(heapJob)) << "a Shared MTLHeap in a residency set is host-written and External";
+
     CFRelease(surface);
 }
 

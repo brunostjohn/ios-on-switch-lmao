@@ -55,13 +55,23 @@ void CommandBuffer::useStorage(uint64_t va, uint64_t bytes, bool write, bool hos
 void CommandBuffer::nameHeaps(std::unique_lock<gm20b::Mutex> &l)
 {
     Device &d = *dev_;
-    for (const HeapMembers *heap : heaps_) {
+    for (const HeapUse &entry : heaps_) {
+        const HeapMembers *heap = entry.heap;
+        const bool write = entry.write;
+        const uint32_t access = write ? uint32_t(TegraGM20BSurfaceWrite) : uint32_t(TegraGM20BSurfaceRead);
         const uint32_t written = heap->hostVisible() ? uint32_t(TegraGM20BSurfaceHostWritten) : 0u;
+        if (write && heap->hostVisible())
+            externalWrites_ = true;
         const auto name = [&](const Bo &bo) {
-            if (bo.handle && !d.member(bo)) {
-                SWITCH_METAL_ENCODE_COUNT(UseAdds);
-                surfaces_.addAccess(bo.handle, TegraGM20BSurfaceRead | written);
+            if (!bo.handle)
+                return;
+            if (d.member(bo)) {
+                if (write || heap->hostVisible())
+                    useMember(bo.va, bo.bytes, write, heap->hostVisible());
+                return;
             }
+            SWITCH_METAL_ENCODE_COUNT(UseAdds);
+            surfaces_.addAccess(bo.handle, access | written);
         };
         if (heap->arena() < d.arenas_.size()) {
             d.waitArena(l, heap->arena());
@@ -76,9 +86,14 @@ void CommandBuffer::nameHeaps(std::unique_lock<gm20b::Mutex> &l)
         }
         heap->each([&](const HeapMember &m) {
             SWITCH_METAL_ENCODE_COUNT(UseAdds);
-            if (!d.member(m.va, m.bytes))
-                surfaces_.addAddress(m.va, m.bytes, false,
-                                     (m.hostVisible && !m.gpuVolatile ? uint32_t(TegraGM20BSurfaceHostWritten) : 0u) |
+            const bool cachedHost = m.hostVisible && !m.gpuVolatile;
+            if (write) {
+                externalWrites_ |= cachedHost;
+                volatileWrites_ |= m.hostVisible && m.gpuVolatile;
+            }
+            if (!useMember(m.va, m.bytes, write, cachedHost))
+                surfaces_.addAddress(m.va, m.bytes, write,
+                                     (cachedHost ? uint32_t(TegraGM20BSurfaceHostWritten) : 0u) |
                                          (m.bytes <= UINT32_MAX ? uint32_t(TegraGM20BSurfaceRange) : 0u));
         });
     }

@@ -394,7 +394,13 @@ def states(boot: Boot, held: set[str]) -> Iterator[tuple[str, str, str, str | No
         parts = whole(boot, process, name)
         if outcome in ('used from tier 1', 'missed'):
             if not parts:
-                yield process, outcome, '-', None, f'{"tier-1 pack" if outcome != "missed" else "a missed"} state has no whole harvest parts'
+                yield (
+                    process,
+                    outcome,
+                    '-',
+                    None,
+                    f'{"tier-1 pack" if outcome != "missed" else "a missed"} state has no whole harvest parts',
+                )
                 continue
             yield process, outcome, parts[0], untested(parts[1]), ''
             continue

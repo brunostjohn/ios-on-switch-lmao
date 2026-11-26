@@ -254,11 +254,15 @@ public:
     // Actual GPU addresses resolve through this connection's binding table in the addressed job ABI.
     void useAddress(uint64_t va, uint64_t bytes, bool write);
 
-    // An MTLHeap an encoder used (useHeap): named once per command buffer, its jobs name what it holds at their commit
-    void useHeap(const HeapMembers &heap)
+    // An MTLHeap an encoder or residency set used (useHeap): named once per command buffer, its jobs name what it holds at their commit
+    void useHeap(const HeapMembers &heap, bool write = false)
     {
-        if (std::find(heaps_.begin(), heaps_.end(), &heap) == heaps_.end())
-            heaps_.push_back(&heap);
+        for (HeapUse &entry : heaps_)
+            if (entry.heap == &heap) {
+                entry.write |= write;
+                return;
+            }
+        heaps_.push_back({&heap, write});
     }
 
     bool useMember(uint64_t va, uint64_t bytes, bool write, bool hostWritten);
@@ -316,8 +320,14 @@ private:
     BatchWork batchWork_;
     uint64_t batchLimit() const;
     DirtyRanges dirty_;
-    std::vector<Texture *> backings_;                   // memoryless backings it uses
-    std::vector<const HeapMembers *> heaps_;            // useHeap's, each kept alive by the facade's command buffer
+    std::vector<Texture *> backings_;  // memoryless backings it uses
+
+    struct HeapUse {
+        const HeapMembers *heap;
+        bool write;
+    };
+
+    std::vector<HeapUse> heaps_;                        // useHeap's, each kept alive by the facade's command buffer
     void nameHeaps(std::unique_lock<gm20b::Mutex> &l);  // lock_ held
     SurfaceList surfaces_;
     ZcullPlanes zcullPlanes_;  // the depths' regions this command buffer's passes stored (zcull_planes.h)

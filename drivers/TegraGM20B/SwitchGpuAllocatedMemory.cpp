@@ -32,8 +32,9 @@ void flushed(void *arg, int status)
 		if (status < 0) {
 			tgm_mem_del_finish(batch->memories);
 		} else {
-			if (TGM_STATS)
-				__atomic_fetch_add(&tgm_retire_gpu_flushes, 1, __ATOMIC_RELAXED);
+#if TGM_STATS
+			__atomic_fetch_add(&tgm_retire_gpu_flushes, 1, __ATOMIC_RELAXED);
+#endif
 			tgm_mem_del_release(batch->memories);
 		}
 		switch_gpu_backing_release_retired(batch->backings);

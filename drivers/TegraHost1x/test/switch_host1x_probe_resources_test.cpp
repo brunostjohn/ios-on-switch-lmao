@@ -24,6 +24,13 @@ TEST_F(Host1xSubmit, VicsProbeChannelsAreMadeAtTheProbesFirstAskAndProgrammedAtE
     static_assert(TEGRA_HOST1X_CHANNELS == TEGRA_HOST1X_CHANNEL_VIC_THIRD + 1);
     constexpr uint32_t kProbe[] = {TEGRA_HOST1X_CHANNEL_VIC_SECOND, TEGRA_HOST1X_CHANNEL_VIC_THIRD};
     EXPECT_EQ(gAllocated, 2u * (TEGRA_HOST1X_CHANNEL_DISPLAY + 1)) << "bring-up makes the engines' channels alone";
+    const switch_dma_buffer *buffers[2 * TEGRA_HOST1X_CHANNELS] = {};
+    const uint32_t bootBuffers = switch_host1x_channels_buffers(buffers, 2 * TEGRA_HOST1X_CHANNELS);
+    EXPECT_EQ(bootBuffers, 2u * (TEGRA_HOST1X_CHANNEL_DISPLAY + 1));
+    for (uint32_t i = 0; i < bootBuffers; ++i) {
+        EXPECT_NE(buffers[i]->pa, 0u) << i;
+        EXPECT_NE(buffers[i]->size, 0u) << i;
+    }
     uint32_t *words = nullptr;
     for (const uint32_t channel : kProbe) {
         EXPECT_EQ(switch_host1x_job_reserve(channel, 4, &words), TEGRA_HOST1X_ENODEV) << channel;
@@ -32,6 +39,7 @@ TEST_F(Host1xSubmit, VicsProbeChannelsAreMadeAtTheProbesFirstAskAndProgrammedAtE
 
     ASSERT_EQ(switch_host1x_probe_channels_take(), TEGRA_HOST1X_OK);
     EXPECT_EQ(gAllocated, 2u * TEGRA_HOST1X_CHANNELS);
+    EXPECT_EQ(switch_host1x_channels_buffers(buffers, 2 * TEGRA_HOST1X_CHANNELS), 2u * TEGRA_HOST1X_CHANNELS);
     for (const uint32_t channel : kProbe) {
         EXPECT_EQ(dmaStart(channel), kPushPA + channel * 0x100000u) << channel;
         ASSERT_EQ(switch_host1x_job_reserve(channel, 4, &words), TEGRA_HOST1X_OK) << channel;
@@ -50,12 +58,12 @@ TEST_F(Host1xSubmit, VicsProbeChannelsAreMadeAtTheProbesFirstAskAndProgrammedAtE
 TEST_F(Host1xSubmit, TheProbesShareOneSetOfFourSyncpointsTakenOnce)
 {
     uint32_t first[SWITCH_HOST1X_PROBE_SYNCPTS] = {}, again[SWITCH_HOST1X_PROBE_SYNCPTS] = {};
-    const uint32_t before = gNextSyncpt;
+    const uint32_t before = gPool.inUse;
     ASSERT_EQ(switch_host1x_probe_syncpts_claim(first), TEGRA_HOST1X_OK);
-    EXPECT_EQ(gNextSyncpt, before + SWITCH_HOST1X_PROBE_SYNCPTS);
+    EXPECT_EQ(gPool.inUse, before + SWITCH_HOST1X_PROBE_SYNCPTS);
     for (uint32_t i = 0; i < SWITCH_HOST1X_PROBE_SYNCPTS; ++i) {
-        EXPECT_GE(first[i], kFirstOwn) << i;
-        EXPECT_LT(first[i], kSyncpts) << i;
+        EXPECT_GE(first[i], SwitchHost1xSyncptPool::kFirstHandedOut) << i;
+        EXPECT_LT(first[i], SwitchHost1xSyncptPool::kSyncpts) << i;
         for (uint32_t j = 0; j < i; ++j)
             EXPECT_NE(first[i], first[j]) << i << " " << j;
     }
@@ -65,7 +73,7 @@ TEST_F(Host1xSubmit, TheProbesShareOneSetOfFourSyncpointsTakenOnce)
     switch_host1x_probe_syncpts_release();
     for (uint32_t i = 0; i < SWITCH_HOST1X_PROBE_SYNCPTS; ++i)
         EXPECT_EQ(again[i], first[i]) << i;
-    EXPECT_EQ(gNextSyncpt, before + SWITCH_HOST1X_PROBE_SYNCPTS) << "the pool gives the set once";
+    EXPECT_EQ(gPool.inUse, before + SWITCH_HOST1X_PROBE_SYNCPTS) << "the pool gives the set once";
 }
 
 // Every probe that writes host1x streams takes the shared set and its own channels' memory, never the pool or the
