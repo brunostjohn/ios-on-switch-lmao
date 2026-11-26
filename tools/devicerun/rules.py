@@ -64,7 +64,8 @@ class Check:
     with no run), and `rule` is not read. `preceded` names a check: only this check's lines that one of its lines came
     within `within` seconds before, in the same boot (with the same `key` value, when `key` is set), are judged.
     `boots` names a check: only this check's lines in a boot where one of its lines came are judged (an iPadOS 27
-    boot's, in an archive of several).
+    boot's, in an archive of several). With `each_boot`, each of those boots must have one of this check's lines (FAIL
+    names the boots without one), and `rule` is not read.
     """
 
     name: str
@@ -101,6 +102,7 @@ class Check:
     per_count: str = ''
     preceded: str = ''
     boots: str = ''
+    each_boot: bool = False
 
     def literals(self) -> tuple[str, ...]:
         return (self.contains,) if isinstance(self.contains, str) else self.contains
@@ -481,6 +483,8 @@ def judge(
         return Result(check, NO_DATA, f'no {missing} line', matches)
     if check.applies and not applicable(check.applies, by_name):
         return Result(check, NA, f'not run here: no {check.applies} line', matches)
+    if check.each_boot:
+        return every_boot(check, matches, by_name)
     if check.followed or check.per:
         runs = by_name.get(check.per, [])
         return follow(check, matches, minutes, by_name, log_end) if check.followed else per_run(check, matches, runs)
@@ -492,6 +496,21 @@ def judge(
     m = RULE.match(check.rule)
     verdict = PASS if OPS[m['op']](got, float(m['value'])) else FAIL
     return Result(check, verdict, failed_text(check, verdict, observed), matches)
+
+
+def every_boot(check: Check, matches: list[dict], by_name: dict[str, list[dict]]) -> Result:
+    """PASS when each boot of the `boots` check's lines has one of `matches`."""
+    if not check.boots:
+        raise ValueError(f'{check.name}: each_boot needs boots')
+    wanted = list(dict.fromkeys(fields['boot'] for fields in by_name.get(check.boots, [])))
+    if not wanted:
+        return Result(check, NO_DATA, f'no {check.boots} line', matches)
+    seen = {fields['boot'] for fields in matches}
+    missing = [boot for boot in wanted if boot not in seen]
+    observed = f'{len(wanted) - len(missing)} of {len(wanted)} boots'
+    if missing:
+        observed += ': none in ' + ', '.join(missing[:4])
+    return Result(check, FAIL if missing else PASS, observed, matches)
 
 
 def per_run(check: Check, matches: list[dict], runs: list[dict]) -> Result:

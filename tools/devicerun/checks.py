@@ -27,6 +27,7 @@ from tools.devicerun.lockscreen import LOCKSCREEN
 from tools.devicerun.memory import MEMORY
 from tools.devicerun.morning import MORNING
 from tools.devicerun.motion import MOTION
+from tools.devicerun.pretranslated import PRETRANSLATED
 from tools.devicerun.protection import PROTECTION
 from tools.devicerun.rules import REPORT, TIMELINE, Check
 from tools.devicerun.springboard import OBSERVATIONS, SPRINGBOARD
@@ -1404,6 +1405,7 @@ GROUPS: dict[str, list[Check]] = {
     'audio': AUDIO,
     'battery': BATTERY,
     'motion': MOTION,
+    'pretranslated': PRETRANSLATED,
     'm2v-cut': CUT,
     'textures': TEXTURES,
     'dispatch': DISPATCH,

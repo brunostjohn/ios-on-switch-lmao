@@ -24,6 +24,7 @@ py_library(
         "memory.py",
         "morning.py",
         "motion.py",
+        "pretranslated.py",
         "protection.py",
         "reports.py",
         "rules.py",
@@ -116,6 +117,14 @@ py_test(
     name = "motion_test",
     size = "small",
     srcs = ["motion_test.py"],
+    deps = [":lib"],
+)
+
+# pretranslated.py's checks over the kernel's deploy-update lines.
+py_test(
+    name = "pretranslated_test",
+    size = "small",
+    srcs = ["pretranslated_test.py"],
     deps = [":lib"],
 )
 
@@ -222,6 +231,7 @@ py_test(
     srcs = ["joycon_test.py"],
     deps = [":lib"],
 )
+
 # bazel run //tools/devicerun:frame_weights -- <absolute .logarchive> --pack <pack.bin>: the frame-weights capture's table
 # (drivers/TegraGM20BMetal/draw_times.h, tools/devicerun/README.md)
 py_library(

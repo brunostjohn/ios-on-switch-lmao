@@ -19,7 +19,8 @@ On iPadOS 27 the accelerometer, gyroscope and device motion services carry J181'
 (drivers/SwitchTouch/SwitchHIDMotionAccess.cpp). IOKit's event system then matches them only for platform binaries or
 connections TCC allows, and logs each connection it refuses. A refusal there means a motion client lost the services.
 The log redacts the line's arguments as <private>; only these services carry a TCCService here, so a redacted one is
-judged as theirs.
+judged as theirs. A refusal of another shape would go unseen there, so each iPadOS 27 boot must also show locationd,
+backboardd and SpringBoard adding the gated services (motion.services.*).
 """
 
 from tools.devicerun.rules import REPORT, Check
@@ -27,7 +28,8 @@ from tools.devicerun.rules import REPORT, Check
 OWNER = 'perf1-daemons'
 SOURCE = 'kernel/xnu-12377.121.6/bsd/vm/switch_ui_scale_sites_24B119.h'
 SUBSYSTEM = 'com.apple.locationd.Motion'
-ADDED = '[CLIoHidInterface] Adding new Device with usage pair {65292, '
+ADDED_PAIR = '[CLIoHidInterface] Adding new Device with usage pair '
+ADDED = ADDED_PAIR + '{65292, '
 NOT_READY = (
     '[CLIoHidInterface] Service for device with usage pair {65292, ',
     '[CLIoHidInterface] Service for usage pair {65292, ',
@@ -44,6 +46,13 @@ IOS27 = 'motion.kernel darwin=25'
 IOS27_BOOT = 'motion.ios27-boot'
 FASTPATH = 'drivers/SwitchTouch/SwitchHIDFastPath.cpp'
 MOTION_ACCESS = 'drivers/SwitchTouch/SwitchHIDMotionAccess.cpp'
+# IOKit's refusal, logged at default level (24B119 IOKit 0x18f591228-0x18f591298: os_log type 0, format
+# "Connection: %@ denied match of service %@: TCC %@ right:%llu"); its arguments are not public, so the archive has them
+# as <private>.
+TCC_DENIED = (
+    r'^Connection: (?P<connection>.+?) denied match of service (?P<service>.+?): '
+    r'TCC (?P<tcc>kTCCServiceMotionSensors|<private>) right:(?P<right>\d+)$'
+)
 EDITS = 'translate/arm64e/pretranslate/edits_24B119.json'
 
 MOTION = [
@@ -230,17 +239,37 @@ MOTION = [
         'motion.tcc-denied',
         OWNER,
         ' denied match of service ',
-        regex=(
-            r'^Connection: (?P<connection>.*?) denied match of service .*: '
-            r'TCC (?P<tcc>kTCCServiceMotionSensors|<private>) right:(?P<right>\d+)'
-        ),
+        regex=TCC_DENIED,
         show=('connection', 'tcc', 'right'),
+        debug=True,
         applies=IOS27,
         needs='motion.kernel',
         boots=IOS27_BOOT,
         source=MOTION_ACCESS,
         note="IOKit's event system refused a connection the Motion & Fitness gated services: not a platform "
         'binary, and TCC did not allow it',
+    ),
+    *(
+        Check(
+            f'motion.services.{process}',
+            OWNER,
+            ADDED_PAIR + pair,
+            rule='count >= 1',
+            process=process,
+            subsystem=SUBSYSTEM,
+            applies=IOS27,
+            needs='motion.kernel',
+            boots=IOS27_BOOT,
+            each_boot=True,
+            source=MOTION_ACCESS,
+            note=f"{process}'s CoreMotion found {what} in each iPadOS 27 boot: the event system matched it the "
+            'Motion & Fitness gated service',
+        )
+        for process, pair, what in (
+            ('locationd', '{65292, 5}', 'the device motion service {0xff0c, 5}'),
+            ('backboardd', '{65280, 3}', 'the accelerometer {0xff00, 3}'),
+            ('SpringBoard', '{65280, 3}', 'the accelerometer {0xff00, 3}'),
+        )
     ),
     Check(
         'motion.spu-added-ungated',

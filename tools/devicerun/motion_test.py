@@ -46,6 +46,15 @@ COPY = '[FastPath] copyEventPrivate() Failed (e00002c0)'
 OPEN = '[FastPath] openFastPathPrivate() failed,serviceRef,<IOHIDServiceClient>'
 
 
+# The gated services each iPadOS 27 boot's motion clients must find (motion.services.*).
+def services(boot: str = 'B2') -> tuple[dict, ...]:
+    return (
+        record('[CLIoHidInterface] Adding new Device with usage pair {65292, 5}', LOCATIOND, 1, boot),
+        record('[CLIoHidInterface] Adding new Device with usage pair {65280, 3}', BACKBOARDD, 1, boot),
+        record('[CLIoHidInterface] Adding new Device with usage pair {65280, 3}', SPRINGBOARD, 1, boot),
+    )
+
+
 BOOT_2 = (
     record('[CLIoHidInterface] Adding new Device with usage pair {65292, 26}', BACKBOARDD, 2),
     record('[CLIoHidInterface] Service for device with usage pair {65292, 26} is not ready', BACKBOARDD, 3),
@@ -136,7 +145,9 @@ class Motion(unittest.TestCase):
         self.assertEqual(got['motion.fastpath-copy'].verdict, INFO)
 
     def test_backboardds_refused_fast_path_and_its_failed_copies_are_reported_only(self):
-        got = results(IOS27, record(START, BACKBOARDD), record(OPEN, BACKBOARDD, 1), record(COPY, BACKBOARDD, 9))
+        got = results(
+            IOS27, *services(), record(START, BACKBOARDD), record(OPEN, BACKBOARDD, 1), record(COPY, BACKBOARDD, 9)
+        )
         self.assertEqual(got['motion.fastpath-open.backboardd'].verdict, INFO)
         self.assertEqual(got['motion.fastpath-copy'].verdict, INFO)
         self.assertNotIn(FAIL, {r.verdict for r in got.values()})
@@ -159,11 +170,28 @@ class Motion(unittest.TestCase):
         self.assertEqual(results(denied)['motion.tcc-denied'].verdict, NO_DATA)
         other = {**denied, 'eventMessage': denied['eventMessage'].replace('MotionSensors', 'Camera')}
         self.assertEqual(results(IOS27, other)['motion.tcc-denied'].verdict, PASS, 'another TCC service')
+        self.assertTrue(next(c for c in MOTION if c.name == 'motion.tcc-denied').debug, 'asks for info and debug lines')
         redacted = {
             **denied,
             'eventMessage': 'Connection: <private> denied match of service <private>: TCC <private> right:0',
         }
         self.assertEqual(results(IOS27, redacted)['motion.tcc-denied'].verdict, FAIL, 'as the log redacts it')
+
+    def test_each_ios_27_boot_s_motion_clients_must_find_the_gated_services(self):
+        names = ('motion.services.locationd', 'motion.services.backboardd', 'motion.services.SpringBoard')
+        got = results(IOS27, *services())
+        for name in names:
+            self.assertEqual(got[name].verdict, PASS, name)
+        got = results(IOS27, *services()[1:])
+        self.assertEqual(got['motion.services.locationd'].verdict, FAIL, 'locationd found no device motion service')
+        self.assertEqual(got['motion.services.backboardd'].verdict, PASS)
+        got = results(darwin(25, 'A'), *services('A'), darwin(25, 'B'))
+        self.assertEqual(got['motion.services.backboardd'].verdict, FAIL, 'boot B found none')
+        self.assertIn('none in B', got['motion.services.backboardd'].observed)
+        got = results(darwin(23, 'A'), darwin(25, 'B'), *services('B'))
+        self.assertEqual(got['motion.services.locationd'].verdict, PASS, 'the iOS 17 boot is not judged')
+        self.assertEqual(results(IOS17)['motion.services.locationd'].verdict, NA)
+        self.assertEqual(results(*services())['motion.services.locationd'].verdict, NO_DATA)
 
     def test_a_report_coremotion_refuses_fails(self):
         got = results(record('Bad device motion report,type,3,size,52', SPRINGBOARD))
@@ -172,7 +200,7 @@ class Motion(unittest.TestCase):
     def test_the_accelerometer_and_gyroscope_alone_pass(self):
         got = results(
             IOS27,
-            record('[CLIoHidInterface] Adding new Device with usage pair {65280, 3}', SPRINGBOARD),
+            *services(),
             record(
                 '[CLIoHidInterface] Property for usage pair {65280, 9}: {ReportInterval = 10000} was set', HWTEST, 1
             ),
