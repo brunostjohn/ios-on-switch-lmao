@@ -6,7 +6,8 @@ only the steps it reaches:
     adt_edit.py base (board ADT, plan) ...... ios-base.adt
     adt_edit.py finish (base, Apple's tree of the IPSW's iPad, iOS 27 cache list, the roles' trust modules)
                                          ...... ios.adt
-    overlay.py trust (plan, Mach-Os) ........ overlay.trustcache
+    overlay.py trust (plan, Mach-Os) ........ overlay.trustcache, and the release's overlay-base.trustcache without
+                                               installd (made from Apple's: the installer hashes it on the computer)
     trust.py         (IPSW, overlay, GPU, iOS 27 pretranslated) ... trustcache.bundle, all in one static module
     build_native_loader.py layout (kernel, ADT, bundle, seed, boot-args)
                                          ...... plan.json, the window's 1 MiB LZ4 blocks in 128 shards (by the MiB
@@ -104,6 +105,9 @@ for block in "$in"/*; do
     "$lz4" -d -c -q "$out/$name.lz4" | /usr/bin/cmp -s - "$block" || { echo "lz4: $name does not decode to its block" >&2; exit 1; }
 done
 """
+
+# The overlay's installd: Apple's, patched and re-signed (drivers/SwitchInstallPolicy), so never in a release asset.
+_INSTALLD = "build/switch-apps/installd"
 
 def _one(target, what):
     files = target.files.to_list()
@@ -312,6 +316,18 @@ def _boot_package_impl(ctx):
     args.add("--out", overlay_trust)
     _run(ctx, ctx.executable._overlay, [args], [plan] + binaries.values(), [overlay_trust], "OverlayTrust", "Hashing the overlay's code")
 
+    # The release's overlay module: the same less installd, which is made from Apple's, so this action never reads it.
+    # The installer merges installd's CDHash back in (install/window), and the bundle comes out the same.
+    overlay_trust_base = out("overlay-base.trustcache")
+    shipped = {source: f for source, f in binaries.items() if source != _INSTALLD}
+    args = ctx.actions.args()
+    args.add("trust")
+    args.add("--plan", plan)
+    args.add_all(["%s=%s" % (source, f.path) for source, f in sorted(shipped.items())], before_each = "--file")
+    args.add("--leave-out", _INSTALLD)
+    args.add("--out", overlay_trust_base)
+    _run(ctx, ctx.executable._overlay, [args], [plan] + shipped.values(), [overlay_trust_base], "OverlayTrustBase", "Hashing the overlay's code but installd")
+
     gpu = ctx.attr._gpu_trustcache[DefaultInfo].files.to_list()
     if len(gpu) > 1:
         fail("the GPU trust cache must be one file")
@@ -455,6 +471,7 @@ def _boot_package_impl(ctx):
         OutputGroupInfo(
             adt = depset([adt]),
             adt_base = depset([adt_base]),
+            bl33 = depset([bl33]),
             boot_script = depset([script_text]),
             constants = depset([constants]),
             kernel_window = depset([window, layout_h, runs_h, constants, window_plan]),
@@ -462,6 +479,8 @@ def _boot_package_impl(ctx):
             launchd_catalog = depset(catalog_outputs),
             loader = depset([loader]),
             overlay = depset([plan, overlay_trust, overlay]),
+            overlay_trust_base = depset([overlay_trust_base]),
+            stage = depset([boot_args, u_boot, script]),
             trust = depset([bundle]),
         ),
     ]

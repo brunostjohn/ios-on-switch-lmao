@@ -8,8 +8,9 @@ Three steps of //boot:package, so that each overlay edit reruns only what reads 
     overlay.py plan --manifest M --portrait-header H --kind KIND [--given SOURCE]... [--release] --out PLAN
         overlay/manifest.json, filtered and checked: the files to stage and the directories the kernel unions
         (each with the switch-no-<feature> boot-arg that hides it), which the ADT carries. Reads no overlay file.
-    overlay.py trust --plan PLAN [--file SOURCE=PATH]... --out MODULE
-        the trust cache module of the trusted files' CDHashes (empty when none is trusted)
+    overlay.py trust --plan PLAN [--file SOURCE=PATH]... [--leave-out SOURCE]... --out MODULE
+        the trust cache module of the trusted files' CDHashes (empty when none is trusted), less those left out: the
+        release ships the module without installd, which the installer makes from the user's IPSW and hashes there
     overlay.py tree --plan PLAN [--file SOURCE=PATH]... --out DIR
         the files at overlay/<absolute path>
 
@@ -247,6 +248,26 @@ def _need(files: dict[str, Path], entry: dict) -> Path:
     return files[entry['source']]
 
 
+def trust(entries: list[dict], files: dict[str, Path], leave_out: Iterable[str] = ()) -> tuple[bytes, int]:
+    """Return the trust cache module of the trusted files' CDHashes (empty when none is trusted) and their count.
+
+    `leave_out`: trusted sources not to hash, each of which the plan must trust.
+    """
+    leave_out = set(leave_out)
+    unknown = sorted(leave_out - {e['source'] for e in entries if e['trust']})
+    if unknown:
+        sys.exit(f'overlay: --leave-out {", ".join(unknown)} is no trusted file of the plan')
+    hashes = [
+        cdhash(image)
+        for e in entries
+        if e['trust'] and e['source'] not in leave_out
+        for image in code_of(e, _need(files, e))
+    ]
+    # Flags and launch-constraint category 0: overlay code lives on Data, where the system categories' volume
+    # constraints would refuse it.
+    return (trust_module(hashes) if hashes else b''), len(hashes)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     step = parser.add_subparsers(dest='step', required=True)
@@ -261,6 +282,9 @@ def main() -> None:
         p.add_argument('--plan', required=True, type=Path)
         p.add_argument('--file', action='append', default=[], help='SOURCE=PATH: a manifest source and its file')
         p.add_argument('--out', required=True, type=Path)
+    step.choices['trust'].add_argument(
+        '--leave-out', action='append', default=[], help='SOURCE: a trusted file not to hash'
+    )
     args = parser.parse_args()
     if args.step == 'plan':
         result = plan(
@@ -275,11 +299,9 @@ def main() -> None:
     files = _files(args.file)
     entries = json.loads(args.plan.read_text())['files']
     if args.step == 'trust':
-        hashes = [cdhash(image) for e in entries if e['trust'] for image in code_of(e, _need(files, e))]
-        # Flags and launch-constraint category 0: overlay code lives on Data, where the system categories' volume
-        # constraints would refuse it.
-        args.out.write_bytes(trust_module(hashes) if hashes else b'')
-        print(f'overlay: {len(entries)} files ({len(hashes)} trusted) -> Data {OVERLAY_ROOT}')
+        module, trusted = trust(entries, files, args.leave_out)
+        args.out.write_bytes(module)
+        print(f'overlay: {len(entries)} files ({trusted} trusted) -> Data {OVERLAY_ROOT}')
         return
     args.out.mkdir(parents=True, exist_ok=True)
     for entry in entries:

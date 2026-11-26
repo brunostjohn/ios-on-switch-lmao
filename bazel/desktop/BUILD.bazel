@@ -202,7 +202,10 @@ _CC_TARGETS = [
 # crt-static for cc-rs and aws-lc-sys. aws-lc-sys maps its own source paths only at opt-level 3 and never for clang-cl,
 # so without CFLAGS_<triple> its __FILE__ strings and debug info name the worker's execroot. cc-rs adds CFLAGS_<triple>
 # to the toolchain's CFLAGS, and the runner replaces ${pwd} with the execroot. On macOS cc-rs also gets the binaries'
-# deployment target, which apple_support's CFLAGS carry too.
+# deployment target, which apple_support's CFLAGS carry too. OPT_LEVEL=3: outside -c opt rules_rust passes 0, and cc-rs
+# would build aws-lc's C at -O0. On macOS fastbuild it changes nothing, because apple_support's CFLAGS end in -O0, which
+# cc-rs applies after OPT_LEVEL's flag. An -O3 in CFLAGS_<triple> would win there, but it also reaches aws-lc's
+# jitterentropy, which must be built at -O0 and refuses to compile otherwise.
 _BUILD_SCRIPT_ENV = {
     "aarch64-apple-darwin": ["MACOSX_DEPLOYMENT_TARGET=" + MACOS_MINIMUM_OS],
     "aarch64-pc-windows-msvc": ["CARGO_CFG_TARGET_FEATURE=crt-static,neon"],
@@ -216,10 +219,13 @@ write_file(
     name = "build_script_env",
     out = "build_script.env",
     content = select({
-        "//bazel/desktop/triple:" + triple: env + ["CFLAGS_{}={}-ffile-prefix-map=${{pwd}}=.".format(
-            triple.replace("-", "_"),
-            "/clang:" if "windows" in triple else "",
-        )]
+        "//bazel/desktop/triple:" + triple: env + [
+            "OPT_LEVEL=3",
+            "CFLAGS_{}={}-ffile-prefix-map=${{pwd}}=.".format(
+                triple.replace("-", "_"),
+                "/clang:" if "windows" in triple else "",
+            ),
+        ]
         for triple, env in _BUILD_SCRIPT_ENV.items()
     } | {"//conditions:default": []}),
 )

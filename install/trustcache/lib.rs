@@ -2,12 +2,18 @@
 //! Version-2 trust cache modules, byte for byte as `tools/trustcache/trustcache.py` writes them. The kernel
 //! binary-searches a module and refuses one that is unsorted or repeats a CDHash.
 
+mod merge;
+mod parse;
+
 use std::collections::BTreeMap;
+
+pub use merge::{bundle, check_bundle, merged_module};
+pub use parse::{ENTRY_LEN, HEADER_LEN, cdhash_list, module_entries};
 
 use sha2::{Digest, Sha256};
 
 pub const CDHASH_LEN: usize = 20;
-const VERSION: u32 = 2;
+pub(crate) const VERSION: u32 = 2;
 const HASH_TYPE_SHA256: u8 = 2;
 
 #[derive(Debug, thiserror::Error)]
@@ -20,6 +26,14 @@ pub enum Error {
     },
     #[error("trust cache: {0} entries do not fit a module")]
     TooMany(usize),
+    #[error("trust cache: {0}")]
+    Module(String),
+    #[error("trust cache: {0} has two different entries")]
+    TwoEntries(String),
+    #[error("trust cache: no modules to merge")]
+    NoModules,
+    #[error("trust cache bundle: {0}")]
+    Bundle(&'static str),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,6 +73,6 @@ pub fn trust_module(entries: impl IntoIterator<Item = Entry>, uuid: Option<[u8; 
     Ok(module)
 }
 
-fn hex(bytes: &[u8]) -> String {
+pub(crate) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }

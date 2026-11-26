@@ -13,7 +13,11 @@ lint_files()
 rust_library(
     name = "switch_adt",
     srcs = glob(["src/*.rs"]),
-    deps = ["@installer_crates//:thiserror"],
+    deps = [
+        "//install/trustcache:switch_trustcache",
+        "//install/window:switch_loader_abi",
+        "@installer_crates//:thiserror",
+    ],
 )
 
 rust_test(

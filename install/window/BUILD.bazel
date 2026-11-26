@@ -1,0 +1,225 @@
+# switch_window: the kernel window and switchroot/ios/bl33.bin, made on the user's computer as //boot:package does.
+#
+#   bazel test //install/window:all                   the selected kind's (--config=ios17 or ios27) trust bundle,
+#                                                     window, constants.json and bl33.bin against //boot:package's
+#   bazel build //install/window:desktop              switch_window_tool for the six desktop platforms
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("//bazel/desktop:defs.bzl", "desktop_binaries")
+load("//bazel/lint:defs.bzl", "lint_files")
+load(":defs.bzl", "opt_test", "overlay_modules_test", "window_case")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+py_binary(
+    name = "loader_abi_rs",
+    srcs = ["loader_abi_rs.py"],
+    deps = ["//tools/package:loader_abi"],
+)
+
+genrule(
+    name = "loader_abi",
+    outs = ["loader_abi.rs"],
+    cmd = "$(execpath :loader_abi_rs) $@",
+    tools = [":loader_abi_rs"],
+)
+
+# tools/package/loader_abi.py's constants, which the packaging and the native loader agree on.
+rust_library(
+    name = "switch_loader_abi",
+    srcs = [":loader_abi"],
+    crate_root = ":loader_abi",
+)
+
+rust_library(
+    name = "switch_window",
+    srcs = glob(["src/*.rs"]),
+    deps = [
+        ":switch_loader_abi",
+        "//install/trustcache:switch_trustcache",
+        "@installer_crates//:lz4-sys",
+        "@installer_crates//:rayon",
+        "@installer_crates//:serde_json",
+        "@installer_crates//:sha2",
+        "@installer_crates//:thiserror",
+    ],
+)
+
+rust_test(
+    name = "switch_window_test",
+    crate = ":switch_window",
+)
+
+rust_binary(
+    name = "switch_window_tool",
+    srcs = ["main.rs"],
+    deps = [
+        ":switch_window",
+        "@installer_crates//:clap",
+        "@installer_crates//:hex",
+        "@installer_crates//:rayon",
+    ],
+)
+
+desktop_binaries(
+    name = "desktop",
+    binary = ":switch_window_tool",
+)
+
+py_binary(
+    name = "lz4_cases",
+    srcs = ["oracle/lz4_cases.py"],
+)
+
+genrule(
+    name = "lz4_oracle_cases",
+    outs = ["lz4_oracle_cases.bin"],
+    cmd = "$(execpath :lz4_cases) $(execpath //tools:lz4) $@",
+    tools = [
+        ":lz4_cases",
+        "//tools:lz4",
+    ],
+)
+
+rust_test(
+    name = "lz4_oracle_test",
+    srcs = ["tests/lz4_oracle_test.rs"],
+    data = [":lz4_oracle_cases"],
+    env = {"LZ4_ORACLE_CASES": "$(rootpath :lz4_oracle_cases)"},
+    deps = [":switch_window"],
+)
+
+py_binary(
+    name = "installd_cdhash",
+    srcs = ["oracle/installd_cdhash.py"],
+    deps = ["//tools/package:overlay"],
+)
+
+genrule(
+    name = "boot_installd_cdhash",
+    srcs = ["//drivers/SwitchInstallPolicy:installd"],
+    outs = ["installd.cdhash"],
+    cmd = "$(execpath :installd_cdhash) $< $@",
+    tools = [":installd_cdhash"],
+)
+
+[filegroup(
+    name = "boot_" + group,
+    srcs = ["//boot:package"],
+    output_group = group,
+) for group in [
+    "adt",
+    "bl33",
+    "kernel_window",
+    "launchd_catalog",
+    "overlay",
+    "overlay_trust_base",
+    "stage",
+    "trust",
+]]
+
+window_case(
+    name = "case",
+    adt = ":boot_adt",
+    app_trust = "//ipsw:app_cryptex_trust",
+    bl33 = ":boot_bl33",
+    data_seed = "//bazel/pinned:data-seed/empty.dbr",
+    dtb = "//bazel/pinned:firmware/oled-sku3.dtb",
+    exporter = "//bazel/pinned:firmware/exporter.uimg",
+    gpu_trustcache = "//boot:gpu_trustcache",
+    installd_cdhash = ":boot_installd_cdhash",
+    kernel = "//kernel:prelinked",
+    kernel_window = ":boot_kernel_window",
+    launchd_catalog = ":boot_launchd_catalog",
+    loader = "//boot:loader",
+    overlay = ":boot_overlay",
+    overlay_trust_base = ":boot_overlay_trust_base",
+    pretranslated = "//ipsw:pretranslated",
+    stage = ":boot_stage",
+    static_trust = "//ipsw:static_trust",
+    system_trust = "//ipsw:system_cryptex_trust",
+    trust = ":boot_trust",
+)
+
+overlay_modules_test(
+    name = "overlay_modules_test",
+    target_under_test = "//boot:package",
+)
+
+_CASE_ENV = {"SWITCH_WINDOW_CASE": "$(rootpath :case)"}
+
+_PACKAGE_TEST_SRCS = [
+    "tests/case.rs",
+    "tests/package_test.rs",
+]
+
+_PACKAGE_TEST_DEPS = [
+    ":switch_window",
+    "//install/trustcache:switch_trustcache",
+    "@installer_crates//:rayon",
+    "@installer_crates//:serde_json",
+    "@installer_crates//:sha2",
+]
+
+rust_test(
+    name = "package_test",
+    srcs = _PACKAGE_TEST_SRCS,
+    crate_root = "tests/package_test.rs",
+    data = [":case"],
+    env = _CASE_ENV,
+    deps = _PACKAGE_TEST_DEPS,
+)
+
+# The same at -c opt, for its timings: built without the case, which the wrapper gives it from this configuration.
+rust_test(
+    name = "package_test_opt_build",
+    srcs = _PACKAGE_TEST_SRCS,
+    crate_root = "tests/package_test.rs",
+    tags = ["manual"],
+    deps = _PACKAGE_TEST_DEPS,
+)
+
+opt_test(
+    name = "package_opt_test",
+    data = [":case"],
+    env = _CASE_ENV,
+    test = ":package_test_opt_build",
+)
+
+rust_test(
+    name = "refusal_test",
+    srcs = [
+        "tests/case.rs",
+        "tests/refusal_test.rs",
+    ],
+    crate_root = "tests/refusal_test.rs",
+    data = [":case"],
+    env = _CASE_ENV,
+    deps = [
+        ":switch_window",
+        "//install/trustcache:switch_trustcache",
+        "@installer_crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "chain_test",
+    srcs = [
+        "tests/case.rs",
+        "tests/chain_test.rs",
+    ],
+    crate_root = "tests/chain_test.rs",
+    data = [
+        ":case",
+        "//install/adt:finish_case",
+    ],
+    env = _CASE_ENV | {"SWITCH_ADT_CASE": "$(rootpath //install/adt:finish_case)"},
+    deps = [
+        ":switch_window",
+        "//install/adt:switch_adt",
+        "//install/trustcache:switch_trustcache",
+        "@installer_crates//:serde_json",
+    ],
+)

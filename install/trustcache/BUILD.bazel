@@ -1,6 +1,7 @@
 # switch_trustcache: version-2 trust cache modules as tools/trustcache/trustcache.py writes them.
 #
-#   bazel test //install/trustcache:all          against the build's own trust_module (oracle.py)
+#   bazel test //install/trustcache:all          against the build's own trust_module (oracle.py), merged_module,
+#                                                cdhash_list and trust.py's bundle (merge_oracle.py)
 load("@rules_python//python:py_binary.bzl", "py_binary")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 load("//bazel/lint:defs.bzl", "lint_files")
@@ -11,7 +12,11 @@ lint_files()
 
 rust_library(
     name = "switch_trustcache",
-    srcs = ["lib.rs"],
+    srcs = [
+        "lib.rs",
+        "merge.rs",
+        "parse.rs",
+    ],
     crate_root = "lib.rs",
     deps = [
         "@installer_crates//:sha2",
@@ -37,5 +42,29 @@ rust_test(
     srcs = ["oracle_test.rs"],
     data = [":oracle_cases"],
     env = {"ORACLE_CASES": "$(rootpath :oracle_cases)"},
+    deps = [":switch_trustcache"],
+)
+
+py_binary(
+    name = "merge_oracle",
+    srcs = ["merge_oracle.py"],
+    deps = [
+        "//tools/package:trust",
+        "//tools/trustcache",
+    ],
+)
+
+genrule(
+    name = "merge_oracle_cases",
+    outs = ["merge_oracle_cases.bin"],
+    cmd = "$(execpath :merge_oracle) $@",
+    tools = [":merge_oracle"],
+)
+
+rust_test(
+    name = "merge_oracle_test",
+    srcs = ["merge_oracle_test.rs"],
+    data = [":merge_oracle_cases"],
+    env = {"MERGE_ORACLE_CASES": "$(rootpath :merge_oracle_cases)"},
     deps = [":switch_trustcache"],
 )

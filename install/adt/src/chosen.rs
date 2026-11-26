@@ -2,13 +2,11 @@
 //! What adt_edit.py finish writes into /chosen after the identity: the IPSW kind's System volume, the manifest hash
 //! slot, the launchd catalogue digests, the pretranslated cache list and each role's CDHashes, in that order.
 
-use crate::tree::Node;
-use crate::trust::{CDHASH_BYTES, cdhash_list};
-use crate::{Error, Finish};
+use switch_loader_abi::{BOOT_MANIFEST_HASH_BYTES, BOOT_MANIFEST_HASH_PROPERTY};
+use switch_trustcache::{CDHASH_LEN, cdhash_list};
 
-/// tools/package/loader_abi.py BOOT_MANIFEST_HASH_PROPERTY and BOOT_MANIFEST_HASH_BYTES.
-const BOOT_MANIFEST_HASH_PROPERTY: &str = "boot-manifest-hash";
-const BOOT_MANIFEST_HASH_BYTES: usize = 48;
+use crate::tree::Node;
+use crate::{Error, Finish};
 
 /// tools/package/native_oled_adt.py root_matching.
 fn root_matching(volume_uuid: &str) -> Result<Vec<u8>, Error> {
@@ -27,13 +25,13 @@ pub(crate) fn write(tree: &mut Node, kind: &Finish) -> Result<(), Error> {
     let chosen = tree.child("chosen");
     chosen.put("root-matching", root_matching(kind.root_volume_uuid)?);
     if kind.boot_manifest_hash {
-        chosen.put(BOOT_MANIFEST_HASH_PROPERTY, [0; BOOT_MANIFEST_HASH_BYTES]);
+        chosen.put(BOOT_MANIFEST_HASH_PROPERTY, [0; BOOT_MANIFEST_HASH_BYTES as usize]);
     }
     if let Some(digests) = kind.launchd_catalog_sha256 {
         chosen.put("switch-launchd-catalog-sha256", digests);
     }
     if let Some(list) = kind.a64x_cache_pretranslated {
-        if list.is_empty() || list.len() % CDHASH_BYTES != 0 {
+        if list.is_empty() || list.len() % CDHASH_LEN != 0 {
             return Err(Error::PretranslatedList(list.len()));
         }
         chosen.put("a64x-cache-pretranslated", list);

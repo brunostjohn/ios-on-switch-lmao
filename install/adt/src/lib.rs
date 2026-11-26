@@ -6,7 +6,6 @@ mod check;
 mod chosen;
 mod identity;
 mod tree;
-mod trust;
 
 #[cfg(test)]
 mod tests;
@@ -48,8 +47,8 @@ pub enum Error {
     VolumeUuid(String),
     #[error("a64x-cache-pretranslated: {0} bytes, not a list of CDHashes")]
     PretranslatedList(usize),
-    #[error("trust module: {0}")]
-    TrustModule(&'static str),
+    #[error(transparent)]
+    TrustModule(#[from] switch_trustcache::Error),
     #[error("switch-{0}-cdhashes: no CDHashes")]
     NoCdhashes(&'static str),
     #[error("the finished ADT: {0}")]
