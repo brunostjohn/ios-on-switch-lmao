@@ -17,6 +17,7 @@ public final class GPURates {
         public var bytes = 64 << 20, readThreads = 1 << 16
         public var triangles = 1 << 20, heavyIterations: UInt32 = 64
         public var atomics = 65536, fetchTriangles = 1 << 18, smallJobs = 60
+        public var fillWidth = 1920, fillHeight = 1080
         public var repeats = 5
 
         public static let device = Sizes()
@@ -35,6 +36,8 @@ public final class GPURates {
             s.atomics = 4096
             s.fetchTriangles = 4096
             s.smallJobs = 8
+            s.fillWidth = 256
+            s.fillHeight = 128
             s.repeats = 2
             return s
         }()

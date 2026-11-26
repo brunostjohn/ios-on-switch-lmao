@@ -7,7 +7,8 @@ import Metal
 extension GPURates {
     static let probesOff: [(String, UInt32)] = [
         ("switchMetalProbeNvn:", 0), ("switchMetalProbeZcullCriterion:", 0), ("switchMetalProbeMs4Cbr:", 0),
-        ("switchMetalProbeSectorPromotion:", 0), ("switchMetalProbePlainPrivate:", 0),
+        ("switchMetalProbeSectorPromotion:", 0), ("switchMetalProbePlainPrivate:", 0), ("switchMetalProbeDirectPa:", 0),
+        ("switchMetalProbeZcullKeep:", 0),
     ]
 
     /// The probe's answer after setting it to `value`; nil where the device has no such probe
@@ -18,6 +19,7 @@ extension GPURates {
         return object.perform(selector, with: NSNumber(value: value))?.takeUnretainedValue() as? String ?? ""
     }
 
+    @discardableResult
     func ask(_ object: AnyObject, _ name: String, _ argument: Any? = nil) -> String? {
         let selector = NSSelectorFromString(name)
         guard let object = object as? NSObject, object.responds(to: selector) else { return nil }

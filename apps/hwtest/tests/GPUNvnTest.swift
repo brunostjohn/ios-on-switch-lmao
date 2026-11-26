@@ -17,7 +17,8 @@ struct GPUNvnTest: HWTest {
 
     /// The arms whose wrong pixels with the probe off are the driver's own fault
     static let judged = [
-        "zcull_bounds_hidden_off_wrong", "stencil_zcull_off_wrong", "zcull_4x2_off_wrong", "zcull_fp_off_wrong",
+        "zcull_bounds_hidden_off_wrong", "stencil_zcull_off_wrong", "zcull_fp_off_wrong",
+        "zcull_always_off_culled_px", "zcull_not_equal_off_culled_px", "zcull_rule_control_off_culled_px",
     ]
 
     func run(_ context: TestContext) async throws -> Outcome {

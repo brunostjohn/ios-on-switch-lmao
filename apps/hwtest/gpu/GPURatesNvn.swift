@@ -6,25 +6,22 @@ import Metal
 /// learn/deko3d.md). Each arm times the same work with the probe off (`_off`) and on (`_on`) and reports, per run, how
 /// far the counters its probe moves grew (`_<counter>`). An on arm whose probe exists and moved nothing is a problem:
 /// its time would be the off arm's. Where the state could change pixels, it also counts the pixels that differ from the
-/// expected ones (`_wrong`). An arm that throws records `<arm>_error`, every probe goes off and the next arm runs; the
-/// arms likeliest to upset the channel (Z_4X2, discard) run last.
+/// expected ones (`_wrong`). An arm that throws records `<arm>_error`, every probe goes off and the next arm runs. The
+/// arms that push state this driver never pushed on the chip before (Z_4X2, discard) are gpu.perf.first_touch's
+/// (GPURatesFirstTouch.swift), which runs after every other test.
 /// - zcull_bounds: a program writes a depth farther than its triangle's, then 16 layers of a 64-FMA program sit between
 ///   the two depths and must be drawn. A second form has the written depth nearer, which hides the layers. Off, the
 ///   program invalidates the region (`_zcull_invalidations`); on, it opens zcull's bounds instead
 ///   (`_nvn_bounds_opened`).
 /// - stencil_zcull: 16 layers whose stencil test fails everywhere, under SET_ZCULL with stencil on and NVN's NOTEQUAL
 ///   criterion, the criterion set for the on arm only.
-/// - zcull_fp, zcull_4x2: the hidden-layer pass of gpu.perf.rates under ZFORMAT FP for its clear of 1.0, and under the
-///   Z_4X2 region format. The region's subregion aliquots stay sized as NIL sizes them for Z_4X4 (zcull.h zcullRegion),
-///   so a change under Z_4X2 may be that sizing rather than the format.
-/// - discard: a loaded target stored DontCare, redrawn whole, the fastest of several runs that each follow a fill of
-///   their own. `discard_<state>_kept_px` counts pixels that still hold the texels from before the pass. More than 0
-///   means the write-back was skipped.
+/// - zcull_fp: the hidden-layer pass of gpu.perf.rates under ZFORMAT FP for its clear of 1.0.
 /// - cbr: a 4x BGRA8 and a 4x RGBA16F target on NVN's 2CBR kinds against 2CRA, filled and resolved, the probe held
 ///   through the arm. The resolved pixels must be equal; `_kind` and `_comptags` are the target's.
 /// - tiled_flush: a pass whose target the next pass reads, both arms under pass=pixel switch=nowfi, the on arm without
 ///   the tiled-cache flush at a pass end (switch=nowfi_noflush). `_flushes` counts the passes that ended without it;
 ///   `_wrong` counts pixels against today's barriers.
+/// - zcull_always, zcull_not_equal, zcull_rule_control: GPURatesZcullRules.swift.
 extension GPURates {
     public static func nvn(
         _ gpu: GPU, _ s: Sizes = .device, settleCompression: (() async throws -> Void)? = nil
@@ -40,8 +37,7 @@ extension GPURates {
         await b.isolated("zcull_fp") { try await b.zcullFormat("zcull_fp", Self.nvnZcullFp) }
         await b.isolated("cbr") { try await b.cbr() }
         await b.isolated("tiled_flush") { try await b.tiledFlush() }
-        await b.isolated("zcull_4x2") { try await b.zcullFormat("zcull_4x2", Self.nvnZcull4x2) }
-        await b.isolated("discard") { try await b.discard() }
+        await b.isolated("zcull_rules") { try await b.zcullRules() }
         var r = SceneResult()
         r.metrics = b.metrics
         r.notes = notes
@@ -59,24 +55,26 @@ extension GPURates {
     /// counters that must not grow with the probe on, and with it off too where `heldOff`
     func ab(
         _ arm: String, bits: UInt32, proof: String, held: [String] = [], heldOff: Bool = true, criterion: UInt32 = 0,
-        read: MTLTexture? = nil, want: [UInt8]? = nil, _ encode: (MTLCommandBuffer) throws -> Void
+        read: MTLTexture? = nil, want: [UInt8]? = nil, culled: [UInt8]? = nil,
+        probeName: String = "switchMetalProbeNvn:", _ encode: (MTLCommandBuffer) throws -> Void
     ) async throws {
-        let probed = has("switchMetalProbeNvn:")
+        let probed = has(probeName)
         for (state, on) in [("off", false), ("on", true)] {
-            probe("switchMetalProbeNvn:", on ? bits : 0)
+            probe(probeName, on ? bits : 0)
             if criterion != 0 { probe("switchMetalProbeZcullCriterion:", on ? criterion : 0) }
             var t = 0.0
             let grew = try await grown([proof] + held) { t = try await fastest("\(arm)_\(state)", encode) }
-            probe("switchMetalProbeNvn:", 0)
+            probe(probeName, 0)
             probe("switchMetalProbeZcullCriterion:", 0)
             metrics.set("\(arm)_\(state)_us", t * 1000, digits: 1)
             proved("\(arm)_\(state)", grew, proof, checked: on && probed)
             for key in held where probed && (on || heldOff) && (grew[key] ?? 0) > 0 {
                 problems.append("\(arm)_\(state): \(key) grew, so zcull was off for some of its draws")
             }
-            if let read, let want {
+            if let read, want != nil || culled != nil {
                 let got = try await gpu.read(read, bytesPerPixel: 4)
-                metrics.set("\(arm)_\(state)_wrong", zip(got, want).filter { $0 != $1 }.count / 4)
+                if let want { metrics.set("\(arm)_\(state)_wrong", zip(got, want).filter { $0 != $1 }.count / 4) }
+                if let culled { metrics.set("\(arm)_\(state)_culled_px", Self.pixelsEqual(got, culled)) }
             }
         }
     }
@@ -87,6 +85,13 @@ extension GPURates {
         if checked && (grew[proof] ?? 0) <= 0 {
             problems.append("\(arm): its probe never fired (\(proof) did not grow)")
         }
+    }
+
+    /// The pixels of `got` (BGRA8) equal to `want`'s
+    static func pixelsEqual(_ got: [UInt8], _ want: [UInt8]) -> Int {
+        stride(from: 0, to: min(got.count, want.count), by: 4).filter { i in
+            got[i] == want[i] && got[i + 1] == want[i + 1] && got[i + 2] == want[i + 2] && got[i + 3] == want[i + 3]
+        }.count
     }
 
     func expected(_ rgba: SIMD4<Float>) -> [UInt8] {
@@ -132,7 +137,7 @@ extension GPURates {
             if form == "seen" {
                 let got = try await gpu.read(colour, bytesPerPixel: 4)
                 let still = expected(SIMD4(0, 0, 1, 1))
-                metrics.set("zcull_bounds_seen_culled_px", zip(got, still).filter { $0 == $1 }.count / 4)
+                metrics.set("zcull_bounds_seen_culled_px", Self.pixelsEqual(got, still))
             }
         }
     }

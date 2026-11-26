@@ -1058,6 +1058,7 @@ swift_library(
         ":core",
         ":gpu",
         ":gpu_models",
+        ":gpu_scenes",
         ":kit",
         ":kit_common",
         ":kit_shared",

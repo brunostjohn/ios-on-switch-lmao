@@ -5,7 +5,8 @@ import Metal
 /// gpu.perf.knobs: two fixed-function settings A/B'd through the facade's probes.
 ///
 /// - SET_SUBTILING_PERF_KNOB_A: our 0x20164010 (NVK's desktop value, GM20B's golden one) against uam's 0x087F6080 and
-///   0x20806080 (3 or more colour outputs) and its commented-out 0x06164010. Each runs on a fragment-heavy draw into one
+///   0x20806080 (3 or more colour outputs); its commented-out 0x06164010 is gpu.perf.first_touch's. Each runs on a
+///   fragment-heavy draw into one
 ///   target, into four, with a program-written depth, and on a plain fill. The `_us_768` fields scale a time by
 ///   `lane_mhz` / 768, which holds for these clock-bound draws. `subtile_<knob>_writes_per_pass` is 1 where every pass
 ///   wrote the knob. The channel keeps the last knob a pass wrote, so a pass of its own writes the golden one back after
@@ -15,7 +16,8 @@ import Metal
 ///   clock, so they keep their measured times. `promo_<mode>_header` is the field the image's header held after its
 ///   arms (TIC bits 156:155).
 ///
-/// An arm that throws records `<arm>_error` and the arms after it still run; 0x06164010 runs last.
+/// An arm that throws records `<arm>_error` and the arms after it still run. uam's commented-out 0x06164010 has never run
+/// on the chip: it is gpu.perf.first_touch's (GPURatesFirstTouch.swift), which runs after every other test.
 extension GPURates {
     static let knobValues: [UInt32] = [0x2016_4010, 0x087F_6080, 0x2080_6080]
     static let lastKnob: UInt32 = 0x0616_4010
@@ -46,7 +48,6 @@ extension GPURates {
             notes.append("no promotion arms beside none: the device has no switchMetalProbeSectorPromotion: probe")
         }
         await b.isolated("promo") { try await b.promotion(promotions) }
-        if knobbed { await b.knobArms(lastKnob, kit) }
         var r = SceneResult()
         r.metrics = b.metrics
         r.notes = notes
