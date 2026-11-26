@@ -77,6 +77,10 @@ TEST(XnuFvariantSource, TheLookupReadsTheMainHeaderAndClassifiesIt)
         Find(lookup, "copyin((user_addr_t)(sr->sr_base_address + sr->sr_first_mapping), header, sizeof(header))");
     const size_t classify = Find(lookup, "switch_fvariant_classify(header, SWITCH_FVARIANT_CACHES,", read);
     EXPECT_LT(read, classify);
+    // What it returns is what the classifier picked: NULL only for a cache with no pinned slots.
+    EXPECT_NE(lookup.find("&cache)) {", classify), std::string::npos);
+    EXPECT_NE(lookup.find("\n    return cache;", classify), std::string::npos);
+    EXPECT_EQ(lookup.find("return NULL;", classify), std::string::npos);
     EXPECT_NE(lookup.find("os_log_error(", classify), std::string::npos) << "an unpinned cache logs in release too";
 
     const std::string region = SourceText("../xnu-12377.121.6/osfmk/vm/vm_shared_region.c");
