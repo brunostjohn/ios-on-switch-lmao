@@ -432,6 +432,7 @@ enum tgm_wait_source {
 	TGM_WAITS_VICTIM,  /* a word the kernel releases (a bind epoch) or a host1x syncpoint */
 	TGM_WAITS_UNKNOWN, /* an acquire on an address only its own pushes name */
 	TGM_WAITS_UNREAD, /* parked on an acquire RAMFC does not name yet (the PBDMA still holds it): a victim */
+	TGM_WAITS_FAILED, /* a word whose producer stopped (switch_gpu_pack_failed_word): its waiter's work fails */
 };
 enum tgm_wait_source tgm_chan_wait_source(struct tgm_chan *chan, struct tgm_chan **source,
 					  char *what, unsigned int len);

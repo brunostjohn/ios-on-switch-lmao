@@ -5976,11 +5976,34 @@ switch_bootstrap_environment(struct image_params *imgp, int pointer_size)
 }
 
 static const char *const native_switch_bluetoothd_environment[] = {
-	"BT_HCI_TRANSPORT=H4BC:POSIX:com.apple.uart.bluetooth,3000000", NULL
+	"BT_HCI_TRANSPORT=H4BC:POSIX:com.apple.uart.bluetooth,3000000", "CA_DISABLE_GENERIC_SHADERS=1", NULL
 };
 static const char *const native_switch_backboardd_environment[] = {
 	"CA_DISABLE_DETACHED=1", "CA_DISABLE_GENERIC_SHADERS=1", NULL
 };
+/*
+ * Every process that renders Core Animation draws its specialised states, never the catch-all Core Animation draws while
+ * one builds (21H461's CA::OGL::MetalContext::draw reads CA_DISABLE_GENERIC_SHADERS, debug option 85 that init_debug
+ * takes from getenv): each state comes from the pack, which holds the closed set, and one the pack lacks is named
+ * (TegraGM20BMetalStatesMiss.mm).
+ */
+static const char *const native_switch_ca_environment[] = {
+	"CA_DISABLE_GENERIC_SHADERS=1", NULL
+};
+/* Whether the environment strings [env, end) already name `entry`'s variable: a process that passes its own environ on
+ * (a shell) keeps one copy, the first, which getenv reads */
+static bool
+native_switch_environment_holds(const char *env, const char *end, const char *entry)
+{
+	const char *equals = strchr(entry, '=');
+	const size_t name = equals ? (size_t)(equals - entry) + 1 : strlen(entry);
+	for (const char *s = env; s < end; s += strlen(s) + 1) {
+		if (strncmp(s, entry, name) == 0) {
+			return true;
+		}
+	}
+	return false;
+}
 
 /* The extra environment strings for imgp's executable, NULL-terminated, or NULL for none. */
 static const char *const *
@@ -6002,7 +6025,7 @@ native_switch_exec_environment(const struct image_params *imgp)
 		}
 		return native_switch_backboardd_environment + 1;
 	}
-	return NULL;
+	return native_switch_ca_environment;
 }
 
 /*
@@ -6239,6 +6262,9 @@ exec_extract_strings(struct image_params *imgp)
 	/* Switch: a chosen daemon's extra environment (native_switch_exec_environment). */
 	const char *const *native_environment = native_switch_exec_environment(imgp);
 	for (; native_environment && *native_environment; native_environment++) {
+		if (native_switch_environment_holds(imgp->ip_endargv, imgp->ip_strendp, *native_environment)) {
+			continue;
+		}
 		error = exec_add_user_string(imgp, CAST_USER_ADDR_T(*native_environment), UIO_SYSSPACE, TRUE);
 		if (error) {
 			goto bad;
@@ -9117,6 +9143,11 @@ load_init_program(proc_t p)
 	/* Owner overlay unions over sealed directories (SwitchRawMount.h), now that Data is mounted. */
 	native_switch_raw_overlay(p, (user_addr_t)scratch_addr);
 	switch_boot_steps_mark(&steps, "overlay");
+	/* pack.bin is reachable from here (drivers/TegraGM20B/SwitchGpuPackImage.cpp) */
+	extern void switch_gpu_pack_volumes_mounted(void) __attribute__((weak));
+	if (switch_gpu_pack_volumes_mounted != NULL) {
+		switch_gpu_pack_volumes_mounted();
+	}
 	switch_bootstrap_capture();
 	switch_boot_steps_mark(&steps, "bootstrap");
 #endif

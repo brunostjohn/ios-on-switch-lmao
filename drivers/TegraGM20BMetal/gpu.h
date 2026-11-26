@@ -229,6 +229,9 @@ public:
     std::vector<std::pair<std::string, Pipeline *>> variantPipelines(uint64_t keyHash, bool caTransform);
     std::vector<std::pair<std::string, Pipeline *>> variantPipelines(const PackRun &run, bool caTransform);
     Pipeline *variantPipeline(const PackRun &run, const std::string &name, bool caTransform);
+    // The same of a tier-0 state, placed as a tier-0 hit is (no lock, no page read), or nullptr: its record is not in tier
+    // 0, takes the device lock to place, or has a storage form's twin (variantPipeline places those)
+    Pipeline *variantPipelineLockFree(const PackRun &run, const std::string &name, bool caTransform);
     // A state the runtime made a record of (record.h), drawn from then on as the pack's are; null: its programs find no room
     // in the heap or its samplers none in the header pool (`why`)
     Pipeline *addRecord(const RuntimeRecord &r, bool caTransform, std::string &why, bool *retry = nullptr);
@@ -1707,6 +1710,7 @@ private:
     }
 
     bool slmNeed(uint64_t perWarp);
+    uint64_t programSlm(const PlacedProgram &p) const;
     bool initPackWindow(std::string &err);
     bool place(uint32_t prog, uint32_t &program, uint64_t &data);
     bool heapGrow(uint64_t end);
@@ -1728,6 +1732,8 @@ private:
     // lock_ + placeRecord otherwise.
     Pipeline *placePackedRecord(const PackPipeline &pp, bool caTransform);
     std::unique_ptr<Pipeline> tryBuildTier0LockFree(const PackPipeline &pp, uint32_t recIndex, bool caTransform);
+    // Tier-0 record `idx`'s pipeline: the slot's, or `built` published in it
+    Pipeline *publishTier0(uint32_t idx, std::unique_ptr<Pipeline> built);
     // lock_ held: pack record `pp` placed (its programs in the heap) and built, once; null where the heap has no room
     Pipeline *placeRecord(const PackPipeline &pp, bool caTransform);
     // `pl`'s split offered, its twin made when a draw first takes it (makeSplit)
@@ -1735,13 +1741,13 @@ private:
     void offerVariants(Pipeline &pl, const PackPipeline &pp, uint32_t recIndex);
     bool offerVariantsLockFree(Pipeline &pl, const PackPipeline &pp, uint32_t recIndex);
     bool placeRequiredVariants(const PackPipeline &pp, uint64_t &slm);
-    Pipeline *placeVariant(Pipeline &pl, VariantTable &t, const std::array<uint32_t, 2> &programs, uint32_t recIndex,
-                           uint32_t comboIndex);
-    // A pipeline of `t` (VariantTable::pipelines) of `pl`'s programs `placed`: the set reads of each stage `variant` names
-    // added, `pl`'s restore and stride twin
+    Pipeline *placeVariant(Pipeline &pl, VariantTable &t, const std::array<uint32_t, 2> &programs, uint32_t setReads,
+                           uint32_t recIndex, uint32_t comboIndex);
+    // A pipeline of `t` (VariantTable::pipelines) of `pl`'s programs `placed`: `setReads` (the pack's PackVariant reads)
+    // added, or for a runtime table the set reads of each stage `variant` names; `pl`'s restore and stride twin
     Pipeline &buildCombination(VariantTable &t, const Pipeline &pl, const PackPipeline &pp,
-                               const PlacedProgram (&placed)[2], const bool (&variant)[2], const uint32_t *blob,
-                               const char *keyString, const uint32_t *spills, const uint32_t *far,
+                               const PlacedProgram (&placed)[2], const bool (&variant)[2], uint32_t setReads,
+                               const uint32_t *blob, const char *keyString, const uint32_t *spills, const uint32_t *far,
                                const PackSegment *prebuilt);
     bool placePackProgram(uint32_t index, PlacedProgram &out);
     bool placePackWindowProgram(uint32_t index, PlacedProgram &out);

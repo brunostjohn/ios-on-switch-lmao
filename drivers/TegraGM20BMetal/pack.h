@@ -39,7 +39,7 @@ enum PackSectionId {
     PackSectionCount
 };
 
-constexpr uint32_t kPackVersion = 35;
+constexpr uint32_t kPackVersion = 37;
 
 // What a record or a program variant (PackVariant) assumes, as bits of a mask: a draw takes a variant only where all of them
 // hold. Bits 0-15 are facts of the draw's bindings, bit 16 of its pipeline, bit 26 of its pass, bits 17-25 of the chip
@@ -90,8 +90,8 @@ struct PackHeader {
     uint32_t chipFacts;
     uint32_t tier0SlmPerWarp;          // v34: max slmPerWarpOfHeader across tier-0 graphics programs
     uint64_t tier0[PackSectionCount];  // v33
-    // v35: what the rules a device-made record is made by (PackRules::of) are, named by the pack's writer
-    // (packfile.py rules_identity); the shader compiler names its store by it
+    // v37: the identity of the rules a device-made record is made by (PackRules::of), which the pack's writer names
+    // (packfile.py rules_identity) and the shader compiler names its store by
     uint8_t rules[16];
 };
 
@@ -126,11 +126,20 @@ struct PackProgram {
     // v27. Its uniform buffers past set-0 byte 496 (cbufType CbufUbo, bits 3-7 zero): the blob section's dword + 1 of its far
     // table, kProgramCbufs uint16_t of each slot's set-0 byte / 16 (0: none); 0: it has none (programFarUbos)
     uint8_t farUbos[3];
-    uint32_t facts;  // v33. PackProgramFact bits, found in its code when it was made
+    uint32_t facts;  // v33. PackProgramFact bits, found in its code (v35: and its header) when it was made
 };
 
+// v35: the header bits a state's creation needs are facts of the program record, so no creation reads a program's slot
+// out of the pack's heap pages, which no process keeps resident (record_parts.cpp programFacts)
 enum PackProgramFact : uint32_t {
     kProgramWritesMemory = 1u << 0,  // its code stores to memory (program_stores.h programWritesMemory)
+    kProgramGlobalStore = 1u << 1,   // SPH DOES_GLOBAL_STORE
+    kProgramWritesViewportIndex = 1u << 2,
+    kProgramWritesLayer = 1u << 3,
+    kProgramPrimitiveId = 1u << 4,       // SPH IMAP_PRIMITIVE_ID
+    kProgramKillsPixels = 1u << 5,       // SPH KILLS_PIXELS
+    kProgramWritesDepth = 1u << 6,       // SPH OMAP_DEPTH
+    kProgramWritesSampleMask = 1u << 7,  // SPH OMAP_SAMPLE_MASK
 };
 
 // One of a stage's programs compiled under assumptions about its draws (PackAssumption). A stage's variants are tried in order
@@ -140,6 +149,8 @@ enum PackProgramFact : uint32_t {
 struct PackVariant {
     uint32_t assume;
     uint32_t program;
+    // v35: the record's first 32 set-0 entries this program reads from the set's upload (set_reads.h placedSetReads)
+    uint32_t memoryEntries;
 };
 
 // A binary archive the IPSW's frameworks ship that declares states for the identity's GPU (pack/archives.py), so a creation
@@ -220,7 +231,9 @@ struct PackFastKey {
 
 // Pre-built GM20B state segment living inside tier 0 of PackHeap at TGM_PACK_WINDOW_VA + heapOffset (v34).
 // PackSegments layout: PackSegmentTable, PackSegment base[pipelineCount], uint32_t variantBase[pipelineCount]
-// (~0u: no variant table), PackSegment variantCombos[variantComboCount].
+// (~0u: no variant table), PackSegment variantCombos[variantComboCount]. v35: every segment's words lie in one block of
+// PackHeap, [wordsOffset, wordsOffset + wordsBytes), which the render server wires with the pack's tier-0 tables
+// (pack_window.h), so the CPU reads a segment's words (a copied bind, the zcull check) without an SD page-in.
 enum PackSegmentFlag : uint16_t {
     kPackSegmentKeptAcrossPasses = 1u << 0,
     kPackSegmentReselectRoot = 1u << 1,
@@ -238,6 +251,7 @@ struct PackSegment {
 struct PackSegmentTable {
     uint32_t pipelineCount;
     uint32_t variantComboCount;
+    uint32_t wordsOffset, wordsBytes;  // v35
 };
 
 // The bytes of a uniform buffer entry a pipeline's programs read: from its bind offset, in 16-byte units
@@ -450,6 +464,9 @@ struct PackHeapArray {
 };
 
 constexpr uint32_t kPackHeapArrays = 8;
+// PackPipeline::guestBaseWord's length, and the fragment stage's bit in guestBaseSlot
+constexpr uint32_t kPackGuestBases = 4;
+constexpr uint8_t kGuestBaseFragment = 0x80;
 // Every heap array's elements: the texture header pool's (Device kTicCount), which the sampler header pool's fits
 constexpr uint32_t kPackHeapElements = 8192;
 
@@ -547,6 +564,11 @@ struct PackPipeline {
     // blob section from restoreAt
     uint16_t restoreDwords;
     uint32_t restoreAt;
+    // v36. m2v's SlotGuestBase fields (pipeline.h Pipeline::GuestBase): a buffer slot whose Metal address its programs read
+    // (a pointer compare, ptrtoint or a stored pointer), as the push word + 1 each draw writes that address to (0: no more)
+    // and the slot's Metal buffer index, kGuestBaseFragment set for the fragment stage's. A set*Bytes binding's address is
+    // its upload copy's.
+    uint8_t guestBaseWord[kPackGuestBases], guestBaseSlot[kPackGuestBases];
 };
 
 // PackPipeline::arrayLengthWord of a record of one layer whose vertex function chooses its slice
@@ -766,8 +788,8 @@ struct InitAddresses {
 
 uint32_t relocated(const PackInitMethod &m, const InitAddresses &a);
 static_assert(sizeof(PackShaderTests) == 16, "shader test layout");
-static_assert(sizeof(PackPipeline) ==
-                  40 + kPackEntries * 8 + 4 + 32 * 4 + 4 + 36 + 16 + 56 + 4 + 92 + 32 + 2 * kWrittenSlots + 4 + 24,
+static_assert(sizeof(PackPipeline) == 40 + kPackEntries * 8 + 4 + 32 * 4 + 4 + 36 + 16 + 56 + 4 + 92 + 32 +
+                                          2 * kWrittenSlots + 4 + 24 + 2 * kPackGuestBases,
               "pack layout");
 static_assert(offsetof(PackPipeline, storageBlendMask) == 490 && offsetof(PackPipeline, fetchRung) == 528,
               "pack layout: packfile.py PIPELINE_V15");
@@ -782,16 +804,18 @@ static_assert(offsetof(PackPipeline, writtenFormat) == 668 && offsetof(PackPipel
 static_assert(offsetof(PackPipeline, tessPrograms) == 704 && offsetof(PackPipeline, strideTwin) == 712 &&
                   offsetof(PackPipeline, restoreAt) == 724,
               "pack layout: packfile.py PIPELINE_V24");
+static_assert(offsetof(PackPipeline, guestBaseWord) == 728 && offsetof(PackPipeline, guestBaseSlot) == 732,
+              "pack layout: packfile.py PIPELINE_V36");
 static_assert(offsetof(PackPipeline, entriesHigh) == 31 && offsetof(PackPipeline, farEntriesAt) == 557 &&
                   offsetof(PackPipeline, spillEntryHigh) == 702,
               "pack layout: packfile.py PIPELINE_V27");
 static_assert(sizeof(PackProgram) == 48 && offsetof(PackProgram, farUbos) == 41, "pack layout");
-static_assert(sizeof(PackVariant) == 8, "pack layout");
+static_assert(sizeof(PackVariant) == 12, "pack layout: packfile.py VARIANT_STRUCT");
 static_assert(sizeof(PackArchive) == 16, "pack layout");
 static_assert(sizeof(PackComputeFacts) == 24, "pack layout: packfile.py compute_facts_bytes");
 static_assert(sizeof(PackReflection) == 16, "pack layout: packfile.py reflection_bytes");
 static_assert(sizeof(PackFastKey) == 16, "pack layout: packfile.py fast_key_bytes");
-static_assert(sizeof(PackSegment) == 8 && sizeof(PackSegmentTable) == 8, "pack layout: packfile.py segments");
+static_assert(sizeof(PackSegment) == 8 && sizeof(PackSegmentTable) == 16, "pack layout: segments.py _SEGMENT_TABLE");
 static_assert(sizeof(PackHeader) == 24 + 16 * PackSectionCount + 16 + 8 * PackSectionCount + 16,
               "pack layout: packfile.py pack_bytes header_size");
 static_assert(sizeof(PackKernel) == 18 + 256 + 14 + 128 + 8 * kKernelEntries + 84 + 12, "pack layout");
@@ -814,6 +838,12 @@ public:
     const PackHeader *header() const
     {
         return hdr_;
+    }
+
+    // The mapping's bytes: the whole file
+    size_t size() const
+    {
+        return size_;
     }
 
     template <class T> const T *section(PackSectionId s) const
@@ -867,6 +897,8 @@ public:
     const uint8_t *reflection(uint64_t keyHash, bool compute, uint32_t &length) const;
     const PackSegment *pipelineSegment(uint32_t recIndex) const;
     const PackSegment *variantSegment(uint32_t recIndex, uint32_t comboIndex) const;
+    // The PackHeap block every segment's words lie in; false: the pack has no segments
+    bool segmentWords(uint32_t &heapOffset, uint32_t &bytes) const;
 
     const char *string(uint32_t off) const
     {

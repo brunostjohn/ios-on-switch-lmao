@@ -29,9 +29,12 @@ MAGIC = b'GM20BPK1'
 # blob section); 28: the selector section (PackSelectors), a state's shader-side stencil push word (shadow_stencil_word)
 # 31: the selector section gone; 32: the fast keys section (PackFastKeys); 33: two tiers (the header's tier0 table, each
 # section's tier 0 first, a stride twin as its record's index + 1), programs' facts (PackProgram.facts); 34: pre-built
-# tier-0 state segments in tier 0 of PackHeap (PackSegments) and tier0SlmPerWarp in PackHeader; 35: the rules' identity
-# (rules_identity) after the tier-0 table
-VERSION = 35
+# tier-0 state segments in tier 0 of PackHeap (PackSegments) and tier0SlmPerWarp in PackHeader; 35: programs' header
+# facts (PackProgram.facts), a variant's set-0 memory reads (PackVariant.memoryEntries), the segments' words block
+# (PackSegmentTable); 36: a record's buffers' Metal address words (PIPELINE_V36); 37: the rules' identity, 16 bytes
+# after the tier-0 table (rules_identity), and a segment's blend kill
+# (segments.FLAG_BLEND_KILL)
+VERSION = 37
 SECTIONS = 17  # runtime/pack.h PackSectionCount
 ENTRY_COMPARES = 1  # runtime/pack.h kEntryCompares: a handle's sampler slot the state samples by comparison
 ENTRY_ARRAY_VIEW = 2  # runtime/pack.h kEntryArrayView: a handle bound as a 2D-array view (m2v cube_as_array)
@@ -69,6 +72,10 @@ PIPELINE_V22 = struct.Struct(f'<{WRITTEN_SLOTS}HH2x')
 # PackPipeline's record-v24 tail: tessPrograms[2], strideTwin, amplificationLayerWord, amplificationViewportWord,
 # restoreDwords, restoreAt
 PIPELINE_V24 = struct.Struct('<2IQBBHI')
+# PackPipeline's record-v36 tail: guestBaseWord[4], guestBaseSlot[4] (m2v's SlotGuestBase fields)
+GUEST_BASES = 4  # runtime/pack.h kPackGuestBases
+GUEST_BASE_FRAGMENT = 0x80  # runtime/pack.h kGuestBaseFragment
+PIPELINE_V36 = struct.Struct(f'<{GUEST_BASES}s{GUEST_BASES}s')
 NO_UNIFORM = b'\xff\x00\x00\x00' * 8
 
 
@@ -114,7 +121,7 @@ PIPE_HEAD = struct.Struct('<QIIIIIBBBBHHI')
 PIPE_DYNAMIC = struct.Struct('<HH')
 PIPE_STORAGE = struct.Struct('<BBBB8I')
 PIPE_TESTS = struct.Struct('<BBBBIII')
-VARIANT_STRUCT = struct.Struct('<II')
+VARIANT_STRUCT = struct.Struct('<III')
 FAST_KEY_STRUCT = struct.Struct('<QII')
 SPILL_HIGH_STRUCT = struct.Struct('<H')
 PROG_RECORD = struct.Struct('<IIIIIB18sBB3sI')
@@ -381,6 +388,7 @@ def pipeline_bytes(
         + v21_tail(rec)
         + v22_tail(rec)
         + v24_tail(rec, restore_at=restore_at, stride_twin=stride_twin)
+        + v36_tail(rec)
     )
     return head + entries + push_bytes(rec['push']) + dynamic + storage + tests + tails
 
@@ -449,6 +457,11 @@ def v24_tail(rec: dict, *, restore_at: int | None = None, stride_twin: int | Non
         2 * len(restore) if restore else 0,
         (rec.get('restore_at', 0) if restore_at is None else restore_at) if restore else 0,
     )
+
+
+def v36_tail(rec: dict) -> bytes:
+    """Give a record's PIPELINE_V36 tail: the push words each draw writes a buffer slot's Metal address to, and the slots."""
+    return PIPELINE_V36.pack(bytes(rec.get('guest_base_word', ())), bytes(rec.get('guest_base_slot', ())))
 
 
 def kernel_window(e: dict) -> int:
@@ -727,13 +740,13 @@ def pipeline_sections(
             for m, v in pairs:
                 blob.append(m)
                 blob.append(v)
-        variants_off = len(variant_bin) >> 3
+        variants_off = len(variant_bin) // VARIANT_STRUCT.size
         variants = rec.get('variants')
         if variants:
             if len(variants) > 1:
                 variants = sorted(variants, key=lambda v: v['stage'])
             for v in variants:
-                variant_bin += pack_variant(v['assume'], v['program'])
+                variant_bin += pack_variant(v['assume'], v['program'], v.get('memory', ALL_ENTRIES))
         # the key's attachment and vertex fields (what the runtime reads of it: gpu.cpp Device::pipeline), not the
         # functions' constants (some 1.5 KB a fixed-function state; pack.json has the whole key)
         key = rec['key']

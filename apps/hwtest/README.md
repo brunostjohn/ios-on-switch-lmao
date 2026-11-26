@@ -77,8 +77,10 @@ under `Documents/gpu/<id>/`.
 pack's corpus (`ca_states.log`, cut from `precompile/corpus.log` at build time). It compares each attachment with that
 state as the same IPSW's QuartzCore draws it on a Mac (`goldens/ca_<build>.txt`). The comparison is the 8x8 block means
 of every channel, which another GPU's filtering and rounding move by a step or two and a wrong blend, format or texture
-moves by far more. `bazel run --config=remote //apps/hwtest:ca_goldens` (again with `--config=ios27`) redraws the
-reference after a harvest adds states; until then a new state counts as `no_golden`. Every state's verdict goes to
+moves by far more. `//apps/hwtest:ca_goldens` redraws the reference after a harvest adds states (the steps are in
+BUILD.bazel); until then a new state counts as `no_golden`. It draws only on the build hosts' M4 GPUs
+(`CAGoldens.referenceGPU`), since an M1 moves a third of the states by a code, and the sweep fails on a reference that
+names another GPU. Every state's verdict goes to
 `Documents/gpu/gpu.ca.sweep/states.txt`, with PNGs or raw bytes of the wrong ones. Set `HWTEST_SWEEP_ALL=1` in the app's
 environment to draw every corpus state instead of one per class.
 

@@ -403,8 +403,8 @@ py_test(
     ],
 )
 
-# gpu.ca.sweep's reference for the build's IPSW: the corpus states drawn on a Mac's GPU with that IPSW's QuartzCore
-# (core/CAGoldens.swift), written into goldens/ by `bazel run --config=remote //apps/hwtest:ca_goldens` (and with --config=ios27).
+# gpu.ca.sweep's reference for the build's IPSW: the corpus states drawn on CA_GOLDENS_GPU with that IPSW's QuartzCore
+# (core/CAGoldens.swift), by :ca_goldens below.
 genrule(
     name = "ca_goldens_txt",
     srcs = select({
@@ -425,8 +425,16 @@ apple_resource_group(
     ],
 )
 
-# Rewrites goldens/ca_<build>.txt: every corpus state drawn on this Mac's GPU with the selected IPSW's QuartzCore
-# (ca_goldens/CAGoldensWriter.swift). Run it after a harvest adds Core Animation states. Manual: it needs a Mac GPU.
+# The GPU every Core Animation golden is drawn on (CAGoldens.referenceGPU): Metal's name for it, which each build host's
+# worker advertises as the `gpu` property of its one-slot GPU runner (tools/remote/host/worker.jsonnet).
+CA_GOLDENS_GPU = "Apple M4"
+
+# Draws goldens/ca_<build>.txt: every corpus state drawn with the selected IPSW's QuartzCore
+# (ca_goldens/CAGoldensWriter.swift) into the test's outputs. Only its test action is pinned to CA_GOLDENS_GPU's
+# build hosts ("test.gpu"), and the writer draws nothing on any other GPU. After a harvest adds Core Animation states:
+#   bazel test --config=ios27 --remote_download_outputs=toplevel //apps/hwtest:ca_goldens
+#   cp bazel-testlogs/apps/hwtest/ca_goldens/test.outputs/ca_24B119.txt apps/hwtest/goldens/
+# and the same with --config=ios17 and ca_21H461.txt. Manual: it needs a Mac GPU.
 swift_test(
     name = "ca_goldens",
     size = "medium",
@@ -439,11 +447,13 @@ swift_test(
     env = select({
         "//ipsw:" + kind: {
             "CA_BUILD": kind,
+            "CA_GPU": CA_GOLDENS_GPU,
             "CA_LIBRARY": "$(rlocationpath @ipsw//:crawl_qc)",
             "CA_STATES": "$(rlocationpath :ca_states)",
         }
         for kind in ("21H461", "24B119")
     }),
+    exec_properties = {"test.gpu": CA_GOLDENS_GPU},
     tags = ["manual"],
     deps = [
         ":core",
@@ -975,6 +985,8 @@ host_test(
         "//drivers/TegraGM20BMetal:record_parts.h",
         "//drivers/TegraGM20BMetal:set_entries.h",
         "//drivers/TegraGM20BMetal:program_stores.h",
+        "//drivers/TegraGM20BMetal:program_facts.h",
+        "//drivers/TegraGM20BMetal:viewports.h",
         "//drivers/TegraGM20BMetal:set_reads.h",
         "//drivers/TegraGM20BMetal:spill_table.h",
     ],

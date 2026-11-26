@@ -54,7 +54,7 @@ public:
         bool resolveDescriptor = false;
         // the descriptor over this facade's own functions, which a compile request names (nil: none can)
         MTLRenderPipelineDescriptor *facade = nil;
-        uint32_t qos = 0;  // ask(): the asking thread's class, which the compiler runs it at
+        uint32_t qos = 0;  // the asking thread's class, which the compiler runs it at (askVariant: 0 for its own)
         bool waited = true;
         std::function<void(std::function<bool()>)> bindWait;
     };

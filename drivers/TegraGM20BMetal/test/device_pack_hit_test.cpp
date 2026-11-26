@@ -3,6 +3,7 @@
 // creation at both gm20b::Device and SwitchMetalDevice layers, exact GM20B method-stream equivalence vs dynamic builder,
 // tier-1 / runtime-compiled fallback cleanup, and 8-thread TSan concurrency stress.
 #include "facade_harness.h"
+#include "pack_fixture_image.h"
 #include "bazel/testing/fresh_process.h"
 #include "../blend_kill.h"
 #include "../creation_cost.h"
@@ -32,7 +33,7 @@
 
 namespace {
 
-constexpr const char *kFixturePath = "drivers/TegraGM20BMetal/test/pack_v34_fixture.bin";
+constexpr const char *kFixturePath = pack_fixture::kPath;
 
 constexpr const char *kPlainKey = "samples=1 topo=0 ds=0/0 c0=80:15:0:1:0:0:1:0:0  | v v  | f f";
 constexpr const char *kBlendInterlockKey = "samples=2 topo=0 ds=0/0 c0=80:15:1:4:5:0:4:5:0  | v blend_v  | f blend_f";
@@ -55,35 +56,8 @@ uint64_t hashKey(const char *key)
     return gm20b::Pack::fnv(key, std::strlen(key));
 }
 
-std::vector<uint8_t> readFileBytes(const char *path)
-{
-    std::ifstream in(path, std::ios::binary | std::ios::ate);
-    EXPECT_TRUE(in.is_open()) << path;
-    const std::streamsize size = in.tellg();
-    if (size <= 0)
-        return {};
-    in.seekg(0, std::ios::beg);
-    std::vector<uint8_t> bytes(static_cast<size_t>(size));
-    in.read(reinterpret_cast<char *>(bytes.data()), size);
-    return bytes;
-}
-
-void configurePackImageFromBytes(const std::vector<uint8_t> &file, bool enabled)
-{
-    kernel_model::model = {};
-    kernel_model::model.vaEnd = uint64_t(1) << 39;
-    if (!enabled)
-        return;
-    gm20b::PackHeader h = {};
-    std::memcpy(&h, file.data(), sizeof h);
-    kernel_model::model.packImage.enabled = true;
-    kernel_model::model.packImage.status = TegraGM20BPackStatusReady;
-    kernel_model::model.packImage.gpuVa = TGM_PACK_WINDOW_VA;
-    kernel_model::model.packImage.tier0HeapBytes = h.tier0[gm20b::PackHeap];
-    kernel_model::model.packImage.heapBytes = h.section[gm20b::PackHeap].bytes;
-    kernel_model::model.packImage.stack = h.stack;
-    kernel_model::model.packImage.hostData = file.data() + h.section[gm20b::PackHeap].offset;
-}
+using pack_fixture::configurePackImageFromBytes;
+using pack_fixture::readFileBytes;
 
 struct DecodedMethod {
     uint16_t subc;

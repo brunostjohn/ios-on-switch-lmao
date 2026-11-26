@@ -52,6 +52,7 @@ struct LayoutEntry {
 // What a state's reads through argument buffers take of a draw: PackPipeline's root-table and heap fields
 struct RecordHeap {
     uint8_t rootTableWord[2] = {}, statusWord[2] = {};
+    uint8_t guestBaseWord[kPackGuestBases] = {}, guestBaseSlot[kPackGuestBases] = {};
     uint32_t rootSlots[2] = {};
     uint8_t arrays = 0;
     uint32_t bytes = 0;
@@ -111,6 +112,8 @@ bool assembleRecord(const RecordParts &parts, const std::string &key, const Pack
 // The set-0 entries the record's final programs read: its two programs' (PackPipeline::memoryEntries), its variants'
 // and its split's (entryMaskWords of its entries)
 std::vector<uint32_t> recordSetReads(const RuntimeRecord &rec);
+// The record's first 32 set-0 entries `program`, one of its variants, reads from the set's upload (PackVariant::memoryEntries)
+uint32_t variantSetReads(const RuntimeRecord &rec, const CapturedProgram &program);
 // A fetch whose set-0 words none of the record's programs reads fetches nothing (the compiler removed every access):
 // it leaves the record with the colour's storage view and rung, and the record fetches only where another one stays.
 // Returns the colours dropped.

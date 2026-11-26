@@ -28,6 +28,7 @@ from tools.devicerun.memory import MEMORY
 from tools.devicerun.morning import MORNING
 from tools.devicerun.motion import MOTION
 from tools.devicerun.owed_all import GROUPS as OWED
+from tools.devicerun.pack_image import PACK_IMAGE
 from tools.devicerun.pretranslated import PRETRANSLATED
 from tools.devicerun.protection import PROTECTION
 from tools.devicerun.rules import REPORT, TIMELINE, Check
@@ -903,13 +904,37 @@ GROUPS: dict[str, list[Check]] = {
             'ca-closure',
             ' cag=',
             'max(cag) == 0',
-            process='backboardd',
+            process='!SwitchHWTest',
             subsystem=GPU_METAL_SUBSYSTEM,
             regex=r'\bgm20b \d+s c=\d+\(.*?\bcag=(?P<cag>\d+)',
-            show=('cag',),
+            show=('process', 'cag'),
             source='drivers/TegraGM20BMetal/TegraGM20BMetalRates.mm (debug builds)',
-            note='backboardd draws zero Core Animation catch-all shaders across the boot on iOS 27 '
-            '(CA_DISABLE_GENERIC_SHADERS=1 in xnu-12377 kern_exec.c; 21H461 keeps the generic)',
+            note='no process draws a Core Animation catch-all shader across the boot: both kernels pass '
+            'CA_DISABLE_GENERIC_SHADERS=1 to every executable (kern_exec.c native_switch_exec_environment). '
+            "SwitchHWTest's are its own: its Core Animation goldens build and draw the generic states from their "
+            'descriptors (apps/hwtest/gpu/CACorpus.swift, goldens/ca_24B119.txt)',
+        ),
+        Check(
+            'boot.ca-pack-covers-all',
+            'ca-closure',
+            (
+                'SwitchMetal: harvest ',
+                'SwitchMetal: in-process state the pack lacks ',
+                ' state the pack lacks ',
+            ),
+            process='!SwitchHWTest',
+            subsystem=GPU_METAL_SUBSYSTEM,
+            regex=(
+                r'^SwitchMetal: (?:harvest [0-9a-f]{16} 1/\d+ label='
+                r'|in-process state the pack lacks [0-9a-f]{16} \((?:record|refusal)\): label='
+                r'|\S+: a render (?:variant )?state the pack lacks [0-9a-f]{16} \()'
+                r'com\.apple\.coreanimation\.(?P<ca>[^\s)]+)'
+            ),
+            show=('process', 'ca'),
+            source='drivers/TegraGM20BMetal/TegraGM20BMetalStatesMiss.mm, TegraGM20BMetalComplete{,Remote}.mm (debug builds)',
+            note='a Core Animation state a process made that the pack lacks: with the catch-all off everywhere, '
+            "each one is made at its first draw; `logharvest` adds them to the corpus. SwitchHWTest's are its own "
+            'descriptors (CACorpus.swift), left out',
         ),
         Check(
             'boot.pack-pieces',
@@ -1569,6 +1594,7 @@ GROUPS: dict[str, list[Check]] = {
     'springboard': SPRINGBOARD,
     'boot-observations': OBSERVATIONS,
     **OWED,
+    'pack-image': PACK_IMAGE,
 }
 
 # The tools/frames lines, pulled with the checks' own query.

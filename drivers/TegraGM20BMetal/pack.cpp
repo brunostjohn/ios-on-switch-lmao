@@ -363,6 +363,16 @@ const PackSegment *Pack::pipelineSegment(uint32_t recIndex) const
     return base[recIndex].words ? &base[recIndex] : nullptr;
 }
 
+bool Pack::segmentWords(uint32_t &heapOffset, uint32_t &bytes) const
+{
+    PackSegmentTable tbl = {};
+    if (!segmentTableValid(*this, tbl) || !tbl.wordsBytes)
+        return false;
+    heapOffset = tbl.wordsOffset;
+    bytes = tbl.wordsBytes;
+    return true;
+}
+
 const PackSegment *Pack::variantSegment(uint32_t recIndex, uint32_t comboIndex) const
 {
     PackSegmentTable tbl = {};

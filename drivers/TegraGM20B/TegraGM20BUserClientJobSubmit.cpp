@@ -348,6 +348,17 @@ IOReturn AGXDeviceUserClient::runJobUses(const SwitchGpuJobRecord &record, JobSc
 	tgm_views_job_writes(job.written, writtenCount);
 	job.phases.end(TGM_SUBMIT_RESOLVE);
 	SwitchGpuEventJob *events = job.events;
+	// the job's event waits, then the pack image's word while the image streams in (its programs are read from the
+	// window, which fills as the stream lands)
+	switch_gpu_word_wait words[TegraGM20BMaxJobEvents + 1];
+	uint32_t wordCount = 0;
+	uint32_t packPool = 0, packChunks = 0;
+	const int packWait = __atomic_load_n(&packClient_.gpuMapping, __ATOMIC_ACQUIRE)
+				     ? switch_gpu_pack_job_wait(&packPool, &packChunks)
+				     : 0;
+	if (packWait < 0)
+		return refuseWrites(
+			switch_gpu_refuse(why, SwitchGpuRefusal::PackImage, kIOReturnAborted));
 	int error = events->sequence(eventChannels_[slot]);
 	if (error)
 		return refuseWrites(switch_gpu_refuse(why, SwitchGpuRefusal::EventSequence,
@@ -464,8 +475,14 @@ refresh:
 			error = events->bind(&completion);
 		}
 		ownershipFailed = error == -5;
-		if (!error && dependencies + siblingCount + events->wordCount() >
-				      TegraGM20BMaxJobDependencies) {
+		if (!error) {
+			wordCount = events->wordCount();
+			memcpy(words, events->words(), wordCount * sizeof(words[0]));
+			if (packWait > 0)
+				words[wordCount++] = {packPool, packChunks, 0};
+		}
+		if (!error &&
+		    dependencies + siblingCount + wordCount > TegraGM20BMaxJobDependencies) {
 			stage = SwitchGpuRefusal::DependencyRoom;
 			error = -28;
 		}
@@ -484,8 +501,8 @@ refresh:
 				switch_gpu_chan_event_releases(chan, uint32_t(completion.value));
 			error = switch_gpu_chan_exec_events(
 				chan, pushes, count, job.dependencies, dependencies, siblings,
-				siblingCount, events->words(), events->wordCount(), &seqno, profile,
-				jobVisibility, releases, keptCount, &transaction);
+				siblingCount, words, wordCount, &seqno, profile, jobVisibility,
+				releases, keptCount, &transaction);
 			job.phases.end(TGM_SUBMIT_EXEC);
 		}
 		if (error != -11)
@@ -493,8 +510,7 @@ refresh:
 		switch_gpu_backing_abort(&transaction);
 		stage = SwitchGpuRefusal::Room;
 		error = switch_gpu_chan_wait_submission_room(
-			chan, pushes, count, dependencies + siblingCount + events->wordCount(),
-			profile);
+			chan, pushes, count, dependencies + siblingCount + wordCount, profile);
 		job.phases.end(TGM_SUBMIT_ROOM);
 		if (error)
 			break;
@@ -527,7 +543,7 @@ refresh:
 		const IOReturn ret = ownershipFailed ? kIOReturnAborted : ioreturn(error);
 		if (stage == SwitchGpuRefusal::DependencyRoom)
 			return refuseWrites(switch_gpu_refuse(
-				why, stage, ret, dependencies + siblingCount + events->wordCount(),
+				why, stage, ret, dependencies + siblingCount + wordCount,
 				TegraGM20BMaxJobDependencies));
 		const uint64_t counted =
 			stage == SwitchGpuRefusal::Refresh       ? surfaceCount

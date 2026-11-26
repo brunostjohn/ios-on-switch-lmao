@@ -28,6 +28,7 @@ py_library(
         "owed_all.py",
         "owed_gpu.py",
         "owed_system.py",
+        "pack_image.py",
         "pretranslated.py",
         "protection.py",
         "reports.py",
@@ -210,6 +211,14 @@ py_test(
     name = "springboard_test",
     size = "small",
     srcs = ["springboard_test.py"],
+    deps = [":lib"],
+)
+
+# pack_image.py: the pack image's build, open and stream, backboardd's wait at its open and the boot time, in uptime.
+py_test(
+    name = "pack_image_test",
+    size = "small",
+    srcs = ["pack_image_test.py"],
     deps = [":lib"],
 )
 

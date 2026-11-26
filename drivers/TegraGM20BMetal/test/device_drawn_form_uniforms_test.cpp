@@ -280,7 +280,7 @@ std::string variantPack(bool requiredTurned = false, bool iterated = false)
     pp.uniform[0] = {0, 1, 0, 0};
     pp.variantCount[1] = 1;
     const gm20b::PackVariant variant = {requiredTurned ? gm20b::AssumeTurned : gm20b::AssumeUniformAligned,
-                                        kVariantProgram};
+                                        kVariantProgram, 0};
     gm20b::PackPipeline pipelines[2] = {pp, pp};
     pipelines[1].keyHash = kVariantKey + 1;
     pipelines[1].variantCount[1] = 0;

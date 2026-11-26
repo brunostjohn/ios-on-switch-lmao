@@ -713,8 +713,9 @@ CompileOutcome directRecord(const NmbDirectState &state, const StageCompile &com
         !vertexStreams(streams, parts, why))
         return CompileOutcome::Refused;
     const uint32_t addresses = addressPushWords(draw);
+    const uint32_t pushed = (draw.pushMask | addresses) & ~guestBasePushWords(draw);
     for (uint32_t i = 0; i < 32; i++)
-        if ((draw.pushMask | addresses) >> i & 1)
+        if (pushed >> i & 1)
             parts.push[kRootPush + 4 * i] = addresses >> i & 1 ? 0 : draw.push[i];
     parts.setBytes = uint16_t(Set0(draw.set0Bindings, draw.set0BindingCount).bytes());
     if (!assembleRecord(parts, key, rules, out, why))

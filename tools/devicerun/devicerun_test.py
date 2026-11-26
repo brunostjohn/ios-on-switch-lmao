@@ -712,7 +712,7 @@ class Rules(unittest.TestCase):
         self.assertEqual(results[0].verdict, FAIL)
         self.assertIn('backboardd/PBGRABsovXmw_TlrpA3Xhfs_Iclr_Iclr', results[0].observed)
 
-    def test_backboardd_must_draw_no_catch_all_across_the_boot(self):
+    def test_no_process_draws_the_catch_all_across_the_boot(self):
         rule = [c for c in checks.GROUPS['boot'] if c.name == 'boot.ca-no-catch-all']
         self.assertEqual(len(rule), 1)
 
@@ -727,15 +727,51 @@ class Rules(unittest.TestCase):
                 'eventMessage': f'TegraGM20BMetal: {process} gm20b 5s c=120(24.0/s) pack=45/0/1/0 cag={cag} rtsync=12/345us',
             }
 
-        hwtest = rates('SwitchHWTest', 7, 1)
-        results, _ = devicerun.run_checks([hwtest], rule)
+        results, _ = devicerun.run_checks([], rule)
         self.assertEqual(results[0].verdict, NO_DATA)
-        clean = [rates('backboardd', 0, 5), rates('backboardd', 0, 10), hwtest]
+        clean = [rates('backboardd', 0, 5), rates('backboardd', 0, 10), rates('SwitchHWTest', 0, 11)]
         results, _ = devicerun.run_checks(clean, rule)
         self.assertEqual(results[0].verdict, PASS)
         results, _ = devicerun.run_checks([*clean, rates('backboardd', 3, 15)], rule)
         self.assertEqual(results[0].verdict, FAIL)
         self.assertIn('max(cag) 3', results[0].observed)
+        results, _ = devicerun.run_checks([*clean, rates('SpringBoard', 7, 16)], rule)
+        self.assertEqual(results[0].verdict, FAIL)
+        self.assertIn('max(cag) 7', results[0].observed)
+        results, _ = devicerun.run_checks([*clean, rates('SwitchHWTest', 7, 17)], rule)
+        self.assertEqual(results[0].verdict, PASS)
+
+    def test_a_core_animation_state_any_process_lacks_fails_the_boot(self):
+        rule = [c for c in checks.GROUPS['boot'] if c.name == 'boot.ca-pack-covers-all']
+        self.assertEqual(len(rule), 1)
+
+        def record(process: str, message: str) -> dict:
+            return {
+                'timestamp': '2026-11-25 19:18:55.559000+0000',
+                'bootUUID': 'B00T',
+                'processImagePath': '/Applications/' + process,
+                'subsystem': checks.GPU_METAL_SUBSYSTEM,
+                'category': 'gm20b',
+                'messageType': 'Error',
+                'eventMessage': message,
+            }
+
+        own = record(
+            'SwitchHWTest',
+            'SwitchMetal: SwitchHWTest: a render state the pack lacks f98fae52bc0cfe8f '
+            '(com.apple.coreanimation.Pb3a8Xm_Tds4A2Xhf_Isrc): samples=1 c0=94',
+        )
+        results, _ = devicerun.run_checks([own], rule)
+        self.assertEqual(results[0].verdict, PASS)
+        for message in (
+            'SwitchMetal: Maps: a render state the pack lacks f98fae52bc0cfe8f '
+            '(com.apple.coreanimation.PBGRAXm_TdfgA2Xhf_Iscd): samples=1 c0=80',
+            'SwitchMetal: in-process state the pack lacks f98fae52bc0cfe8f (record): '
+            'label=com.apple.coreanimation.PBGRAXm_TdfgA2Xhf_Iscd',
+        ):
+            results, _ = devicerun.run_checks([own, record('Maps', message)], rule)
+            self.assertEqual(results[0].verdict, FAIL)
+            self.assertIn('PBGRAXm_TdfgA2Xhf_Iscd', results[0].observed)
 
     def test_pack_tier1_uses_reports_os_states_and_ignores_hwtest(self):
         rule = [c for c in checks.GROUPS['boot'] if c.name == 'pack.tier1-uses']
@@ -784,8 +820,9 @@ class Rules(unittest.TestCase):
             rec(
                 '/kernel.development',
                 '',
-                'tegra-gm20b: pack image: tier 0 124 MiB built in 900 ms for cameracaptured '
-                '(pagein requests 125, copy 14 ms, big-page bytes 130023424)',
+                'tegra-gm20b: pack image: tier 0 124 MiB for cameracaptured, open 600 ms after the build began '
+                '(tables read), streamed 300 ms after that (pagein requests 125, copy 14 ms, big-page bytes '
+                '130023424); 0 jobs waited on it on the GPU, the first submitted 0 ms before its end',
                 1,
             ),
             rec(

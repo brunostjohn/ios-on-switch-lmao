@@ -6,6 +6,7 @@
 #include "dynamic_push.h"
 #include "blend_reads.h"
 #include "gpu.h"
+#include "pack_preread.h"
 #include "pack_window.h"
 #include "mme.h"
 #include "mip.h"
@@ -21,6 +22,7 @@
 #include "xr_pass.h"
 #include "written_textures.h"
 
+#include <mach/vm_page_size.h>
 #include <os/log.h>
 #include <algorithm>
 #include <cstdio>
@@ -237,9 +239,32 @@ static uint8_t setCbufSlot(const PackProgram &prog)
     return 0;
 }
 
+static void guestBasesOf(const PackPipeline &pp, Pipeline::GuestBase (&out)[kGuestBases])
+{
+    static_assert(kGuestBases == kPackGuestBases, "pack.h kPackGuestBases");
+    bool more = true;
+    for (uint32_t k = 0; k < kPackGuestBases; k++) {
+        const uint8_t slot = pp.guestBaseSlot[k];
+        more = more && pp.guestBaseWord[k];
+        out[k] = more ? Pipeline::GuestBase{uint8_t(slot & kGuestBaseFragment ? 1 : 0),
+                                            uint8_t(slot & ~kGuestBaseFragment), pp.guestBaseWord[k]}
+                      : Pipeline::GuestBase{};
+    }
+}
+
 static bool needsArguments(const PackPipeline &pp)
 {
     return pp.rootTableWord[0] || pp.rootTableWord[1] || pp.statusWord[0] || pp.statusWord[1] || pp.heapArrays;
+}
+
+// A program in the pack window is one of tier 0's, whose local memory the pack's ceiling covers (pack_scan.h): its
+// header, in heap pages no process keeps resident, is not read. Any other's header was copied or imported with it.
+uint64_t Device::programSlm(const PlacedProgram &p) const
+{
+    const uint8_t *heap = pack_.header() ? pack_.section<uint8_t>(PackHeap) : nullptr;
+    if (heap && packWindowBytes_ && p.header >= heap && p.header < heap + packWindowBytes_)
+        return pack_.header()->tier0SlmPerWarp;
+    return slmPerWarpOfHeader(p.header);
 }
 
 const PackSegment *Device::prebuiltPipelineSegment(uint32_t recIndex) const
@@ -402,9 +427,9 @@ std::unique_ptr<Pipeline> Device::tryBuildTier0LockFree(const PackPipeline &pp, 
         (tess && (!placePackWindowProgram(pp.tessPrograms[0], tessPlaced[0]) ||
                   !placePackWindowProgram(pp.tessPrograms[1], tessPlaced[1]))))
         return nullptr;
-    uint64_t slm = std::max(slmPerWarpOfHeader(vs.header), slmPerWarpOfHeader(fs.header));
+    uint64_t slm = std::max(programSlm(vs), programSlm(fs));
     for (uint32_t k = 0; tess && k < 2; k++)
-        slm = std::max(slm, slmPerWarpOfHeader(tessPlaced[k].header));
+        slm = std::max(slm, programSlm(tessPlaced[k]));
     if (!slmReady(slm))
         return nullptr;
     Pipeline *twin = nullptr;
@@ -442,24 +467,48 @@ std::unique_ptr<Pipeline> Device::tryBuildTier0LockFree(const PackPipeline &pp, 
     return built;
 }
 
+Pipeline *Device::publishTier0(uint32_t idx, std::unique_ptr<Pipeline> built)
+{
+    std::atomic<Pipeline *> &slot = tier0Pipelines_.slots[idx];
+    Pipeline *expected = nullptr;
+    Pipeline *raw = built.get();
+    if (!slot.compare_exchange_strong(expected, raw, std::memory_order_acq_rel, std::memory_order_acquire))
+        return expected;
+    built.release();
+    SWITCH_METAL_DIAGNOSTIC(stats.blendKillStates += raw->blendKill);
+    SWITCH_METAL_DIAGNOSTIC(stats.blendKillStates += combinationBlendKills(*raw, false));
+    return raw;
+}
+
+Pipeline *Device::variantPipelineLockFree(const PackRun &run, const std::string &name, bool caTransform)
+{
+    const PackPipeline *pipelines = pack_.section<PackPipeline>(PackPipelines);
+    if (!run.records || uint64_t(run.first - pipelines) >= tier0Pipelines_.count)
+        return nullptr;
+    const PackPipeline *rec = pack_.variantRecord(run, name, PackForm::Default);
+    const uint32_t idx = rec ? uint32_t(rec - pipelines) : UINT32_MAX;
+    if (idx >= tier0Pipelines_.count)
+        return nullptr;
+    Pipeline *pl = tier0Pipelines_.slots[idx].load(std::memory_order_acquire);
+    if (!pl) {
+        std::unique_ptr<Pipeline> built = tryBuildTier0LockFree(*rec, idx, caTransform);
+        if (!built)
+            return nullptr;
+        pl = publishTier0(idx, std::move(built));
+    }
+    return pl->storageBits ? nullptr : pl;
+}
+
 Pipeline *Device::placePackedRecord(const PackPipeline &pp, bool caTransform)
 {
     const uint32_t idx = uint32_t(&pp - pack_.section<PackPipeline>(PackPipelines));
     if (idx < tier0Pipelines_.count) {
-        std::atomic<Pipeline *> &slot = tier0Pipelines_.slots[idx];
-        if (Pipeline *existing = slot.load(std::memory_order_acquire))
+        if (Pipeline *existing = tier0Pipelines_.slots[idx].load(std::memory_order_acquire))
             return existing;
-        if (std::unique_ptr<Pipeline> built = tryBuildTier0LockFree(pp, idx, caTransform)) {
-            Pipeline *expected = nullptr;
-            Pipeline *raw = built.get();
-            if (slot.compare_exchange_strong(expected, raw, std::memory_order_acq_rel, std::memory_order_acquire)) {
-                built.release();
-                SWITCH_METAL_DIAGNOSTIC(stats.blendKillStates += raw->blendKill);
-                SWITCH_METAL_DIAGNOSTIC(stats.blendKillStates += combinationBlendKills(*raw, false));
-                return raw;
-            }
-            return expected;
-        }
+        if (std::unique_ptr<Pipeline> built = tryBuildTier0LockFree(pp, idx, caTransform))
+            return publishTier0(idx, std::move(built));
+    } else {
+        prereadPackRecord(pack_, pp, uint64_t(vm_page_size));
     }
     std::lock_guard<gm20b::Mutex> l(lock_);
     return placeRecord(pp, caTransform);
@@ -481,9 +530,9 @@ Pipeline *Device::placeRecord(const PackPipeline &pp, bool caTransform)
         (tess && (!placePackProgram(pp.tessPrograms[0], tessPlaced[0]) ||
                   !placePackProgram(pp.tessPrograms[1], tessPlaced[1]))))
         return nullptr;
-    uint64_t slm = std::max(slmPerWarpOfHeader(vs.header), slmPerWarpOfHeader(fs.header));
+    uint64_t slm = std::max(programSlm(vs), programSlm(fs));
     for (uint32_t k = 0; tess && k < 2; k++)
-        slm = std::max(slm, slmPerWarpOfHeader(tessPlaced[k].header));
+        slm = std::max(slm, programSlm(tessPlaced[k]));
     if (!placeRequiredVariants(pp, slm))
         return nullptr;
     if (!slmNeed(slm)) {
@@ -551,11 +600,12 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     pl.vertexInstructions =
         instructions(*vs.record) + (tess ? instructions(*tess[0].record) + instructions(*tess[1].record) : 0);
     pl.fragmentInstructions = instructions(*fs.record);
-    const auto writesMemory = [](const PlacedProgram &p) {
-        return (p.record->facts & kProgramWritesMemory) != 0;
+    const auto has = [](const PlacedProgram &p, uint32_t fact) {
+        return (p.record->facts & fact) != 0;
     };
-    pl.writesMemory[0] = writesMemory(vs) || (tess && (writesMemory(tess[0]) || writesMemory(tess[1])));
-    pl.writesMemory[1] = writesMemory(fs);
+    pl.writesMemory[0] = has(vs, kProgramWritesMemory) ||
+                         (tess && (has(tess[0], kProgramWritesMemory) || has(tess[1], kProgramWritesMemory)));
+    pl.writesMemory[1] = has(fs, kProgramWritesMemory);
     pl.memoryEntries = pp.memoryEntries;
     std::vector<uint32_t> words;
     Push w{nullptr, nullptr};
@@ -683,6 +733,7 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     pl.stagesOff = !pixelStage(pp) || rasterOff(keyString);
     memcpy(pl.push, pp.pushWords, sizeof pl.push);
     pl.pushMask = pp.pushMask;
+    guestBasesOf(pp, pl.guestBases);
     pl.heapSlot[0] = heapCbufSlot(*vs.record);
     pl.heapSlot[1] = heapCbufSlot(*fs.record);
     if (needsArguments(pp))
@@ -725,21 +776,13 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     }
     if (const char *n = strstr(keyString, "samples="))
         pl.samples = uint8_t(std::max(1, atoi(n + 8)));
-    // SPH word 0 bit 15 KILLS_PIXELS, bit 608 OMAP_SAMPLE_MASK (cla097sph.h); SET_DEPTH_TEST, SET_STENCIL_TEST and
-    // SET_ANTI_ALIAS_ALPHA_CONTROL's alpha to coverage in bit 0
-    uint32_t sph[20];
-    memcpy(sph, fs.header, sizeof sph);
-    pl.primitiveId = (sph[5] >> 24) & 1;  // NVA097_SPHV3T2_IMAP_PRIMITIVE_ID, bit 184
-    const auto doesGlobalStore = [](const uint8_t *header) {
-        uint32_t sph0;
-        memcpy(&sph0, header, sizeof sph0);
-        return ((sph0 >> 16) & 1) != 0;  // NVA097_SPHV3T1_DOES_GLOBAL_STORE
-    };
-    pl.vertexStores =
-        doesGlobalStore(vs.header) || (tess && (doesGlobalStore(tess[0].header) || doesGlobalStore(tess[1].header)));
-    pl.fragmentDepth = (sph[19] >> 1) & 1;  // OMAP_DEPTH, bit 609
-    pl.viewportIndex = headerWritesViewportIndex((tess ? tess[1] : vs).header);
-    pl.writesLayer = headerWritesLayer((tess ? tess[1] : vs).header);
+    // SET_DEPTH_TEST, SET_STENCIL_TEST and SET_ANTI_ALIAS_ALPHA_CONTROL's alpha to coverage in bit 0
+    pl.primitiveId = has(fs, kProgramPrimitiveId);
+    pl.vertexStores = has(vs, kProgramGlobalStore) ||
+                      (tess && (has(tess[0], kProgramGlobalStore) || has(tess[1], kProgramGlobalStore)));
+    pl.fragmentDepth = has(fs, kProgramWritesDepth);
+    pl.viewportIndex = has(tess ? tess[1] : vs, kProgramWritesViewportIndex);
+    pl.writesLayer = has(tess ? tess[1] : vs, kProgramWritesLayer);
     bool tests = false, alphaToCoverage = false;
     for (uint32_t k = 0; k < pp.blobDwords; k += 2) {
         const uint32_t m = blob[k], v = blob[k + 1];
@@ -749,11 +792,12 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
         if (m == HYBRID_ANTI_ALIAS_CONTROL)
             pl.samplePasses = uint8_t(std::max(1u, v & 0xf));
     }
-    pl.dropsPixels = (sph[0] >> 15 & 1) || (sph[19] & 1) || tests || strncmp(keyString, "samples=1 ", 10) ||
-                     !strstr(keyString, " ds=0/0 ");
+    pl.dropsPixels = has(fs, kProgramKillsPixels) || has(fs, kProgramWritesSampleMask) || tests ||
+                     strncmp(keyString, "samples=1 ", 10) || !strstr(keyString, " ds=0/0 ");
     // KILLS_PIXELS, OMAP_SAMPLE_MASK or OMAP_DEPTH, or its registers' alpha to coverage; a Metal state's own alpha to
     // coverage is the encoder's, per draw (alpha_control.h)
-    pl.shapesCoverage = (sph[0] >> 15 & 1) || (sph[19] & 3) || alphaToCoverage;
+    pl.shapesCoverage = has(fs, kProgramKillsPixels) || has(fs, kProgramWritesSampleMask) ||
+                        has(fs, kProgramWritesDepth) || alphaToCoverage;
     for (uint32_t k = 0; k < pl.entries.size(); k++)
         if (pl.entries[k].kind == EntryFetch && pl.entries[k].slot < 8)
             pl.fetchBits |= uint8_t(1u << pl.entries[k].slot);

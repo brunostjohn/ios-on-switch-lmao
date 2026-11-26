@@ -1,4 +1,4 @@
-"""Generate a two-tier v34 pack fixture exercising every pre-built state-segment path.
+"""Generate a two-tier pack fixture (v34 and later) exercising every pre-built state-segment path.
 
 usage: pack_v34_fixture.py <out pack.bin>
 """
@@ -20,6 +20,8 @@ VARIANTS_KEY = 'samples=1 topo=0 ds=0/0 c0=80:15:0:1:0:0:1:0:0  | v var_v  | f v
 STRIDE_TWIN_KEY = 'samples=1 topo=0 ds=0/0 c0=80:15:0:1:0:0:1:0:0  | v stride_twin_v  | f stride_twin_f'
 STRIDE_MAIN_KEY = 'samples=1 topo=0 ds=0/0 c0=80:15:0:1:0:0:1:0:0  | v stride_v  | f stride_f'
 PASS_WRITE_KEY = 'samples=1 topo=0 ds=0/0 c0=80:15:0:1:0:0:1:0:0  | v passw_v  | f passw_f'
+GUEST_BASE_KEY = 'samples=1 topo=0 ds=0/0 c0=80:15:0:1:0:0:1:0:0  | v guest_v  | f guest_f'
+GUEST_TWIN_KEY = 'samples=1 topo=0 ds=0/0 c0=80:15:0:1:0:0:1:0:0  | v guest_twin_v  | f guest_twin_f'
 TIER1_KEY = 'samples=1 topo=0 ds=0/0 c0=80:15:0:1:0:0:1:0:0  | v cold_v  | f cold_f'
 
 SET_PROGRAM_REGION_A = 0x1608
@@ -131,6 +133,7 @@ def build_fixture() -> packfile.Pack:
     ]
 
     stride_twin_hash = packfile.fnv(STRIDE_TWIN_KEY.encode())
+    guest_twin_hash = packfile.fnv(GUEST_TWIN_KEY.encode())
 
     pipes = [
         # Plain tier-0 QuartzCore state with CbufShaderData (FLAG_RESELECT_ROOT) plus owned + swizzle methods dropped.
@@ -266,8 +269,8 @@ def build_fixture() -> packfile.Pack:
                 (0x136C, 0x00000052),
             ],
             variants=[
-                {'stage': 1, 'assume': 1 << 26, 'program': fs_turned},
-                {'stage': 1, 'assume': 1, 'program': fs_slm},
+                {'stage': 1, 'assume': 1 << 26, 'program': fs_turned, 'memory': 0},
+                {'stage': 1, 'assume': 1, 'program': fs_slm, 'memory': 0},
             ],
         ),
         # Stride twin target + main record with strideTwin and PipelineVariantRecord (" | tests=2").
@@ -317,6 +320,52 @@ def build_fixture() -> packfile.Pack:
                 (0x1368, 0x00000071),
                 (0x136C, 0x00000072),
             ],
+        ),
+        # Its programs read vertex buffer 5's and fragment buffer 2's Metal addresses (push words 6-7 and 2-3); its program
+        # variants are of the same record, its stride twin a record of its own that reads vertex buffer 1's (words 8-9).
+        base_record(
+            GUEST_BASE_KEY,
+            vs_data,
+            fs_plain,
+            [
+                (0x1A00, 0x1111),
+                (0x1364, 0x00000074),
+                (0x1368, 0x00000075),
+                (0x136C, 0x00000076),
+            ],
+            guest_base_word=[7, 3],
+            guest_base_slot=[5, packfile.GUEST_BASE_FRAGMENT | 2],
+            variants=[
+                {'stage': 1, 'assume': 1 << 26, 'program': fs_turned, 'memory': 0},
+                {'stage': 1, 'assume': 1, 'program': fs_slm, 'memory': 0},
+            ],
+            stride_twin=guest_twin_hash,
+        ),
+        base_record(
+            GUEST_TWIN_KEY,
+            vs_data,
+            fs_plain,
+            [
+                (0x1A00, 0x1111),
+                (0x1364, 0x00000077),
+                (0x1368, 0x00000078),
+                (0x136C, 0x00000079),
+            ],
+            guest_base_word=[9],
+            guest_base_slot=[1],
+        ),
+        # A tier-1 state's variant record, which its draws' first select of " | tests=2" places on the placer.
+        base_record(
+            TIER1_KEY + ' | tests=2',
+            t1_vs,
+            t1_fs,
+            [
+                (0x1A00, 0x1111),
+                (0x1364, 0x00000083),
+                (0x1368, 0x00000084),
+                (0x136C, 0x00000085),
+            ],
+            tier=1,
         ),
         # Tier-1 cold record past tier0_heap.
         base_record(

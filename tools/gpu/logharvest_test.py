@@ -215,6 +215,9 @@ class LogHarvestTest(unittest.TestCase):
         added, report = logharvest.harvest(boots, CORPUS.splitlines(), None, Path('/nonexistent'))
         self.assertEqual(added, [])
         self.assertEqual(report.left['backboardd', 'refused on the device'], 1)
+        added, report = logharvest.harvest(boots, CORPUS.splitlines(), None, Path('/nonexistent'), refused=True)
+        self.assertEqual([logharvest.make_pack.state_key(line) for line in added], [CA])
+        self.assertNotIn(('backboardd', 'refused on the device'), report.left)
 
     def test_a_harvested_ca_line_gives_caspec_the_fields_of_its_untagged_line(self):
         added, _ = self.run_tool(boot_records())
@@ -313,6 +316,36 @@ class LogHarvestTest(unittest.TestCase):
         ]
         boot = logharvest.read_boots(logged)[BOOT]
         self.assertEqual(logharvest.whole(boot, 'backboardd', '000000000000000a'), (CA_LABEL, key))
+
+    def test_a_miss_line_takes_its_key_from_its_parts_under_its_own_hash(self):
+        miss = f'SwitchMetal: backboardd: a render state the pack lacks 0000000000000015 ({CA_LABEL})'
+        records = [
+            record(BOOT, 'x', 'OS version: 24B119'),
+            record(BOOT, 'backboardd', miss),
+            *parts(BOOT, 'backboardd', '0000000000000015', CA_LABEL, CA),
+        ]
+        new, _ = logharvest.harvest(logharvest.read_boots(records), CORPUS.splitlines(), None, Path('/nonexistent'))
+        self.assertEqual([logharvest.make_pack.state_key(line) for line in new], [CA])
+
+    def test_a_miss_whose_parts_are_not_all_there_gives_no_line(self):
+        miss = f'SwitchMetal: backboardd: a render state the pack lacks 0000000000000016 ({CA_LABEL})'
+        long_key = CA + ' ' * 0 + ''.join(f' | x{i}' for i in range(300))
+        cut = parts(BOOT, 'backboardd', '0000000000000016', CA_LABEL, long_key)
+        self.assertGreater(len(cut), 1)
+        records = [record(BOOT, 'x', 'OS version: 24B119'), record(BOOT, 'backboardd', miss), *cut[:-1]]
+        new, report = logharvest.harvest(
+            logharvest.read_boots(records), CORPUS.splitlines(), None, Path('/nonexistent')
+        )
+        self.assertEqual(new, [])
+        self.assertEqual(report.left['backboardd', 'a missed state has no whole harvest parts'], 1)
+        old = f'{miss}: {CA}'
+        new, _ = logharvest.harvest(
+            logharvest.read_boots([record(BOOT, 'x', 'OS version: 24B119'), record(BOOT, 'backboardd', old)]),
+            CORPUS.splitlines(),
+            None,
+            Path('/nonexistent'),
+        )
+        self.assertEqual(new, [], 'a line that carries its key is no miss line: its key may be cut')
 
     def test_left_out_states_are_counted_by_reason(self):
         boots = logharvest.read_boots(boot_records())

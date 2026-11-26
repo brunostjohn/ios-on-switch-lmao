@@ -16,6 +16,9 @@ TegraGM20BMetalStatesCost.mm):
     <name>
         <key>
         (one line) <name>: the runtime's 16-hex-digit cache name of the state; <key>: its first 400 characters
+    SwitchMetal: <process>: a render [variant ]state the pack lacks <hash> (<label>)
+        a state or variant the pack lacks, once a process; its key arrives in its harvest parts under <hash>, and one
+        whose parts are not all there gives no line
     SwitchMetal: tier-1 pack state <fast> <name> in <process>: <n> pieces, card=<pages>
         a tier-1 pack state used for the first time in a process; its key arrives in its harvest parts
     SwitchMetal: harvest <name> <i>/<n> <part>
@@ -52,7 +55,7 @@ only where that library is the one the device loaded.
 Left out and counted: our own apps' states (SwitchHWTest*), a key the log cut with no whole parts (or parts that
 disagree with it), a function no one library is named for, an AIR-keyed state that links functions, a Core Animation
 state that links functions or has no label, a framework whose library path none of those name, a variant whose state the
-corpus lacks, and the states the device refused.
+corpus lacks, and the states the device refused (taken with --refused).
 """
 
 import argparse
@@ -96,6 +99,8 @@ CUT = 400  # TegraGM20BMetalComplete.mm's made line: %.400s
 # A harvest part's characters but the last part's; the log drops a part's trailing spaces, which pads them back
 PART_CHARS = 700
 PART = re.compile(r'SwitchMetal: harvest ([0-9a-f]{16}) (\d+)/(\d+) (.*)$', re.DOTALL)
+# a render state or variant the pack lacks (TegraGM20BMetalStatesMiss.mm): its hash and label, its key in its parts
+MISS = re.compile(r'SwitchMetal: \S+: a render (?:variant )?state the pack lacks ([0-9a-f]{16}) \(([^)]*)\)$')
 TIER1 = re.compile(r'SwitchMetal: tier-1 pack state [0-9a-f]{16} ([0-9a-f]{16}) in \S+: \d+ pieces, card=\d+')
 VARIANT = re.compile(r'state\.variant_unpacked: .*?refused:( \| .*?) of ([0-9a-f]{16}) ')
 VARIANT_ANY = 'state.variant_unpacked: '
@@ -179,6 +184,8 @@ def read_boots(stream: Iterable[dict]) -> dict[str, Boot]:
             boot.made.setdefault((process, m[2]), (m[1], m[3]))
         elif m := TIER1.search(message):
             boot.made.setdefault((process, m[1]), ('used from tier 1', ''))
+        elif m := MISS.search(message):
+            boot.made.setdefault((process, m[1]), ('missed', ''))
         elif m := PART.search(message):
             boot.parts[process, m[1]][int(m[2])] = m[4]
             boot.totals[process, m[1]] = int(m[3])
@@ -320,7 +327,12 @@ class Report:
 
 
 def harvest(
-    boots: dict[str, Boot], corpus: list[str], forced: str | None, precompile: Path, crawl: Path | None = None
+    boots: dict[str, Boot],
+    corpus: list[str],
+    forced: str | None,
+    precompile: Path,
+    crawl: Path | None = None,
+    refused: bool = False,
 ) -> tuple[list[str], Report]:
     report, new = Report(), []
     for uuid, boot in sorted(boots.items()):
@@ -332,7 +344,7 @@ def harvest(
         for process, count in boot.unnamed.items():
             report.left[process, "a variant line that names no state hash (the runtime's older line)"] += count
         libraries = Libraries(build, corpus, precompile / 'archives' / f'{build}.tsv', crawl)
-        new += harvest_boot(boot, build, libraries, in_corpus(corpus + new, build), report)
+        new += harvest_boot(boot, build, libraries, in_corpus(corpus + new, build), report, refused)
     return new, report
 
 
@@ -344,13 +356,16 @@ def boot_build(uuid: str, boot: Boot, forced: str | None) -> str | None:
     return forced or next(iter(boot.builds), None)
 
 
-def harvest_boot(boot: Boot, build: str, libraries: Libraries, held: set[str], report: Report) -> list[str]:
-    """Give the lines of one boot's states `held` lacks (a variant's state first), adding their keys to it."""
+def harvest_boot(
+    boot: Boot, build: str, libraries: Libraries, held: set[str], report: Report, refused: bool = False
+) -> list[str]:
+    """Give the lines of one boot's states `held` lacks (a variant's state first), adding their keys to it; with
+    `refused`, the states the device refused too."""
     new = []
     for process, outcome, label, key, missing in states(boot, held):
         if process.startswith(OWN_APPS):
             report.left[process, 'our own app'] += 1
-        elif outcome == 'refused':
+        elif outcome == 'refused' and not refused:
             report.left[process, 'refused on the device'] += 1
         elif key is None:
             report.left[process, missing] += 1
@@ -377,9 +392,9 @@ def states(boot: Boot, held: set[str]) -> Iterator[tuple[str, str, str, str | No
     """
     for (process, name), (outcome, key) in sorted(boot.made.items()):
         parts = whole(boot, process, name)
-        if outcome == 'used from tier 1':
+        if outcome in ('used from tier 1', 'missed'):
             if not parts:
-                yield process, outcome, '-', None, 'tier-1 pack state has no whole harvest parts'
+                yield process, outcome, '-', None, f'{"tier-1 pack" if outcome != "missed" else "a missed"} state has no whole harvest parts'
                 continue
             yield process, outcome, parts[0], untested(parts[1]), ''
             continue
@@ -428,10 +443,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--crawl', type=Path, help="the build's crawl inventory.json, for framework library paths")
     parser.add_argument('--dry-run', action='store_true', help='print the lines instead of adding them')
     parser.add_argument('--check', action='store_true', help="fail where an OS state is not the corpus's")
+    parser.add_argument(
+        '--refused',
+        action='store_true',
+        help="the states the device refused too: a later translator may make them, and the pack's report names any it "
+        'still refuses',
+    )
     args = parser.parse_args(argv)
     corpus = args.corpus.read_text().splitlines()
     new, report = harvest(
-        read_boots(records(args.archives, args.ndjson)), corpus, args.build, args.corpus.parent, args.crawl
+        read_boots(records(args.archives, args.ndjson)),
+        corpus,
+        args.build,
+        args.corpus.parent,
+        args.crawl,
+        args.refused,
     )
     for line in report.boots:
         print('boot', line)
