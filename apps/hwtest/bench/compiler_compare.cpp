@@ -3,7 +3,7 @@
 #include "drivers/TegraGM20BMetal/cache_io.h"
 #include <algorithm>
 #include <cstring>
-#include <iomanip>
+#include "apps/hwtest/bench/compiler_pixels.h"
 #include <sstream>
 
 namespace bench::compiler {
@@ -65,40 +65,15 @@ bool decode(const std::string &bytes, const char *key, Input &in)
     return r.ok() && r.at() == bytes.size();
 }
 
-std::string hexPixel(const uint8_t *at, uint32_t bpp)
-{
-    std::ostringstream s;
-    for (uint32_t i = 0; i < bpp; ++i)
-        s << std::hex << std::setfill('0') << std::setw(2) << unsigned(at[i]);
-    return s.str();
-}
-
 std::string pixels(const Input &in, const Result &nak, const Result &nv)
 {
+    if (nak.pixels.size() != nv.pixels.size())
+        return "different attachment counts";
     for (size_t i = 0; i < nak.pixels.size(); ++i) {
-        const auto &a = nak.pixels[i], &b = nv.pixels[i];
-        if (a.size() != b.size())
-            return "different image extents";
-        auto match = std::mismatch(a.begin(), a.end(), b.begin());
-        if (match.first == a.end())
-            continue;
-        const size_t bpp = a.size() / (width * height * in.samples), offset = (match.first - a.begin()) / bpp;
-        size_t sample = offset % in.samples, pixel = offset / in.samples, x = pixel % width, y = pixel / width;
-        const bool depth = i == in.colors.size();
-        if (depth && in.samples == 4) {
-            const size_t gx = offset % (2 * width), gy = offset / (2 * width);
-            x = gx / 2;
-            y = gy / 2;
-            sample = (gx & 1) + 2 * (gy & 1);
-        }
-        std::ostringstream s;
-        if (depth)
-            s << "depth/stencil";
-        else
-            s << "color " << i;
-        s << " (" << x << "," << y << ") sample " << sample << " NAK " << hexPixel(a.data() + offset * bpp, bpp)
-          << " NVIDIA " << hexPixel(b.data() + offset * bpp, bpp);
-        return s.str();
+        const Attachment plane{i, i == in.colors.size(), width, height, in.samples};
+        auto mismatch = difference(plane, nak.pixels[i], nv.pixels[i], "NAK", "NVIDIA");
+        if (!mismatch.empty())
+            return mismatch;
     }
     return {};
 }
@@ -134,9 +109,8 @@ bool compare(const Input &in, std::ostringstream &s)
         ok &= exercised && difference.empty();
         s << (difference.empty() ? (exercised ? "exact match" : "equal bytes, inconclusive coverage/write/variation")
                                  : difference)
-          << " visible NAK/NVIDIA " << arms[0].visible << "/" << arms[1].visible
-          << " changed color NAK/NVIDIA " << arms[0].changed << "/" << arms[1].changed
-          << " GPU ns min/median (100 draws) NAK ";
+          << " visible NAK/NVIDIA " << arms[0].visible << "/" << arms[1].visible << " changed color NAK/NVIDIA "
+          << arms[0].changed << "/" << arms[1].changed << " GPU ns min/median (100 draws) NAK ";
         timing(s, arms[0]);
         s << " NVIDIA ";
         timing(s, arms[1]);

@@ -866,6 +866,8 @@ cc_library(
             "bench/compiler_compare.cpp",
             "bench/compiler_draw.h",
             "bench/compiler_handles.h",
+            "bench/compiler_pixels.cpp",
+            "bench/compiler_pixels.h",
             "bench/compiler_run.cpp",
             "//drivers/TegraGM20BMetal:cache_io.h",
             "//drivers/TegraGM20BMetal:gm20b_cache.cpp",
@@ -921,6 +923,16 @@ host_test(
     srcs = [
         "bench/compiler_handles.h",
         "bench/compiler_handles_test.cpp",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "compiler_pixels_test",
+    srcs = [
+        "bench/compiler_pixels.cpp",
+        "bench/compiler_pixels.h",
+        "bench/compiler_pixels_test.cpp",
     ],
     cxx_std = "c++17",
 )

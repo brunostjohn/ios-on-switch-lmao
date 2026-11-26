@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "apps/hwtest/bench/compiler_draw.h"
+#include "apps/hwtest/bench/compiler_pixels.h"
 #include "drivers/TegraGM20BMetal/stamps.h"
 #include <algorithm>
 #include <array>
@@ -12,6 +13,12 @@ namespace bench::compiler {
 using namespace gm20b;
 
 namespace {
+enum class Readback {
+    Initial,
+    Warmup,
+    Last
+};
+
 struct Surface {
     Texture tex;
     Buffer initial;
@@ -62,7 +69,7 @@ private:
     bool pass(CommandBuffer &cb, bool coverage, std::string &why);
     bool records(Result &result, bool coverage);
     bool transfer(CommandBuffer &cb, Surface &s, bool upload);
-    bool readImages(Result *out, std::string &why);
+    bool readImages(Readback when, Result &out, std::string &why);
     bool reset(bool all);
 };
 
@@ -273,11 +280,11 @@ bool Arm::records(Result &result, bool coverage)
     return lease.finish();
 }
 
-bool Arm::readImages(Result *out, std::string &why)
+bool Arm::readImages(Readback when, Result &out, std::string &why)
 {
     auto &d = *b_.device;
     Submission submission(b_, experiment_, status_);
-    const size_t count = out ? attachmentCount_ : surfaces_.size();
+    const size_t count = when == Readback::Initial ? surfaces_.size() : attachmentCount_;
     for (size_t i = 0; i < count; ++i) {
         auto &s = surfaces_[i];
         uint64_t gpu, wall;
@@ -297,18 +304,24 @@ bool Arm::readImages(Result *out, std::string &why)
         if (s.depth)
             for (size_t j = 0; j < size; j += 8)
                 memset(bytes.data() + j + 5, 0, 3);
+        if (when == Readback::Last) {
+            why = difference({i, s.depth, width, height, in_.samples}, out.pixels.at(i), bytes, "draw 0", "draw 100");
+            if (!why.empty())
+                return false;
+            continue;
+        }
         HostAccess initial;
         if (!d.hostAccess(s.initial, false, initial))
             return false;
         const bool differs = memcmp(s.initial.cpu, bytes.data(), size) != 0;
         if (!initial.finish())
             return false;
-        if (out) {
+        if (when == Readback::Warmup) {
             if (i < in_.colors.size())
-                out->changed |= differs;
+                out.changed |= differs;
             if (i == 0)
-                out->varied = !std::equal(bytes.begin() + s.tex.bpp, bytes.end(), bytes.begin());
-            out->pixels.push_back(std::move(bytes));
+                out.varied = !std::equal(bytes.begin() + s.tex.bpp, bytes.end(), bytes.begin());
+            out.pixels.push_back(std::move(bytes));
         } else if (differs) {
             why = "initial surface " + std::to_string(i) + " differs from seeded upload";
             return false;
@@ -327,7 +340,7 @@ bool Arm::execute(Result &out, std::string &why)
     Submission s(b_, experiment_, status_);
     for (unsigned i = 0; i <= 100; ++i) {
         uint64_t gpu, wall;
-        if (!reset(i == 0) || (!i && !readImages(nullptr, why)))
+        if (!reset(i == 0) || (!i && !readImages(Readback::Initial, out, why)))
             break;
         HostAccess clear;
         if (!b_.device->hostAccess(resources_.reports, true, clear))
@@ -343,10 +356,20 @@ bool Arm::execute(Result &out, std::string &why)
             why = "missing draw timestamps or visibility result";
             return false;
         }
-        if (!i && !readImages(&out, why))
+        if (!i && !readImages(Readback::Warmup, out, why))
             break;
-        if (i == 100)
-            return true;
+        if (i == 100) {
+            if (!readImages(Readback::Last, out, why))
+                break;
+            Target alive;
+            alive.color = surfaces_.front().tex;
+            experiment_.width = width;
+            experiment_.height = height;
+            checkAlive(b_, experiment_, alive, status_);
+            if (status_.status == SWITCH_BENCH_OK)
+                return true;
+            break;
+        }
     }
     if (why.empty())
         why = *status_.why ? status_.why : "GPU submission or memory lease failed";
