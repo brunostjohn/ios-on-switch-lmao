@@ -222,7 +222,13 @@ void RenderEncoder::probeGlassDraw(const Pipeline &bound, const Pipeline &drawn,
     snprintf(line, sizeof line, "%s k%016llx %s att %s tex %s uni %s box %u,%u-%u,%u%s", caName ? caName : "-",
              (unsigned long long)rec.keyHash, form, attachments, sampled, uniforms, limit.x0, limit.y0, limit.x1,
              limit.y1, taps);
-    if (!glassProbeFirst(cb_, line) || gGlassProbeLines.fetch_sub(1, std::memory_order_relaxed) <= 0)
+    GlassProbeTally ended;
+    const bool first = glassProbeFirst(line, ended);
+    if (ended.distinct)
+        os_log(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "gm20b"),
+               "SwitchMetal: glass draws g%u: %u distinct lines, %u repeats left out", ended.generation, ended.distinct,
+               ended.repeats);
+    if (!first || gGlassProbeLines.fetch_sub(1, std::memory_order_relaxed) <= 0)
         return;
     os_log(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "gm20b"),
            "SwitchMetal: glass draw g%u cb %06llx %{public}s", gGlassProbeGeneration.load(std::memory_order_relaxed),

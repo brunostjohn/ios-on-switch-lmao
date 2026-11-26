@@ -14,7 +14,8 @@ import UIKit
 ///           intermediates' memory behind in its pool
 /// first_in_process= is the first control round's verdict when no test had built a glass stage before it (the render
 /// server still holds SpringBoard's and this app's own glass). Every snapshot arms the glass probe's draw lines (`raw:
-/// glass draw g<generation> ...` in every process, `SwitchMetal: glass cb g<generation>` in the render server):
+/// glass draw g<generation> ...`, each distinct state once a thread, in every process, `SwitchMetal: glass cb
+/// g<generation>` in the render server):
 /// Documents/ui/ui.glass_ab/rounds.json lists each round's arm, verdict, encoding, command buffers and generation;
 /// black pictures go beside it. The render server's draw and record lines share the generation; another process's draw
 /// lines count only its own armings.
