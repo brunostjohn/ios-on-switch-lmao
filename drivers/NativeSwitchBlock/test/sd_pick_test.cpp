@@ -1,5 +1,5 @@
 // Host test of drivers/NativeSwitchBlock/SwitchSdPick.h: the SD worker's choice of chain, run in the card model
-// (sd_card_model.h) against the rule it replaced (r6-lows: a better-class read passes only a head of another class, and
+// (sd_pick_model.h) against the rule it replaced (r6-lows: a better-class read passes only a head of another class, and
 // only while the head is under 100 ms old).
 #include <gtest/gtest.h>
 
@@ -8,7 +8,7 @@
 #include <cstdio>
 #include <vector>
 
-#include "sd_card_model.h"
+#include "sd_pick_model.h"
 
 using namespace sdmodel;
 

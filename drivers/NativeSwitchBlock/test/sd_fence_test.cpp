@@ -1,5 +1,5 @@
 // Host test of the write fence end to end: SwitchSdPick.h's pick with SwitchQueue.h's gather (or pickLocked's fallback
-// merge) in the card model (sd_card_model.h), with synchronizes beginning during the run. A synchronize must not end
+// merge) in the card model (sd_pick_model.h), with synchronizes beginning during the run. A synchronize must not end
 // while a write submitted ahead of it is still queued or on the card, on either window, whether the synchronizes
 // overlap and whether one begins over a chain already picked.
 #include <gtest/gtest.h>
@@ -9,7 +9,7 @@
 #include <random>
 #include <vector>
 
-#include "sd_card_model.h"
+#include "sd_pick_model.h"
 
 using namespace sdmodel;
 

@@ -108,7 +108,7 @@ host_test(
 host_test(
     name = "sd_pick_test",
     srcs = [
-        "sd_card_model.h",
+        "sd_pick_model.h",
         "sd_pick_test.cpp",
         "//drivers/NativeSwitchBlock:SwitchQueue.h",
         "//drivers/NativeSwitchBlock:SwitchSdPick.h",
@@ -120,7 +120,7 @@ host_test(
 host_test(
     name = "sd_fence_test",
     srcs = [
-        "sd_card_model.h",
+        "sd_pick_model.h",
         "sd_fence_test.cpp",
         "//drivers/NativeSwitchBlock:SwitchQueue.h",
         "//drivers/NativeSwitchBlock:SwitchSdPick.h",
