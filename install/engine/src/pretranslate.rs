@@ -25,6 +25,7 @@ pub struct PreparedDeltas {
 pub fn prepare_pretranslated(
     build: &Build,
     local: &LocalInputs,
+    boot_tar: Option<&Path>,
     members: &PreparedMembers,
     work_dir: &Path,
     progress: &mut EngineProgress<'_>,
@@ -52,7 +53,7 @@ pub fn prepare_pretranslated(
     }
 
     let decoded_trust = decode_trust_caches(build, members)?;
-    let os_edits = load_edits(build, local)?;
+    let os_edits = load_edits(build, local, boot_tar)?;
     let translator = local
         .translator_version
         .as_deref()
@@ -231,9 +232,18 @@ fn decode_trust_caches(build: &Build, members: &PreparedMembers) -> Result<RoleT
     })
 }
 
-fn load_edits(build: &Build, local: &LocalInputs) -> Result<BTreeMap<String, Vec<edits::Edit>>> {
+fn load_edits(
+    build: &Build,
+    local: &LocalInputs,
+    boot_tar: Option<&Path>,
+) -> Result<BTreeMap<String, Vec<edits::Edit>>> {
     if let Some(path) = &local.pretranslate_edits {
         let bytes = fs::read(path).map_err(|e| EngineError::io_path(path, e))?;
+        return Ok(edits::parse(&bytes)?);
+    }
+    if let Some(tar_path) = boot_tar
+        && let Some(bytes) = crate::boot::read_pretranslated_edits_from_boot_tar(tar_path)?
+    {
         return Ok(edits::parse(&bytes)?);
     }
     if let Some(dir) = &local.assets_dir {

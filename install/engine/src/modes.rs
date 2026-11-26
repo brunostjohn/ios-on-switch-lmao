@@ -14,7 +14,7 @@ use switch_sd::BootFile;
 use crate::assemble::{AssembleInput, assemble_volumes};
 use crate::boot::prepare_boot;
 use crate::error::{EngineError, Result};
-use crate::fetch::{prepare_members, resolve_boot_asset_tar};
+use crate::fetch::{prepare_members, resolve_release_assets};
 use crate::pretranslate::prepare_pretranslated;
 use crate::probe::read_pending_journal;
 use crate::progress::{EngineProgress, EngineStep, StepOutcome};
@@ -242,17 +242,7 @@ fn execute_install_stage(
     );
 
     progress.start_step("prepare", false)?;
-    let boot_tar = if request.local.boot_files_dir.is_none() {
-        Some(resolve_boot_asset_tar(
-            catalog,
-            build,
-            &request.local,
-            work_dir,
-            progress,
-        )?)
-    } else {
-        None
-    };
+    let assets = resolve_release_assets(catalog, build, &request.local, work_dir, progress)?;
     let need_im4p = request.local.boot_files_dir.is_none()
         || (build.steps.pretranslate
             && (request.local.pretranslated_os_dir.is_none()
@@ -263,7 +253,14 @@ fn execute_install_stage(
 
     let deltas = if build.steps.pretranslate {
         progress.start_step("pretranslate", false)?;
-        let res = prepare_pretranslated(build, &request.local, &members, work_dir, progress)?;
+        let res = prepare_pretranslated(
+            build,
+            &request.local,
+            assets.boot_tar.as_deref(),
+            &members,
+            work_dir,
+            progress,
+        )?;
         progress.finish_step("pretranslate", StepOutcome::Done);
         res
     } else {
@@ -283,7 +280,7 @@ fn execute_install_stage(
     let boot = prepare_boot(
         build,
         &request.local,
-        boot_tar.as_deref(),
+        assets.boot_tar.as_deref(),
         members.im4p.as_ref(),
         &system_fs,
         progress,
@@ -292,6 +289,7 @@ fn execute_install_stage(
         &AssembleInput {
             build,
             local: &request.local,
+            assets: &assets,
             members: &members,
             system_fs: &system_fs,
             boot: &boot,

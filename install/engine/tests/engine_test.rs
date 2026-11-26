@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+mod assets_e2e;
 mod e2e;
 mod synth_apfs;
 mod synth_cryptex;

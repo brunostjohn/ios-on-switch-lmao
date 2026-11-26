@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 use std::collections::BTreeMap;
 use std::fs::{self, File};
+use std::io::BufReader;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -23,10 +24,12 @@ use switch_image_pretranslated::{parse_cdhash_pairs, place_pretranslated};
 
 use crate::boot::BootOutputs;
 use crate::error::{EngineError, Result};
-use crate::fetch::PreparedMembers;
+use crate::fetch::{PreparedAssets, PreparedMembers};
 use crate::pretranslate::PreparedDeltas;
 use crate::progress::EngineProgress;
 use crate::{DATA_VOLUME_UUID_STR, LocalInputs, PREBOOT_VOLUME_UUID_STR};
+
+const OVERLAY_HELPER_REL: &str = "usr/libexec/switch-bootstrap";
 
 pub struct AssembledVolumes {
     pub data_spec: VolumeSpec,
@@ -46,6 +49,7 @@ pub fn unicode_for_build(build: &Build) -> UnicodeVersion {
 pub struct AssembleInput<'a> {
     pub build: &'a Build,
     pub local: &'a LocalInputs,
+    pub assets: &'a PreparedAssets,
     pub members: &'a PreparedMembers,
     pub system_fs: &'a Fs<'a>,
     pub boot: &'a BootOutputs,
@@ -56,6 +60,7 @@ pub struct AssembleInput<'a> {
 pub fn assemble_volumes(input: &AssembleInput<'_>, progress: &mut EngineProgress<'_>) -> Result<AssembledVolumes> {
     let build = input.build;
     let local = input.local;
+    let assets = input.assets;
     let members = input.members;
     let system_fs = input.system_fs;
     let boot = input.boot;
@@ -75,34 +80,22 @@ pub fn assemble_volumes(input: &AssembleInput<'_>, progress: &mut EngineProgress
     }
     progress.check_cancel()?;
 
-    apply_overlay_and_apps(&mut data_tree, local, boot, progress)?;
+    let overlay_helper = apply_overlay_and_apps(&mut data_tree, build, local, assets, boot, progress)?;
     progress.check_cancel()?;
 
-    apply_bootstrap(&mut data_tree, build, local, progress)?;
+    apply_bootstrap(
+        &mut data_tree,
+        build,
+        local,
+        assets,
+        boot,
+        overlay_helper.as_deref(),
+        progress,
+    )?;
     progress.check_cancel()?;
 
-    if let Some(gpu_dir) = &local.gpu_dir {
-        if gpu_dir.is_file() || gpu_dir.join(switch_image_gpu::TREE_MANIFEST).is_file() {
-            progress.log(format!("Staging GPU bundle from {}", gpu_dir.display()));
-            let report = switch_image_gpu::stage_gpu_from_path(&mut data_tree, Some(system_fs), gpu_dir)?;
-            progress.log(format!(
-                "GPU bundle: {} files, {} pref plists, icon build {}",
-                report.files, report.prefs, report.icon_build
-            ));
-        } else {
-            progress.log(format!("Merging GPU bundle from {}", gpu_dir.display()));
-            let gpu_src = TreeSource::from_dir(gpu_dir)?;
-            let report = merge_tree(&mut data_tree, &gpu_src)?;
-            progress.log(format!("GPU bundle: {} files, {} dirs", report.files, report.dirs));
-        }
-    }
-
-    if let Some(seed_dir) = &local.shader_seed_dir {
-        progress.log(format!("Merging shader seed from {}", seed_dir.display()));
-        let seed_src = TreeSource::from_dir(seed_dir)?;
-        let report = merge_tree(&mut data_tree, &seed_src)?;
-        progress.log(format!("Shader seed: {} files, {} dirs", report.files, report.dirs));
-    }
+    apply_gpu(&mut data_tree, build, local, assets, system_fs, progress)?;
+    apply_seed(&mut data_tree, build, local, assets, progress)?;
     progress.check_cancel()?;
 
     progress.log("Planning Switch-iOS-Preboot cryptexes");
@@ -144,22 +137,42 @@ fn apply_os_pretranslation(
 
 fn apply_overlay_and_apps(
     data_tree: &mut Tree,
+    build: &Build,
     local: &LocalInputs,
+    assets: &PreparedAssets,
     boot: &BootOutputs,
     progress: &mut EngineProgress<'_>,
-) -> Result<()> {
-    let base = match &local.overlay_dir {
-        Some(dir) => Some(TreeSource::from_dir(dir)?),
-        None => None,
+) -> Result<Option<Vec<u8>>> {
+    let base = if let Some(path) = &local.overlay_dir {
+        if path.is_dir() {
+            Some(TreeSource::from_dir(path)?)
+        } else {
+            let file = File::open(path).map_err(|e| EngineError::io_path(path, e))?;
+            Some(TreeSource::from_tar(BufReader::new(file))?)
+        }
+    } else if let Some(tar_path) = &assets.overlay_tar {
+        let asset = build.asset("overlay")?;
+        let file = File::open(tar_path).map_err(|e| EngineError::io_path(tar_path, e))?;
+        let mut checked = asset.checked(BufReader::new(file));
+        let src = TreeSource::from_tar(&mut checked)?;
+        checked.finish()?;
+        Some(src)
+    } else {
+        None
     };
+
     let merged = merge_overlay_sources(base.as_ref(), &boot.overlay_files)?;
+    let helper_bytes = match merged.get(OVERLAY_HELPER_REL).map(|e| &e.kind) {
+        Some(SourceKind::File(bytes)) => Some(bytes.to_vec()),
+        _ => None,
+    };
     if merged.is_empty() {
-        return Ok(());
+        return Ok(helper_bytes);
     }
 
     let app_path = format!("Applications/{}", switch_image_overlay::INSTALLER_APP);
     let app_prefix = format!("{app_path}/");
-    let has_full_overlay = local.overlay_dir.is_some()
+    let has_full_overlay = base.is_some()
         || merged
             .entries()
             .keys()
@@ -184,7 +197,7 @@ fn apply_overlay_and_apps(
     if !staged.staged.is_empty() {
         progress.log(format!("Staged {} system apps", staged.staged.len()));
     }
-    Ok(())
+    Ok(helper_bytes)
 }
 
 fn merge_overlay_sources(base: Option<&TreeSource>, extra: &BTreeMap<String, Vec<u8>>) -> Result<TreeSource> {
@@ -213,46 +226,155 @@ fn apply_bootstrap(
     data_tree: &mut Tree,
     build: &Build,
     local: &LocalInputs,
+    assets: &PreparedAssets,
+    boot: &BootOutputs,
+    overlay_helper: Option<&[u8]>,
     progress: &mut EngineProgress<'_>,
 ) -> Result<()> {
-    let Some(dir) = &local.bootstrap_dir else {
-        return Ok(());
-    };
     let pins = BootstrapPins {
         build: build.build(),
         version: &build.record.version,
     };
-    let report = if dir.join("bootstrap").is_dir() {
-        stage_bootstrap_from_dir(data_tree, dir, &pins)?
-    } else if dir.join(MANIFEST).is_file() {
-        let manifest_path = dir.join(MANIFEST);
-        let archive_path = dir.join(ARCHIVE);
-        let manifest_bytes = fs::read(&manifest_path).map_err(|e| EngineError::io_path(&manifest_path, e))?;
-        let archive = File::open(&archive_path).map_err(|e| EngineError::io_path(&archive_path, e))?;
-        let helper_path = dir.join(HELPER);
-        let helper = if helper_path.is_file() {
-            Some(fs::read(&helper_path).map_err(|e| EngineError::io_path(&helper_path, e))?)
+    let report = if let Some(path) = &local.bootstrap_dir {
+        if path.is_file() {
+            let manifest_bytes = boot.bootstrap_manifest.as_deref().ok_or_else(|| {
+                EngineError::Config("bootstrap manifest missing from boot package for tar override".into())
+            })?;
+            let archive = File::open(path).map_err(|e| EngineError::io_path(path, e))?;
+            Some(stage_bootstrap_reader(
+                data_tree,
+                manifest_bytes,
+                BufReader::new(archive),
+                overlay_helper,
+                &pins,
+            )?)
+        } else if path.join("bootstrap").is_dir() {
+            stage_bootstrap_from_dir(data_tree, path, &pins)?
+        } else if path.join(MANIFEST).is_file() {
+            let manifest_path = path.join(MANIFEST);
+            let archive_path = path.join(ARCHIVE);
+            let manifest_bytes = fs::read(&manifest_path).map_err(|e| EngineError::io_path(&manifest_path, e))?;
+            let archive = File::open(&archive_path).map_err(|e| EngineError::io_path(&archive_path, e))?;
+            let helper_path = path.join(HELPER);
+            let helper = if helper_path.is_file() {
+                Some(fs::read(&helper_path).map_err(|e| EngineError::io_path(&helper_path, e))?)
+            } else {
+                None
+            };
+            Some(stage_bootstrap_reader(
+                data_tree,
+                &manifest_bytes,
+                BufReader::new(archive),
+                helper.as_deref().or(overlay_helper),
+                &pins,
+            )?)
         } else {
-            None
-        };
-        Some(stage_bootstrap_reader(
-            data_tree,
-            &manifest_bytes,
-            archive,
-            helper.as_deref(),
-            &pins,
-        )?)
+            return Err(EngineError::Config(format!(
+                "bootstrap path {} contains neither bootstrap/ nor {MANIFEST}",
+                path.display()
+            )));
+        }
+    } else if let (Some(tar_path), Some(manifest_bytes)) = (&assets.bootstrap_tar, boot.bootstrap_manifest.as_deref()) {
+        let asset = build.asset("bootstrap")?;
+        let file = File::open(tar_path).map_err(|e| EngineError::io_path(tar_path, e))?;
+        let mut checked = asset.checked(BufReader::new(file));
+        let report = stage_bootstrap_reader(data_tree, manifest_bytes, &mut checked, overlay_helper, &pins)?;
+        checked.finish()?;
+        Some(report)
     } else {
-        return Err(EngineError::Config(format!(
-            "bootstrap directory {} contains neither bootstrap/ nor {MANIFEST}",
-            dir.display()
-        )));
+        None
     };
+
     if let Some(report) = report {
         progress.log(format!(
             "Bootstrap staged: {} ({}, {} entries)",
             report.build, report.firmware, report.entries
         ));
+    }
+    Ok(())
+}
+
+fn is_tar_path(path: &Path) -> bool {
+    path.is_file()
+        && path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("tar"))
+}
+
+fn apply_gpu(
+    data_tree: &mut Tree,
+    build: &Build,
+    local: &LocalInputs,
+    assets: &PreparedAssets,
+    system_fs: &Fs<'_>,
+    progress: &mut EngineProgress<'_>,
+) -> Result<()> {
+    if let Some(gpu_path) = &local.gpu_dir {
+        if is_tar_path(gpu_path) {
+            progress.log(format!("Staging GPU bundle tar from {}", gpu_path.display()));
+            let file = File::open(gpu_path).map_err(|e| EngineError::io_path(gpu_path, e))?;
+            let stage = switch_image_gpu::GpuStage::from_tar(BufReader::new(file))?;
+            let report = switch_image_gpu::stage_gpu(data_tree, Some(system_fs), &stage)?;
+            progress.log(format!(
+                "GPU bundle: {} files, {} pref plists, icon build {}",
+                report.files, report.prefs, report.icon_build
+            ));
+        } else if gpu_path.is_file() || gpu_path.join(switch_image_gpu::TREE_MANIFEST).is_file() {
+            progress.log(format!("Staging GPU bundle from {}", gpu_path.display()));
+            let report = switch_image_gpu::stage_gpu_from_path(data_tree, Some(system_fs), gpu_path)?;
+            progress.log(format!(
+                "GPU bundle: {} files, {} pref plists, icon build {}",
+                report.files, report.prefs, report.icon_build
+            ));
+        } else {
+            progress.log(format!("Merging GPU bundle from {}", gpu_path.display()));
+            let gpu_src = TreeSource::from_dir(gpu_path)?;
+            let report = merge_tree(data_tree, &gpu_src)?;
+            progress.log(format!("GPU bundle: {} files, {} dirs", report.files, report.dirs));
+        }
+    } else if let Some(tar_path) = &assets.gpu_tar {
+        progress.log(format!("Staging GPU release asset from {}", tar_path.display()));
+        let asset = build.asset("gpu")?;
+        let file = File::open(tar_path).map_err(|e| EngineError::io_path(tar_path, e))?;
+        let mut checked = asset.checked(BufReader::new(file));
+        let stage = switch_image_gpu::GpuStage::from_tar(&mut checked)?;
+        checked.finish()?;
+        let report = switch_image_gpu::stage_gpu(data_tree, Some(system_fs), &stage)?;
+        progress.log(format!(
+            "GPU bundle: {} files, {} pref plists, icon build {}",
+            report.files, report.prefs, report.icon_build
+        ));
+    }
+    Ok(())
+}
+
+fn apply_seed(
+    data_tree: &mut Tree,
+    build: &Build,
+    local: &LocalInputs,
+    assets: &PreparedAssets,
+    progress: &mut EngineProgress<'_>,
+) -> Result<()> {
+    if let Some(seed_path) = &local.shader_seed_dir {
+        progress.log(format!("Merging shader seed from {}", seed_path.display()));
+        let seed_src = if seed_path.is_dir() {
+            TreeSource::from_dir(seed_path)?
+        } else {
+            let file = File::open(seed_path).map_err(|e| EngineError::io_path(seed_path, e))?;
+            TreeSource::from_tar(BufReader::new(file))?
+        };
+        let report = merge_tree(data_tree, &seed_src)?;
+        progress.log(format!("Shader seed: {} files, {} dirs", report.files, report.dirs));
+    } else if let Some(tar_path) = &assets.seed_tar {
+        progress.log(format!("Merging shader seed release asset from {}", tar_path.display()));
+        let asset = build.asset("seed")?;
+        let file = File::open(tar_path).map_err(|e| EngineError::io_path(tar_path, e))?;
+        let mut checked = asset.checked(BufReader::new(file));
+        let seed_src = TreeSource::from_tar(&mut checked)?;
+        checked.finish()?;
+        let report = merge_tree(data_tree, &seed_src)?;
+        progress.log(format!("Shader seed: {} files, {} dirs", report.files, report.dirs));
     }
     Ok(())
 }

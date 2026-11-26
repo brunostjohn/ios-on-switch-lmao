@@ -112,7 +112,7 @@ pub struct Cli {
     /// Local AppOS cryptex image override.
     #[arg(long)]
     pub app_cryptex: Option<PathBuf>,
-    /// Local overlay tree directory merged into Switch/overlay.
+    /// Local overlay tree directory or .tar archive merged into Switch/overlay.
     #[arg(long)]
     pub overlay_dir: Option<PathBuf>,
     /// Optional built-in Installer app pin manifest (installer-bundle.json).
@@ -121,13 +121,13 @@ pub struct Cli {
     /// Optional Installer migration seed pin manifest (installer-seed.json).
     #[arg(long)]
     pub overlay_seed_pin: Option<PathBuf>,
-    /// Local rootless bootstrap package or directory.
+    /// Local rootless bootstrap package directory or payload .tar archive.
     #[arg(long)]
     pub bootstrap_dir: Option<PathBuf>,
-    /// Optional GPU bundle directory merged onto Data.
+    /// Optional GPU bundle directory, gpu.stage manifest, or .tar archive merged onto Data.
     #[arg(long)]
     pub gpu_dir: Option<PathBuf>,
-    /// Optional shader seed tree directory merged onto Data.
+    /// Optional shader seed tree directory or .tar archive merged onto Data.
     #[arg(long)]
     pub shader_seed_dir: Option<PathBuf>,
     /// Optional checked byte-edit table for arm64e pretranslation.

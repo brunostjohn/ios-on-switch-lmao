@@ -46,6 +46,39 @@ class FilesCardTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 sdcard.card_for_run(None, root / 'bad', files, 'ntfs')
 
+    def test_raw_container_defaults_to_offset_zero_without_state_json(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            image = root / 'raw.apfs'
+            header = bytearray(4096)
+            struct.pack_into('<4sIQ', header, 32, b'NXSB', 4096, 1024)
+            image.write_bytes(header)
+
+            self.assertEqual(sdcard.raw_container(image), (0, 4096 * 1024 // sdcard.SECTOR))
+
+            captured = {}
+
+            def fake_entry(_root: Path, key: str, _builder: object) -> Path:
+                captured['key'] = key
+                return root / 'cached'
+
+            with patch.object(sdcard.cache, 'entry', side_effect=fake_entry):
+                self.assertEqual(sdcard.base(image), root / 'cached')
+            self.assertIn('key', captured)
+
+            offset_image = root / 'staged.img'
+            offset_bytes = 2048 * sdcard.SECTOR
+            with offset_image.open('wb') as f:
+                f.seek(offset_bytes + 32)
+                f.write(struct.pack('<4sIQ', b'NXSB', 4096, 512))
+            offset_image.with_name('state.json').write_text(json.dumps({'offset': offset_bytes}))
+            self.assertEqual(sdcard.raw_container(offset_image), (2048, 4096 * 512 // sdcard.SECTOR))
+
+            bad_image = root / 'bad.apfs'
+            bad_image.write_bytes(b'\0' * 64)
+            with self.assertRaises(SystemExit):
+                sdcard.raw_container(bad_image)
+
 
 if __name__ == '__main__':
     unittest.main()

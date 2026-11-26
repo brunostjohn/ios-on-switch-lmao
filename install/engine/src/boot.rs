@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 use std::collections::BTreeMap;
 use std::fs::{self, File};
-use std::io::BufReader;
+use std::io::{BufReader, Read};
 use std::path::Path;
 
 use switch_apfs_read::{Entry, Fs, Stream, XattrData, stream};
-use switch_boot::{Assets, LAUNCHD_CATALOG, LaunchdCatalog, Members};
+use switch_boot::{Assets, LAUNCHD_CATALOG, LaunchdCatalog, Members, PRETRANSLATED_EDITS};
 use switch_catalog::Build;
 
 use crate::LocalInputs;
@@ -18,7 +18,35 @@ pub struct BootOutputs {
     pub overlay_files: BTreeMap<String, Vec<u8>>,
     pub builtin_installer_pin: Option<Vec<u8>>,
     pub bootstrap_manifest: Option<Vec<u8>>,
+    pub pretranslated_edits: Option<Vec<u8>>,
     pub installd_cdhash: Option<[u8; 20]>,
+}
+
+pub fn read_pretranslated_edits_from_boot_tar(boot_tar: &Path) -> Result<Option<Vec<u8>>> {
+    let file = File::open(boot_tar).map_err(|e| EngineError::io_path(boot_tar, e))?;
+    let mut archive = tar::Archive::new(BufReader::new(file));
+    for entry in archive.entries().map_err(|e| EngineError::io_path(boot_tar, e))? {
+        let mut entry = entry.map_err(|e| EngineError::io_path(boot_tar, e))?;
+        if !entry.header().entry_type().is_file() {
+            continue;
+        }
+        let raw = entry.path_bytes();
+        let Ok(name) = std::str::from_utf8(&raw) else {
+            continue;
+        };
+        let mut norm = name;
+        while let Some(rest) = norm.strip_prefix("./") {
+            norm = rest;
+        }
+        if norm == PRETRANSLATED_EDITS {
+            let mut bytes = Vec::with_capacity(entry.size() as usize);
+            entry
+                .read_to_end(&mut bytes)
+                .map_err(|e| EngineError::io_path(boot_tar, e))?;
+            return Ok(Some(bytes));
+        }
+    }
+    Ok(None)
 }
 
 pub fn prepare_boot(
@@ -77,6 +105,7 @@ pub fn prepare_boot(
         overlay_files: BTreeMap::new(),
         builtin_installer_pin: None,
         bootstrap_manifest: None,
+        pretranslated_edits: assets.get(PRETRANSLATED_EDITS).map(ToOwned::to_owned),
         installd_cdhash: Some(package.installd_cdhash),
     };
     for (path, data) in package.files {
@@ -143,6 +172,7 @@ fn load_boot_dir(root: &Path) -> Result<BootOutputs> {
         overlay_files: BTreeMap::new(),
         builtin_installer_pin: None,
         bootstrap_manifest: None,
+        pretranslated_edits: None,
         installd_cdhash: None,
     };
     walk_boot_dir(root, "", &mut out)?;

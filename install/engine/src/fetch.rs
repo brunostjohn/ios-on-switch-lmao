@@ -68,6 +68,44 @@ pub struct PreparedMembers {
     pub im4p: Option<Im4pMembers>,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct PreparedAssets {
+    pub boot_tar: Option<PathBuf>,
+    pub overlay_tar: Option<PathBuf>,
+    pub bootstrap_tar: Option<PathBuf>,
+    pub gpu_tar: Option<PathBuf>,
+    pub seed_tar: Option<PathBuf>,
+}
+
+pub fn resolve_release_assets(
+    catalog: &Catalog,
+    build: &Build,
+    local: &LocalInputs,
+    work_dir: &Path,
+    progress: &mut EngineProgress<'_>,
+) -> Result<PreparedAssets> {
+    let boot_tar = local
+        .boot_files_dir
+        .is_none()
+        .then(|| resolve_boot_asset_tar(catalog, build, local, work_dir, progress))
+        .transpose()?;
+    let assets_dir = local.assets_dir.as_deref();
+    let mut optional = |role: &str, override_set: bool| -> Result<Option<PathBuf>> {
+        if override_set {
+            Ok(None)
+        } else {
+            resolve_release_asset(catalog, build, role, None, assets_dir, work_dir, progress)
+        }
+    };
+    Ok(PreparedAssets {
+        boot_tar,
+        overlay_tar: optional("overlay", local.overlay_dir.is_some())?,
+        bootstrap_tar: optional("bootstrap", local.bootstrap_dir.is_some())?,
+        gpu_tar: optional("gpu", local.gpu_dir.is_some())?,
+        seed_tar: optional("seed", local.shader_seed_dir.is_some())?,
+    })
+}
+
 pub fn resolve_boot_asset_tar(
     catalog: &Catalog,
     build: &Build,
@@ -75,26 +113,62 @@ pub fn resolve_boot_asset_tar(
     work_dir: &Path,
     progress: &mut EngineProgress<'_>,
 ) -> Result<PathBuf> {
+    let _ = build.asset("boot")?;
+    resolve_release_asset(
+        catalog,
+        build,
+        "boot",
+        local.boot_tar.as_deref(),
+        local.assets_dir.as_deref(),
+        work_dir,
+        progress,
+    )?
+    .ok_or_else(|| {
+        EngineError::Catalog(switch_catalog::Error::NoAsset {
+            build: build.build().to_owned(),
+            role: "boot".to_owned(),
+        })
+    })
+}
+
+pub fn resolve_release_asset(
+    catalog: &Catalog,
+    build: &Build,
+    role: &str,
+    override_path: Option<&Path>,
+    assets_dir: Option<&Path>,
+    work_dir: &Path,
+    progress: &mut EngineProgress<'_>,
+) -> Result<Option<PathBuf>> {
     progress.check_cancel()?;
-    let asset = build.asset("boot")?;
-    if let Some(path) = &local.boot_tar {
-        progress.log(format!("Using local boot asset tar {}", path.display()));
-        return Ok(path.clone());
+    if let Some(path) = override_path {
+        progress.log(format!("Using local {role} asset {}", path.display()));
+        return Ok(Some(path.to_path_buf()));
     }
-    if let Some(dir) = &local.assets_dir {
-        let candidate = dir.join(&asset.name);
-        if candidate.is_file() {
-            progress.log(format!("Using local boot asset {}", candidate.display()));
-            return Ok(candidate);
-        }
+    let Some(asset) = build.record.assets.get(role) else {
+        return Ok(None);
+    };
+    if let Some(candidate) = assets_dir.map(|d| d.join(&asset.name)).filter(|p| p.is_file()) {
+        progress.log(format!("Using local {role} asset {}", candidate.display()));
+        return Ok(Some(candidate));
     }
 
     let assets_cache = work_dir.join("cache").join(&catalog.release).join("assets");
     fs::create_dir_all(&assets_cache).map_err(|e| EngineError::io_path(&assets_cache, e))?;
     let dest = assets_cache.join(&asset.name);
-    if dest.is_file() && fs::metadata(&dest).is_ok_and(|m| m.len() == asset.size) {
-        progress.log(format!("Reusing cached boot asset {}", dest.display()));
-        return Ok(dest);
+    let stamp_path = assets_cache.join(format!("{}.stamp.json", asset.name));
+    let expected_hex = asset.sha256.to_string();
+    if dest.is_file() {
+        if load_stamp(&stamp_path).is_some_and(|s| s.matches_file(&dest, asset.size, &expected_hex)) {
+            progress.log(format!("Reusing cached {role} asset {}", dest.display()));
+            return Ok(Some(dest));
+        }
+        if check_asset_matches(asset, &dest).is_ok() {
+            save_stamp(&stamp_path, asset.size, &expected_hex)?;
+            progress.log(format!("Reusing cached {role} asset {}", dest.display()));
+            return Ok(Some(dest));
+        }
+        let _ = fs::remove_file(&dest);
     }
 
     let base_url = Url::parse(&catalog.assets_url())
@@ -104,10 +178,9 @@ pub fn resolve_boot_asset_tar(
     let total = asset.size;
     let progress_bytes = Arc::new(Mutex::new(0u64));
     let progress_cb = Arc::clone(&progress_bytes);
-
     progress.log(format!(
-        "Downloading release asset {} ({} bytes)",
-        asset.name, asset.size
+        "Downloading {role} release asset {} ({total} bytes)",
+        asset.name
     ));
     run_cancelable(&cancel, async move {
         fetch_release(
@@ -115,7 +188,7 @@ pub fn resolve_boot_asset_tar(
             &base_url,
             std::slice::from_ref(asset),
             &assets_cache,
-            move |_name, done| {
+            move |_, done| {
                 if let Ok(mut g) = progress_cb.lock() {
                     *g = done;
                 }
@@ -124,7 +197,7 @@ pub fn resolve_boot_asset_tar(
         .await
         .map_err(EngineError::Fetch)
     })?;
-
+    save_stamp(&stamp_path, asset.size, &expected_hex)?;
     let done = progress_bytes.lock().map_or(total, |g| *g);
     progress.step_progress(
         "prepare",
@@ -133,7 +206,7 @@ pub fn resolve_boot_asset_tar(
         Some(format!("Fetched {}", asset.name)),
         true,
     );
-    Ok(dest)
+    Ok(Some(dest))
 }
 
 pub fn prepare_members(

@@ -18,7 +18,9 @@ use switch_catalog::{Build, Catalog, Role};
 use switch_partition::minimum_ios_bytes;
 
 pub use error::{CardErrorState, EngineError, Result};
-pub use fetch::{HTTP_CONNECT_TIMEOUT, HTTP_READ_TIMEOUT, build_http_client, load_catalog};
+pub use fetch::{
+    HTTP_CONNECT_TIMEOUT, HTTP_READ_TIMEOUT, PreparedAssets, build_http_client, load_catalog, resolve_release_asset,
+};
 pub use modes::steps_for_mode;
 pub use paths::{APP_DATA_DIR_NAME, RunLog, default_cache_dir, default_log_dir, timestamped_log_path};
 pub use probe::{CardProbe, ProbeJournal, ProbeSize, ProbeSlot, probe_device, probe_image, read_pending_journal};

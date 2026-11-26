@@ -128,12 +128,22 @@ def _mtools(fat: Path, *args: str) -> None:
     subprocess.run([args[0], '-i', str(fat), *args[1:]], check=True, capture_output=True)
 
 
+def _raw_state(image: Path) -> dict:
+    state_file = image.with_name('state.json')
+    if state_file.is_file():
+        return json.loads(state_file.read_text())
+    return {'offset': 0}
+
+
 def raw_container(image: Path) -> tuple[int, int]:
     """Return a raw stage image's container (tools/install compose/populate) as its first sector and sector count."""
-    offset = json.loads(image.with_name('state.json').read_text())['offset']
+    offset = _raw_state(image)['offset']
     with image.open('rb') as f:
         f.seek(offset + 32)
-        magic, block_size, block_count = struct.unpack('<4sIQ', f.read(16))
+        header = f.read(16)
+    if len(header) < 16:
+        raise SystemExit(f'{image}: no APFS container at {offset}')
+    magic, block_size, block_count = struct.unpack('<4sIQ', header)
     if magic != b'NXSB':
         raise SystemExit(f'{image}: no APFS container at {offset}')
     return offset // SECTOR, block_size * block_count // SECTOR
@@ -178,7 +188,7 @@ def base(first_part: Path | None) -> Path:
             identity = {'manifest': hashlib.sha256(f.read(manifest.BOOT_OFFSET)).hexdigest()}
     elif first_part is not None:
         stat = first_part.stat()
-        state = json.loads(first_part.with_name('state.json').read_text())
+        state = _raw_state(first_part)
         identity = {'image': first_part.name, 'state': state, 'size': stat.st_size, 'mtime': stat.st_mtime_ns}
     key = cache.digest({'image': identity, 'revision': LAYOUT_REVISION})
     return cache.entry(cache.ROOT / 'sd-base', key, lambda tmp, _: make_base(tmp, first_part))
