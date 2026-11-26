@@ -107,7 +107,7 @@ def plan(preboot_root: Path, spec: dict, image: Image, free_bytes: int, folder: 
 
 
 def allocated(path: Path) -> int:
-    """The bytes a file holds on its volume (0: none there): a sparse file's holes hold none."""
+    """Return the bytes a file holds on its volume (0: none there): a sparse file's holes hold none."""
     try:
         return path.stat().st_blocks * 512
     except FileNotFoundError:

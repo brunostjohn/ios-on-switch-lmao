@@ -113,9 +113,12 @@ class SystemUpdateTest(unittest.TestCase):
         mounted = mock.patch.object(
             system_update.cards, 'mounted', side_effect=lambda *_, **__: contextlib.nullcontext(self.preboot)
         )
-        with mounted, mock.patch.object(system_update, 'free_bytes', return_value=12288):
-            with self.assertRaisesRegex(system_update.host.HostError, 'neither it nor the boot entry'):
-                system_update.write_on_card('disk9s3', update, self.built, object(), Log())
+        with (
+            mounted,
+            mock.patch.object(system_update, 'free_bytes', return_value=12288),
+            self.assertRaisesRegex(system_update.host.HostError, 'neither it nor the boot entry'),
+        ):
+            system_update.write_on_card('disk9s3', update, self.built, object(), Log())
         self.assertNotEqual(self.staged().read_bytes(), self.image.read_bytes())
         with mounted, mock.patch.object(system_update, 'free_bytes', return_value=ROOM):
             system_update.write_on_card('disk9s3', update, self.built, object(), Log())
