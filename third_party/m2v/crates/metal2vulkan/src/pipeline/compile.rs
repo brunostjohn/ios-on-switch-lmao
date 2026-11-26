@@ -1898,7 +1898,7 @@ const KEPT_DECODES: usize = 4;
 /// decode left charged.
 struct KeptDecode {
     bytes: Arc<[u8]>,
-    sha: Hash256,
+    sha: Option<Hash256>,
     decoded: Arc<air::Decoded>,
     charged: u64,
 }
@@ -1933,23 +1933,48 @@ fn decode_kept(
                 found
             })
     };
-    if let Some((sha, decoded, charged)) = found {
+    if let Some((cached_sha, decoded, charged)) = found {
         m.charge(usize::try_from(charged).unwrap_or(usize::MAX))?;
-        return Ok((known.unwrap_or(sha), air::Decoded::clone(&decoded)));
+        let sha = match known {
+            Some(h) => h,
+            None => match cached_sha {
+                Some(h) => h,
+                None => {
+                    let h = container::sha256(bitcode);
+                    let mut kept = KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                    if let Some(k) = kept.iter_mut().find(|k| *k.bytes == *bitcode) {
+                        k.sha = Some(h);
+                    }
+                    h
+                }
+            },
+        };
+        return Ok((sha, air::Decoded::clone(&decoded)));
     }
     let before = m.ledger();
     let decoded = air::decode(bitcode, m)?;
     let charged = m.ledger().saturating_sub(before);
-    let sha = known.unwrap_or_else(|| container::sha256(bitcode));
+    let computed_sha = if known.is_some() {
+        None
+    } else {
+        Some(container::sha256(bitcode))
+    };
+    let sha = known.unwrap_or_else(|| computed_sha.expect("computed when known is None"));
     let entry = KeptDecode {
         bytes: Arc::from(bitcode),
-        sha,
+        sha: computed_sha,
         decoded: Arc::new(decoded.clone()),
         charged,
     };
     let mut kept = KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    kept.push_front(entry);
-    kept.truncate(KEPT_DECODES);
+    if let Some(at) = kept.iter().position(|k| *k.bytes == *bitcode) {
+        if let Some(h) = computed_sha {
+            kept[at].sha = Some(h);
+        }
+    } else {
+        kept.push_front(entry);
+        kept.truncate(KEPT_DECODES);
+    }
     Ok((sha, decoded))
 }
 

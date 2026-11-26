@@ -611,4 +611,23 @@ TEST_F(FacadeBlitOverlap, BackToBackOverlappingCopiesInSingleBlitEncoder)
     EXPECT_EQ(memcmp(outB.contents, expB.data(), kBytes), 0);
 }
 
+TEST(BlitOverlap, Linear2DArraySliceCopyNotIdentityAndDifferentLayerBytesNotDropped)
+{
+    gm20b::Texture arr;
+    arr.va = 0x100000;
+    arr.pitch = 64;
+    arr.width = 16;
+    arr.height = 8;
+    arr.bpp = 4;
+    arr.layers = 2;
+    arr.layerBytes = 512;
+    arr.blockLinear = false;
+
+    const gm20b::CopySurface s0 = gm20b::copySideOf(arr, 2, 1, 0);
+    const gm20b::CopySurface s1 = gm20b::copySideOf(arr, 2, 1, 1);
+    EXPECT_EQ(s0.va + 512, s1.va);
+    EXPECT_EQ(gm20b::copySideOverlap(s0, s1, 4, 4, 4, 4), gm20b::CopyOverlap::None);
+    EXPECT_EQ(gm20b::copySideOverlap(s0, s0, 4, 4, 4, 4), gm20b::CopyOverlap::Identity);
+}
+
 }  // namespace

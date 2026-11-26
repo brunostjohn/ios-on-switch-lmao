@@ -271,14 +271,21 @@ static void load_function_starts(const uint8_t *m)
         for (uint32_t q = 0; q < fs_size;) {
             uint64_t v = 0;
             int sh = 0;
+            bool ok = false;
             while (q < fs_size) {
                 uint8_t b = data[q++];
-                v |= (uint64_t)(b & 0x7f) << sh;
-                sh += 7;
-                if (!(b & 0x80))
+                if (sh == 63 && b > 1u)
                     break;
+                v |= (uint64_t)(b & 0x7fu) << sh;
+                if (!(b & 0x80u)) {
+                    ok = true;
+                    break;
+                }
+                if (sh >= 63)
+                    break;
+                sh += 7;
             }
-            if (!v)
+            if (!ok || !v || v > UINT64_MAX - cur)
                 break;
             cur += v;
             if (nfstarts == capfs) {

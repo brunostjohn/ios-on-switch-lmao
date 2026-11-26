@@ -82,7 +82,8 @@ struct a64x_image {
     uint32_t *stubs;
     uint32_t nstub, stubcap;
     uint32_t nranges;
-    struct a64x_range *ranges; /* instruction sections, absolute file offsets, sorted */
+    uint32_t ranges_cap;
+    struct a64x_range *ranges; /* instruction sections, absolute file offsets, sorted and merged */
     uint32_t map_flags;        /* A64X_MAP_NO_PAC for plain arm64 */
     uint64_t changed;          /* words the scan rewrote */
     uint8_t *data;             /* [npages * 128]: 1 bit per word of the segment, set = data in __text */
@@ -121,7 +122,7 @@ static void a64x_image_free(struct a64x_image *im)
         kfree_data(im->stubs, im->stubcap * sizeof(uint32_t));
     }
     if (im->ranges) {
-        kfree_data(im->ranges, im->nranges * sizeof(struct a64x_range));
+        kfree_data(im->ranges, im->ranges_cap * sizeof(struct a64x_range));
     }
     if (im->data) {
         kfree_data(im->data, (size_t)im->npages * (A64X_WORDS / 8));
@@ -264,7 +265,12 @@ static int a64x_parse(const void *lcmds, size_t size, off_t slice_off, struct a6
                 if (nexec++) {
                     return ENOTSUP; /* one executable segment (__TEXT) is all arm64e images have */
                 }
-                lay->exec_fileoff = (uint64_t)slice_off + sg->fileoff;
+                uint64_t seg_end = 0, abs_seg_end = 0;
+                if (slice_off < 0 || os_add_overflow((uint64_t)slice_off, sg->fileoff, &lay->exec_fileoff) ||
+                    os_add_overflow(sg->fileoff, sg->filesize, &seg_end) ||
+                    os_add_overflow((uint64_t)slice_off, seg_end, &abs_seg_end)) {
+                    return EBADMACHO;
+                }
                 lay->exec_filesize = sg->filesize;
                 lay->exec_vmaddr = sg->vmaddr;
                 const struct section_64 *sc = (const void *)(sg + 1);
@@ -274,6 +280,12 @@ static int a64x_parse(const void *lcmds, size_t size, off_t slice_off, struct a6
                     if (sk == A64X_SECT_DATA) {
                         continue;
                     }
+                    uint64_t lo = 0, hi = 0;
+                    if (sc[s].offset < sg->fileoff || sc[s].offset > seg_end || sc[s].size > seg_end - sc[s].offset ||
+                        os_add_overflow((uint64_t)slice_off, sc[s].offset, &lo) ||
+                        os_add_overflow(lo, sc[s].size, &hi)) {
+                        return EBADMACHO;
+                    }
                     if (sk == A64X_SECT_CODE) {
                         if (!(sc[s].flags & (S_ATTR_PURE_INSTRUCTIONS | S_ATTR_SOME_INSTRUCTIONS)) &&
                             (sc[s].offset & 3u) != 0u) {
@@ -282,13 +294,17 @@ static int a64x_parse(const void *lcmds, size_t size, off_t slice_off, struct a6
                         if (lay->nsect >= A64X_MAX_SECTIONS) {
                             return ENOTSUP;
                         }
-                        lay->sect[lay->nsect].lo = (uint64_t)slice_off + sc[s].offset;
-                        lay->sect[lay->nsect].hi = (uint64_t)slice_off + sc[s].offset + sc[s].size;
+                        lay->sect[lay->nsect].lo = lo;
+                        lay->sect[lay->nsect].hi = hi;
                         lay->nsect++;
                     } else if ((sc[s].offset & 3u) == 0u && lay->ncand < A64X_MAX_SECTIONS) {
+                        uint64_t va_end = 0;
+                        if (os_add_overflow(sc[s].addr, sc[s].size, &va_end)) {
+                            return EBADMACHO;
+                        }
                         lay->cand[lay->ncand].va = sc[s].addr;
                         lay->cand[lay->ncand].size = sc[s].size;
-                        lay->cand[lay->ncand].off = (uint64_t)slice_off + sc[s].offset;
+                        lay->cand[lay->ncand].off = lo;
                         lay->ncand++;
                     }
                 }
@@ -327,15 +343,23 @@ static int a64x_find_islands(struct a64x_image *im, const struct a64x_layout *la
             for (uint32_t q = 0; q < lay->fs_size;) {
                 uint64_t v = 0;
                 int sh = 0;
-                while (q < lay->fs_size && sh < 64) {
+                bool ok = false;
+                while (q < lay->fs_size) {
                     uint8_t b = buf[q++];
-                    v |= (uint64_t)(b & 0x7F) << sh;
-                    sh += 7;
-                    if (!(b & 0x80)) {
+                    if (sh == 63 && b > 1u) {
                         break;
                     }
+                    v |= (uint64_t)(b & 0x7Fu) << sh;
+                    if (!(b & 0x80u)) {
+                        ok = true;
+                        break;
+                    }
+                    if (sh >= 63) {
+                        break;
+                    }
+                    sh += 7;
                 }
-                if (!v || v > UINT64_MAX - addr) {
+                if (!ok || !v || v > UINT64_MAX - addr) {
                     break;
                 }
                 addr += v;
@@ -375,25 +399,41 @@ static int a64x_find_islands(struct a64x_image *im, const struct a64x_layout *la
             error = ENOMEM;
             goto out;
         }
+        im->ranges_cap = nrange;
         if (lay->nsect) {
             bcopy(lay->sect, im->ranges, lay->nsect * sizeof(struct a64x_range));
         }
         uint32_t nr = lay->nsect;
         for (uint32_t c = 0; c < lay->ncand; c++) {
             if (cand_hit & (1ull << c)) {
+                uint64_t hi = 0;
+                if (os_add_overflow(lay->cand[c].off, lay->cand[c].size, &hi)) {
+                    error = EBADMACHO;
+                    goto out;
+                }
                 im->ranges[nr].lo = lay->cand[c].off;
-                im->ranges[nr].hi = lay->cand[c].off + lay->cand[c].size;
+                im->ranges[nr].hi = hi;
                 nr++;
             }
         }
-        im->nranges = nr;
-        for (uint32_t i = 1; i < im->nranges; i++) {
+        for (uint32_t i = 1; i < nr; i++) {
             for (uint32_t j = i; j > 0 && im->ranges[j - 1].lo > im->ranges[j].lo; j--) {
                 struct a64x_range t = im->ranges[j];
                 im->ranges[j] = im->ranges[j - 1];
                 im->ranges[j - 1] = t;
             }
         }
+        uint32_t merged = 0;
+        for (uint32_t i = 0; i < nr; i++) {
+            if (merged > 0 && im->ranges[i].lo <= im->ranges[merged - 1].hi) {
+                if (im->ranges[i].hi > im->ranges[merged - 1].hi) {
+                    im->ranges[merged - 1].hi = im->ranges[i].hi;
+                }
+            } else {
+                im->ranges[merged++] = im->ranges[i];
+            }
+        }
+        im->nranges = merged;
     }
     if (!page || !im->data) {
         goto out;
@@ -1046,8 +1086,9 @@ int a64x_emulate_user(arm_saved_state_t *state, uint32_t w)
         uint64_t val = 0;
         a64x_decode_ldra(w, &imm, &wb);
         user_addr_t ea = addr + (int64_t)imm;
+        user_addr_t load_ea = (ea & (1ull << 55)) ? ea : (ea & ~0xFF00000000000000ull);
         /* Single-copy atomic 64-bit load on 8-byte-aligned addresses; LDRAA/LDRAB allows unaligned loads. */
-        error = (ea & 7) == 0 ? copyin_atomic64(ea, &val) : copyin(ea, &val, sizeof(val));
+        error = (load_ea & 7) == 0 ? copyin_atomic64(load_ea, &val) : copyin(load_ea, &val, sizeof(val));
         if (!error) {
             if (wb) {
                 if (rn == 31) {

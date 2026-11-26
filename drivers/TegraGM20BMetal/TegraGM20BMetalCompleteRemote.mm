@@ -202,7 +202,8 @@ std::string Completion::packKeyOf(const CompileRequest &r)
 {
     bool own = false;
     const std::string key = requestPackKey(r, own);
-    return withoutFull(r.form) == RequestForm::Barrier ? key + " | barrier form" : key;
+    const std::string &base = own ? r.key : key;
+    return withoutFull(r.form) == RequestForm::Barrier ? base + " | barrier form" : base;
 }
 
 // The wait split where it went (obtained.h; -1 for a part not measured): the request queued until its compile

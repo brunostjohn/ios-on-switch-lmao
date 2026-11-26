@@ -720,4 +720,24 @@ TEST(Image, FlaglessDataSectionsAreExcluded)
     }
 }
 
+TEST(Parse, OverlappingCodeRangesAreMergedForBinarySearch)
+{
+    Spec s;
+    s.code = {kPacibsp, kLdaddal, kAdd, kRetab, kNop, kNop, kNop, kNop};
+    s.function_starts = {0};
+    // Add a contained code section [0x1004, 0x100C) inside __text [0x1000, 0x1020) so sorting by .lo alone would break
+    // img_is_code's binary search on words past 0x100C if overlapping ranges were not merged.
+    s.extra_sections.push_back({"__stubs", 0x1004, A64X_S_ATTR_PURE_INSTRUCTIONS, {kAdd, kRet}, {}});
+    std::vector<uint8_t> in = build(s);
+    // Restore original __text words overwritten by build() for the overlapping section.
+    for (size_t i = 0; i < s.code.size(); i++)
+        put32(in, 0x1000 + i * 4, s.code[i]);
+    auto m = std::make_unique<a64x_macho>();
+    char err[256];
+    ASSERT_EQ(0, a64x_macho_parse(in.data(), in.size(), m.get(), err, sizeof(err))) << err;
+    ASSERT_EQ(1u, m->nranges);
+    EXPECT_EQ(0x1000u, m->ranges[0].lo);
+    EXPECT_EQ(0x1000u + s.code.size() * 4, m->ranges[0].hi);
+}
+
 }  // namespace

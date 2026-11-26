@@ -217,14 +217,21 @@ int a64x_macho_parse(const uint8_t *base, size_t size, struct a64x_macho *m, cha
             for (uint32_t q = 0; q < m->fs_size;) {
                 uint64_t v = 0;
                 int sh = 0;
-                while (q < m->fs_size && sh < 64) {
+                bool ok = false;
+                while (q < m->fs_size) {
                     uint8_t b = buf[q++];
-                    v |= (uint64_t)(b & 0x7F) << sh;
-                    sh += 7;
-                    if (!(b & 0x80))
+                    if (sh == 63 && b > 1u)
                         break;
+                    v |= (uint64_t)(b & 0x7Fu) << sh;
+                    if (!(b & 0x80u)) {
+                        ok = true;
+                        break;
+                    }
+                    if (sh >= 63)
+                        break;
+                    sh += 7;
                 }
-                if (!v || v > UINT64_MAX - addr)
+                if (!ok || !v || v > UINT64_MAX - addr)
                     break;
                 addr += v;
                 if ((addr & 3u) == 0u) {
@@ -247,7 +254,6 @@ int a64x_macho_parse(const uint8_t *base, size_t size, struct a64x_macho *m, cha
             }
         }
     }
-    /* sorted for the binary search (they are in file order already, as the kernel assumes too) */
     for (uint32_t i = 1; i < m->nranges; i++) {
         for (uint32_t j = i; j > 0 && m->ranges[j - 1].lo > m->ranges[j].lo; j--) {
             struct a64x_range t = m->ranges[j];
@@ -255,6 +261,16 @@ int a64x_macho_parse(const uint8_t *base, size_t size, struct a64x_macho *m, cha
             m->ranges[j - 1] = t;
         }
     }
+    uint32_t merged = 0;
+    for (uint32_t i = 0; i < m->nranges; i++) {
+        if (merged > 0 && m->ranges[i].lo <= m->ranges[merged - 1].hi) {
+            if (m->ranges[i].hi > m->ranges[merged - 1].hi)
+                m->ranges[merged - 1].hi = m->ranges[i].hi;
+        } else {
+            m->ranges[merged++] = m->ranges[i];
+        }
+    }
+    m->nranges = merged;
     return 0;
 }
 
@@ -351,14 +367,21 @@ static int find_islands(const struct a64x_macho *m, struct a64x_image_xlate *x, 
         for (uint32_t q = 0; q < m->fs_size;) {
             uint64_t v = 0;
             int sh = 0;
-            while (q < m->fs_size && sh < 64) {
+            bool ok = false;
+            while (q < m->fs_size) {
                 uint8_t b = buf[q++];
-                v |= (uint64_t)(b & 0x7F) << sh;
-                sh += 7;
-                if (!(b & 0x80))
+                if (sh == 63 && b > 1u)
                     break;
+                v |= (uint64_t)(b & 0x7Fu) << sh;
+                if (!(b & 0x80u)) {
+                    ok = true;
+                    break;
+                }
+                if (sh >= 63)
+                    break;
+                sh += 7;
             }
-            if (!v)
+            if (!ok || !v || v > UINT64_MAX - addr)
                 break;
             addr += v;
             if (addr >= m->exec_vmaddr) {

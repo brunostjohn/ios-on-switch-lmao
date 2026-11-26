@@ -83,19 +83,21 @@ void Completion::unmarkForm(const Pipeline *made, RequestForm form)
 
 void Completion::enqueueForms(const Ask &a, const CacheKey &k, std::array<FormAsk, 2> forms, uint32_t count)
 {
-    // off the creating thread and the answer queue, whose blocks a form's request would hold up. The descriptor is
-    // copied here, on the creating thread: the synchronous creation hands over the app's own, which it may change for its
-    // next state while the forms are asked (and Apple's classes are not read safely across threads)
-    Ask asked = a;
-    asked.facade = [a.facade copy];
-    asked.descriptor = nil;
-    asked.bindWait = nullptr;
+    // off the creating thread and the answer queue, whose blocks a form's request would hold up. Each form gets its
+    // own descriptor copy on the creating thread so concurrent background asks never share an Apple descriptor object.
+    std::array<Ask, 2> asked{};
+    for (uint32_t i = 0; i < count; i++) {
+        asked[i] = a;
+        asked[i].facade = [a.facade copy];
+        asked[i].descriptor = nil;
+        asked[i].bindWait = nullptr;
+    }
     const CacheKey key = k;
     dispatch_group_enter(forms_);
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0), ^{
         for (uint32_t i = 0; i < count; i++)
             if (!stopping_.load(std::memory_order_acquire))
-                formOf(asked, key, forms[i].target, forms[i].form, false);
+                formOf(asked[i], key, forms[i].target, forms[i].form, false);
         dispatch_group_leave(forms_);
     });
 }
@@ -114,7 +116,8 @@ void Completion::askForms(const Ask &a, const CacheKey &k, Pipeline *made, const
             forms[count++] = {made, RequestForm::Barrier};
         }
     }
-    if (fullFormAdds(record) && markForm(made, RequestForm::Full))
+    if ((fullFormAdds(record) || (record.strideTwin && fullFormAdds(*record.strideTwin))) &&
+        markForm(made, RequestForm::Full))
         forms[count++] = {made, RequestForm::Full};
     if (count)
         enqueueForms(a, k, forms, count);
@@ -184,7 +187,8 @@ void Completion::formOf(const Ask &a, const CacheKey &k, Pipeline *made, Request
             const AskNext next = stopping ? AskNext::End
                                           : askNext(answer, found != RecordCache::Found::None, again,
                                                     checkDeclined && remote_->declined());
-            if (!stopping && next == AskNext::End && answer == Remote::Answer::Unavailable)
+            if (!stopping && next == AskNext::End &&
+                (answer == Remote::Answer::Unavailable || answer == Remote::Answer::Failed))
                 unmarkForm(made, form);
             if (next == AskNext::End || found == RecordCache::Found::Refusal) {
                 dispatch_group_leave(forms_);
@@ -222,11 +226,17 @@ void Completion::attachForm(const Ask &a, const CacheKey &k, Pipeline *made, con
     std::string why;
     bool retry = false;
     Pipeline *twin = device_.addRecord(record, a.caTransform, why, &retry);
-    if (!twin || twin == made || twin->storageBits)
+    if (!twin) {
+        if (retry)
+            unmarkForm(made, form);
+        return;
+    }
+    if (twin == made || twin->storageBits)
         return;
     Pipeline *none = nullptr;
     __atomic_compare_exchange_n(twinSlot(*made), &none, twin, false, __ATOMIC_RELEASE, __ATOMIC_RELAXED);
-    if (fullFormAdds(record) && markForm(twin, RequestForm::BarrierFull))
+    if ((fullFormAdds(record) || (record.strideTwin && fullFormAdds(*record.strideTwin))) &&
+        markForm(twin, RequestForm::BarrierFull))
         formOf(a, k, twin, RequestForm::BarrierFull, false);
 }
 

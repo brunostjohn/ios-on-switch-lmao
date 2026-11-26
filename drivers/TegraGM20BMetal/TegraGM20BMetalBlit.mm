@@ -156,7 +156,7 @@ bool isIdentityTextureCopy(SwitchMetalTexture *a, NSUInteger ss, NSUInteger sl, 
         if (a->_raw.storePitch || b->_raw.storePitch)
             return false;
         return a->_raw.bpp == b->_raw.bpp && a->_raw.va == b->_raw.va && a->_raw.pitch == b->_raw.pitch &&
-               a->_raw.layers == b->_raw.layers && sl == dl && ss == ds;
+               a->_raw.layers == b->_raw.layers && a->_raw.layerBytes == b->_raw.layerBytes && sl == dl && ss == ds;
     }
     return false;
 }

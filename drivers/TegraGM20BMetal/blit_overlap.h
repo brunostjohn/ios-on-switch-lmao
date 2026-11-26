@@ -27,7 +27,8 @@ enum class VolumeOverlap : uint8_t {
 inline CopySurface copySideOf(const Texture &t, uint32_t x, uint32_t y, uint32_t z)
 {
     if (!t.blockLinear)
-        return {t.va + uint64_t(y) * t.pitch + uint64_t(x) * t.bpp, t.pitch};
+        return {t.va + (t.layers > 1 ? uint64_t(z) * t.layerBytes : 0) + uint64_t(y) * t.pitch + uint64_t(x) * t.bpp,
+                t.pitch};
     if (t.import && t.import->kernelTiled())
         return {t.va, t.pitch, x + t.surfaceX, y + t.surfaceY, t.import->layout.height, true, t.blockHeight};
     if (t.layers > 1)
@@ -140,7 +141,8 @@ inline VolumeOverlap volumePlanesOverlap(const Texture &src, uint32_t sx, uint32
     const CopySurface s0 = copySideOf(src, sx, sy, sz), d0 = copySideOf(dst, dx, dy, dz);
     if (s0.blockLinear && d0.blockLinear) {
         if (sameBlockLinearLayout(s0, d0, src.bpp, dst.bpp)) {
-            if (sz == dz || !(sz < dz + planes && dz < sz + planes) || !rectsOverlap(s0.x, s0.y, d0.x, d0.y, w, h))
+            if (sz == dz || !(uint64_t(sz) < uint64_t(dz) + planes && uint64_t(dz) < uint64_t(sz) + planes) ||
+                !rectsOverlap(s0.x, s0.y, d0.x, d0.y, w, h))
                 return VolumeOverlap::None;
             return dz > sz ? VolumeOverlap::Reverse : VolumeOverlap::Forward;
         }
