@@ -101,9 +101,11 @@ TEST(GM20BPrivateComp, TheCbrProbeBindsNvnsFourSampleKinds)
     const uint32_t c32 = gm20b::privateCompressedKind(f);
     f.bpp = 8;
     const uint32_t c64 = gm20b::privateCompressedKind(f);
+    const uint32_t memoryless = gm20b::backingKind(true, true, 0, 4, 4, false);
     gm20b::probeMs4Cbr = false;
     EXPECT_EQ(c32, 0xe0u) << "C32_MS4_2CBR";
     EXPECT_EQ(c64, 0xeeu) << "C64_MS4_2CBR";
+    EXPECT_EQ(memoryless, 0xe2u) << "a memoryless 4x backing keeps 2CRA under the probe";
     EXPECT_EQ(gm20b::privateCompressedKind(f), 0xf0u) << "C64_MS4_2CRA with the probe off";
 }
 

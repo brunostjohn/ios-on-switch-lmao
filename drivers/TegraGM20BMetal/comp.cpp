@@ -458,8 +458,12 @@ uint64_t Device::compDeadline() const
 
 void Device::compTrim(uint64_t now, DeferredFrees &deferred)
 {
+    bool probeKinds = true;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    probeKinds = probeMs4Cbr.load(std::memory_order_relaxed);
+#endif
     for (auto it = comp_.ready.begin(); it != comp_.ready.end();) {
-        if (readyStale(commits(), it->madeAt, now, it->readyNs)) {
+        if (readyStale(commits(), it->madeAt, now, it->readyNs) || (!probeKinds && probeOnlyKind(it->kind))) {
             SWITCH_METAL_DIAGNOSTIC(stats.compHeld--);
             SWITCH_METAL_DIAGNOSTIC(stats.compHeldBytes -= it->bo.bytes);
             SWITCH_METAL_DIAGNOSTIC(glassMemEvent("compressed memory freed unused", it->bo.bytes));
@@ -540,5 +544,20 @@ void Device::zbcMake(std::unique_lock<gm20b::Mutex> &l)
                          e.format, unsigned(kr));
     }
 }
+
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+// The 2CBR probe turned off: no texture asks for its kinds again, so what was asked for them goes, and what was made
+void Device::dropProbeCompressedKinds()
+{
+    DeferredFrees deferred(*this);
+    std::lock_guard<gm20b::Mutex> l(lock_);
+    const auto probeOnly = [](const CompWant &w) {
+        return probeOnlyKind(w.kind);
+    };
+    comp_.wanted.erase(std::remove_if(comp_.wanted.begin(), comp_.wanted.end(), probeOnly), comp_.wanted.end());
+    comp_.refused.erase(std::remove_if(comp_.refused.begin(), comp_.refused.end(), probeOnly), comp_.refused.end());
+    compTrim(compClock(), deferred);
+}
+#endif
 
 }  // namespace gm20b

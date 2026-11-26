@@ -19,7 +19,7 @@ id<MTLDevice> device()
 {
     {
         std::lock_guard<std::mutex> l(kernel_model::callLock);
-        kernel_model::model.infoFlags |= TegraGM20BInfoTiledCache;
+        kernel_model::model.infoFlags |= TegraGM20BInfoTiledCache | TegraGM20BInfoCompression;
     }
     return opened().device;
 }
@@ -106,9 +106,41 @@ TEST(GM20BFacadeNvnProbes, APrivateTexturesHeaderTakesThePromotionItWasMadeUnder
 TEST(GM20BFacadeNvnProbes, TheFactsLineNamesAPlainTexturesKindAsNone)
 {
     ASSERT_NE(device(), nil);
-    NSString *facts = probe("switchMetalProbeFacts:", target());
+    probe("switchMetalProbePlainPrivate:", @YES);
+    id<MTLTexture> plain = target();
+    probe("switchMetalProbePlainPrivate:", @NO);
+    NSString *facts = probe("switchMetalProbeFacts:", plain);
     EXPECT_TRUE([facts containsString:@"comptags=0"]) << facts.UTF8String;
     EXPECT_TRUE([facts hasSuffix:@" kind=0x0"]) << facts.UTF8String;
+}
+
+long compressed(NSString *key)
+{
+    return [harness::ask(device(), "switchMetalCompression")[key] longValue];
+}
+
+// The 2CBR probe turned off gives back the compressed memory made for its kinds: no texture takes it without the probe,
+// and the compression tests after gpu.perf.nvn would meet a fuller pool
+TEST(GM20BFacadeNvnProbes, TheCbrProbeTurningOffFreesWhatItsKindsMade)
+{
+    ASSERT_NE(device(), nil);
+    const long before = compressed(@"held");
+    probe("switchMetalProbeMs4Cbr:", @YES);
+    MTLTextureDescriptor *td = [MTLTextureDescriptor new];
+    td.textureType = MTLTextureType2DMultisample;
+    td.pixelFormat = MTLPixelFormatBGRA8Unorm;
+    td.width = 640;
+    td.height = 360;
+    td.sampleCount = 4;
+    td.storageMode = MTLStorageModePrivate;
+    td.usage = MTLTextureUsageRenderTarget;
+    id<MTLTexture> target = [device() newTextureWithDescriptor:td];
+    ASSERT_NE(target, nil);
+    ASSERT_EQ(harness::compressionSettled(device()), 1);
+    const long made = compressed(@"held");
+    probe("switchMetalProbeMs4Cbr:", @NO);
+    EXPECT_GT(made, before) << "no 2CBR memory was made for the target";
+    EXPECT_EQ(compressed(@"held"), before) << "the 2CBR memory stayed held after the probe went off";
 }
 
 TEST(GM20BFacadeNvnProbes, APassUnderNoflushFormsCountsTheFlushItLeftOut)

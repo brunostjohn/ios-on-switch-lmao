@@ -1190,6 +1190,8 @@ public:
     std::atomic<uint32_t> probeNvn{0};
     // zcull rules gpu.perf.nvn's zcull_rule arms skip (zcull.h kZcullKeep*)
     std::atomic<uint32_t> probeZcullKeep{0};
+    // comp.h probeMs4Cbr turned off: its kinds' wants go and their made memory is freed
+    void dropProbeCompressedKinds();
     gm20b::Mutex probeLock;
     std::shared_ptr<const ProbeWords> probeWords;
 

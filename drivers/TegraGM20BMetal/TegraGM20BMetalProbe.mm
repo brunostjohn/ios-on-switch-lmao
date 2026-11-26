@@ -249,7 +249,10 @@ static gm20b::ProbeSurface probeSurface(const gm20b::Texture &t, uint32_t fmt2d)
 // 4x colour textures made while `on` take the 2CBR compression kinds (comp.h probeMs4Cbr); answers whether they did
 - (NSString *)switchMetalProbeMs4Cbr:(NSNumber *)on
 {
-    return gm20b::probeMs4Cbr.exchange(on.boolValue) ? @"1" : @"0";
+    const bool was = gm20b::probeMs4Cbr.exchange(on.boolValue);
+    if (was && !on.boolValue)
+        gRM->raw->dropProbeCompressedKinds();
+    return was ? @"1" : @"0";
 }
 
 - (NSString *)switchMetalProbeMacroBands:(NSNumber *)on
