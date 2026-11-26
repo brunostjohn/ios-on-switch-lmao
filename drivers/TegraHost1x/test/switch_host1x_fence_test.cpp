@@ -209,7 +209,19 @@ namespace {
 struct Host1xFence : testing::Test {
     void SetUp() override
     {
+        static bool seeded = false;
+        const bool first = !seeded;
+        if (first) {
+            seeded = true;
+            for (uint32_t id = 0; id < kSyncpts; ++id)
+                value(id) = 0x80088080u ^ (id + 1u);
+        }
         ASSERT_EQ(tegra_host1x_start(), TEGRA_HOST1X_OK);
+        if (first) {
+            EXPECT_EQ(gPool.capacity(), 190u) << "non-zero power-on syncpoint SRAM stays in the pool";
+            for (uint32_t id = 0; id < kSyncpts; ++id)
+                value(id) = 0;
+        }
         switch_test_sleep = nullptr;
         switch_test_kicks = switch_test_wakeups = 0;
         switch_test_now = 1000;
@@ -643,6 +655,30 @@ TEST_F(Host1xFence, AFreeAfterARestartDroppedTheOwingJobIsNoPanic)
     ASSERT_EQ(switch_host1x_job_copy(TEGRA_HOST1X_CHANNEL_NVJPG, job, 2, id, 6), TEGRA_HOST1X_OK);
     tegra_host1x_channel_teardown(TEGRA_HOST1X_CHANNEL_NVJPG);
     tegra_host1x_channel_restart(TEGRA_HOST1X_CHANNEL_NVJPG);
+    tegra_host1x_syncpt_free(id);
+}
+
+TEST_F(Host1xFence, AHighBitSyncpointFreesCleanlyAndStillChecksOwedThresholds)
+{
+    uint32_t id = 0;
+    ASSERT_EQ(tegra_host1x_syncpt_alloc(&id), TEGRA_HOST1X_OK);
+    value(id) = 0x84000120u;
+    tegra_host1x_syncpt_free(id);
+
+    ASSERT_EQ(tegra_host1x_syncpt_alloc(&id), TEGRA_HOST1X_OK);
+    value(id) = 0x84000120u;
+    const uint32_t job[2] = {tegra_host1x_op_setclass(TEGRA_HOST1X_CLASS_HOST1X, 0, 0),
+                             tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_IMMEDIATE, id)};
+    ASSERT_EQ(switch_host1x_job_copy(TEGRA_HOST1X_CHANNEL_NVJPG, job, 2, id, 0x84000122u), TEGRA_HOST1X_OK);
+    try {
+        tegra_host1x_syncpt_free(id);
+        ADD_FAILURE() << "no panic";
+    } catch (const std::runtime_error &e) {
+        EXPECT_EQ(std::string(e.what()), "TegraHost1x: syncpoint " + std::to_string(id) +
+                                             " freed at 2214592800 while a job a channel ran still takes it to "
+                                             "2214592802");
+    }
+    value(id) = 0x84000122u;
     tegra_host1x_syncpt_free(id);
 }
 

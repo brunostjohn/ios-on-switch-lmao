@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // The syncpoints TegraHost1x hands out (tegra_host1x_syncpt_alloc, _free): host1x's 192 (T210 TRM 14.2), less the ones
-// reserved and the ones the boot chain left counting. Allocation never sleeps or locks (a scan and a compare-and-swap),
+// reserved. Allocation never sleeps or locks (a scan and a compare-and-swap),
 // so any context may allocate.
 //
 // Order: every id never handed out comes first, scanned from kFirstHandedOut (so the first 32 are the ones every boot

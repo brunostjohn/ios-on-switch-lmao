@@ -65,11 +65,13 @@ IOFilterInterruptEventSource *gIrq;
 IOLock *gSubmitLock;  // every channel's push buffer and arena, and suspend/resume
 
 // Never handed out: 0, mainline host1x's no-op syncpoint, and 9, which DC A's CONT_SYNCPT_VSYNC counts at every vblank
-// (TegraDisplayPower.cpp, as hekate's di.c and L4T's dc.c set it). bringUp adds the ones the boot chain left counting.
+// (TegraDisplayPower.cpp, as hekate's di.c and L4T's dc.c set it). T210's HOST1X_SYNC_SYNCPT bank is unreset SRAM
+// whose power-on values are arbitrary non-zero bits, so bringUp cannot probe it for boot-chain syncpoints.
 SwitchHost1xSyncptPool gPool = {{1ULL << 0 | 1ULL << 9, 0, 0}, {}, {}, {}, 0, 0, 2};
 #if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
 // Debug kernels: the highest threshold a channel's fenced job was given per syncpoint, which a free must have reached.
 uint32_t gOwed[kSyncpts];
+bool gOwedSet[kSyncpts];
 #endif
 int gState;                 // 0 not started, 1 up, 2 suspended, < 0 failed
 uint32_t gSaved[kSyncpts];  // syncpoint values across SC7, which resets the sync unit
@@ -159,27 +161,6 @@ bool attachInterrupt()
     return true;
 }
 
-// A syncpoint the boot chain left counting may still be counted by what set it up: it stays out of the pool.
-void keepBootChainSyncpts()
-{
-    char kept[160] = "";
-    size_t used = 0;
-    for (uint32_t id = 1; id < kSyncpts; id++) {
-        const uint32_t value = sync(SYNC_SYNCPT + 4 * id);
-        if (!value || id == 9)
-            continue;
-        const bool shared = gPool.owns(id);
-        if (!shared && !gPool.reserve(id))
-            continue;
-        const int n = used < sizeof(kept) ? snprintf(kept + used, sizeof(kept) - used, " %u=%u%s", id, value,
-                                                     shared ? " (already handed out: shared)" : "")
-                                          : 0;
-        used += n > 0 ? static_cast<size_t>(n) : 0;
-    }
-    if (kept[0])
-        IOLog("TegraHost1x: syncpoints the boot chain left counting, kept out of the pool (id=value):%s\n", kept);
-}
-
 int bringUp()
 {
     gHost = switch_mmio_map(kHost1xPA, kHost1xSize);
@@ -205,7 +186,6 @@ int bringUp()
     else
         IOLog("TegraHost1x: command DMA not behind the SMMU (%s): host1x can reach all of RAM below 4 GiB\n", why);
     switch_host1x_channels_program(gClockKHz);
-    keepBootChainSyncpts();
     gState = 1;
     switch_host1x_intr_start();
     switch_host1x_errors_start(gLoop, gHost + kSyncOffset);
@@ -252,15 +232,17 @@ extern "C" int tegra_host1x_syncpt_alloc_named(uint32_t *id, const char *caller)
 #if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
 void switch_host1x_syncpt_owed(uint32_t id, uint32_t threshold)
 {
-    if (id < kSyncpts && static_cast<int32_t>(threshold - gOwed[id]) > 0)
+    if (id < kSyncpts && (!gOwedSet[id] || static_cast<int32_t>(threshold - gOwed[id]) > 0)) {
         gOwed[id] = threshold;
+        gOwedSet[id] = true;
+    }
 }
 
 // Another channel's job on the same id is forgotten with it: a check missed, never a false panic.
 void switch_host1x_syncpt_dropped(uint32_t id)
 {
     if (id < kSyncpts)
-        gOwed[id] = tegra_host1x_syncpt_read(id);
+        gOwedSet[id] = false;
 }
 #endif
 
@@ -270,9 +252,12 @@ extern "C" void tegra_host1x_syncpt_free(uint32_t id)
         panic("TegraHost1x: syncpoint %u freed while a fence or waiter still waits on it", id);
 #if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
     const uint32_t reached = tegra_host1x_syncpt_read(id);
-    if (id < kSyncpts && gPool.owns(id) && static_cast<int32_t>(gOwed[id] - reached) > 0)
-        panic("TegraHost1x: syncpoint %u freed at %u while a job a channel ran still takes it to %u", id, reached,
-              gOwed[id]);
+    if (id < kSyncpts && gPool.owns(id)) {
+        if (gOwedSet[id] && static_cast<int32_t>(gOwed[id] - reached) > 0)
+            panic("TegraHost1x: syncpoint %u freed at %u while a job a channel ran still takes it to %u", id, reached,
+                  gOwed[id]);
+        gOwedSet[id] = false;
+    }
 #endif
     if (!gPool.free(id))
         panic("TegraHost1x: syncpoint %u freed, but it is not handed out (never, reserved, or freed already)", id);
