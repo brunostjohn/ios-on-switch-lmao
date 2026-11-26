@@ -46,8 +46,10 @@ public struct ContentView: View {
                     Toggle("Long runs", isOn: $longRuns).toggleStyle(.button).disabled(!suite.idle)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Run All") { suite.runAll() }
-                        .disabled(!suite.idle).bold()
+                    Button(suite.report == nil && suite.pendingRun == nil ? "Start" : "Run All") {
+                        suite.requestRunAll()
+                    }
+                    .disabled(!suite.idle).bold()
                 }
             }
         }
@@ -65,23 +67,13 @@ public struct ContentView: View {
         .fullScreenCover(isPresented: $benchShown) {
             BenchView(documents: suite.documents, ios: suite.ios) { benchShown = false }
         }
-        .sheet(isPresented: Binding(get: { suite.pendingRun != nil }, set: { _ in })) {
-            VStack(alignment: .leading, spacing: 20) {
-                Text("Unfinished test run").font(.title2.bold())
-                if let run = suite.pendingRun {
-                    Text(
-                        "\(run.results.count) of \(run.summary.planned) tests completed. Continue this run, or cancel it and start a new one."
-                    )
-                }
-                if let error = suite.resumeError {
-                    Text(error).foregroundStyle(.red)
-                }
-                Button("Continue run") { suite.continueRun() }.buttonStyle(.borderedProminent).disabled(suite.busy)
-                Button("Start new run") { suite.startNewRun() }.buttonStyle(.bordered).disabled(suite.busy)
-            }
-            .padding(24)
-            .presentationDetents([.medium])
-            .interactiveDismissDisabled()
+        .sheet(
+            isPresented: Binding(
+                get: { suite.resumePromptShown },
+                set: { if !$0 { suite.dismissPendingRun() } }
+            )
+        ) {
+            UnfinishedRunSheet(suite: suite)
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
             suite.interrupted("backgrounded")
@@ -108,6 +100,38 @@ public struct ContentView: View {
                 }
             }
         }
+    }
+}
+
+struct UnfinishedRunSheet: View {
+    @ObservedObject var suite: Suite
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Unfinished test run").font(.title2.bold())
+            if let run = suite.pendingRun {
+                Text(
+                    "\(run.results.count) of \(run.summary.planned) tests completed. "
+                        + "Continue this run, start a new one, or cancel to browse and run individual tests."
+                )
+            }
+            if let error = suite.resumeError {
+                Text(error).foregroundStyle(.red)
+            }
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) { buttons }
+                VStack(alignment: .leading, spacing: 10) { buttons }
+            }
+        }
+        .padding(24)
+        .presentationDetents([.medium, .large])
+        .interactiveDismissDisabled(suite.busy)
+    }
+
+    @ViewBuilder private var buttons: some View {
+        Button("Continue run") { suite.continueRun() }.buttonStyle(.borderedProminent).disabled(suite.busy)
+        Button("Start new run") { suite.startNewRun() }.buttonStyle(.bordered).disabled(suite.busy)
+        Button("Cancel", role: .cancel) { suite.dismissPendingRun() }.buttonStyle(.bordered).disabled(suite.busy)
     }
 }
 

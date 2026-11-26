@@ -3,10 +3,12 @@
 A SwiftUI app that tests the Switch's hardware through public iOS APIs: Metal, the hardware video decoders and
 encoders, images, audio, display, sensors, input, networking, storage, CPU and crypto.
 
-The first launch on a boot runs every test that needs no person. If the latest run is unfinished, startup waits for
-Continue run or Start new run. Continue keeps completed results; Start new run saves the old run as cancelled before
-starting fresh. Other launches show this boot's last results until you tap Run All. Interactive runs the tests that need
-someone to plug, press or pick something. While a run goes, the app keeps it in
+Launching with no run from this boot stays idle until you tap Start, Interactive, Bench, or an individual test. If the
+latest run is unfinished, startup offers Continue run, Start new run, or Cancel. Continue keeps completed results; Start
+new run saves the old run as cancelled before starting fresh; Cancel dismisses the sheet and leaves the unfinished
+journal untouched so you can run interactive or individual tests and resume later. Other launches show this boot's last
+results until you tap Run All. Interactive runs the tests that need someone to plug, press or pick something. While a
+run goes, the app keeps it in
 `Library/Application Support/hwtest/<boot uuid>-<stamp>.journal`, one line per finished test, written off the main
 thread. Documents, which Files shows and Spotlight indexes, gets only finished pictures, each renamed in whole. Each
 test's result and the next test's name reach the card (`F_FULLFSYNC`) before that test starts, so a run the app or the

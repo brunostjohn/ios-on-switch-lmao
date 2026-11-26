@@ -14,16 +14,19 @@ public final class Suite: ObservableObject {
 
     let list: RunList
     @Published private(set) var running = false
-    /// The run shown: as it stood when its batch started while one runs, as it ended after.
-    @Published private(set) var report: Report?
-    @Published private(set) var pendingRun: Report?
+    @Published private(set) var session = RunSession()
     @Published private(set) var resumeError: String?
     /// A run choice being saved, or the launch's or Run All's read of earlier runs, is on the recorder's queue: the
     /// controls that start a run wait for it.
     @Published private(set) var busy = false
 
-    /// Nothing runs, waits for a person's choice or waits for the card: a run may start.
-    var idle: Bool { !running && !busy && pendingRun == nil }
+    /// The run shown: as it stood when its batch started while one runs, as it ended after.
+    var report: Report? { session.report }
+    var reportSaved: Bool { session.reportSaved }
+    var pendingRun: Report? { session.pendingRun }
+    var resumePromptShown: Bool { session.resumePromptShown }
+    /// Nothing runs, waits for the resume sheet or waits for the card: a run may start.
+    var idle: Bool { !running && !busy && !resumePromptShown }
     /// What this launch found of the last one, shown above the results.
     @Published private(set) var notice = ""
 
@@ -34,6 +37,7 @@ public final class Suite: ObservableObject {
     let ios: Int
     private let recorder: RunRecorder
     private var launched = false
+    private var recording = false
     private var wedgedBy: String?
 
     /// `ios`: the iOS major version the app is built for, which its summary line names so a log tells which
@@ -46,8 +50,8 @@ public final class Suite: ObservableObject {
         recorder = RunRecorder(store: RunStore(directory: AppFiles.working), log: Suite.results)
     }
 
-    /// A boot's first launch runs everything; an unfinished run waits for the person's choice;
-    /// any other launch shows this boot's last run until Run All.
+    /// An unfinished run opens the resume sheet; a finished run from this boot is shown; otherwise stays idle until
+    /// started.
     func launch() {
         guard !launched else { return }
         launched = true
@@ -56,15 +60,21 @@ public final class Suite: ObservableObject {
         Task {
             let recent = await recorder.recent(boot: boot)
             busy = false
-            if let interrupted = Report.interrupted(recent) {
-                show(interrupted)
-                pendingRun = interrupted
-            } else if let last = recent.last(where: { $0.latestBootUUID == boot }) {
-                show(last)
-            } else {
-                runAll(stoppedIn: Report.lastBootStoppedIn(recent, boot: boot))
+            switch session.applyLaunch(recent: recent, boot: boot) {
+            case .empty:
+                break
+            case .showLast(let last):
+                populateRows(from: last)
+            case .promptUnfinished(let interrupted):
+                populateRows(from: interrupted)
             }
         }
+    }
+
+    func dismissPendingRun() {
+        guard !busy else { return }
+        session.dismissResumePrompt()
+        resumeError = nil
     }
 
     func continueRun() {
@@ -111,17 +121,27 @@ public final class Suite: ObservableObject {
             Self.results.error("Run choice not saved: \(String(describing: error), privacy: .public)")
             return false
         }
-        pendingRun = nil
+        session.acceptPendingChoice(chosen)
         resumeError = nil
-        show(chosen)
+        populateRows(from: chosen)
         return true
     }
 
     /// The app going to the background or away while a run goes, for the next launch to tell a person's or the
     /// system's ending of the process from a crash.
     func interrupted(_ reason: String?) {
-        guard running else { return }
+        guard running, recording else { return }
         recorder.interrupt(reason)
+    }
+
+    func requestRunAll() {
+        guard idle else { return }
+        switch session.requestRunAll() {
+        case .promptUnfinished:
+            break
+        case .startFresh:
+            runAll()
+        }
     }
 
     func runAll() {
@@ -137,9 +157,9 @@ public final class Suite: ObservableObject {
 
     /// `stoppedIn`: the test the last boot went down in, which runs last.
     private func runAll(stoppedIn stopped: String?) {
-        guard !running, pendingRun == nil else { return }
+        guard !running, !busy, pendingRun == nil else { return }
         wedgedBy = nil
-        report = newReport()
+        session.beginFreshRun(newReport())
         for row in list.rows { row.record = nil }
         var batch = tests.filter { !$0.interactive }
         notice = ""
@@ -161,13 +181,14 @@ public final class Suite: ObservableObject {
     }
 
     private func run(_ batch: [any HWTest], summarize: Bool) {
-        guard !running, !busy, pendingRun == nil, !batch.isEmpty else { return }
+        guard idle, !batch.isEmpty else { return }
         running = true
         UIApplication.shared.isIdleTimerDisabled = true
-        var planned = report ?? newReport()
-        planned.plan(batch.map(\.id))
-        report = planned
-        recorder.start(planned)
+        let target = session.planBatch(batch.map(\.id)) { newReport() }
+        let planned = target.report
+        let persists = target.persists
+        recording = persists
+        if persists { recorder.start(planned) }
         list.seed(planned)
         let context = TestContext(
             media: Bundle.main.resourceURL!.appendingPathComponent("media"), documents: documents, ios: ios,
@@ -180,6 +201,7 @@ public final class Suite: ObservableObject {
             let start = CFAbsoluteTimeGetCurrent()
             var harness = HarnessTally()
             harness.longRuns = LongRuns.on
+            var ephemeral = persists ? nil : planned
             var finished: TestRecord?
             var ended: Double?
             var cpu = ThreadTimes.sample(main: main)
@@ -187,7 +209,8 @@ public final class Suite: ObservableObject {
                 guard let self else { return }
                 let mainBefore = ThreadTimes.nanoseconds(of: mainPort)
                 let wedged = await self.advance(finished, next: test.id)
-                let flush = await recorder.advance(finished, begin: test.id)
+                let flush: Double = persists ? await recorder.advance(finished, begin: test.id) : 0
+                ephemeral = Suite.advanceEphemeral(ephemeral, finished: finished, next: test.id)
                 let mainWait = await Suite.mainThreadAnswer()
                 let begun = CFAbsoluteTimeGetCurrent()
                 if let ended {
@@ -207,12 +230,23 @@ public final class Suite: ObservableObject {
             }
             guard let self else { return }
             _ = await self.advance(finished, next: nil)
-            _ = await recorder.advance(finished, begin: nil)
-            let final = await recorder.finish(at: Date())
+            if persists { _ = await recorder.advance(finished, begin: nil) }
+            let final: Report? = persists
+                ? await recorder.finish(at: Date())
+                : Suite.advanceEphemeral(ephemeral, finished: finished, next: nil)
             await self.done(
                 final, summarize: summarize, milliseconds: (CFAbsoluteTimeGetCurrent() - start) * 1000, harness: harness
             )
         }
+    }
+
+    private nonisolated static func advanceEphemeral(
+        _ report: Report?, finished: TestRecord?, next: String?
+    ) -> Report? {
+        guard var report else { return nil }
+        if let finished { report.record(finished) }
+        if let next { report.begin(next) } else { report.finish(at: Date()) }
+        return report
     }
 
     /// Returns the test that wedged the GPU, if one did.
@@ -230,14 +264,15 @@ public final class Suite: ObservableObject {
 
     nonisolated static func mainThreadAnswer() async -> Double {
         let asked = CFAbsoluteTimeGetCurrent()
-        await MainActor.run {}
+        _ = await MainActor.run { 0 }
         return (CFAbsoluteTimeGetCurrent() - asked) * 1000
     }
 
     private func done(_ final: Report?, summarize: Bool, milliseconds: Double, harness: HarnessTally) {
         running = false
+        recording = false
         UIApplication.shared.isIdleTimerDisabled = false
-        if let final { report = final }
+        session.finishBatch(final)
         guard summarize else { return }
         let ran = Dictionary(
             (report?.results ?? []).enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first }
@@ -253,8 +288,7 @@ public final class Suite: ObservableObject {
         for piece in LogLine.pieces(line) { results.notice("\(piece, privacy: .public)") }
     }
 
-    private func show(_ shown: Report) {
-        report = shown
+    private func populateRows(from shown: Report) {
         let entries = Dictionary(shown.results.map { ($0.id, $0) }, uniquingKeysWith: { $1 })
         for row in list.rows {
             row.record = entries[row.id].map { entry in
