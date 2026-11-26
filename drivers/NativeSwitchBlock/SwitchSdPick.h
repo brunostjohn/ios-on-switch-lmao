@@ -137,7 +137,7 @@ inline uint32_t switchSdAgeReplay(Request *head, uint64_t now, uint32_t queuedRe
                                   uint32_t &queuedReplay)
 {
     uint32_t aged = 0;
-    for (Request *r = queuedReplay ? head : nullptr; r; r = r->next) {
+    for (Request *r = head; r && queuedReplay; r = r->next) {
         if (!switchSdAgeable(r) || now - r->queuedNs < kSwitchSdReplayAgeNs)
             continue;
         --queuedReads[r->klass];

@@ -364,6 +364,26 @@ TEST(SdPick, TheAgerWalksOnlyWhileAReplayReadIsCounted)
     EXPECT_EQ(queued.klass, kSwitchSdReplayClass);
 }
 
+// The walk ends once the count is spent: the second read here is ageable but uncounted, so a walk past the first would
+// move it and take the count below zero.
+TEST(SdPick, TheAgerStopsOnceItsCountIsSpent)
+{
+    std::vector<Request> q(2);
+    for (size_t i = 0; i < q.size(); ++i) {
+        q[i] = {};
+        q[i].next = i + 1 < q.size() ? &q[i + 1] : nullptr;
+        q[i].lba = 100 * i;
+        q[i].sectors = 8;
+        q[i].klass = kSwitchSdReplayClass;
+        q[i].replay = true;
+    }
+    uint32_t reads[kSwitchSdPickClasses] = {0, 2, 0, 0};
+    uint32_t replay = 1;
+    EXPECT_EQ(switchSdAgeReplay(q.data(), 10 * kSwitchSdReplayAgeNs, reads, replay), 1u);
+    EXPECT_EQ(replay, 0u);
+    EXPECT_EQ(q[1].klass, kSwitchSdReplayClass);
+}
+
 // A raise to class 0 takes a replay read out of the ager's count; a raise to class 1 leaves it there.
 TEST(SdPick, PromotingAReplayReadToClassZeroLeavesTheAgerNothingToCount)
 {

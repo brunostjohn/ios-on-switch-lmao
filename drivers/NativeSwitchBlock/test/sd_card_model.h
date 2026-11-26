@@ -205,6 +205,7 @@ private:
     Request *head = nullptr, *tail = nullptr;
     uint32_t queuedReads[4] = {};
     uint32_t queuedReplay = 0;
+    uint32_t maxWriteSectors = kMaxSectors;  // the driver's maxWriteSectors: the card's own write limit
     SwitchSdPickState state = {};
     size_t depth = 0;
     std::vector<Request *> active, prepared;
@@ -389,7 +390,8 @@ private:
         uint32_t sectors = first->sectors;
         while (count < kMaxChain && last->next && last->next->shared == first->shared &&
                last->next->write == first->write && last->next->lba == last->lba + last->sectors &&
-               sectors + last->next->sectors <= kMaxSectors && !overlapsOlder(last->next) &&
+               sectors + last->next->sectors <= (first->write ? maxWriteSectors : kMaxSectors) &&
+               !overlapsOlder(last->next) &&
                !overlapsInFlight(last->next)) {
             last = last->next;
             sectors += last->sectors;
@@ -440,7 +442,7 @@ private:
             const std::vector<SwitchLbaRange> flight = inFlight();
             bool fits = false;
             if (first->write) {
-                count = switchGatherWrites(head, first, kMaxSectors, kMaxChain, kMaxChain, &start, &sectors,
+                count = switchGatherWrites(head, first, maxWriteSectors, kMaxChain, kMaxChain, &start, &sectors,
                                            flight.data(), static_cast<unsigned>(flight.size()),
                                            rule == Rule::kNew && waiting(first->shared));
                 fits = switchWriteChainTiles(head, start, sectors, count);
