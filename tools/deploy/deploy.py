@@ -5,6 +5,10 @@
     bazel run //deploy:sd -- <diskN> --yes                 deploy (type the disk identifier to confirm)
 
 Steps:
+  0 Switch/ owner  iOS 27, first: <Data>/Switch (its former name moved to it) root:wheel without group or other write,
+                   which the kernel requires before it takes the pretranslated updates (data_owner.py; set under sudo,
+                   asked for before the deploy writes anything, only when it is not); the check refuses a mount that
+                   does not show the tree (<Data>/Switch/pretranslated) as 0:0, since then owners are not honoured
   1 pull logs      off unless --pull-logs (or --//deploy:logs): the last boots' logs and logarchive
                    (//deploy:pull_logs; --no-csstore/--no-launchd-log narrow it); --harvest (or --//deploy:harvest)
                    also merges the device's m2v journals into the checkout's corpus.log
@@ -36,16 +40,14 @@ Steps:
                    PosterBoard's data store (poster_snapshots.py), so the next "Add New Wallpaper" renders them again
   4 launchd check  --launchd-check LABEL...: read-only, the jobs Data's launchd database disables (exit 1 if a label
                    is not among them; the kernel rewrites that database at every boot)
-  5 Switch/ owner  iOS 27: <Data>/Switch root:wheel without group or other write, which the kernel requires before it
-                   takes the pretranslated updates (data_owner.py; set under sudo only when it is not)
-  5a cryptex       iOS 27: the System cryptex on Preboot := this build's translation (system_update.py, as
+  5 cryptex        iOS 27: the System cryptex on Preboot := this build's translation (system_update.py, as
                    //deploy:system), written only when its record (tools/install/cryptex_record.py) does not name
                    this build's image; planned in the check, so a card without the room or the image refuses before
                    anything is written
   6 boot entry     last: switchroot/ios/* and bootloader/ini/ios.ini on the FAT: only files that differ are copied,
                    stale files in switchroot/ios/ removed (never the user's bootargs.txt or the install images'
                    NAME.SII.NNN parts), AppleDouble files by name; nothing else on the FAT. Until it is written the
-                   card boots its last build, whose trust modules cover what it had; a stopped deploy leaves that
+                   card boots its last boot entry over this build's Data; a re-run completes the deploy
   7 eject          unmount the iPad volumes, eject the card (--no-eject keeps it)
 
 The check refuses a card whose iOS is another kind than the build's (its System volume is not the IPSW's), and on iOS
@@ -396,12 +398,20 @@ def _write(
     return steps.not_done
 
 
-def _update_system_cryptex(args: argparse.Namespace, preboot: str | None, log: host.Log) -> None:
+def _update_system_cryptex(args: argparse.Namespace, preboot: str | None, target: object, log: host.Log) -> None:
     """Before the boot entry: the card's System cryptex as this build translated it, or the deploy fails."""
     image, update = args.cryptex
     if not preboot:
         raise host.HostError("no Preboot volume: the card's System cryptex was not brought to this build")
-    system_update.write_on_card(preboot, update, image, log)
+    system_update.write_on_card(preboot, update, image, target, log)
+
+
+def _own_switch(data: str, log: host.Log) -> None:
+    """Switch/ under its own name and root's, before any other Data write."""
+    with cards.mounted(data, log) as data_root:
+        renamed.migrate_data(data_root, log)
+        (Path(data_root) / renamed.DATA_FOLDER).mkdir(exist_ok=True)
+    data_owner.ensure(data, log)
 
 
 def _write_boot_entry(args: argparse.Namespace, fat: str, log: host.Log) -> None:
@@ -449,6 +459,8 @@ class Checked(NamedTuple):
 def _write_card(args: argparse.Namespace, checked: Checked, log: host.Log) -> list[str]:
     """Write the card, the boot entry last; return the steps not done."""
     card, spec = checked.card, checked.spec
+    if args.pretranslated_trust:
+        _own_switch(checked.data, log)
     preboot = pull_logs.data_volume(card, spec['volumes']['preboot']['uuid'])
     if preboot:
         with cards.mounted(preboot, log) as preboot_root:
@@ -458,10 +470,8 @@ def _write_card(args: argparse.Namespace, checked: Checked, log: host.Log) -> li
         args.rerun_migration = True
     with cards.mounted(checked.data, log) as data_root:
         not_done = _write(args, data_root, Volumes(system, checked.boot_args), checked.pairing, log)
-    if args.pretranslated_trust:
-        data_owner.ensure(checked.data, log)
     if args.system_image:
-        _update_system_cryptex(args, preboot, log)
+        _update_system_cryptex(args, preboot, checked.target, log)
     _write_boot_entry(args, checked.fat.identifier, log)
     if not args.no_eject:
         _eject(card, checked.target, log)

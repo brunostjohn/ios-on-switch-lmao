@@ -410,6 +410,7 @@ class KindTest(unittest.TestCase):
             mock.patch.object(cards, 'check_layout_unprivileged', return_value=(mock.Mock(), target)),
             mock.patch.object(pull_logs, 'data_volume', return_value='disk9s5'),
             mock.patch.object(cards, 'mounted', return_value=contextlib.nullcontext(data)) as mounted,
+            mock.patch.object(deploy.data_owner, '_owner', return_value=deploy.data_owner.Owner(0, 0, 0o40755)),
         ):
             deploy._checked(args, Log())
         return args, mounted

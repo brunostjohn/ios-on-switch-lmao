@@ -85,7 +85,8 @@ def plan(preboot_root: Path, spec: dict, image: Image, free_bytes: int, folder: 
     """Decide the write: the System cryptex's staged path, and whether the card's record names this image.
 
     `folder` is the image's folder on the card while a rename to the spec's is still to come (renamed.migrate_preboot).
-    A partial image a stopped write left beside it counts as free: the write replaces it first.
+    A partial image a stopped write left beside it counts as free, by the blocks it holds (the copy sizes it first, so
+    a stopped one is mostly holes): the write replaces it first.
     """
     path = next(c['path'] for c in spec['cryptexes'] if c['member'] == ROLE)
     relative = path[len(renamed.PREBOOT) :]
@@ -96,15 +97,21 @@ def plan(preboot_root: Path, spec: dict, image: Image, free_bytes: int, folder: 
         raise cards.RefusedError(f'Preboot has no {path}: install the image first')
     size, card_size = image.path.stat().st_size, current.stat().st_size
     same = cryptex_record.read(current) == image.sha256
-    leftover = files.partial(current)
-    reclaimable = leftover.stat().st_size if leftover.is_file() else 0
-    needed = size + SPARE_BYTES
-    if not same and free_bytes + reclaimable < needed:
+    room = free_bytes + allocated(files.partial(current))
+    if not same and room < size + SPARE_BYTES:
         raise cards.RefusedError(
-            f'the card has {progress.size(free_bytes + reclaimable)} free, the new image needs '
-            f'{progress.size(needed)} beside the old one until it replaces it'
+            f'the card has {progress.size(room)} free, the new image needs {progress.size(size + SPARE_BYTES)} beside '
+            'the old one until it replaces it'
         )
     return Update(relative, size, card_size, same)
+
+
+def allocated(path: Path) -> int:
+    """The bytes a file holds on its volume (0: none there): a sparse file's holes hold none."""
+    try:
+        return path.stat().st_blocks * 512
+    except FileNotFoundError:
+        return 0
 
 
 def described(update: Update) -> str:
@@ -137,11 +144,21 @@ def planned_on_card(card: cards.Card, spec: dict, image: Image, target: object, 
     return update
 
 
-def write_on_card(preboot: str, update: Update, image: Image, log: host.Log) -> None:
-    """//deploy:sd's write of what planned_on_card decided."""
+def write_on_card(preboot: str, update: Update, image: Image, target: object, log: host.Log) -> None:
+    """//deploy:sd's write of what planned_on_card decided, once the room is still there.
+
+    Data shares the container, and the deploy's Data writes come between the plan and this, so the room is measured
+    again here, before anything of the image is written.
+    """
     if update.same:
         return
     with cards.mounted(preboot, log) as preboot_root:
+        room = free_bytes(target) + allocated(files.partial(Path(preboot_root) / update.relative))
+        if room < update.size + SPARE_BYTES:
+            raise host.HostError(
+                f'the card has {progress.size(room)} free after the Data writes, the new System cryptex needs '
+                f'{progress.size(update.size + SPARE_BYTES)}: neither it nor the boot entry was written'
+            )
         write(preboot_root, update, image, log)
 
 

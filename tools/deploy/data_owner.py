@@ -4,8 +4,10 @@ kernel/switch/vfs/pretranslated_updates.c uses Switch/pretranslated-updates only
 can change, and otherwise gives each updated file no redirect (it then runs translated at load time). The install
 leaves Switch/ so; a Data volume rebuilt without it, or a Switch/ a Mac made, has another owner. The deploy reads the
 owner in its check, with Data mounted read-only with owners (as tools/install/owners_apfs_test.py mounts its images,
-without root). When it is wrong the deploy asks for sudo before it writes anything, so a run that cannot have it stops
-with the card untouched; once its Data writes are done it sets the owner, then reads it again.
+without root), and refuses unless that mount shows the tree as 0:0, which proves owners are honoured there. When the
+owner is wrong the deploy asks for sudo before it writes anything, then sets it first of all, before any other Data
+write, and reads it again: a run that cannot have sudo, or a mount that will not take the owner, stops with nothing
+else written.
 """
 
 import os
@@ -16,6 +18,7 @@ from pathlib import Path
 from tools.install import card as cards, host, renamed
 
 SUDO = '/usr/bin/sudo'
+TREE = 'pretranslated'
 CHOWN = '/usr/sbin/chown'
 CHMOD = '/bin/chmod'
 
@@ -46,9 +49,21 @@ def _owner(path: Path) -> Owner | None:
 
 
 def read(data: str, log: host.Log) -> Owner | None:
-    """Switch/'s owner on the card (None: no Switch/ yet), from Data mounted read-only with owners."""
+    """Switch/'s owner on the card (None: no Switch/ yet), from Data mounted read-only with owners.
+
+    Refused unless that mount shows the tree as root's: the install leaves it 0:0 and the kernel captures it only so,
+    so any other answer means owners are not honoured there, and setting Switch/'s would not take.
+    """
     with cards.mounted(data, log, read_only=True, owners=True) as data_root:
-        return _owner(renamed.data_folder(data_root))
+        folder = renamed.data_folder(data_root)
+        owner = _owner(folder)
+        tree = _owner(folder / TREE)
+        if not tree or (tree.uid, tree.gid) != (0, 0):
+            raise cards.RefusedError(
+                f'Data mounted with owners shows {folder.name}/{TREE} as {tree or "missing"}, not 0:0: owners are not '
+                "honoured on this mount, so Switch/'s owner cannot be set"
+            )
+        return owner
 
 
 def planned(owner: Owner | None) -> str:

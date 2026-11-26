@@ -1,6 +1,7 @@
 """The System cryptex update's plan and write, on plain directories standing in for the card's FAT and Preboot."""
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -98,6 +99,27 @@ class SystemUpdateTest(unittest.TestCase):
         system_update.write(self.preboot, system_update.plan(self.preboot, SPEC, self.built, ROOM), self.built, Log())
         os.utime(self.staged(), ns=(1, 1))
         self.assertFalse(system_update.plan(self.preboot, SPEC, self.built, ROOM).same, 'modified since')
+
+    def test_a_sparse_partial_counts_only_its_blocks(self) -> None:
+        with files.partial(self.staged()).open('wb') as partial:
+            partial.truncate(1 << 30)
+        held = system_update.allocated(files.partial(self.staged()))
+        self.assertLess(held, 1 << 20, 'a stopped copy is mostly holes')
+        with self.assertRaisesRegex(cards.RefusedError, 'beside the old one'):
+            system_update.plan(self.preboot, SPEC, self.built, 12288 + (1 << 30) - (1 << 29))
+
+    def test_the_room_is_measured_again_before_the_write(self) -> None:
+        update = system_update.plan(self.preboot, SPEC, self.built, ROOM)
+        mounted = mock.patch.object(
+            system_update.cards, 'mounted', side_effect=lambda *_, **__: contextlib.nullcontext(self.preboot)
+        )
+        with mounted, mock.patch.object(system_update, 'free_bytes', return_value=12288):
+            with self.assertRaisesRegex(system_update.host.HostError, 'neither it nor the boot entry'):
+                system_update.write_on_card('disk9s3', update, self.built, object(), Log())
+        self.assertNotEqual(self.staged().read_bytes(), self.image.read_bytes())
+        with mounted, mock.patch.object(system_update, 'free_bytes', return_value=ROOM):
+            system_update.write_on_card('disk9s3', update, self.built, object(), Log())
+        self.assertEqual(self.staged().read_bytes(), self.image.read_bytes())
 
     def test_a_partial_a_stopped_write_left_counts_as_room(self) -> None:
         files.partial(self.staged()).write_bytes(b'p' * 8192)

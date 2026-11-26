@@ -1,6 +1,7 @@
 """deploy.main's tail: a step that fails once the card is being written leaves the rest, the boot entry and the eject.
 
-The boot entry comes last, so a deploy stopped before it leaves the card booting its last build.
+The boot entry comes last: a deploy stopped before it leaves this build's Data under the card's last boot entry, and a
+re-run completes it.
 """
 
 import contextlib
@@ -79,8 +80,8 @@ class DeployTailTest(unittest.TestCase):
         ios27 = ('--system-image', 'image', '--pretranslated-trust', 'trust')
         status, _ = self.deploy(*ios27)
         self.assertEqual(status, 0)
-        self.assertEqual(self.order[0], 'sudo', 'asked before anything is written')
-        self.assertEqual(self.order[-4:], ['Switch/ owner', '_update_system_cryptex', '_write_boot_entry', '_eject'])
+        self.assertEqual(self.order[:2], ['sudo', 'Switch/ owner'], "sudo, then Switch/'s owner, before any Data write")
+        self.assertEqual(self.order[-3:], ['_update_system_cryptex', '_write_boot_entry', '_eject'])
         self.order.clear()
         status, lines = self.deploy(*ios27, sudo=deploy.host.HostError('sudo: a password is required'))
         self.assertEqual((status, self.order), (1, ['sudo']))
@@ -93,6 +94,8 @@ class DeployTailTest(unittest.TestCase):
                 self.assertEqual(lines[-1], 'FAILED: no room')
                 self.assertNotIn('_write_boot_entry', self.order)
                 self.assertNotIn('_eject', self.order)
+                if failing == 'owner':
+                    self.assertEqual(self.order, ['sudo', 'Switch/ owner'], 'an owner that does not take stops first')
 
     def test_ios_17_never_touches_the_system_cryptex(self):
         status, _ = self.deploy()

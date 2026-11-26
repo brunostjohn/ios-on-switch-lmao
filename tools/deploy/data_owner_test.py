@@ -39,11 +39,23 @@ class DataOwnerTest(unittest.TestCase):
             self.assertFalse(owner.kernel_takes_updates, owner)
 
     def test_the_check_reads_switch_with_owners_read_only(self):
-        self.assertIsNone(data_owner.read('disk9s5', Log()), 'no Switch/ yet')
-        (self.data / 'Switch').mkdir()
-        self.assertIsNotNone(data_owner.read('disk9s5', Log()))
+        (self.data / 'Switch/pretranslated').mkdir(parents=True)
+        with mock.patch.object(data_owner, '_owner', side_effect=[MOBILE_OWNED, ROOT_OWNED]) as owner:
+            self.assertEqual(data_owner.read('disk9s5', Log()), MOBILE_OWNED)
+        switch = self.data / 'Switch'
+        self.assertEqual(owner.call_args_list, [mock.call(switch), mock.call(switch / 'pretranslated')])
         self.mounted.assert_called_with('disk9s5', mock.ANY, read_only=True, owners=True)
         self.run.assert_not_called()
+
+    def test_a_mount_that_does_not_show_the_tree_as_roots_refuses(self):
+        (self.data / 'Switch/pretranslated').mkdir(parents=True)
+        for tree in (MOBILE_OWNED, None):
+            with (
+                self.subTest(tree=tree),
+                mock.patch.object(data_owner, '_owner', side_effect=[ROOT_OWNED, tree]),
+                self.assertRaisesRegex(cards.RefusedError, 'owners are not honoured'),
+            ):
+                data_owner.read('disk9s5', Log())
 
     def test_a_file_where_switch_goes_refuses(self):
         (self.data / 'Switch').write_text('')
