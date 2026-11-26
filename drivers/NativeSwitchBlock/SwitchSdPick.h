@@ -107,10 +107,10 @@ inline SwitchSdPicked<Request> switchSdPick(Request *head, const uint64_t awaite
 }
 
 // The boot replay's reads (the kernel's prefetch thread, kernel/switch/vm/prefetch.c) are tier 0 by policy but read
-// ahead of use: they queue one class below the UI's demand reads. A tier-0 thread can still sleep on a page a queued
-// replay read holds busy. XNU's busy-page raise (doSetPriority) is meant to lift that read, but no device or emulator
-// run has shown it reaching the card yet, so a replay read that has waited kSwitchSdReplayAgeNs goes back to tier 0's
-// class (switchSdAgeReplay): the UI waits at most that long behind its own page.
+// ahead of use: they queue one class below the UI's demand reads. A tier-0 thread can still wait on a replay read: on a
+// VM page it holds busy, which XNU's busy-page raise (doSetPriority) lifts, or on a buffer the replay's vget or pagein
+// read for APFS, which no raise reaches. So a replay read that has waited kSwitchSdReplayAgeNs goes back to tier 0's
+// class (switchSdAgeReplay), and the UI waits at most that long behind it.
 constexpr uint8_t kSwitchSdReplayClass = 1;
 constexpr uint64_t kSwitchSdReplayAgeNs = 20000000;  // 20 ms
 
@@ -123,11 +123,11 @@ inline uint8_t switchSdClassOf(uint8_t asked, bool replay)
     return replay && asked < kSwitchSdReplayClass ? kSwitchSdReplayClass : asked;
 }
 
-// A queued request the ager may still move: a replay read above class 0. Its count (queuedReplay) gates the ager's
-// walk, so tier-1 and cryptex reads in class 1 after the boot cost a pick nothing.
+// A queued request the ager may move: a replay read in the replay class. A replay read asked at a lower priority keeps
+// it. Their count (queuedReplay) gates the ager's walk, so tier-1 and cryptex reads in class 1 cost a pick nothing.
 template <typename Request> inline bool switchSdAgeable(const Request *r)
 {
-    return r->replay && !r->write && r->klass;
+    return r->replay && !r->write && r->klass == kSwitchSdReplayClass;
 }
 
 // Puts each replay read queued for kSwitchSdReplayAgeNs or more back in class 0, keeping queuedReads (reads only) and
@@ -164,9 +164,10 @@ inline uint32_t switchSdPromote(Request *head, uint64_t lba, uint64_t sectors, u
             --queuedReads[r->klass];
             ++queuedReads[klass];
         }
-        if (!klass && switchSdAgeable(r))
-            --queuedReplay;
+        const bool wasAgeable = switchSdAgeable(r);
         r->klass = klass;
+        if (wasAgeable != switchSdAgeable(r))
+            wasAgeable ? --queuedReplay : ++queuedReplay;
         ++raised;
     }
     return raised;

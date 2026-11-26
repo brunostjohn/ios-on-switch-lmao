@@ -385,6 +385,32 @@ TEST(SdPick, PromotingAReplayReadToClassZeroLeavesTheAgerNothingToCount)
     EXPECT_EQ(reads[0], 2u);
 }
 
+// The age bounds the replay class only: a replay read asked at a lower priority is not lifted to class 0 by waiting, and
+// a promote into the replay class makes it ageable.
+TEST(SdPick, OnlyTheReplayClassAgesAndAPromoteIntoItCounts)
+{
+    std::vector<Request> q(2);
+    for (size_t i = 0; i < q.size(); ++i) {
+        q[i] = {};
+        q[i].next = i + 1 < q.size() ? &q[i + 1] : nullptr;
+        q[i].lba = 100 * i;
+        q[i].sectors = 8;
+        q[i].replay = true;
+    }
+    q[0].klass = 2;
+    q[1].klass = 3;
+    uint32_t reads[kSwitchSdPickClasses] = {0, 0, 1, 1};
+    uint32_t replay = 0;
+    EXPECT_EQ(switchSdPromote(q.data(), 0, 8, kSwitchSdReplayClass, reads, replay), 1u);
+    EXPECT_EQ(replay, 1u);
+    EXPECT_EQ(switchSdAgeReplay(q.data(), 10 * kSwitchSdReplayAgeNs, reads, replay), 1u);
+    EXPECT_EQ(q[0].klass, 0u);
+    EXPECT_EQ(q[1].klass, 3u);
+    EXPECT_EQ(replay, 0u);
+    EXPECT_EQ(reads[0], 1u);
+    EXPECT_EQ(reads[3], 1u);
+}
+
 TEST(SdPick, PromoteRaisesOnly)
 {
     std::vector<Request> q(3);
