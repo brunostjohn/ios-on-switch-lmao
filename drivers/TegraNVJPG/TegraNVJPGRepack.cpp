@@ -10,12 +10,30 @@
 #include "../TegraVIC/SwitchVICDecodeOutput.h"
 #include "../TegraVIC/SwitchVICSurfaceAccess.h"
 #include "../../kits/SwitchDMA/SwitchDMAPages.h"
+#include "../../kits/SwitchDMA/SwitchDcache.h"
+#include "../../kits/SwitchMath/SwitchMath.h"
 
 namespace {
 // Grown to the largest decode yet and kept: decodes run one at a time on the engine thread, and none starts before the
 // one before it has ended, its re-pack included (tegra_nvjpg_repack_end), so the next may write it.
 switch_dma_pages *gPages;
 switch_gpu_backing *gBacking;
+// The last 8 bytes of gPages, past every byte a decode writes: the copy engine's re-pack runs only while they are not
+// zero (tegra_gm20b_ce_wait.when). A cancelled decode zeroes them before its fence passes, so the re-pack copies none
+// of the buffer, which may still hold an earlier decode's picture, another process's.
+constexpr uint64_t kGuardBytes = 8;
+
+uint64_t guardOffset()
+{
+    return gPages->size - kGuardBytes;
+}
+
+void setGuard(uint64_t value)
+{
+    auto *guard = reinterpret_cast<volatile uint64_t *>(gPages->va + guardOffset());
+    *guard = value;
+    switch_dcache_clean(guard, kGuardBytes);
+}
 
 void releasePages(void *owner)
 {
@@ -100,11 +118,12 @@ void queueCeRepack(void *context, uint32_t syncpt, uint32_t fence)
 {
     auto *run = static_cast<TegraNVJPGRepackRun *>(context);
     const TegraNVJPGPlan *p = run->plan;
-    const tegra_gm20b_ce_wait after = {syncpt, fence};
+    const tegra_gm20b_ce_wait after = {syncpt, fence, 1, guardOffset()};
     const tegra_gm20b_ce_done done = {TEGRA_GM20B_CE_NO_SYNCPT, ceCompleted, run};
     switch_gpu_cpu_lease *lease = run->access.owned;
     const switch_gpu_copy_ownership ownership = {lease ? &lease : nullptr, lease ? 1u : 0u, &run->access.guard, 1};
     const switch_gpu_event_submission none = {};
+    setGuard(1);
     // One count for the queueing itself, so no plane's completion ends the re-pack while later planes are queued
     __atomic_store_n(&run->pending, 1u, __ATOMIC_RELEASE);
     bool queued = false;
@@ -132,6 +151,12 @@ void queueCeRepack(void *context, uint32_t syncpt, uint32_t fence)
     run->why = why;
     if (queued && !__atomic_sub_fetch(&run->pending, 1u, __ATOMIC_ACQ_REL))
         repackEnded(run);
+}
+
+// The decode was cancelled: the copies queued behind its fence launch with the guard zero and write nothing
+void ceCancelled(void *)
+{
+    setGuard(0);
 }
 }  // namespace
 
@@ -163,7 +188,7 @@ int tegra_nvjpg_repack_start(TegraNVJPGRepackRun *run, TegraNVJPGJob *engine, co
             return error;
         }
     }
-    if (const int error = grow(plan->repackBytes)) {
+    if (const int error = grow(SWITCH_MAX(plan->repackBytes, plan->writeEnd) + kGuardBytes)) {
         switch_vic_surface_release_access(&run->access);
         *why = run->ce ? "no memory for the planes Copy Engine re-packs" : "no memory for the planes VIC re-packs";
         return error;
@@ -177,7 +202,7 @@ int tegra_nvjpg_repack_start(TegraNVJPGRepackRun *run, TegraNVJPGJob *engine, co
     engine->bitstream = bitstream;
     for (uint32_t i = 0; i < plan->planes; ++i)
         engine->plane[i] = mapping->address + plan->planeStart[i];
-    const TegraNVJPGFollow follow = {run->ce ? queueCeRepack : queueRepack, run};
+    const TegraNVJPGFollow follow = {run->ce ? queueCeRepack : queueRepack, run, run->ce ? ceCancelled : nullptr};
     tegra_nvjpg_lock();
     const int ret = tegra_nvjpg_start(engine, ended, &follow);
     if (ret)

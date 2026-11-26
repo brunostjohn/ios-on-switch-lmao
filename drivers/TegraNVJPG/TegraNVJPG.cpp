@@ -182,6 +182,7 @@ struct Flight {
     uint32_t threshold;
     uint64_t startUs;
     int result;
+    TegraNVJPGFollow follow;  // the decode's, if any: cancelled() tells it
     bool active;
 };
 
@@ -461,6 +462,8 @@ int cancelled(const TegraNVJPGJob *job, uint32_t fence, uint64_t us)
     switch_car_reset_assert(kClock);
     IODelay(10);
     const bool reset = powerUp(&wasOn);
+    if (gFlight.follow.cancelled)
+        gFlight.follow.cancelled(gFlight.follow.context);
     const int released = tegra_host1x_syncpt_release_through(gSyncpt, fence);
     tegra_host1x_channel_restart(TEGRA_HOST1X_CHANNEL_NVJPG);
     const uint32_t from = tegra_host1x_syncpt_read(gSyncpt);
@@ -762,6 +765,7 @@ extern "C" int tegra_nvjpg_start(const TegraNVJPGJob *job, const TegraNVJPGSigna
         return error;
     }
     gNext = fence;
+    gFlight.follow = follow ? *follow : TegraNVJPGFollow{};
     if (follow)
         follow->queue(follow->context, gSyncpt, fence);
     gFlight.signal = *signal;

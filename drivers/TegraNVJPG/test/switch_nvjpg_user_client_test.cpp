@@ -479,8 +479,9 @@ extern "C" int tegra_gm20b_ce_copy_plane_checked(const tegra_gm20b_ce_plane *src
                                                  uint64_t dstBackingOffset, const switch_gpu_copy_ownership *,
                                                  const switch_gpu_event_submission *)
 {
-    gCeCopies.push_back({*src, *dst, rowBytes, rows, wait ? *wait : tegra_gm20b_ce_wait{TEGRA_GM20B_CE_NO_SYNCPT, 0},
-                         srcBacking, dstBacking, srcBackingOffset, dstBackingOffset});
+    gCeCopies.push_back({*src, *dst, rowBytes, rows,
+                         wait ? *wait : tegra_gm20b_ce_wait{TEGRA_GM20B_CE_NO_SYNCPT, 0, 0, 0}, srcBacking, dstBacking,
+                         srcBackingOffset, dstBackingOffset});
     gHoldsAtCopy.push_back(gHolds);
     if (gCeStatus)
         return gCeStatus;
@@ -645,6 +646,12 @@ Job *repackOf(uint64_t bytes)
 // and re-pack engines run between as their hardware would; `repackFirst` delivers a re-pack's end before NVJPG's, as
 // two work loops may. A job no signal would ever carry on leaves the engine thread asleep for good: the test fails
 // there.
+// The copy engine's guard word for a queued copy, in the re-pack's buffer (TegraNVJPGRepack.cpp)
+uint64_t guardOf(const CeCopyCall &copy)
+{
+    return *reinterpret_cast<const uint64_t *>(gPages->va + copy.wait.when);
+}
+
 IOReturn engineRuns(Job *job, bool repackFirst = false)
 {
     for (bool inFlight = beginJob(job); inFlight; inFlight = !advanceJob(job)) {
@@ -822,6 +829,8 @@ TEST_F(NVJPGUserClient, UnalignedStrideExecutesViaCopyEngineRepackBehindNVJPGFen
     EXPECT_EQ(gCeCopies[0].dst.pitch, 2080u);
     EXPECT_EQ(gCeCopies[0].rowBytes, 2048u);
     EXPECT_EQ(gCeCopies[0].rows, 512u);
+    EXPECT_EQ(gCeCopies[0].wait.predicated, 1u);
+    EXPECT_EQ(guardOf(gCeCopies[0]), 1u) << "a decode that ends copies its picture";
     EXPECT_EQ(gCeCopies[0].dstBacking, &d.backing);
     EXPECT_EQ(gSurfaceAccessUnreserved, 1);
     EXPECT_EQ(gSurfaceAccessReleased, 1);
@@ -847,6 +856,9 @@ TEST_F(NVJPGUserClient, ACancelledDecodeLetsTheCopyEngineQueuedBehindItEnd)
         EXPECT_EQ(gEngine.decodeEndedBy, falconError ? "falcon" : "fence");
         ASSERT_EQ(gCeCopies.size(), 1u);
         EXPECT_EQ(gEngine.released, std::vector<uint32_t>{gCeCopies[0].wait.threshold}) << falconError;
+        EXPECT_EQ(gCeCopies[0].wait.predicated, 1u) << "the re-pack runs only on its guard";
+        EXPECT_EQ(guardOf(gCeCopies[0]), 0u)
+            << "a cancelled decode's re-pack copies nothing: the buffer may hold another process's picture";
         EXPECT_TRUE(logged("engine reset: running again"));
         EXPECT_EQ(d.backing.refs, 1);
         retire(&d.backing);

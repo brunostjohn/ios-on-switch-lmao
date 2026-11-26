@@ -57,9 +57,12 @@ struct TegraNVJPGJob {
 };
 
 // Work queued behind a decode as it starts: `queue` gets NVJPG's syncpoint and the decode's fence.
+// `cancelled`, when not null, runs if the decode is cancelled, after the engine's reset and before its fence is
+// released: the work queued behind the fence must then write nothing.
 struct TegraNVJPGFollow {
     void (*queue)(void *context, uint32_t syncpt, uint32_t fence);
     void *context;
+    void (*cancelled)(void *context);
 };
 
 // A started decode's end: `ended` runs once, on host1x's interrupt work loop (its fence reached or past its bound) or
