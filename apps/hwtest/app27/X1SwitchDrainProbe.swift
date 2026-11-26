@@ -15,8 +15,8 @@ import Metal
 /// probe saw corrupt at these sizes; a cell judges the switch arms only once hazard differed there. Every forced arm
 /// keeps today's pass barrier and job entry; rule forces nothing, so production's rules (barrier_forms.h) pick every barrier, and
 /// rule_switches= counts the engine changes they relaxed. Every arm draws pass A with the same spins, so the control's
-/// race is the arms' race. Run All runs `quick` trials an arm a cell; HWTEST_LONG=1 runs 1,504 (600 at 1280 x 720)
-/// within the cell's budget. hazard_cells_trials= each cell's hazard trials and how many differed.
+/// race is the arms' race. Run All runs `quick` trials an arm a cell, whose clean claim is PASS_QUICK, not proof; Long
+/// runs (LongRuns) run 1,504 (600 at 1280 x 720) within the cell's budget. hazard_cells_trials= each cell's hazard trials and how many differed.
 enum X1SwitchDrainProbe {
     static let probe = X1Probe(
         id: "gpu.x1.subchannel_switch_drain", name: "A subchannel change drains the engine left behind",
@@ -160,6 +160,7 @@ enum X1SwitchDrainProbe {
             finding.verdict = .inconclusive
             finding.note = "today's barriers gave texels other than the CPU's reading"
         }
+        finding.quick(unless: LongRuns.on)
         return finding
     }
 

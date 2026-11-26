@@ -16,8 +16,8 @@ import Metal
 /// it opened with the pixel barrier, and a cell where rule read other texels than control fails the line. Cells: format x
 /// layout x read shape x size. 0x1288 in place of 0x0f74 after the barrier is never sent: F-v1
 /// read it wrong in every 64 x 64 cell (bgra8_bl_same_s 623 of 1,008 trials). Run All runs `quick` trials an arm a
-/// cell, and a cell whose none arm never differed in them reads blind, never held; HWTEST_LONG=1 runs each cell's
-/// `trials` within its `seconds` (the 64 x 64 cells' four times T-v2's, the F-v1 count). none_cells= each cell's none
+/// cell, and a cell whose none arm never differed in them reads blind, never held; a clean claim there is PASS_QUICK,
+/// not proof. Long runs (LongRuns) run each cell's `trials` within its `seconds` (the 64 x 64 cells' four times T-v2's, the F-v1 count). none_cells= each cell's none
 /// trials and how many differed.
 enum X1PassBarrierProbe {
     static let probe = X1Probe(
@@ -208,6 +208,7 @@ enum X1PassBarrierProbe {
             finding.verdict = .inconclusive
             finding.note = "the control's reads are not the CPU's reading of the pattern"
         }
+        finding.quick(unless: LongRuns.on)
         return finding
     }
 
