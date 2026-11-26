@@ -7,6 +7,7 @@ public struct ContentView: View {
     @ObservedObject var prompter: Prompter
     @ObservedObject var stage: Stage
     @State private var benchShown = false
+    @AppStorage(LongRuns.defaultsKey) private var longRuns = false
 
     public init(suite: Suite) {
         self.suite = suite
@@ -40,6 +41,9 @@ public struct ContentView: View {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Bench") { benchShown = true }
                         .disabled(!suite.idle)
+                }
+                ToolbarItem(placement: .topBarLeading) {
+                    Toggle("Long runs", isOn: $longRuns).toggleStyle(.button).disabled(!suite.idle)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Run All") { suite.runAll() }

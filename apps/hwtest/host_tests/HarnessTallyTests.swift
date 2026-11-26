@@ -48,4 +48,11 @@ final class HarnessTallyTests: XCTestCase {
         XCTAssertFalse(TestBudget.over(15_000, interactive: false))
         XCTAssertFalse(TestBudget.over(60_000, interactive: true), "a person's pace is not the test's")
     }
+
+    func testALongRunSaysSoInItsLine() {
+        var tally = HarnessTally()
+        XCTAssertNil(tally.outcome.metrics["long_runs"])
+        tally.longRuns = true
+        XCTAssertEqual(tally.outcome.metrics["long_runs"], .flag(true))
+    }
 }

@@ -16,6 +16,8 @@ public struct HarnessTally {
     private var mainCpu: [Double] = []
     private var cpuSamples: [Double] = []
     private var overBudget: [String] = []
+    /// The run took the long forms (LongRuns): its numbers are not Run All's
+    public var longRuns = false
 
     public init() {}
 
@@ -52,6 +54,7 @@ public struct HarnessTally {
         metrics.set("cpu_sample_ms_max", cpuSamples.max() ?? 0, digits: 2)
         metrics.set("over_budget", overBudget.count)
         metrics.set("over_budget_ids", overBudget.isEmpty ? "-" : overBudget.joined(separator: ","))
+        if longRuns { metrics.set("long_runs", true) }
         var over: [String] = []
         if boundary > Self.boundaryCeilingMs { over.append("median boundary over \(Int(Self.boundaryCeilingMs)) ms") }
         if mainWait > Self.mainWaitCeilingMs { over.append("median main-thread answer over one display period") }

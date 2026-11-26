@@ -179,6 +179,7 @@ public final class Suite: ObservableObject {
         Task.detached(priority: .userInitiated) { [weak self] in
             let start = CFAbsoluteTimeGetCurrent()
             var harness = HarnessTally()
+            harness.longRuns = LongRuns.on
             var finished: TestRecord?
             var ended: Double?
             var cpu = ThreadTimes.sample(main: main)
