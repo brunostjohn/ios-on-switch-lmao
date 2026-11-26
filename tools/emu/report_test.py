@@ -15,7 +15,6 @@ class KernelLogTest(unittest.TestCase):
         ring = b'[    16.873000]: \x1b[35m' + text.encode() + b'\x1b[0m\n'
         self.assertEqual(report.kernel_log(ring), [f'[    16.873000] {text}'])
 
-
     def test_text_after_a_message_that_starts_with_a_newline_takes_the_stamp_before_it(self):
         ring = (
             b'[    10.000000]: tcp listen: x\nso_gencnt: 62 SwitchBootPrefetch: 0 MiB paged in ahead\n'
