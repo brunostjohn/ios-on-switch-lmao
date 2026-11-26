@@ -70,6 +70,10 @@ TEST(TegraSESource, AnMccifOperationsPagesAreHeldOnlyWhileItRuns)
     ASSERT_NE(start, std::string::npos);
     EXPECT_LT(hold, start);
     EXPECT_LT(start, release);
+    const size_t engineOff = run.find("if (!e.up)\n        return ran;");
+    ASSERT_NE(engineOff, std::string::npos) << "an engine turned off mid-operation keeps its holds";
+    EXPECT_LT(start, engineOff);
+    EXPECT_LT(engineOff, run.find("tegra_se_smmu_release(which, outList)"));
     EXPECT_EQ(Count(source, "start(e, "), 1u) << "every operation starts through run()";
     EXPECT_THAT(source, HasSubstr("if (!engineUp(e) || !confine(e, which)) {"));
     EXPECT_THAT(source, Not(HasSubstr("kSmmuAsid")));

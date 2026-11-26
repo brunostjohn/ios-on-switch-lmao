@@ -31,6 +31,7 @@ void bringUpWithSe2LostOnItsSecondOperation()
     EXPECT_FALSE(gEngines[1].up);
     EXPECT_EQ(se_model::engines[1].started, 2u) << "an operation reached SE2 after it was off";
     EXPECT_TRUE(gEngines[0].proven) << "callers reach SE1 from here";
+    EXPECT_EQ(gSmmuHolds[0], 0) << "every operation SE1 ended gave its holds back";
     EXPECT_NE(se_model::log().find("SE2 off for this boot: operation never ended"), std::string::npos)
         << se_model::log();
     ASSERT_FALSE(se_model::engines[0].crypto.empty());
@@ -63,6 +64,7 @@ void stateLoadAfterItsEngineWentOff()
     EXPECT_TRUE(gEngines[1].up);
     EXPECT_EQ(se_model::engines[0].started, 1u);
     EXPECT_EQ(se_model::engines[1].started, 0u) << "SE2 was not the engine under test";
+    EXPECT_GT(gSmmuHolds[0], 0) << "the operation SE1 never ended keeps its pages held: SE1 may still write them";
 }
 
 // A caller's operation on a proven engine may have DMA in flight into the caller's pages: never an engine turned off.

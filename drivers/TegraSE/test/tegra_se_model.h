@@ -22,13 +22,19 @@ tegra_se_smmu_attach_result tegra_se_smmu_attach(unsigned, const switch_dma_buff
     return TEGRA_SE_SMMU_UNTRANSLATED;
 }
 
-bool tegra_se_smmu_hold(unsigned, const uint32_t *)
+// Holds taken less holds released, per engine: an operation's lists are counted once each way.
+int gSmmuHolds[2];
+
+bool tegra_se_smmu_hold(unsigned engine, const uint32_t *)
 {
+    ++gSmmuHolds[engine];
     return true;
 }
 
-void tegra_se_smmu_release(unsigned, const uint32_t *)
-{}
+void tegra_se_smmu_release(unsigned engine, const uint32_t *)
+{
+    --gSmmuHolds[engine];
+}
 
 namespace se_model {
 constexpr uintptr_t kBase[kEngines] = {0x70012000, 0x70412000};

@@ -418,6 +418,11 @@ bool run(Engine &e, uint32_t in, uint32_t out)
         return false;
     }
     const bool ran = start(e, in, out);
+    // An engine turned off mid-operation may still write what its lists name. Only the driver's own buffers reach an
+    // engine that can go off without a panic (callers' pages reach proven engines only), and those outlive it, so their
+    // holds do too: a late write must land, not fault at the MC.
+    if (!e.up)
+        return ran;
     if (translated && outList)
         tegra_se_smmu_release(which, outList);
     if (translated && inList)
