@@ -62,7 +62,9 @@ class Checks(unittest.TestCase):
         self.assertEqual(len(names), len(set(names)))
         for group in checks.GROUPS.values():
             for c in group:
-                self.assertTrue(c.rule in {rules.REPORT, rules.TIMELINE} or rules.RULE.match(c.rule), c.name)
+                self.assertTrue(
+                    c.rule in {rules.REPORT, rules.TIMELINE, rules.SUMS} or rules.RULE.match(c.rule), c.name
+                )
                 self.assertTrue(all(c.literals()), c.name)
                 if c.regex:
                     re.compile(c.regex)

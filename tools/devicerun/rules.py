@@ -28,7 +28,8 @@ OPS = {
     '<': lambda a, b: a < b,
     '>': lambda a, b: a > b,
 }
-REPORT, TIMELINE = 'report', 'timeline'
+# sums: an INFO row of each `show` field's total over the lines, for counters a line carries per window.
+REPORT, TIMELINE, SUMS = 'report', 'timeline', 'sums'
 DEBUG_LEVELS = {'info', 'debug'}
 LAUNCHD_PID = re.compile(r' \[\d+\]$')
 TOP_GROUPS = 6
@@ -375,6 +376,9 @@ def informational(check: Check, matches: list[dict], minutes: float, by_name: di
     """Return a 'timeline' or 'report' check's INFO row."""
     if check.rule == TIMELINE:
         return Result(check, INFO if matches else NO_DATA, timeline(matches) or 'no lines', matches)
+    if check.rule == SUMS:
+        totals = ', '.join(f'{k} {fmt(sum(values(matches, k)))}' for k in check.show)
+        return Result(check, INFO if matches else NO_DATA, f'{len(matches)} lines; {totals}', matches)
     observed = describe(check, matches, minutes)
     if check.against:
         observed += '; ' + lookup(check, matches, by_name.get(check.against, []))
@@ -473,7 +477,7 @@ def judge(
     if check.followed or check.per:
         runs = by_name.get(check.per, [])
         return follow(check, matches, minutes, by_name, log_end) if check.followed else per_run(check, matches, runs)
-    if check.rule in {TIMELINE, REPORT}:
+    if check.rule in {TIMELINE, REPORT, SUMS}:
         return informational(check, matches, minutes, by_name)
     got, observed = measure(check, matches, minutes)
     if got is None:
