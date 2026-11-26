@@ -631,11 +631,15 @@ struct Display : OSObject {
             gHost.owner->status = SwitchHost1xDisplayStream::kCancelled;
     }
 
+    std::function<void()> passSignalled;  // runs between gpuComplete's signal and its write, as a gate frame end may
+
     void deliver(int status)
     {
         status = mediaFlipVerdict(status);
         gpuStatus = status;
         gpuDonePending = true;
+        if (passSignalled)
+            passSignalled();
         model.completing = true;
         writeMediaFlip(status);
         model.completing = false;

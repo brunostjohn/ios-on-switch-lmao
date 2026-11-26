@@ -63,7 +63,8 @@ int submitMediaHostFlip(const switch_gpu_backing_token *producers, unsigned coun
     if (error) {
         __atomic_store_n(&mediaHostGeneration, 0u, __ATOMIC_RELEASE);
         withdrawMediaFlip();
-        IOLog("SwitchDisplay: host1x refused windows B and C's controller stream (%d)\n", error);
+        if (!bridge)
+            IOLog("SwitchDisplay: host1x refused windows B and C's controller stream (%d)\n", error);
         return error;
     }
     if (mediaFlip.state() == SwitchCompletionFlip::kArmed) {

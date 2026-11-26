@@ -134,13 +134,14 @@ PlaneStreamOutcome planeBridgeSubmitted(switch_gpu_bridge *bridge, const switch_
         outcome = kPlaneStreamJobful;
     else if (planeBridgeArmed != mediaFlip.generation() || mediaFlip.state() != SwitchCompletionFlip::kArmed)
         outcome = kPlaneStreamStale;
-    else if (submitMediaHostFlip(host1x, host1xCount, bridge))
+    int refusal = 0;
+    if (outcome == kPlaneStreamed && (refusal = submitMediaHostFlip(host1x, host1xCount, bridge)))
         outcome = kPlaneStreamRefused;
-    planeStreamCount(outcome);
+    planeStreamCount(outcome, refusal);
     return outcome;
 }
 
-void planeStreamCount(PlaneStreamOutcome outcome)
+void planeStreamCount(PlaneStreamOutcome outcome, int refusal)
 {
     if (outcome == kPlaneStreamed) {
         if (stats)
@@ -156,5 +157,6 @@ void planeStreamCount(PlaneStreamOutcome outcome)
     static constexpr const char *kWhy[3] = {
         "its bridge has a GPU job of its own, whose producer failures do not cancel a stream",
         "its flip was withdrawn while the bridge was submitted", "host1x refused its stream"};
-    IOLog("SwitchDisplay: a GPU-rendered window B/C set completes through its bridge: %s (once a boot)\n", kWhy[which]);
+    IOLog("SwitchDisplay: a GPU-rendered window B/C set completes through its bridge: %s (%d; once a boot)\n",
+          kWhy[which], refusal);
 }

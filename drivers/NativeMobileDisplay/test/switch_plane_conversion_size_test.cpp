@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // The converted plane's size: no more pixels than the source has on either axis (a layer shown larger is scaled up by
-// the window, not by VIC), a plane kept while still content moves or shrinks wholly on the screen, and a new one once
-// it grows past it; a layer wholly off the screen is shown as nothing, not dropped.
+// the window, not by VIC), a plane kept while still content moves or shrinks to half wholly on the screen, and a new
+// one once it grows past it or shrinks below half; a layer wholly off the screen is shown as nothing, not dropped.
 #include "switch_plane_conversion_harness.h"
 
 namespace {
@@ -34,7 +34,7 @@ TEST_F(PlaneConversion, StillContentMovedOrShrunkWhollyOnTheScreenKeepsItsPlane)
     ASSERT_GE(slot, 0);
     display->busy[slot] = true;
     for (const native_planes::Rect dst : {native_planes::Rect{300, 400, 256, 128}, native_planes::Rect{100, 200, 192, 96},
-                                          native_planes::Rect{0, 0, 64, 32}, native_planes::Rect{10, 10, 32, 16}}) {
+                                          native_planes::Rect{0, 0, 64, 32}, native_planes::Rect{10, 10, 80, 40}}) {
         layer.dst = dst;
         SCOPED_TRACE(testing::Message() << dst.x << "," << dst.y << " " << dst.w << "x" << dst.h);
         EXPECT_EQ(offer(), slot);
@@ -45,17 +45,18 @@ TEST_F(PlaneConversion, StillContentMovedOrShrunkWhollyOnTheScreenKeepsItsPlane)
     EXPECT_EQ(allocations, 1u);
 }
 
-// Past the window's 1/4 across, the kept plane cannot be shown: VIC makes the smaller one.
-TEST_F(PlaneConversion, AShrinkPastTheWindowsQuarterConvertsAgain)
+// Below half its plane's size, the layer gets a plane its own size: window B fetches, and admission charges, no more
+// than twice the pixels each way.
+TEST_F(PlaneConversion, AShrinkBelowHalfConvertsAgain)
 {
     const int slot = convert();
     ASSERT_GE(slot, 0);
     display->busy[slot] = true;
-    layer.dst = {100, 200, 24, 12};
+    layer.dst = {100, 200, 48, 24};
     ASSERT_GE(convert(), 0);
     EXPECT_EQ(conversions, 2u);
-    EXPECT_EQ(lastOperation.dstW, 24u);
-    EXPECT_EQ(lastOperation.dstH, 12u);
+    EXPECT_EQ(lastOperation.dstW, 48u);
+    EXPECT_EQ(lastOperation.dstH, 24u);
 }
 
 // A plane made for the layer shown small is not stretched over the layer shown larger: VIC makes the larger one.

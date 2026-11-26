@@ -131,15 +131,18 @@ inline bool screenConversionOf(const Layer &l, uint32_t width, uint32_t height, 
 }
 
 // Whether a plane converted as `made` can show what `now` asks for: the same part of the source, at least as many pixels
-// as `now` would convert, and few enough for the window to shrink to the part's size on the screen. A layer wholly on
-// the screen converts its whole source rectangle wherever it goes, so moving or resizing still content keeps its plane
-// until the layer grows past it.
+// as `now` would convert, and at most twice the part's size on the screen each way. A layer wholly on the screen
+// converts its whole source rectangle wherever it goes, so moving or resizing still content keeps its plane until it
+// grows past it or shrinks below half. Admission charges window B for the plane it fetches, so a plane kept far larger
+// than its part on the screen could cost an overlay its place.
+constexpr int64_t kConvertedReuseShrink = 2;
+
 inline bool screenConversionShows(const ScreenConversion &made, const ScreenConversion &now)
 {
     return made.srcX == now.srcX && made.srcY == now.srcY && made.srcW == now.srcW && made.srcH == now.srcH &&
            made.width >= now.width && made.height >= now.height &&
-           made.width <= static_cast<int64_t>(now.screen.w) * kRgbShrinkAcross &&
-           made.height <= static_cast<int64_t>(now.screen.h) * kShrinkDown;
+           made.width <= static_cast<int64_t>(now.screen.w) * kConvertedReuseShrink &&
+           made.height <= static_cast<int64_t>(now.screen.h) * kConvertedReuseShrink;
 }
 
 // The plane screenConversionOf describes, as the layer the window shows.

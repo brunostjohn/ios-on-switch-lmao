@@ -227,6 +227,40 @@ TEST_F(GpuPlaneStreamFlip, AFrameEndDuringTheStreamsCompletionFindsItsPassSignal
     EXPECT_EQ(d.model.active[kStartB], address(2));
 }
 
+// The two later instants of the completion's order against a frame end: after the pass is signalled but before the
+// claim (the flip still armed), and after the claim but before the generation goes (the written flip's pass runs then).
+TEST_F(GpuPlaneStreamFlip, AFrameEndAtEitherLaterInstantOfTheCompletionIsRight)
+{
+    for (const bool afterClaim : {false, true}) {
+        SCOPED_TRACE(afterClaim ? "after the claim" : "before the claim");
+        gWaitResult = -16;
+        ASSERT_TRUE(d.offerGpu(video(afterClaim ? 3 : 2), ++seq));
+        d.copyThread();
+        unsigned frameEnds = 0;
+        if (afterClaim) {
+            gDelivered = [this, &frameEnds](void *display, int status) {
+                static_cast<Display *>(display)->deliver(status);
+                d.frameEnd();
+                ++frameEnds;
+            };
+        } else {
+            d.passSignalled = [this, &frameEnds] {
+                d.frameEnd();
+                ++frameEnds;
+            };
+        }
+        ASSERT_NO_THROW(d.complete(0));
+        d.passSignalled = nullptr;
+        gDelivered = [](void *display, int status) {
+            static_cast<Display *>(display)->deliver(status);
+        };
+        EXPECT_EQ(frameEnds, 1u);
+        settle();
+        EXPECT_EQ(d.shown.back(), seq);
+        EXPECT_EQ(d.model.active[kStartB], address(afterClaim ? 3 : 2));
+    }
+}
+
 // A compositor's own GPU fault is a contract our driver or compiler breaks: the written set's verdict panics, as the
 // bridge fence's does for it, so the record finds the bug.
 TEST_F(GpuPlaneStreamFlip, AWrittenSetWhoseCompositorProducerWasKilledPanics)
