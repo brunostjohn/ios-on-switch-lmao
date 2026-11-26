@@ -27,13 +27,15 @@ unsigned roomWaits, completions;
 int completedStatus;
 bool watchedAtGate;
 
-int switch_gpu_bridge_submit(const switch_gpu_backing_token *tokens, uint32_t count, switch_gpu_bridge **bridge)
+int switch_gpu_bridge_submit_watched(const switch_gpu_backing_token *tokens, uint32_t count,
+                                     switch_gpu_bridge **bridge)
 {
     if (busy-- > 0)
         return -16;
     if (submitError)
         return submitError;
     bridged.assign(tokens, tokens + count);
+    ++theBridge.watches;
     *bridge = &theBridge;
     return 0;
 }
@@ -42,12 +44,6 @@ int switch_gpu_bridge_wait_room()
 {
     ++roomWaits;
     return roomError;
-}
-
-int switch_gpu_bridge_watch(const switch_gpu_bridge *bridge)
-{
-    ++const_cast<switch_gpu_bridge *>(bridge)->watches;
-    return 0;
 }
 
 int switch_gpu_bridge_jobless(const switch_gpu_bridge *bridge)

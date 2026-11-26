@@ -12,7 +12,7 @@
 //
 // Ownership: planeBridgeArmed is the gate's, written before the hand-off to the copy thread, which reads it. The bridge
 // handle is the copy thread's, lent to the gate for planeBridgeSubmitted, which hands it to the stream or back. A
-// producer that hangs is the bridge's hang check's from switch_gpu_bridge_watch on.
+// producer that hangs is the bridge's hang check's from its submission (switch_gpu_bridge_submit_watched) on.
 
 static inline uint32_t planeBridgeArmed = 0;  // the flip generation armed for the bridged set; 0: the bridge fence
 static inline bool planeStreamTold[3] = {};    // the gate's: each case's line, once a boot
@@ -62,8 +62,8 @@ void planeBridgeArm(const PlaneSet &p)
     planeBridgeArmed = mediaFlip.generation();
 }
 
-// The copy thread: the bridge over the set's GPU producers, watched for a hang from its submission, then the gate's
-// answer; a set the gate did not stream completes from here.
+// The copy thread: the bridge over the set's GPU producers, watched for a hang from its submission (in the submit's own
+// lock), then the gate's answer; a set the gate did not stream completes from here.
 void planeBridgeWork(const switch_gpu_backing_token *producers, unsigned count)
 {
     switch_gpu_backing_token gpu[kPlaneDependencies] = {}, host1x[kPlaneDependencies] = {};
@@ -77,7 +77,7 @@ void planeBridgeWork(const switch_gpu_backing_token *producers, unsigned count)
     switch_gpu_bridge *bridge = nullptr;
     int error = kIOReturnAborted;
     while (!__atomic_load_n(&copyStopping, __ATOMIC_ACQUIRE)) {
-        error = switch_gpu_bridge_submit(gpu, gpuCount, &bridge);
+        error = switch_gpu_bridge_submit_watched(gpu, gpuCount, &bridge);
         if (error != -16)
             break;
         error = switch_gpu_bridge_wait_room();
@@ -89,7 +89,6 @@ void planeBridgeWork(const switch_gpu_backing_token *producers, unsigned count)
         native_legacy_gpu_complete(this, error);
         return;
     }
-    switch_gpu_bridge_watch(bridge);
     PlaneStreamOutcome outcome = kPlaneStreamStopping;
     PlaneStreamOffer offer = {bridge, host1x, host1xCount, &outcome};
     getWorkLoop()->runAction(&planeBridgeSubmittedAction<decltype(this)>, this, &offer);

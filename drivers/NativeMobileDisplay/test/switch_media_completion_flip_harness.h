@@ -71,19 +71,14 @@ struct switch_gpu_bridge {
 
 inline switch_gpu_bridge gTheBridge;
 
-extern "C" inline int switch_gpu_bridge_submit(const switch_gpu_backing_token *tokens, uint32_t count,
-                                               switch_gpu_bridge **bridge)
+extern "C" inline int switch_gpu_bridge_submit_watched(const switch_gpu_backing_token *tokens, uint32_t count,
+                                                       switch_gpu_bridge **bridge)
 {
     ++media_flip_test::gBridge.submits;
+    ++media_flip_test::gBridge.watches;
     media_flip_test::gBridge.tokens.assign(tokens, tokens + count);
     media_flip_test::gBridge.held = true;
     *bridge = &gTheBridge;
-    return 0;
-}
-
-extern "C" inline int switch_gpu_bridge_watch(const switch_gpu_bridge *)
-{
-    ++media_flip_test::gBridge.watches;
     return 0;
 }
 
