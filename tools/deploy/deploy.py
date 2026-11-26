@@ -435,8 +435,7 @@ def _located(args: argparse.Namespace) -> None:
 
 
 class Checked(NamedTuple):
-    """What the check found: the card, its spec, FAT, APFS partition and Data volume, and the FAT's pairing and
-    boot-args."""
+    """What the check found: the card, its spec, FAT, APFS partition, Data volume, the FAT's pairing and boot-args."""
 
     card: cards.Card
     spec: dict
