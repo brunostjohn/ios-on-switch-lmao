@@ -488,6 +488,7 @@ TESTS_NATIVE_SRCS = [
     "tests/NativeArgumentDraws.swift",
     "tests/NativeArgumentHeaps.swift",
     "tests/NativeArgumentKernels.swift",
+    "tests/NativeArgumentSampler.swift",
     "tests/NativeArgumentSpills.swift",
     "tests/NativeArgumentTests.swift",
     "tests/NativeArgumentTier2Test.swift",
