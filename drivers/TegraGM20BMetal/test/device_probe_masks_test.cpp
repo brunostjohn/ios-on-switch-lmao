@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
-// A probe draw whose words write the sample-mask registers (HW Test gpu.gm20b.mixed_merge_probe) leaves none of them
-// behind (gm20b::Device over the kernel model): after the draw the push sets SET_SAMPLE_MASK and
-// SET_COLOR_TARGET_SAMPLE_MASK back to the golden context's values, and the next draw writes the raster masks it wants.
+// A probe draw whose words write registers no state's bind sets (HW Test gpu.gm20b.mixed_merge_probe,
+// gpu.gm20b.constant_colour) leaves none of them behind (gm20b::Device over the kernel model): after the draw the push
+// sets each back to the golden context's value (probe_restores.h), and the next draw writes the raster masks it wants.
 #include "device_forms.h"
 #include "../client_errors.h"
+#include "../probe_restores.h"
 #include "../record.h"
 
 namespace {
@@ -40,8 +41,9 @@ protected:
         for (const auto &[method, value] : before) {
             words->before.push_back(gm20b::Push::hdr(1, gm20b::SUBC_3D, method, 1));
             words->before.push_back(value);
+            words->restores |= gm20b::probeRestoreBits(method);
+            words->rasterMasks |= gm20b::probeWritesRasterMasks(method);
         }
-        words->sampleMasks = true;
         {
             std::lock_guard<gm20b::Mutex> hold(dev.probeLock);
             dev.probeWords = std::move(words);
@@ -64,12 +66,30 @@ TEST_F(DeviceProbeMasks, AProbeDrawLeavesTheContextsSampleMasksBehindIt)
     });
     ASSERT_FALSE(ms.empty());
     EXPECT_EQ(dev.probeEmitted.load(), 1u);
-    EXPECT_EQ(values(ms, kSampleMask), (std::vector<uint32_t>{0x11, gm20b::kContextSampleMask}));
-    EXPECT_EQ(values(ms, kColorTargetMask), (std::vector<uint32_t>{0x1, gm20b::kContextColorTargetSampleMask}));
+    EXPECT_EQ(values(ms, kSampleMask), (std::vector<uint32_t>{0x11, 0x1}));
+    EXPECT_EQ(values(ms, kColorTargetMask), (std::vector<uint32_t>{0x1, 0xffff}));
     const std::vector<uint32_t> raster = values(ms, kRasterMask);
     ASSERT_GE(raster.size(), 2u);
     EXPECT_EQ(raster.back(), gm20b::kSampleMaskAll) << "the next draw writes the raster masks it wants";
     EXPECT_EQ(lastOf(ms, kRasterMask + 12), gm20b::kSampleMaskAll);
+}
+
+TEST_F(DeviceProbeMasks, AConstantColourProbeDrawTurnsThePixelStageBackOn)
+{
+    constexpr uint32_t kConstantColour = 0x0f40, kPixelStage = 0x2140;
+    gm20b::PassDesc desc;
+    desc.color[0] = kept(target, gm20b::ColorAttachment::Clear);
+    desc.count = 1;
+    const auto ms = pass(desc, [&](gm20b::RenderEncoder &e, const char **why) {
+        e.setPipeline(pl);
+        arm({{kPixelStage, 0x50}, {kConstantColour, 1}});
+        const bool probed = e.draw(3, 0, 3, 1, 0, why);
+        dev.probeArmed.store(false, std::memory_order_release);
+        return probed && e.draw(3, 0, 3, 1, 0, why);
+    });
+    ASSERT_FALSE(ms.empty());
+    EXPECT_EQ(values(ms, kConstantColour), (std::vector<uint32_t>{1, 0}));
+    EXPECT_EQ(lastOf(ms, kPixelStage), 0x51u);
 }
 
 }  // namespace

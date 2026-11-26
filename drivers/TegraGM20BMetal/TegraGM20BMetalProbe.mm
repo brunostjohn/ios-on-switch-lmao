@@ -2,6 +2,7 @@
 #import "TegraGM20BMetalInternal.h"
 #include "TegraGM20BGrPreemptABI.h"
 #include "TegraGM20BPathsABI.h"
+#include "probe_restores.h"
 #include "push.h"
 #include <libkern/OSCacheControl.h>
 #include <xpc/xpc.h>
@@ -29,7 +30,7 @@ static NSString *const kProbesUnentitled = @"raw methods need the " SWITCH_GPU_P
 // (method, value) uint32 pairs of the 3D class. Every draw of one instance this process encodes emits `before` after
 // its state and `after` once it ended, until a call with `before` nil disarms them and answers how many draws emitted
 // them. The probe's command buffers must complete before it disarms: their encoding may run after commit returns.
-static bool appendMethods(NSData *pairs, std::vector<uint32_t> &words, bool &sampleMasks)
+static bool appendMethods(NSData *pairs, std::vector<uint32_t> &words, gm20b::Device::ProbeWords &into)
 {
     if (!pairs)
         return true;
@@ -39,7 +40,8 @@ static bool appendMethods(NSData *pairs, std::vector<uint32_t> &words, bool &sam
     for (NSUInteger i = 0; i < pairs.length / 4; i += 2) {
         if (v[i] >= 0x8000 || v[i] % 4)
             return false;
-        sampleMasks |= v[i] >= NVB197_SET_SAMPLE_MASK && v[i] <= NVB197_SET_SAMPLE_MASK_X1_Y1;
+        into.restores |= gm20b::probeRestoreBits(v[i]);
+        into.rasterMasks |= gm20b::probeWritesRasterMasks(v[i]);
         words.push_back(gm20b::Push::hdr(1, gm20b::SUBC_3D, v[i], 1));
         words.push_back(v[i + 1]);
     }
@@ -88,8 +90,7 @@ static gm20b::ProbeSurface probeSurface(const gm20b::Texture &t, uint32_t fmt2d)
     if (!probesEntitled())
         return kProbesUnentitled;
     auto words = std::make_shared<gm20b::Device::ProbeWords>();
-    if (!appendMethods(before, words->before, words->sampleMasks) ||
-        !appendMethods(after, words->after, words->sampleMasks))
+    if (!appendMethods(before, words->before, *words) || !appendMethods(after, words->after, *words))
         return @"methods are (method, value) uint32 pairs of 3D-class methods below 0x8000";
     if (words->before.size() + words->after.size() > 1024)
         return @"more than 512 methods";

@@ -6,11 +6,13 @@
 #include "kit.h"
 #include "mixed_samples.h"
 #include "mme.h"
+#include "probe_restores.h"
 #include "tiled_cache.h"
 #include "view.h"
 #include "frame_cpu_counts.h"
 
 #include <algorithm>
+#include <iterator>
 #include <cstring>
 
 #include "gm20b_gpu_internal.h"
@@ -180,7 +182,7 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
     SWITCH_METAL_DIAGNOSTIC(cb_->counts_.amplifiedDraws += amplifies());
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     if (const auto probe = instances == 1 ? dev_->armedProbe() : nullptr) {
-        if (p_.room() < kInstanceWords + probe->before.size() + probe->after.size() + 4)
+        if (p_.room() < kInstanceWords + probe->before.size() + probe->after.size() + 2 * std::size(kProbeRestores))
             reserve();
         if (!probe->before.empty())
             p_.raw(probe->before.data(), uint32_t(probe->before.size()));
@@ -188,11 +190,11 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
         wholeDraw(*pl, false, first, count, instances, first, baseInstance);
         if (!probe->after.empty())
             p_.raw(probe->after.data(), uint32_t(probe->after.size()));
-        if (probe->sampleMasks) {
-            p_.m(NVB197_SET_SAMPLE_MASK, kContextSampleMask);
-            p_.m(NVB197_SET_COLOR_TARGET_SAMPLE_MASK, kContextColorTargetSampleMask);
+        for (uint32_t i = 0; i < std::size(kProbeRestores); i++)
+            if (probe->restores >> i & 1)
+                p_.m(kProbeRestores[i].method, kProbeRestores[i].value);
+        if (probe->rasterMasks)
             cb_->sampleMaskHeld_ = kSampleMaskUnknown;
-        }
         finishDraw(count, drawnInstances);
         return true;
     }
