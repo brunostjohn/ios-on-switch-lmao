@@ -141,8 +141,8 @@ public enum AegirMoon {
         }
         var reading = Reading(path: ran.path)
         reading.mask = rows(maskSurface, UInt8.self)
-        if let drawableSurface {
-            reading.drawable = rows(drawableSurface, UInt32.self)
+        if let surface = drawableSurface ?? drawable.iosurface {
+            reading.drawable = rows(surface, UInt32.self)
         } else {
             let bytes = try await gpu.read(drawable, bytesPerPixel: 4)
             reading.drawable = stride(from: 0, to: bytes.count, by: 4).map { at in

@@ -8,7 +8,7 @@ import Metal
 /// - `late_depth`, `late_discard`: zero-source draws of a program that writes depth, or that can discard, with depth
 ///   writes on, so the depth test runs after the shader. Metal writes depth 0.5 at every pixel over the clear's 1 and
 ///   keeps the colour (`late_<...>_wrong=` depth texels other than 0.5, `late_<...>_colour_changed_bytes=`,
-///   `late_<...>_kill_binds=` binds the facade made with the kill on).
+///   `late_<...>_kill_binds=` binds the facade made with the kill on, red at 0: the arm then tests nothing).
 /// - `visibility`: zero-source draws counted into a visibility result: Metal counts every sample of every draw
 ///   (`visibility_counted=` of `visibility_wanted=`).
 /// - `zero_clear`: a pass that binds a kill state, then in the same command buffer a pass that clears another target to
@@ -150,6 +150,8 @@ extension BlendKillTest {
             paths.append(arm.path)
             if arm.wrong != 0 { wrong.append("\(label)_wrong") }
             if arm.colourChanged != 0 { wrong.append("\(label)_colour_changed_bytes") }
+            // with the kill off the arm asks nothing of it
+            if arm.binds == 0 { wrong.append("\(label)_kill_binds") }
         }
         let visibility = try await visibilityArm(gpu)
         metrics.set("visibility_counted", Int(visibility.counted))
