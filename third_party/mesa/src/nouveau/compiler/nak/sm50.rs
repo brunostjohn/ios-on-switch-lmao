@@ -147,7 +147,13 @@ impl ShaderModel for ShaderModel50 {
             Dst::Reg(reg) => reg.file() == RegFile::GPR,
             Dst::None => false,
         };
-        if !gpr || !write.has_fixed_latency(self.sm) {
+        // XMAD stays out: NVIDIA's code never reads it before 6, and no bench
+        // row times an XMAD writer yet
+        if !gpr
+            || !write.has_fixed_latency(self.sm)
+            || latency != 6
+            || matches!(write, Op::Xmad(_))
+        {
             return latency;
         }
         // A variable-latency reader collects its operands after it issues:

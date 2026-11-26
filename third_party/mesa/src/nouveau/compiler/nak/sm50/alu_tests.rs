@@ -242,7 +242,8 @@ fn ldc() -> Op {
 }
 
 /// A fixed-latency GPR write read by MUFU issues 2 cycles before the read,
-/// by LDC 4 and by FFMA 6; MUFU's own result keeps its estimate
+/// by LDC 4 and by FFMA 6; an XMAD write keeps 6 for every reader, and MUFU's
+/// own result its estimate
 #[test]
 fn a_variable_latency_reader_collects_its_operand_after_issue() {
     let sm = ShaderModel50::new(53);
@@ -250,6 +251,16 @@ fn a_variable_latency_reader_collects_its_operand_after_issue() {
     assert_eq!(sm.raw_latency(&w, 0, &mufu(MuFuOp::Rcp), 0), 2);
     assert_eq!(sm.raw_latency(&w, 0, &ldc(), 0), 4);
     assert_eq!(sm.raw_latency(&w, 0, &ffma(3), 0), 6);
+    let xmad = Op::Xmad(Box::new(OpXmad {
+        dst: gpr(1),
+        srcs: [Src::ZERO, Src::ZERO, Src::ZERO],
+        hi: [false; 2],
+        psl: false,
+        mrg: false,
+        cbcc: false,
+    }));
+    assert_eq!(sm.raw_latency(&xmad, 0, &mufu(MuFuOp::Rcp), 0), 6);
+    assert_eq!(sm.raw_latency(&xmad, 0, &ldc(), 0), 6);
     let m = mufu(MuFuOp::Rcp);
     assert_eq!(
         sm.raw_latency(&m, 0, &mufu(MuFuOp::Rsq), 0),
