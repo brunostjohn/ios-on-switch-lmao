@@ -22,6 +22,7 @@
 #include "../../kits/SwitchSysctl/SwitchSysctl.h"
 #include "../SwitchSuspend/SwitchWake.h"
 #include "TegraGM20BGpu.h"
+#include "SwitchGpuPackImage.h"
 #include "SwitchGpuPathStats.h"
 #include "SwitchGpuShaderCompiler.h"
 #include "TegraGM20BRail.h"
@@ -244,6 +245,7 @@ void bringup(void *arg, wait_result_t)
 		} else {
 			IOLog("tegra-gm20b: M4 ok published AGXAccelerator (MetalPluginName "
 			      "TegraGM20BMetal)\n");
+			switch_gpu_pack_gpu_usable();
 		}
 	}
 #if TGM_STATS

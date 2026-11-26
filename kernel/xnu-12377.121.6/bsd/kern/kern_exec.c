@@ -10255,6 +10255,12 @@ load_init_program(proc_t p)
 	/* Owner overlay unions over sealed directories (SwitchRawMount.h), now that Data is mounted. */
 	native_switch_raw_overlay(p, (user_addr_t)scratch_addr);
 	switch_boot_steps_mark(&steps, "overlay");
+	/* pack.bin is reachable from here: the GPU's tier-0 pack image (drivers/TegraGM20B/SwitchGpuPackImage.cpp) is read
+	 * now, before launchd, not when the first Metal client opens its device and the render server waits for it. */
+	extern void switch_gpu_pack_volumes_mounted(void) __attribute__((weak));
+	if (switch_gpu_pack_volumes_mounted != NULL) {
+		switch_gpu_pack_volumes_mounted();
+	}
 	switch_bootstrap_capture();
 	switch_boot_steps_mark(&steps, "bootstrap");
 	switch_pretranslated_capture();

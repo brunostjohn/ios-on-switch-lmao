@@ -170,8 +170,13 @@ IOReturn switch_gpu_pack_client_wire_cpu(task_t task, const TegraGM20BAbiPackCpu
 void switch_gpu_pack_client_release_cpu(SwitchGpuPackClient *client);
 void switch_gpu_pack_client_unmap_gpu(tgm_vm *vm, SwitchGpuPackClient *client);
 
+// The tier-0 image is built once both have happened, whichever is second: the kernel has mounted Data and its owner
+// overlay (kern_exec.c, before launchd: pack.bin is reachable), and the GPU's bring-up has published the accelerator
+// (the copy engine can run)
+void switch_gpu_pack_gpu_usable(void);
 extern "C" {
 void switch_gpu_pack_shutdown(void);
+void switch_gpu_pack_volumes_mounted(void);
 }
 #endif
 

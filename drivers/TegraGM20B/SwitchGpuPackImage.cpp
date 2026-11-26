@@ -31,6 +31,7 @@ struct PackImageStore {
 	IOLock *lock;
 	SwitchGpuPackState state;
 	bool buildActive;
+	uint8_t bootConditions;  // kVolumesMounted | kGpuUsable, as each has happened
 #ifdef SWITCH_GPU_PACK_IMAGE_HOST_TEST
 	uint32_t refusedCount;
 #endif
@@ -47,6 +48,8 @@ struct PackImageStore {
 
 PackImageStore gPack = {};
 volatile uint32_t gShutdown = 0;
+
+constexpr uint8_t kVolumesMounted = 1, kGpuUsable = 2;
 
 IOLock *packLock()
 {
@@ -205,7 +208,61 @@ void buildThread(void *, wait_result_t)
 	thread_terminate(current_thread());
 }
 
+// Under the lock: a store no one has asked for becomes Building, its build named for `who`; whether the caller starts it
+bool claimBuild(const char *who)
+{
+	if (gPack.state != SwitchGpuPackState::None)
+		return false;
+	gPack.state = SwitchGpuPackState::Building;
+	gPack.buildActive = true;
+#if TGM_STATS
+	if (who)
+		strlcpy(gPack.firstProc, who, sizeof(gPack.firstProc));
+#else
+	(void)who;
+#endif
+	return true;
+}
+
+// For a store the caller claimed: its build's thread, or the store refused
+void startBuild(IOLock *lock)
+{
+	thread_t worker = nullptr;
+	const kern_return_t kr = kernel_thread_start(buildThread, nullptr, &worker);
+	if (kr != KERN_SUCCESS) {
+		finishRefused(lock, "kernel_thread_start failed", int(kr), false);
+		return;
+	}
+	thread_deallocate(worker);
+}
+
+// The build needs pack.bin reachable and the copy engine: the second of the two to happen starts it, before any client
+// opens a device, so the render server's first acquire finds it under way or Ready instead of starting it
+void bootCondition(uint8_t condition)
+{
+	IOLock *lock = packLock();
+	if (!lock)
+		return;
+	IOLockLock(lock);
+	gPack.bootConditions |= condition;
+	const bool start = gPack.bootConditions == (kVolumesMounted | kGpuUsable) &&
+			   !switch_gpu_pack_shutdown_requested() && claimBuild("boot");
+	IOLockUnlock(lock);
+	if (start)
+		startBuild(lock);
+}
+
 }  // namespace
+
+extern "C" void switch_gpu_pack_volumes_mounted(void)
+{
+	bootCondition(kVolumesMounted);
+}
+
+void switch_gpu_pack_gpu_usable(void)
+{
+	bootCondition(kGpuUsable);
+}
 
 bool switch_gpu_pack_shutdown_requested(void)
 {
@@ -233,23 +290,9 @@ IOReturn switch_gpu_pack_image_acquire(const char *procName, SwitchGpuPackImageV
 		IOLockUnlock(lock);
 		return kIOReturnSuccess;
 	}
-	if (gPack.state == SwitchGpuPackState::None) {
-		gPack.state = SwitchGpuPackState::Building;
-		gPack.buildActive = true;
-#if TGM_STATS
-		if (procName)
-			strlcpy(gPack.firstProc, procName, sizeof(gPack.firstProc));
-#else
-		(void)procName;
-#endif
+	if (claimBuild(procName)) {
 		IOLockUnlock(lock);
-		thread_t worker = nullptr;
-		const kern_return_t kr = kernel_thread_start(buildThread, nullptr, &worker);
-		if (kr != KERN_SUCCESS) {
-			finishRefused(lock, "kernel_thread_start failed", int(kr), false);
-			return kIOReturnSuccess;
-		}
-		thread_deallocate(worker);
+		startBuild(lock);
 		IOLockLock(lock);
 	}
 	if (gPack.state == SwitchGpuPackState::Building) {
