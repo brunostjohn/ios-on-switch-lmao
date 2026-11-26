@@ -266,6 +266,38 @@ gm20b::OpenFailure metal_open_failure(void)
     return gOpenFailure;
 }
 
+// A client's memory goes back when its app goes to the background, as well as on memory pressure. By name: UIKit's and
+// Foundation's extension notifications post only in the processes that link them, and this driver links neither.
+static void observeBackground()
+{
+    NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
+    for (NSString *name in
+         @[ @"UIApplicationDidEnterBackgroundNotification", @"NSExtensionHostDidEnterBackgroundNotification" ])
+        [center addObserverForName:name
+                            object:nil
+                             queue:nil
+                        usingBlock:^(NSNotification *) {
+#if SWITCH_METAL_DIAGNOSTICS
+                            const uint64_t began = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+#endif
+                            gRawRelease.backgrounded();
+#if SWITCH_METAL_DIAGNOSTICS
+                            // the release runs on the posting thread (UIKit's main), ahead of the app's snapshot
+                            os_log(gm20bLog(), "SwitchMetal: background release %llu us on %s thread",
+                                   (clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - began) / 1000,
+                                   pthread_main_np() ? "the main" : "another");
+#endif
+                        }];
+    for (NSString *name in
+         @[ @"UIApplicationWillEnterForegroundNotification", @"NSExtensionHostWillEnterForegroundNotification" ])
+        [center addObserverForName:name
+                            object:nil
+                             queue:nil
+                        usingBlock:^(NSNotification *) {
+                            gRawRelease.foregrounded();
+                        }];
+}
+
 id<MTLDevice> metal_device_open(const char *packPath, uint64_t stack, uint64_t registryID, NSString **error)
 {
     static gm20b::Mutex once;
@@ -347,11 +379,22 @@ id<MTLDevice> metal_device_open(const char *packPath, uint64_t stack, uint64_t r
     fillDeviceLimits(r->device);
     r->handlers = followingSerialQueue("com.brunostjohn.switch.gm20b.handlers");
     r->listener = [[MTLSharedEventListener alloc] initWithDispatchQueue:r->handlers];
-    gRawRelease.startOnPressure(
+    gRawRelease.start(
         [](void *) {
             gm20bReleaseAhead(gRM->raw->hasBoundVolatileArena());
             const SwitchMetalPassTrim passes = gm20bPassTrim();
+            // freed Shared spans zeroed and back in their chunks first, so an idle chunk they were in can park: the
+            // submit worker submits their job, and this thread waits for it, not the worker
+            if (gRM->raw->scrubDue()) {
+                uint32_t seqno = 0;
+                uint64_t generation = 0;
+                if (gm20bExcludingSubmissions([&] {
+                        return gRM->raw->scrubFreed(seqno, generation);
+                    }))
+                    gRM->raw->scrubWait(seqno, generation);
+            }
             const gm20b::Device::Trimmed kept = gRM->raw->trim();
+            gRM->raw->kernelSparesGiveBack();
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
             gm20b::Device::PurgeStats purge;
             gRM->raw->purgeArenas(gRM->committed, &purge);
@@ -360,6 +403,9 @@ id<MTLDevice> metal_device_open(const char *packPath, uint64_t stack, uint64_t r
 #endif
             gRM->raw->trimArenas(gRM->committed);
             releaseRecordings();
+            gm20bTrimCompiledLibraries();
+            if (gRM->completion)
+                gRM->completion->trim();
             // A daemon over its inactive jetsam limit is killed when it goes inactive, without a pressure notification that
             // would have made malloc give back the dirty pages its zones keep free (a compile's working memory)
             const size_t relieved = malloc_zone_pressure_relief(nullptr, 0);
@@ -373,11 +419,8 @@ id<MTLDevice> metal_device_open(const char *packPath, uint64_t stack, uint64_t r
         },
         nullptr);
     const bool renderServer = dev->role() == gm20b::Device::Role::RenderServer;
-    // A client that opens the device and draws nothing gives back the room its first queue kept.
-    if (renderServer)
-        r->idle.pressureOnly();
-    else
-        r->idle.drained(clock_gettime_nsec_np(CLOCK_UPTIME_RAW));
+    if (!renderServer)
+        observeBackground();
     if (renderServer)
         os_log(gm20bLog(), "SwitchMetal: shader heap %llu KB, each program placed at its state's first use",
                (unsigned long long)(dev->heapBytes() >> 10));

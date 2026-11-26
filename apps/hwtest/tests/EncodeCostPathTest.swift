@@ -1,6 +1,7 @@
 import Foundation
 import HWTestCore
 import HWTestGPU
+import HWTestKit
 import Metal
 
 /// The raw encode's CPU cost of a command buffer shaped as Core Animation's (encode_profile.h, debug builds):
@@ -33,7 +34,9 @@ struct EncodeCostPathTest: HWTest {
 
     static let parts = [
         "resources", "loop", "state", "apply", "pass", "pass_begin", "fusion", "pass_end", "pass_prologue", "draw",
-        "prepare", "geometry", "variant", "descriptors", "textures", "bind", "use", "uniforms", "tail", "commit",
+        "prepare", "geometry", "variant_lookup", "variant", "descriptors", "textures", "bind", "use", "uniforms",
+        "tail",
+        "commit",
         "exec", "retire",
     ]
     static let events = [

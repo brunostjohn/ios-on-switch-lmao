@@ -335,6 +335,39 @@ TEST(GM20BRecordCost, CompositorScaleFrame)
     EXPECT_EQ(difference(repeated, one).counts.retains, 0u);
 }
 
+// An encoder whose pass shape the pass cache has not seen (TegraGM20BMetalPassCache.h): its clear colour new each round, so
+// every pass is a miss that copies its descriptor and reads every attachment, as a quarter to a half of the render
+// server's passes did on 25 Nov (frame line hit= against kept=). Printed beside a kept shape's encoder.
+TEST(GM20BRecordCost, AMissedPassShapeAgainstAKeptOne)
+{
+    Bench &b = bench();
+    ASSERT_TRUE(b.device != nil && b.state != nil);
+    using Passes = const std::vector<MTLRenderPassDescriptor *>;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    const auto made = [] {
+        const auto &passes = gm20b::frameCpuCounts().passes;
+        return passes[size_t(gm20b::PassOpen::Kept)].load() + passes[size_t(gm20b::PassOpen::Unkept)].load();
+    };
+    const uint64_t madeBefore = made();
+#endif
+    const Sample hit = measure([&](id<MTLCommandBuffer> cb, Passes &into, uint32_t) {
+        emptyEncoders(cb, b, into);
+    });
+    const Sample missed = measure([&](id<MTLCommandBuffer> cb, Passes &into, uint32_t round) {
+        for (int p = 0; p < kEncoders; p++) {
+            into[size_t(p)].colorAttachments[0].loadAction = MTLLoadActionClear;
+            into[size_t(p)].colorAttachments[0].clearColor =
+                MTLClearColorMake(double(round) / 64, double(p) / 64, 0, 1);
+        }
+        emptyEncoders(cb, b, into);
+    });
+    print("kept-shape encoder", hit, kEncoders, "encoder");
+    print("missed-shape encoder", missed, kEncoders, "encoder");
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    EXPECT_GE(made() - madeBefore, uint64_t(kEncoders) * kRounds);
+#endif
+}
+
 // Command buffers recorded back to back before any is committed, so the setBytes chunk pool runs dry: the recording
 // thread takes chunks or makes its own, and the pool's refill is left to the completions
 TEST(GM20BRecordCost, ABurstDispatchesNothingFromTheRecordingThread)

@@ -106,6 +106,8 @@ int tgm_mem_new_exclusive(struct tgm_vm *vm, const uint64_t *pas, uint32_t npage
 			  struct tgm_mem **pmem);
 int tgm_mem_new_exclusive_smmu(struct tgm_vm *vm, const uint64_t *pas, uint32_t npages,
 			       struct tgm_mem **pmem);
+int tgm_mem_new_smmu_big(struct tgm_vm *vm, const uint64_t *pas, uint32_t npages,
+			 struct tgm_mem **pmem);
 int tgm_mem_can_compress(const struct tgm_mem *mem);
 int tgm_mem_is_smmu(const struct tgm_mem *mem);
 struct switch_gpu_backing;
@@ -113,11 +115,33 @@ int switch_gpu_backing_tgm_mem_direct(struct switch_gpu_backing *backing, uint32
 				      struct tgm_mem **out);
 int switch_gpu_backing_tgm_mem(struct switch_gpu_backing *backing, uint32_t count,
 			       struct tgm_mem **out);
+int switch_gpu_backing_tgm_mem_big(struct switch_gpu_backing *backing, uint32_t count,
+				   struct tgm_mem **out);
 int switch_gpu_backing_tgm_mem_existing(struct switch_gpu_backing *backing, uint32_t count,
 					struct tgm_mem **out);
 int switch_gpu_backing_tgm_mem_existing_or_direct(struct switch_gpu_backing *backing,
 						  uint32_t count, struct tgm_mem **out);
 void tgm_mem_del(struct tgm_mem **pmem);
+/* tgm_mem_del for a batch: the GMMU mapping goes now, and SMMU-backed memory waits on `*later` for tgm_mem_del_finish,
+ * whose one L2 flush and invalidate covers the whole batch before any of its IOVAs goes back. */
+void tgm_mem_del_later(struct tgm_mem **pmem, struct tgm_mem **later);
+void tgm_mem_del_finish(struct tgm_mem *later);
+/* tgm_mem_del_finish's end, for a batch whose L2 the GPU already wrote back and invalidated (switch_gpu_copy_l2_flush):
+ * its RAM-view holds end and its SMMU windows go back, then the memory objects */
+void tgm_mem_del_release(struct tgm_mem *later);
+/* debug kernels: retirement batches whose L2 the GPU wrote back and invalidated (switch_gpu_copy_l2_flush), for the smmu
+ * stats line beside tgm_retire_invalidates' CPU-waited ones */
+extern uint64_t tgm_retire_gpu_flushes;
+/* The retirement work's ordered L2 write-back and invalidate (SwitchGpuAllocatedMemory.cpp, TegraGM20BCopy.cpp): an
+ * empty job on the kernel copy queue's channel. Its host-written acquire runs L2_FLUSH_DIRTY then L2_SYSMEM_INVALIDATE
+ * with no drain ahead of them (gpu_exec.c chan_exec_body; nvkm_ltc_invalidate's order over MMIO, 0x70010 then 0x70004),
+ * and its external fence then WFI, FB_FLUSH, L2_FLUSH_DIRTY and FB_FLUSH before the release (chan_fence_job). Sound for
+ * retired memory, whose writers' fences all passed: a write still posted at the invalidate would be written back by the
+ * fence's flush but not dropped. Then fn(arg, 0 or the channel's error) on the retirement work once that fence passed.
+ * That work never waits for the queue: -16 when the lock, a waiting submitter's turn, every job slot or the channel is
+ * taken, -11 when the ring has no room, and nothing is queued; a later retirement pass asks again (a holder's unlock or
+ * a job's fence schedules one). */
+int switch_gpu_copy_l2_flush(void (*fn)(void *arg, int status), void *arg);
 /* User range [TGM_USER_VA_START, TGM_KERNEL_VA): raw binds. read_only: the GPU may only read the range (a write is an
  * MMU fault). tgm_vm_map and tgm_vm_unmap invalidate the L2 and the TLB before they return; tgm_vm_map_ordered (a
  * claimed space's) leaves both to the next submission of each of its channels (TegraGM20BTlb.h). A compressible kind
@@ -180,6 +204,8 @@ void switch_gpu_mapping_describe(const struct switch_gpu_mapping *mapping, char 
 /* A zero-bandwidth-clear entry (ds, l2 as TegraGM20BAbiZbc has them): its table index, or -EINVAL (format), -ENOSPC
  * (table full), -ENODEV (no compression). */
 int tgm_zbc_add(int depth, uint32_t format, const uint32_t ds[4], const uint32_t l2[4]);
+/* The ZBC tables' occupancy and entries as TegraGM20BPathsOpZbc's line (debug kernels). */
+void tgm_zbc_line(char *line, size_t size);
 /* Zcull's layout (TegraGM20BZcullABI.h method 'ZC'), or -EOPNOTSUPP where the GPU reported no zcull RAM. */
 struct TegraGM20BAbiZcullInfo;
 int tgm_zcull_info(struct TegraGM20BAbiZcullInfo *out);
@@ -319,6 +345,7 @@ void switch_gpu_chan_semantic_visibility(struct tgm_chan *,
 					 volatile struct TegraGM20BAbiFenceSemantic *);
 void switch_gpu_chan_visibility(struct tgm_chan *chan, volatile uint32_t *visible_cpu,
 				uint64_t visible_gpu);
+void switch_gpu_chan_progress(struct tgm_chan *chan, volatile uint32_t *progress_cpu);
 void switch_gpu_fence_hold(const volatile uint32_t *fence);
 void switch_gpu_fence_put(const volatile uint32_t *fence);
 /* A word of the user fence pages by its byte offset in the pool (what every address space's fence view adds to its
@@ -463,11 +490,25 @@ enum tgm_fence_kernel_channel {
 	TGM_FENCE_KERNEL_RELAYOUT,
 	TGM_FENCE_KERNEL_BRIDGE,
 	TGM_FENCE_KERNEL_CACHED_ZERO,
+	/* no channel: the pack image's stream raises its word to the chunks landed (SwitchGpuPackImage.cpp) */
+	TGM_FENCE_KERNEL_PACK,
+	/* no channel: the word the GPU bridge's jobs acquire (SwitchGpuBridgeGate.cpp) */
+	TGM_FENCE_KERNEL_BRIDGE_GATE,
 	TGM_FENCE_KERNEL_CHANNELS,
 };
 
+/* SwitchGpuPackImage.cpp: whether `pool` (a fence-pool offset) is the word of a pack image whose stream stopped before
+ * its end. A channel parked on it is failed, not a victim (gpu_acquire.c semaphore_source). */
+int switch_gpu_pack_failed_word(uint32_t pool);
+/* gpu_acquire.c: every channel parked on a failed word (switch_gpu_pack_failed_word) recovered as a hang, its work
+ * failed with `why`. Thread context, tgm_live_lock not held. */
+void tgm_acquire_recover_failed(const char *why);
+
 int tgm_fence_kernel(unsigned int which, volatile uint32_t **va, uint64_t *page_pa,
 		     uint32_t *offset);
+/* That fence's GPU address in `vm`'s view of the fence range (every address space maps it read-only); 0 when `vm` maps
+ * none. */
+uint64_t tgm_fence_kernel_va(const struct tgm_vm *vm, unsigned int which);
 /* A channel's fence word is a TegraGM20BAbiFence: its kill record zeroed, for a channel about to be made on it. */
 void tgm_fence_kill_clear(volatile uint32_t *fence);
 
@@ -505,7 +546,8 @@ void tgm_present_pass(void);
 /* SwitchGpuPresentFilter.cpp: the armed watch's token, read by the nonstall interrupt's primary filter
  * (tgm_present_filter); attached once armed, detached at its claim before its tokens drop and before done runs. */
 void tgm_present_filter_attach(const struct switch_gpu_backing_token *token);
-void tgm_present_filter_attach_for(const void *display, const struct switch_gpu_backing_token *token);
+void tgm_present_filter_attach_for(const void *display,
+				   const struct switch_gpu_backing_token *token);
 void tgm_present_filter_detach(void);
 void tgm_present_filter_detach_for(const void *display);
 int tgm_present_filter_is_owner(const void *display);
@@ -562,6 +604,15 @@ int tegra_gm20b_iosurface_view(void *client, uint32_t index, uint32_t surface_id
 uint32_t tgm_chan_uid(struct tgm_chan *chan);
 int tgm_writer_done(uint32_t uid, uint32_t seqno);
 void tgm_writer_wait(uint32_t uid, uint32_t seqno);
+/* The hang rule's check (tgm_chan_check_progress) of the channel of `uid` for a waiter on `seqno` that holds nothing on
+ * the channel but a token: a host1x stream waiting on the channel's own syncpoint (SwitchGpuBridge.cpp). Thread
+ * context; takes tgm_live_lock. Returns when the next check is due, 0 when the job is done or the channel gone. */
+uint64_t tgm_writer_check_progress(uint32_t uid, uint32_t seqno, const char *who);
+/* Debug kernels (TGM_STATS, defined below) alone: a host1x consumer's bridge waits on the syncpoint of channel `uid` with
+ * no GPU job of its own (SwitchGpuBridge.cpp); and those bridges summed over the channels, live or closed, of
+ * processes named `owner`, a count that never goes down. Take tgm_live_lock. */
+void tgm_chan_note_jobless(uint32_t uid);
+uint64_t tgm_chan_jobless(const char *owner);
 int tgm_writers_all_done(void);
 void tgm_writers_wait_all(void);
 /* SurfaceLayout (method 16) for the import holding `c`: the surface's layout, decided at the first call with `writes` while
@@ -670,6 +721,7 @@ struct tgm_present_read {
 #if TGM_STATS
 /* Debug kernels: clock gating on (1) or off (0), for the A/B (TegraGM20B.cpp's debug.switch_gpu_clkgate). 0 or -EBUSY. */
 int tgm_clkgate_switch(int on);
+int switch_gpu_gpc_khz(void);
 
 struct nvkm_device;
 int tgm_gpu_held(void (*fn)(struct nvkm_device *device, void *arg), void *arg);
@@ -764,6 +816,12 @@ void tgm_stats_bo_alloc(uint64_t bytes, int kind, uint64_t ns, const uint64_t ph
 			const char *owner);
 void tgm_stats_compositor_pool(int64_t bytes);
 void tgm_spare_counts(uint64_t *kept_bytes, uint64_t *ready, uint64_t *pool_zeroing_bytes);
+/* debug kernels (SwitchGpuSurfaceAccess.cpp): a submission cleaned IOSurface `surface`'s `bytes` while a CPU writer held
+ * it, and the window's such cleans with their lock holders */
+void switch_gpu_concurrent_clean_note(uint32_t surface, uint64_t bytes);
+unsigned long switch_gpu_concurrent_clean_line(char *out, unsigned long size);
+/* debug kernels: the classes this boot's spare demand record seeded, appended to `line` */
+void tgm_spare_seeds_line(char *line, unsigned long size);
 /* Where the pool is (TegraGM20BUserClient.cpp, for the stats2 line): pool BOs of clients other than the compositor, pool
  * pages freed but still behind their view's release (orphans: a task still maps the view, or an import of it is live),
  * every client's compressible BOs with their count, and coherent BOs served from system memory instead

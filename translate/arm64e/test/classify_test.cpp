@@ -78,6 +78,27 @@ TEST(Classify, HintSpacePacIsLeftAlone)
     EXPECT_FALSE(a64x_rewrite1(0xD503237F, &out));
 }
 
+TEST(Classify, DecodeLdraSignExtendsAndExtractsWriteback)
+{
+    int32_t imm = 0;
+    bool wb = false;
+    a64x_decode_ldra(0xF8201420u, &imm, &wb);  // ldraa x0, [x1, #8]
+    EXPECT_EQ(imm, 8);
+    EXPECT_FALSE(wb);
+    a64x_decode_ldra(0xF87C1C20u, &imm, &wb);  // ldraa x0, [x1, #-504]!
+    EXPECT_EQ(imm, -504);
+    EXPECT_TRUE(wb);
+    a64x_decode_ldra(0xF87FF420u, &imm, &wb);  // ldraa x0, [x1, #-8]
+    EXPECT_EQ(imm, -8);
+    EXPECT_FALSE(wb);
+    a64x_decode_ldra(0xF8600420u, &imm, &wb);  // ldraa x0, [x1, #-4096]
+    EXPECT_EQ(imm, -4096);
+    EXPECT_FALSE(wb);
+    a64x_decode_ldra(0xF83FF420u, &imm, &wb);  // ldraa x0, [x1, #4088]
+    EXPECT_EQ(imm, 4088);
+    EXPECT_FALSE(wb);
+}
+
 TEST(Classify, EveryRewriteIsArmv80)
 {
     for (const Case &c : kCases) {

@@ -311,9 +311,11 @@ bool SwitchMetalRangeEncode::command(size_t at)
             for (uint8_t region = 0; region < kernels->count; ++region) {
                 const auto &record = *kernels->jobs[region]->value()->rec;
                 for (uint32_t i = 0; i < record.entries; ++i)
-                    if (record.entry[i].kind == gm20b::KernelTexture && record.entry[i].slot < 31 &&
-                        gm20b::kernelEntryWrites(record, i))
-                        standInFresh_.erase((__bridge SwitchMetalTexture *)textures[record.entry[i].slot]);
+                    if ((record.entry[i].kind == gm20b::KernelTexture ||
+                         record.entry[i].kind == gm20b::KernelTexturePlane) &&
+                        gm20b::kernelTextureSlot(record.entry[i]) < 31 && gm20b::kernelEntryWrites(record, i))
+                        standInFresh_.erase(
+                            (__bridge SwitchMetalTexture *)textures[gm20b::kernelTextureSlot(record.entry[i])]);
             }
         return true;
     }

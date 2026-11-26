@@ -452,7 +452,7 @@ void gm20bHeapForget(SwitchMetalHeap *heap, uint64_t va)
 
 void restoreArenas(SwitchMetalCommandBuffer *cb)
 {
-    for (id o : cb->_owners) {
+    auto restoreObject = [](id o) {
         SwitchMetalHeap *h = nil;
         if ([o isKindOfClass:[SwitchMetalTexture class]]) {
             __unsafe_unretained SwitchMetalTexture *owner =
@@ -463,5 +463,10 @@ void restoreArenas(SwitchMetalCommandBuffer *cb)
         else if ([o isKindOfClass:[SwitchMetalHeap class]])
             h = (SwitchMetalHeap *)o;
         resident(h);
-    }
+    };
+    for (id o : cb->_owners)
+        restoreObject(o);
+    for (const auto &snapshot : cb->_residencySnapshots)
+        for (id o in snapshot->committed)
+            restoreObject(o);
 }

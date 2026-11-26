@@ -127,16 +127,16 @@ protected:
 
 	void kicked(bool doorbell, bool main, uint64_t addr, uint32_t bytes)
 	{
-		const bool ordered = switch_exec_backing::order_held();
+		const bool locked = !uses.empty() && switch_exec_backing::lock_held(written);
 		const switch_exec_chan_pointers now = pointers();
 		Kick kick = {doorbell,
 			     main,
 			     addr,
 			     bytes,
-			     ordered && switch_exec_backing::recorded(written, completion),
-			     ioLocksHeld().size() == size_t(ordered),
+			     locked && switch_exec_backing::recorded(written, completion),
+			     ioLocksHeld().size() == (locked ? uses.size() : size_t(0)),
 			     !switch_exec_mutex_held(),
-			     ordered,
+			     locked,
 			     now.gp_put,
 			     now.submitted};
 		kicks.push_back(kick);
@@ -144,8 +144,8 @@ protected:
 			before_doorbell();
 	}
 
-	// An ordered job holds the ownership order for every entry it writes until its channel's submitted seqno names it,
-	// and lets it go before its fence's own kick and GP_PUT.
+	// An ordered job holds its uses' per-backing locks until its channel's submitted seqno names it,
+	// and lets them go before its fence's own kick and GP_PUT.
 	void expect_published(bool has_write = true, bool ordered = true) const
 	{
 		ASSERT_FALSE(kicks.empty());
@@ -165,7 +165,7 @@ protected:
 		EXPECT_EQ(doorbells, 1u);
 		EXPECT_TRUE(kicks.back().doorbell);
 		EXPECT_EQ(pointers().gp_put, pointers().gpfifo_cur);
-		EXPECT_FALSE(switch_exec_backing::order_held());
+		EXPECT_FALSE(switch_exec_backing::any_lock_held());
 	}
 
 	bool pushed_user_entry() const
@@ -483,7 +483,7 @@ TEST_F(ExecCommit, AnIdleClockGoesUpOutsideTheOwnershipOrderBeforeTheDoorbell)
 		[](void *context) {
 			auto *r = static_cast<Raise *>(context);
 			++r->raises;
-			r->ordered |= switch_exec_backing::order_held();
+			r->ordered |= switch_exec_backing::any_lock_held();
 			for (const Kick &kick : *r->kicks)
 				r->after_doorbell |= kick.doorbell;
 		},
@@ -514,7 +514,7 @@ TEST_F(ExecCommit, ForcedEmptyWaitJobsTakeNoOwnershipOrder)
 		const uint64_t own = ioLockTakes().load(), live = switch_exec_mutex_takes();
 		ASSERT_EQ(exec(nullptr, 0, kJob | SWITCH_GPU_SUBMIT_FORCE_FENCE), 0);
 		EXPECT_EQ(ioLockTakes().load() - own, 0u);
-		EXPECT_EQ(switch_exec_mutex_takes() - live, mode == 1 ? 1u : 0u);
+		EXPECT_EQ(switch_exec_mutex_takes() - live, 0u);
 		expect_published(false, false);
 		if (mode < 2)
 			EXPECT_EQ(switch_exec_chan_word_acquires(consumer, 0x100, 1), 1u);
@@ -546,7 +546,7 @@ TEST_F(ExecCommit, CombinedWaitsReadEachDependencyOnceUnderOneLiveHold)
 	const uint32_t parked = switch_exec_parked_promises();
 	ASSERT_EQ(exec(&kPush, 1), 0);
 	EXPECT_EQ(switch_exec_backing::status_reads() - status, dependency_count);
-	EXPECT_EQ(switch_exec_mutex_takes() - live, 1u);
+	EXPECT_EQ(switch_exec_mutex_takes() - live, 0u);
 	EXPECT_EQ(switch_exec_parked_promises() - parked, 2u);
 	expect_published();
 	for (auto *source : {first, second})
@@ -576,6 +576,55 @@ TEST_F(ExecCommit, PlainAndHostOnlyJobsTakeNoLiveLock)
 			EXPECT_EQ(switch_exec_chan_syncpt_waits(consumer, 7, 3), 1u);
 		kicks.clear();
 	}
+}
+
+TEST_F(ExecCommit, DependenciesAcquireWithoutTakingLiveLockEvenWhileHeld)
+{
+	auto *a = switch_exec_backing::make();
+	auto *source = producer(0x105, 3, a);
+	ASSERT_EQ(begin({{a, SWITCH_GPU_BACKING_READ, 0}, {written, SWITCH_GPU_BACKING_WRITE, 0}}),
+		  0);
+	switch_exec_chan_high(consumer, 1);
+
+	std::mutex gate;
+	std::condition_variable cv;
+	bool holding = false;
+	bool release = false;
+	std::thread holder([&] {
+		switch_exec_live_lock();
+		{
+			std::lock_guard<std::mutex> g(gate);
+			holding = true;
+			cv.notify_all();
+		}
+		{
+			std::unique_lock<std::mutex> g(gate);
+			cv.wait(g, [&] {
+				return release;
+			});
+		}
+		switch_exec_live_unlock();
+	});
+	{
+		std::unique_lock<std::mutex> g(gate);
+		cv.wait(g, [&] {
+			return holding;
+		});
+	}
+
+	const uint64_t live = switch_exec_mutex_takes();
+	const int ret = exec(&kPush, 1);
+	const uint64_t live_after = switch_exec_mutex_takes();
+	{
+		std::lock_guard<std::mutex> g(gate);
+		release = true;
+		cv.notify_all();
+	}
+	holder.join();
+
+	EXPECT_EQ(ret, 0);
+	EXPECT_EQ(live_after - live, 0u);
+	EXPECT_EQ(switch_exec_chan_acquires(consumer, source, 1), 1u);
 }
 
 TEST_F(ExecCommit, LaterCompositorKicksCountFramesPerFrameMaxAndQueueMax)

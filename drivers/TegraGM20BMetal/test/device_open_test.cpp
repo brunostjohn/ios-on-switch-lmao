@@ -41,6 +41,8 @@ TEST(GM20BDeviceOpen, EveryAskOfAProcessWithNoDeviceOpensAfresh)
     EXPECT_THAT(open, HasSubstr("if (device)\n            return device;"));
     EXPECT_THAT(open, HasSubstr("device = openOnce(port, failure, why);"));
     EXPECT_THAT(open, HasSubstr("gm20b::openFailureText(failure), why);"));
+    const std::string container = Body(plugin, "bool systemContainerCache(char *out, size_t size)");
+    EXPECT_LT(container.find("entitledToSystemContainer(identifier)"), container.find("lookup(identifier, &error)"));
 }
 
 TEST(GM20BDeviceOpen, APreparedRawDeviceThatDidNotOpenIsPreparedAgain)

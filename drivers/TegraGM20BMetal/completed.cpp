@@ -8,6 +8,7 @@
 #include <os/log.h>
 #include "gpu.h"
 #include "dynamic_push.h"
+#include "guest_bases.h"
 #include "record.h"
 #include "slm.h"
 #include "storage.h"
@@ -124,6 +125,10 @@ Pipeline *Device::addRecord(const RuntimeRecord &r, bool caTransform, std::strin
         why = "missing or invalid dynamic blend push metadata";
         return nullptr;
     }
+    if (!usableGuestBases(r.pipeline)) {
+        why = "its buffers' Metal address words are not this runtime's";
+        return nullptr;
+    }
     Pipeline *strideTwin = nullptr;
     if (r.strideTwin && !(strideTwin = addRecord(*r.strideTwin, caTransform, why, retry))) {
         why = "its stride twin: " + why;
@@ -132,7 +137,7 @@ Pipeline *Device::addRecord(const RuntimeRecord &r, bool caTransform, std::strin
     std::lock_guard<std::mutex> l(lock_);
     const uint64_t key = r.pipeline.keyHash;
     if (const auto it = completed_.find(key); it != completed_.end())
-        return it->second;
+        return &it->second->pipeline;
     PlacedProgram vs, fs = noPixelProgram(), tessPlaced[2];
     if (!placeCompleted(r.programs[0], vs) || (pixel && !placeCompleted(r.programs[1], fs)) ||
         (tess &&
@@ -149,6 +154,9 @@ Pipeline *Device::addRecord(const RuntimeRecord &r, bool caTransform, std::strin
     c.blob = r.blob;
     c.spill = r.spill;
     c.far = r.far;
+    c.vs = vs;
+    c.fs = fs;
+    c.layout = layoutOf(r);
     if (c.far.size() != farWords(entryCount(c.record))) {
         why = "a record whose far entries are not its entries'";
         return nullptr;
@@ -185,7 +193,7 @@ Pipeline *Device::addRecord(const RuntimeRecord &r, bool caTransform, std::strin
     const std::vector<uint32_t> restored = restoreWords(pairs.data(), uint32_t(pairs.size()));
     stored.pipeline.restore.insert(stored.pipeline.restore.end(), restored.begin(), restored.end());
     stored.pipeline.strideTwin = strideTwin;
-    if (r.split && !c.record.storageMask)
+    if (r.split && !stored.record.storageMask && pixel && !tess)
         offerCompletedSplit(stored, r, vs, caTransform);
     for (uint32_t i = r.pipeline.variantCount[0]; i < r.variants.size(); i++) {
         if (!(r.variants[i].assume & AssumeTurned))
@@ -214,8 +222,40 @@ Pipeline *Device::addRecord(const RuntimeRecord &r, bool caTransform, std::strin
         break;
     }
     stored.pipeline.own = isOwnState(key);
-    completed_[key] = &stored.pipeline;
+    offerCompletedVariants(stored, r);
+    completed_[key] = &stored;
     return &stored.pipeline;
+}
+
+bool Device::attachFullForm(const RuntimeRecord &full, std::string &why)
+{
+    const RuntimeRecord *forms[2] = {&full, full.strideTwin.get()};
+    const RecordLayout layouts[2] = {layoutOf(full), forms[1] ? layoutOf(*forms[1]) : RecordLayout()};
+    std::lock_guard<gm20b::Mutex> l(lock_);
+    Completed *placed[2] = {};
+    for (uint32_t k = 0; k < 2 && forms[k]; k++) {
+        const auto it = completed_.find(forms[k]->pipeline.keyHash);
+        if (it == completed_.end() || (k && &it->second->pipeline != placed[0]->pipeline.strideTwin)) {
+            why = k ? "no stride twin of its key is placed" : "no state of its key is placed";
+            return false;
+        }
+        if (const char *part = layoutDifference(it->second->layout, layouts[k])) {
+            why = std::string(k ? "its stride twin is" : "it is") + " of another " + part + " than its placed record";
+            return false;
+        }
+        placed[k] = it->second;
+    }
+    if (placed[0]->pipeline.strideTwin && !forms[1]) {
+        why = "no stride twin in its full form";
+        return false;
+    }
+    for (uint32_t k = 0; k < 2 && placed[k]; k++) {
+        if (forms[k]->split && !placed[k]->record.storageMask && pixelStage(placed[k]->record) &&
+            !tessellates(placed[k]->record))
+            offerCompletedSplit(*placed[k], *forms[k], placed[k]->vs, placed[k]->pipeline.caTransform);
+        offerCompletedVariants(*placed[k], *forms[k]);
+    }
+    return true;
 }
 
 Pipeline *Device::makeTurned(Pipeline &pl)

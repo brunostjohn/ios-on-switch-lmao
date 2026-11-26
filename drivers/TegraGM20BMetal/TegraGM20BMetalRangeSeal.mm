@@ -90,14 +90,22 @@ static bool storageLaidOut(SwitchMetalCommandBuffer *cb, gm20b::RenderEncoder &o
     return !b.storageMask || open.takeStorage(b.storageMask, b.arrayedStorageMask);
 }
 
-// A Depth16Unorm a draw of the pass after `open` tests in its shader is the converted zeta only where `open` began it so
-// (TegraGM20BMetalRangeForms.mm depth16Tested); a zeta of any other format is the same however its pass began
+// A Depth16Unorm a draw of the pass after `open` tests in its shader is the converted zeta only where `open` began it
+// so (TegraGM20BMetalRangeForms.mm depth16Tested), and a depth-only pass testing or writing stencil cannot fuse across
+// pass boundaries because Metal starts each pass's hidden stencil at 0
 static bool testedLaidOut(SwitchMetalCommandBuffer *cb, size_t open, size_t next)
 {
+    const SwitchMetalPass &first = cb->_passes[cb->_plan.legacy(open).x];
     const SwitchMetalPass &pass = cb->_passes[cb->_plan.legacy(next).x];
     __unsafe_unretained SwitchMetalTexture *depth = (SwitchMetalTexture *)pass.zeta[0].texture;
-    return !pass.shaderTestsDepth || !depth || depth->_raw.format != MTLPixelFormatDepth16Unorm ||
-           cb->_passes[cb->_plan.legacy(open).x].shaderTestsDepth;
+    if (!depth)
+        return true;
+    if (depth->_raw.format == MTLPixelFormatDepth32Float ||
+        (depth->_raw.format == MTLPixelFormatDepth32Float_Stencil8 && !(pass.zetaAspects & 2)))
+        return !pass.testsStencil && !first.testsStencil;
+    if (depth->_raw.format == MTLPixelFormatDepth16Unorm)
+        return !pass.testsStencil && !first.testsStencil && (!pass.shaderTestsDepth || first.shaderTestsDepth);
+    return true;
 }
 
 bool SwitchMetalRangeEncode::endEncoder(size_t at)
@@ -192,6 +200,7 @@ bool SwitchMetalRangeEncode::seal(size_t to)
     encoder_ = SIZE_MAX;
     uint32_t seq = 0;
     prepareSharedEvents(cb, rc);
+    gm20bNameResidencySets(cb, rc);
     rc->quietEnd = cb->_rangeQuiet;
     const bool lastRange = cb->_segNext + 1 == cb->_segs.size() && cb->_promised.load(std::memory_order_acquire);
     if (lastRange) {
@@ -199,6 +208,7 @@ bool SwitchMetalRangeEncode::seal(size_t to)
         cb->_promisesTaken = true;
         rc->promises = cb->_promises;
     }
+    carryZcull(to);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     splitCaptureCommitted(*rc);
 #endif
@@ -222,7 +232,10 @@ bool SwitchMetalRangeEncode::seal(size_t to)
                                NSLocalizedDescriptionKey : @"Resource readiness notification could not be armed"
                            }];
             }
-            rc->abandon();
+            if (cb->_resourceReady)
+                rc->abandonForRetry();
+            else
+                rc->abandon();
             return false;
         }
         // its promises were given up at the holder's bound before this keep: it fails as one held past it
@@ -240,14 +253,15 @@ bool SwitchMetalRangeEncode::seal(size_t to)
         // process's GPU write of its surface) would be refused again
         if (rc->nativeError == kIOReturnNotReady)
             rc->invalidateNativeReads();
-        if (rc->nativeError && !rc->partial)
-            failCommandBuffer(cb,
-                              rc->nativeError == kIOReturnNotReady
-                                  ? @"A surface it reads changed while it was submitted"
-                                  : @"Native ownership or event dependency failed",
-                              MTLCommandBufferErrorInternal, PredEncKernel);
         char reason[192];
         rc->describeRefusal(reason, sizeof reason);
+        if (rc->nativeError && !rc->partial)
+            failCommandBuffer(
+                cb,
+                rc->nativeError == kIOReturnNotReady
+                    ? @"A surface it reads changed while it was submitted"
+                    : [NSString stringWithFormat:@"Native ownership or event dependency failed: %s", reason],
+                MTLCommandBufferErrorInternal, PredEncKernel);
         // as Metal fails a command buffer its driver could not submit: nothing of it runs elsewhere
         if (!ahead_ && !rc->partial && !rc->nativeError)
             failCommandBuffer(
@@ -260,7 +274,8 @@ bool SwitchMetalRangeEncode::seal(size_t to)
                                                          @"kernel refused the rest: %s",
                                                          reason],
                               MTLCommandBufferErrorInternal);
-        return fail(PredEncKernel, "the kernel refused the submission", uint32_t(rc->kernelResult), 0, reason);
+        return fail(PredEncKernel, "the kernel refused the submission",
+                    uint32_t(rc->kernelResult ? rc->kernelResult : rc->nativeError), 0, reason);
     }
     firstContents_->submitted(cb);
     if (rc->skips)

@@ -22,7 +22,7 @@ void gm20bSetCompileWaits(SwitchMetalCommandBuffer *cb, std::vector<std::functio
         cb->_compileWaits = std::move(waits);
     }
     cb->_compileWaitGen.fetch_add(1, std::memory_order_acq_rel);
-    cb->_submitOwner.clear();
+    cb->_submitOwner.clearIf(gRM->submitThread.load(std::memory_order_relaxed));
     gm20bChanged(cb);
 }
 
@@ -120,6 +120,8 @@ static void commandBufferDropped(void *object)
 #endif
     if (!completed) {
         b->_deferredPresents.clear();
+        b->_residencySets = nil;
+        b->_residencySnapshots.clear();
         gm20bRecordingDone(b);
     }
 }
@@ -327,10 +329,11 @@ static const gm20b::Pipeline *recordedPipeline(const gm20b::RasterState &raster)
     return _traceId;
 }
 
-// Every allocation is mapped in the one GPU VM and stays resident: a residency set asks nothing of the driver
+// Every allocation is mapped in the one GPU VM and stays resident; what the set's host-visible allocations ask of the
+// command buffer's jobs is gm20bNameResidencySets'
 - (void)useResidencySet:(id)set
 {
-    (void)set;
+    gm20bUseResidencySet(self, set);
 }
 
 // (QuartzCore 27, per command buffer: the kernel charges GPU time to the task that submits it, this one)
@@ -342,8 +345,8 @@ static const gm20b::Pipeline *recordedPipeline(const gm20b::RasterState &raster)
 
 - (void)useResidencySets:(const __unsafe_unretained id *)sets count:(NSUInteger)count
 {
-    (void)sets;
-    (void)count;
+    for (NSUInteger k = 0; k < count; k++)
+        gm20bUseResidencySet(self, sets[k]);
 }
 
 - (MTLCommandBufferStatus)status
@@ -457,8 +460,11 @@ static const gm20b::Pipeline *recordedPipeline(const gm20b::RasterState &raster)
             [_scheduledHandlers addObject:[block copy]];
         } else {
             _handlersQueued = true;
-            dispatch_async(_queue->_handlers, ^{
-                block((id<MTLCommandBuffer>)self);
+            MTLCommandBufferHandler copy = [block copy];
+            _queue->_handlerExec.enqueue([self, copy] {
+                @autoreleasepool {
+                    copy((id<MTLCommandBuffer>)self);
+                }
             });
         }
     }
@@ -599,6 +605,7 @@ static void deferPresent(SwitchMetalCommandBuffer *cb, id<MTLDrawable> drawable,
 #endif
     if (_active)
         [(SwitchMetalEncoder *)_active endEncoding];
+    gm20bSnapshotResidencySets(self);
 #if SWITCH_METAL_DIAGNOSTICS
     if (_lateWriteSampled)
         gm20bCheckLateWrites(self);
@@ -800,17 +807,24 @@ static void deferPresent(SwitchMetalCommandBuffer *cb, id<MTLDrawable> drawable,
 
 @implementation SwitchMetalQueue
 
+// nil where its handler thread cannot be made, as Metal's newCommandQueue answers nil where it makes no queue
 - (instancetype)init
 {
     if ((self = [super init])) {
         queuePriorityAdd(self);
-        _handlers = followingSerialQueue("com.brunostjohn.switch.gm20b.command.handlers");
+        int err = 0;
+        if (!_handlerExec.start(err)) {
+            os_log_error(gm20bLog(), "SwitchMetal: %{public}s: no command queue made: its handler thread: %{public}s",
+                         getprogname(), strerror(err));
+            return nil;
+        }
     }
     return self;
 }
 
 - (void)dealloc
 {
+    _handlerExec.stop();
     queuePriorityRemove(self);
 }
 
@@ -842,27 +856,27 @@ static void deferPresent(SwitchMetalCommandBuffer *cb, id<MTLDrawable> drawable,
 - (void)insertDebugCaptureBoundary
 {}
 
-// (as the command buffer's: everything is resident)
+// Every command buffer of the queue uses these sets (gm20bSnapshotResidencySets, gm20bNameResidencySets)
 - (void)addResidencySet:(id)set
 {
-    (void)set;
+    gm20bQueueAddResidencySet(self, set);
 }
 
 - (void)addResidencySets:(const __unsafe_unretained id *)sets count:(NSUInteger)count
 {
-    (void)sets;
-    (void)count;
+    for (NSUInteger k = 0; k < count; k++)
+        gm20bQueueAddResidencySet(self, sets[k]);
 }
 
 - (void)removeResidencySet:(id)set
 {
-    (void)set;
+    gm20bQueueRemoveResidencySet(self, set);
 }
 
 - (void)removeResidencySets:(const __unsafe_unretained id *)sets count:(NSUInteger)count
 {
-    (void)sets;
-    (void)count;
+    for (NSUInteger k = 0; k < count; k++)
+        gm20bQueueRemoveResidencySet(self, sets[k]);
 }
 
 - (void)setCompletionQueue:(dispatch_queue_t)queue

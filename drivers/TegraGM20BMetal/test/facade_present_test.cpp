@@ -1016,7 +1016,7 @@ void compositorEarlyScheduledRefusedNonPresentingFrameWithdrawsPromise()
     EXPECT_EQ(next.status, MTLCommandBufferStatusCompleted);
 }
 
-void nonCompositorClientNeverEarlySchedulesAndDefersPresent()
+void nonCompositorClientSchedulesWithoutPromisesAndDefersPresent()
 {
     const Opened o = openPacked(false);
     ASSERT_TRUE(o.device != nil && o.state != nil) << o.why;
@@ -1073,9 +1073,9 @@ void nonCompositorClientNeverEarlySchedulesAndDefersPresent()
     ASSERT_FALSE(dispatch_semaphore_wait(inJob, dispatch_time(DISPATCH_TIME_NOW, 10 * int64_t(NSEC_PER_SEC))));
     std::thread waiter;
     const bool early = waitScheduledWithin(cb, std::chrono::milliseconds(200), waiter);
-    EXPECT_FALSE(early) << "non-compositor client must never early-schedule";
-    EXPECT_EQ(drawable.presents, 0);
-    EXPECT_EQ(makes.load(std::memory_order_acquire), 0u);
+    EXPECT_TRUE(early) << "an app's waitUntilScheduled waited for its job's submission";
+    EXPECT_EQ(drawable.presents, 0) << "an app's drawable was presented before its command buffer completed";
+    EXPECT_EQ(makes.load(std::memory_order_acquire), 0u) << "an app made a writer promise";
 
     jobGuard.release();
     waiter.join();
@@ -1355,9 +1355,9 @@ TEST(GM20BFacadePresent, CompositorEarlyScheduledRefusedNonPresentingFrameWithdr
     switch_ios::test::ExpectPassesInFreshProcess(compositorEarlyScheduledRefusedNonPresentingFrameWithdrawsPromise);
 }
 
-TEST(GM20BFacadePresent, NonCompositorClientNeverEarlySchedulesAndDefersPresent)
+TEST(GM20BFacadePresent, NonCompositorClientSchedulesWithoutPromisesAndDefersPresent)
 {
-    switch_ios::test::ExpectPassesInFreshProcess(nonCompositorClientNeverEarlySchedulesAndDefersPresent);
+    switch_ios::test::ExpectPassesInFreshProcess(nonCompositorClientSchedulesWithoutPromisesAndDefersPresent);
 }
 
 TEST(GM20BFacadePresent, CompositorSerializesEarlyPromisesOnSameSurface)

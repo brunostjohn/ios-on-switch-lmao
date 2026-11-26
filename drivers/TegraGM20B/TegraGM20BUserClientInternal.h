@@ -12,7 +12,8 @@
 #include <kern/thread.h>
 #include <kern/thread_call.h>
 #include <mach/vm_region.h>
-#include "SwitchGpuSpares.h"
+#include "SwitchGpuSpareBooks.h"
+#include "SwitchGpuSpareRecord.h"
 #include "SwitchGpuParked.h"
 #include "SwitchGpuCachedBuffer.h"
 #include "SwitchGpuMethodGate.h"
@@ -34,6 +35,7 @@
 #include "TegraGM20BReadback.h"
 #include "TegraGM20BRegDumpABI.h"
 #include "TegraGM20BCopyResetABI.h"
+#include "TegraGM20BSchedABI.h"
 #include "TegraGM20BSchedPolicy.h"
 #include "TegraGM20BSharedWiring.h"
 #include "SwitchGpuPin.h"
@@ -66,6 +68,7 @@
 #include "SwitchGpuFenceRecord.h"
 #include "SwitchGpuJobStats.h"
 #include "SwitchGpuPackImage.h"
+#include "SwitchGpuUseCache.h"
 
 #include "SwitchGpuSurfaceGeometry.h"
 #include "shim/include/switch_tiled_cache.h"
@@ -170,6 +173,7 @@ struct Spare {
 	SwitchGpuCachedBuffer buffer;  // ours alone (no view, no task mapping)
 	uint64_t *pas;
 	uint64_t bytes;
+	switch_gpu_spare_kind kind;
 	switch_gpu_cached_mapping *mapping;
 };
 
@@ -200,28 +204,38 @@ struct OwnerStat {
 struct SparePool {
 	IOLock *lock;
 	thread_call_t call;
-	Spare *dirty;         // freed, not yet zeroed
-	PoolZero *poolDirty;  // freed pool BOs, not yet zeroed
-	Spare *ready
-		[kClasses];  // zeroed and clean, by class (classUp(bytes) <= class of a spare's bytes)
-	uint16_t count[kClasses], target[kClasses], zeroing[kClasses];
-	uint64_t clean, dirtyBytes, cleaningBytes,
-		poolZeroing;  // bytes ready, freed and waiting, pool bytes waiting
+	thread_call_t recycleCall;
+	thread_call_t reclaimCall;
+	thread_call_t recordCall;
+	Spare *dirty;                          // freed, not yet zeroed
+	PoolZero *poolDirty;                   // freed pool BOs, not yet zeroed
+	Spare *ready[SWITCH_GPU_SPARE_SLOTS];  // zeroed and clean, by slot (SwitchGpuSpareBooks.h)
+	switch_gpu_spare_books
+		books;  // the lists' counts and bytes, and the depths (SwitchGpuSpareBooks.h)
+	uint64_t poolZeroing;  // pool bytes waiting for the scrub
 	// a copy-engine fill failed: no spare is made until the next BoAlloc asks
 	bool fillFailed;
+	bool recordRead;                                // spareWork's alone
+	uint8_t record[SWITCH_GPU_SPARE_RECORD_BYTES];  // the record last read or set
+	uint32_t recordLength;
 #if TGM_STATS
 	OwnerStat owners[kOwners];
 	uint32_t misses[SWITCH_GPU_SPARE_MISSES], zeroBusy, zeroFailed, refillRefused, notUnits;
+	uint16_t seeded[SWITCH_GPU_SPARE_SLOTS];  // the depths this boot's record seeded
 #endif
 };
 
 void cleanZeros(void *va, uint64_t bytes);
 SparePool *spares();
-Spare *spareTake(uint64_t bytes);
+SparePool *sparesExisting();
+void sparesSeed(SparePool *p);
+void spareRecordWork(thread_call_param_t param, thread_call_param_t);
+Spare *spareTake(uint64_t bytes, switch_gpu_spare_kind kind, bool critical);
 void spareIneligible();
 bool spareKeep(const SwitchGpuCachedBuffer &buffer, uint64_t *pas, uint64_t bytes,
-	       switch_gpu_cached_mapping *mapping = nullptr);
+	       switch_gpu_spare_kind kind, switch_gpu_cached_mapping *mapping);
 bool sparesPressure();
+void sparesPressureLook();
 bool sparesHasRoom();
 void kickSpareWork();
 bool reclaimParkedStep(bool pressure, bool room);
@@ -236,8 +250,8 @@ void parkedStatsTake(uint64_t *parked, uint64_t *unparkResident, uint64_t *unpar
 		     uint64_t *reclaimedCached, uint64_t *reclaimedSystem);
 #endif
 
-// With the stats (also gpu_stats_tick.c's stats lines): the method stream of every kScanEvery-th submission of each
-// connection is read back and what it asks of the GPU is counted, one line per process every 5 s ("tegra-gm20b: push
+// With the stats (also gpu_stats_tick.c's stats lines): the method stream of each connection's first kScanFirst
+// submissions and every kScanEvery-th after them is read back and what it asks of the GPU is counted, one line per process every 5 s ("tegra-gm20b: push
 // <process>", the window's first kPushOwners - 1 processes by name, the rest as "(others)"), per submission: render passes
 // (and of those, the ones with a depth target and the multisampled ones), bound color targets (RTs) and the pitch-linear
 // ones, draws, clears; every 3D wait-for-idle (WFI), shader cache invalidate that waits for idle and flushes (INVALIDATE_SHADER_CACHES,
@@ -247,7 +261,7 @@ void parkedStatsTake(uint64_t *parked, uint64_t *unparkResident, uint64_t *unpar
 // compute dispatches and semaphore acquires; "bad" counts streams with an opcode NVK does not emit. Pushes in host
 // imports (no kernel mapping) are not read; the line says what share of the push bytes was. The reader:
 // TegraGM20BPushScan.h. Every kProfileEvery-th submission read is also profiled (gpu_fenced.h "push profile").
-constexpr uint32_t kScanEvery = 4, kPushOwners = 4,
+constexpr uint32_t kScanFirst = 16, kScanEvery = 4, kPushOwners = 4,
 		   kProfileEvery = 16;  // 1 submission in 64 profiled (its pushes WFI-stamped)
 
 static inline IOReturn ioreturn(int err)
@@ -301,8 +315,11 @@ struct SwitchGpuJobRecord;
 
 extern "C" int switch_native_surface_gpu_acquire(void *, switch_gpu_native_surface_view *)
 	__attribute__((weak));
+extern "C" int switch_native_surface_gpu_acquire_write(void *, switch_gpu_native_surface_view *)
+	__attribute__((weak));
 extern "C" void switch_native_surface_gpu_release(switch_gpu_native_surface_view *)
 	__attribute__((weak));
+extern "C" void switch_native_surface_gpu_written(void *) __attribute__((weak));
 
 // IOGPUFamily's marker of a UI-critical GPU client, which no GPU restart kills (the same string in 21H461's and
 // 24B119's): backboardd; on 24B119 SpringBoard and the WidgetRenderer apps too
@@ -365,6 +382,9 @@ class AGXDeviceUserClient : public IOUserClient
 		bool parkedReadOnly;
 		bool reclaimDeferred;
 		SwitchGpuParkState parkState;
+		// The thread moving it through Parking, Unparking or Reclaiming, which its waiters push; &parkOwner is
+		// their event (parkWaitStableLocked, parkSettledLocked)
+		SwitchGpuThreadRef parkOwner;
 		uint64_t parkedVa;
 		uint64_t reclaimSeq;
 		switch_gpu_backing *parkedBacking;
@@ -449,9 +469,11 @@ class AGXDeviceUserClient : public IOUserClient
 		switch_gpu_cpu_lease **leases;
 		tgm_coh **
 			written;  // the listed uses' imports a job writes, as its uses resolved them
+		void **nativeWritten;
 		uint32_t capacity;
 		SwitchGpuEventJob *events;
 		SubmitPhases phases;
+		SwitchGpuUseCache<KernelMemory> useCache;
 	};
 
 	SwitchGpuEventClient events_;
@@ -507,7 +529,6 @@ class AGXDeviceUserClient : public IOUserClient
 	Left left_ = {};  // lock_: for releaseCall_
 	uint32_t reclaimDeferredCount_ = 0;
 	uint64_t reclaimSeq_ = 0;
-	uint32_t parkWait_ = 0;
 	thread_call_t releaseCall_ = nullptr;
 	RetiredBinding *retired_ = nullptr, **retiredTail_ = &retired_, *unmapping_ = nullptr;
 	// a retired binding's PTEs go under it (retireBatch, takeRetiredOverlaps)
@@ -544,12 +565,13 @@ class AGXDeviceUserClient : public IOUserClient
 	uint32_t nbinds_ = 0, cap_binds_ = 0;
 	uint64_t next_handle_ = 1;
 	uint32_t next_token_ = 1;
+	uint64_t bindGen_ = 1, boGen_ = 1;
 	bool counted_ = false;
 	char owner_[17] = {};  // the opening process
 	int32_t ownerPid_ = 0;
 	SwitchGpuOwnerMemory ownerMemory_ = {};  // debug kernels: what its BOs hold, under lock_
 	uint32_t pushSubmits_ =
-		0;  // the stats: its submissions, every kScanEvery-th read (scanPushes)
+		0;  // the stats: its submissions (tgm_scan::scanWeight picks those read)
 	uint32_t pushScans_ =
 		0;  // the ones read, every kProfileEvery-th also profiled (gpu_fenced.h "push profile")
 	// the compositor's (TegraGM20BSchedPolicy.h tgm_compositor): its channels are critical, it has no pool quota
@@ -608,6 +630,17 @@ class AGXDeviceUserClient : public IOUserClient
 	void pushWakes();
 	void unbindOverlaps(uint64_t va, uint64_t range, Bo *only);
 	void publishBindings(BindingTable::Snapshot *made);
+
+	void bumpBindGen()
+	{
+		__atomic_add_fetch(&bindGen_, 1u, __ATOMIC_RELEASE);
+	}
+
+	void bumpBoGen()
+	{
+		__atomic_add_fetch(&boGen_, 1u, __ATOMIC_RELEASE);
+	}
+
 	bool passSubmitters(bool wait);
 	void dropLeft(const Left &left);
 	void keepLeft(const Left &left);
@@ -617,9 +650,10 @@ class AGXDeviceUserClient : public IOUserClient
 	bool bindCuts(const TegraGM20BAbiVmBind *in, uint32_t count);
 	static bool bindingIs(const Binding &binding, const TegraGM20BAbiBindOp &op, const Bo *bo);
 	IOReturn bindOp(const TegraGM20BAbiBindOp &op, bool &changed);
-	void scanPushes(const tgm_push *pushes, uint32_t count, tgm_prof *prof, bool metalMacros);
+	void scanPushes(const tgm_push *pushes, uint32_t count, tgm_prof *prof, bool metalMacros,
+			uint32_t submits);
 	void deferScan(uint32_t slot, uint32_t fences, const tgm_push *pushes, uint32_t count,
-		       bool metalMacros);
+		       bool metalMacros, uint32_t submits);
 	const tgm_prof *scanSubmission(uint32_t slot, uint32_t fences, const tgm_push *pushes,
 				       uint32_t count, tgm_prof &prof, bool metalMacros);
 	const uint32_t *pushView(uint64_t va, uint64_t bytes,
@@ -660,6 +694,7 @@ class AGXDeviceUserClient : public IOUserClient
 	void drainDeferredReclaims(uint64_t upToSeq);
 	void releaseReclaimedList(ReclaimedBacking *list);
 	void parkUnlinkAllLocked();
+	void parkSettledLocked(Bo *bo);
 	void drainParkedRanges();
 	Bo **findLink(uint64_t handle);
 	IOReturn freeBo(Bo **p);
@@ -682,7 +717,7 @@ class AGXDeviceUserClient : public IOUserClient
 	IOReturn surfaceLayoutInfo(const TegraGM20BAbiSurfaceLayout *in,
 				   TegraGM20BAbiSurfaceLayoutInfo *out, bool canonical);
 	void applyLevel(bool allChannels = true);
-	IOReturn setPriority(const TegraGM20BAbiPriority &asked);
+	IOReturn setPriority(const TegraGM20BAbiPriority &asked, TegraGM20BAbiPriorityReply *reply);
 	IOReturn resourceSetCreate(const TegraGM20BAbiResourceSetCreate *in,
 				   TegraGM20BAbiResourceSetCreateReply *out);
 	IOReturn attachSet(const TegraGM20BAbiResourceSetCreate *in, TegraGM20BAbiSurfaceUse *uses,

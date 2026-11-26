@@ -43,25 +43,6 @@ std::string besidePlugin(const char *name, bool up = false)
     return path + "/" + name;
 }
 
-gm20b::Digest rulesDigest(const gm20b::PackRules &r)
-{
-    std::string bytes;
-    const auto word = [&](uint32_t v) {
-        bytes.append(reinterpret_cast<const char *>(&v), sizeof v);
-    };
-    word(uint32_t(r.varying.size()));
-    for (uint32_t v : r.varying)
-        word(v);
-    for (const auto *registers : {&r.baseline, &r.context}) {
-        word(uint32_t(registers->size()));
-        for (const auto &[method, value] : *registers) {
-            word(method);
-            word(value);
-        }
-    }
-    return gm20b::sha256(bytes.data(), bytes.size());
-}
-
 }  // namespace
 
 struct Engine::State {
@@ -96,7 +77,7 @@ bool Engine::open(uint64_t stack, const EngineInputs &inputs, std::string &why)
     s.inputs = inputs;
     if (!s.pack.load(inputs.pack.c_str(), stack, why))
         return why = "the pack: " + why, false;
-    s.rules = rulesDigest(gm20b::PackRules::of(s.pack));
+    memcpy(s.rules.data(), s.pack.header()->rules, sizeof s.pack.header()->rules);
     s.libraries = std::make_shared<LibraryCache>(inputs.systemRoot);
     s.codeGen = std::make_unique<CodeGen>(inputs.codeGen);
     s.stages = std::make_unique<CompiledStages>(kKeptStageBytes);
@@ -145,14 +126,20 @@ int32_t Engine::compile(const Prepared &p, std::string &entry, std::string &why)
     if (p.request.kind == gm20b::RequestKind::Library)
         return s.codeGen->make(p, entry, why);
     LibraryCache &cache = *s.libraries;
-    const Libraries libraries = [&cache](const gm20b::RequestLibrary &l, std::string &failed) {
+    const Libraries libraries = [&cache, &p](const gm20b::RequestLibrary &l, std::string &failed) {
+        std::shared_ptr<const MappedClientLibrary> mapped;
+        if (l.libraryId && !p.request.libraries.empty()) {
+            const ptrdiff_t idx = &l - p.request.libraries.data();
+            if (idx >= 0 && size_t(idx) < p.clientLibraries.size())
+                mapped = p.clientLibraries[size_t(idx)];
+        }
 #if SWITCH_DEBUG
         const uint64_t began = uptimeNs();
-        id<MTLLibrary> library = cache.library(l, failed);
+        id<MTLLibrary> library = cache.library(l, failed, mapped);
         tJobSplit.libraryNs += uptimeNs() - began;
         return library;
 #else
-        return cache.library(l, failed);
+        return cache.library(l, failed, mapped);
 #endif
     };
 #if SWITCH_DEBUG

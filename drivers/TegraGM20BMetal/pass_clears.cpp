@@ -46,7 +46,7 @@ void RenderEncoder::glassMemReached(const std::vector<Clear> &cl)
 }
 #endif
 
-void RenderEncoder::continuePass(uint8_t stores)
+void RenderEncoder::continuePass(uint8_t stores, uint8_t discards)
 {
     // Clear reach is a Metal encoder property, including its empty-draw behavior.
     // Later encoders must not enlarge or elide the first encoder's clear.
@@ -54,8 +54,10 @@ void RenderEncoder::continuePass(uint8_t stores)
         clears(initialClears_, true);
         clearsSealed_ = true;
     }
-    for (uint32_t i = 0; i < 8; ++i)
+    for (uint32_t i = 0; i < 8; ++i) {
         pass_.color[i].store = stores & (1u << i);
+        pass_.color[i].discard = discards & (1u << i);
+    }
     pipeline_ = nullptr;
     for (auto &stage : bufs_)
         for (auto &binding : stage)

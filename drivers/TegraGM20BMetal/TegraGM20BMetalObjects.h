@@ -99,6 +99,9 @@ inline uint64_t gm20bNewIdentity()
     std::optional<gm20b::AirHash> _air;  // its library function's HASH tag; none where its library lists none
     uint64_t _stageHash;                 // its part of a state's fast key (TegraGM20BMetalPipelineKey.h stageHash)
     uint8_t _patchType;                  // its MTLPatchType, its TESS tag's
+    // function_tags.h listedFacts, read the first time a store request names it (functionFacts)
+    std::once_flag _factsOnce;
+    std::string _facts;
 }
 @property (nonatomic, copy) NSString *name;
 @end
@@ -195,6 +198,7 @@ enum class SwitchMetalShareable : uint8_t {
     bool _aliasable;
     std::atomic<bool>
         _idNamed;  // its gpuResourceID was asked: the device's handle tables name it (TegraGM20BMetalResourceIds.mm)
+    std::atomic<bool> _viewIdNamed;                // a view over this texture had its gpuResourceID asked
     std::atomic<SwitchMetalShareable> _shareable;  // its surface's creation properties name a Metal device (read once)
     // Made plain for want of compressed memory (private_comp.h): the submit worker may move its memory
     // (compressedFromPlain), so allocatedSize answers this, its plain allocation's bytes; 0: it wants none
@@ -262,6 +266,8 @@ enum class SwitchMetalShareable : uint8_t {
     std::string _key;
     MTLRenderPipelineDescriptor *_madeFrom;
     uint64_t _packKey;  // the hash the pack finds its records and reflection by (its key's, or its key and AIR's)
+    gm20b::PackRun _packRun;
+    bool _hasPackVariants;
     gm20b::Mutex _variantLock;
     // every variant asked of it, by name, for its life: plans and encoders name each by address
     std::map<std::string, std::shared_ptr<gm20b::Variant<gm20b::Pipeline>>> _variants;
@@ -279,16 +285,21 @@ enum class SwitchMetalShareable : uint8_t {
 @end
 
 #include "TegraGM20BMetalPlan.h"
+#include "ordered_executor.h"
 
 @interface SwitchMetalQueue : SwitchMetalObject {
 @public
     dispatch_queue_t _completionQueue;
-    dispatch_queue_t _handlers;  // its command buffers' scheduled handlers, in its order
-    std::atomic<void *> _last;   // the command buffer enqueued last, retained until its completed handlers ran
+    gm20b::OrderedExecutor _handlerExec;  // its command buffers' scheduled handlers, in its order
+    std::atomic<void *> _last;            // the command buffer enqueued last, retained until its completed handlers ran
     // the submit worker's: the kernel's bound on the writer promises of a command buffer held behind its held head
     gm20b::EventDeadline::Time _heldBound;
     uint32_t _unscheduled;
     uint32_t _gpuPriority, _backgroundGpuPriority;  // what it asked for (TegraGM20BMetalQueuePriority.mm)
+    // addResidencySet:'s sets, which every command buffer of it uses, under _residencyLock
+    NSMutableArray *_residencySets;
+    std::atomic<uint32_t> _residencySetCount;
+    gm20b::Mutex _residencyLock;
 }
 @end
 
@@ -309,6 +320,7 @@ struct SwitchMetalPass {
     __unsafe_unretained id depth;
     NSUInteger depthSlice = 0;  // a 2D array's or cube's layer
     MTLLoadAction depthLoad, stencilLoad;
+    uint8_t zetaAspects = 3;
 
     // the descriptor's depth (0) and stencil (1) attachments as the encode reads them, the store as the encoder set it (a
     // resolve's, MultisampleResolve and StoreAndMultisampleResolve, as DontCare and Store)
@@ -337,6 +349,7 @@ struct SwitchMetalPass {
     // a draw in it tests depth in its shader (shader_tests.h): a Depth16Unorm attachment renders converted
     // (TegraGM20BMetalRangeForms.mm depth16Tested)
     bool shaderTestsDepth = false;
+    bool testsStencil = false;
     bool xrPlaneBinds = false;  // it binds a two-plane RGB10A8_2P_XR10 texture, which a draw may store through
     bool continues =
         false;  // a parallel encoder's sub-encoder after its first: the pass before it goes on (parallel.h)
@@ -436,6 +449,23 @@ static inline void gm20bRunDeferredPresent(const SwitchMetalDeferredPresent &p)
     }
 }
 
+struct SwitchMetalResidencyEntry {
+    enum class Kind : uint8_t {
+        Buffer,
+        Texture,
+        Heap
+    };
+
+    id allocation;
+    Kind kind;
+    bool write;
+};
+
+struct SwitchMetalResidencySnapshot {
+    NSArray *committed;
+    std::vector<SwitchMetalResidencyEntry> hostVisible;
+};
+
 @interface SwitchMetalCommandBuffer : SwitchMetalObject {
 @public
     uint64_t _protection;  // setProtectionOptions: (kept, no effect)
@@ -516,7 +546,7 @@ static inline void gm20bRunDeferredPresent(const SwitchMetalDeferredPresent &p)
     gm20b::PointerMap<bool> _ownerKeys;  // everything the tape names, retained until completion
     NSMutableArray *_scheduledHandlers, *_completedHandlers;
     std::atomic<bool>
-        _handlersQueued;  // scheduled handlers went to its queue's _handlers: its completed ones go behind them
+        _handlersQueued;  // scheduled handlers went to its queue's _handlerExec: its completed ones go behind them
     SwitchMetalCommandBuffer
         *_before;  // enqueued before it on its queue, until its own completed handlers were handed on
     std::vector<SwitchMetalSubCommand>
@@ -531,6 +561,10 @@ static inline void gm20bRunDeferredPresent(const SwitchMetalDeferredPresent &p)
     std::atomic<MTLCommandBufferStatus> _status;
     NSError *_error;
     SwitchMetalQueue *_queue;
+    // the residency sets it and its encoders used (useResidencySet:), snapshotted at commit and named at each range's
+    // seal (gm20bSnapshotResidencySets, gm20bNameResidencySets)
+    NSMutableArray *_residencySets;
+    std::vector<std::shared_ptr<const SwitchMetalResidencySnapshot>> _residencySnapshots;
     std::atomic<uint8_t> _enqueueState;  // 0: none, 1: commit claimed queue slot, 2: explicit enqueue pushed to worker
     gm20b::SubmitQueue<void *, SwitchMetalCommandBuffer *>::Reservation _reservation;
     bool _reserved;  // the submit worker's: its reservation made
@@ -685,9 +719,8 @@ enum SwitchMetalPipelineVeto : uint32_t {
     VetoFailed = 1u << 10,     // its encode failed ahead (the commit's encode meets the failure again, as before)
     VetoOtherWork = 1u << 11,  // the worker needed the device for another command buffer
     VetoDevice = 1u << 12,     // a purge, or a channel made again since it began
-    VetoZcull = 1u << 13,      // a pass loads a depth an earlier pass stored (zcull_planes.h)
-    VetoChannel = 1u << 14,    // the kernel gave its begin no channel (the commit's encode asks again)
-    VetoKinds = 15
+    VetoChannel = 1u << 13,    // the kernel gave its begin no channel (the commit's encode asks again)
+    VetoKinds = 14
 };
 
 static inline void gm20bPipelineVeto(SwitchMetalCommandBuffer *cb, uint32_t reason)

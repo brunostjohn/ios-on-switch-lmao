@@ -89,14 +89,14 @@ void TegraSMMUEngine::detach()
         tegra_smmu_detach(asid, groups[i].asidReg);
 }
 
-uint64_t TegraSMMUEngine::map(const uint64_t *pages, uint32_t count, bool writable)
+uint64_t TegraSMMUEngine::map(const uint64_t *pages, uint32_t count, bool writable, uint64_t reserveBytes)
 {
     for (uint32_t i = 0; i < count; i++) {
         if (pages[i] >= kPageLimit || (pages[i] & SWITCH_HW_PAGE_MASK))
             return 0;
     }
     IOLockLock(lock);
-    const uint64_t iova = count ? space.alloc(static_cast<uint64_t>(count) * SWITCH_HW_PAGE_SIZE) : 0;
+    const uint64_t iova = count ? space.alloc(static_cast<uint64_t>(count) * SWITCH_HW_PAGE_SIZE, reserveBytes) : 0;
     if (iova) {
         domain.map(iova, pages, count, writable);  // the window's tables are all installed: it cannot fail
         switch_smmu_publish(domain, asid, SWITCH_DCACHE_CLEAN);

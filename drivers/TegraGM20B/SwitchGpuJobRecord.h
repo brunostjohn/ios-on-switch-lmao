@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "TegraGM20BJobABI.h"
+#include "TegraGM20BSchedABI.h"
 #include "TegraGM20BVolatileABI.h"
 
 struct SwitchGpuJobRecord {
@@ -15,10 +16,10 @@ struct SwitchGpuJobRecord {
 	uint64_t admission;                        // the admission cookie, 0: none
 	const TegraGM20BAbiJobPromises *promises;  // the writer promises it keeps, or null
 
-	static constexpr uint32_t kFlags = TegraGM20BJobExternal | TegraGM20BJobHostWritten |
-					   TegraGM20BJobHasEvents | TegraGM20BJobQuiet |
-					   TegraGM20BJobAdmission | TegraGM20BJobFulfills |
-					   TegraGM20BJobVolatileWrites | TegraGM20BJobEventReleases;
+	static constexpr uint32_t kFlags =
+		TegraGM20BJobExternal | TegraGM20BJobHostWritten | TegraGM20BJobHasEvents |
+		TegraGM20BJobQuiet | TegraGM20BJobAdmission | TegraGM20BJobFulfills |
+		TegraGM20BJobVolatileWrites | TegraGM20BJobSameUses | TegraGM20BJobEventReleases;
 	static constexpr size_t kMaxBytes =
 		sizeof(TegraGM20BAbiJob) + TegraGM20BMaxJobPushes * sizeof(TegraGM20BAbiPush) +
 		TegraGM20BMaxJobUses * sizeof(TegraGM20BAbiSurfaceUse) +
@@ -37,7 +38,8 @@ struct SwitchGpuJobRecord {
 		    job->set > TegraGM20BMaxResourceSets || (job->set && !job->set_generation) ||
 		    (!job->set && job->set_generation) ||
 		    job->push_count > TegraGM20BMaxJobPushes ||
-		    job->shared_count > TegraGM20BMaxJobUses)
+		    job->shared_count > TegraGM20BMaxJobUses ||
+		    ((job->flags & TegraGM20BJobSameUses) && job->shared_count))
 			return record;
 		const uint32_t admitted = job->flags & TegraGM20BJobAdmission;
 		const bool begins = admitted & TegraGM20BJobAdmissionBegin,
@@ -46,7 +48,7 @@ struct SwitchGpuJobRecord {
 		    ((admitted & TegraGM20BJobAdmissionEnd) && !begins && !continues) ||
 		    ((admitted & TegraGM20BJobAdmissionCancel) &&
 		     (admitted != TegraGM20BJobAdmissionCancel || job->push_count ||
-		      job->shared_count)))
+		      job->shared_count || (job->flags & TegraGM20BJobSameUses))))
 			return record;
 		size_t expected = sizeof(*job) + job->push_count * sizeof(TegraGM20BAbiPush) +
 				  job->shared_count * sizeof(TegraGM20BAbiSurfaceUse);

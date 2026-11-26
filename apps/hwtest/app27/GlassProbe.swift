@@ -48,6 +48,9 @@ enum GlassProbe {
 
     static func disarm() { post("glass-probe-off") }
 
+    /// Every process's idle reclaim of backings and compressed memory now, as after the driver's 10 s with no commit
+    static func reclaimIdle() { post("idle-reclaim") }
+
     static func lowTicks() -> UInt64 { mach_absolute_time() & ((1 << 40) - 1) }
 
     static func state(_ name: String) -> UInt64? {

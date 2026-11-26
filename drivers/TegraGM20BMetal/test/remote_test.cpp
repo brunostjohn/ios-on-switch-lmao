@@ -10,6 +10,7 @@
 #include "../cache_io.h"
 #include "../obtained.h"
 #include "../program_pages.h"
+#include "../store_key.h"
 #include "TegraGM20BABI.h"
 #include "TegraGM20BCompilerABI.h"
 
@@ -38,12 +39,13 @@ class Kernel {
 public:
     uint32_t flags = TegraGM20BCompilerCapable | TegraGM20BCompilerRegistered | TegraGM20BCompilerStore;
     int called = kIOReturnSuccess, asyncCalled = kIOReturnSuccess, infoCalled = kIOReturnSuccess;
-    int waitCalled = kIOReturnSuccess;
+    int waitCalled = kIOReturnSuccess, registerLibraryCalled = kIOReturnSuccess;
     unsigned infos = 0;
     int32_t answer = TegraGM20BCompileMade;
     uint32_t generation = 1, how = TegraGM20BCompileCompiled | 4u << 8;
     TegraGM20BAbiCompileTimes times = {};  // the compiler's, as its Complete gave them
-    unsigned maps = 0, compiles = 0, asyncAsked = 0;
+    unsigned maps = 0, compiles = 0, asyncAsked = 0, registerLibraries = 0;
+    uint64_t nextLibraryId = 1;
     std::vector<uint64_t> compileWaits;
     std::function<int(uint64_t)> onCompileWait;
     std::function<void()> compiling;  // what the compiler does before it answers
@@ -130,7 +132,8 @@ public:
                 infos++;
                 if (infoCalled != kIOReturnSuccess)
                     return infoCalled;
-                *static_cast<TegraGM20BAbiCompilerInfoReply *>(out) = {store.mappedBytes(), kStack, flags, generation};
+                *static_cast<TegraGM20BAbiCompilerInfoReply *>(out) = {
+                    store.mappedBytes(), kStack, flags, generation, {}};
                 return kIOReturnSuccess;
             case TegraGM20BMethodMap:
                 maps++;
@@ -150,6 +153,13 @@ public:
                     return onCompileWait(req.cookie);
                 compileWaits.push_back(req.cookie);
                 return waitCalled;
+            }
+            case TegraGM20BMethodCompilerRegisterLibrary: {
+                registerLibraries++;
+                if (registerLibraryCalled != kIOReturnSuccess)
+                    return registerLibraryCalled;
+                *static_cast<TegraGM20BAbiCompilerRegisterLibraryReply *>(out) = {nextLibraryId++};
+                return kIOReturnSuccess;
             }
             default:
                 return kIOReturnUnsupported;
@@ -696,6 +706,43 @@ TEST_F(RemoteCompile, WaitAsyncHeldCookieSurvivesNotFoundRaceAndFollowsPromotion
     waiter.join();
     EXPECT_FALSE(retry);
     EXPECT_EQ(seen, (std::vector<uint64_t>{c1, c2, held}));
+}
+
+TEST_F(RemoteCompile, RegisterLibraryCachesPerSliceAndFallsBackCleanly)
+{
+    std::string lib = "metallib-payload";
+    constexpr uint64_t kSource = 1, kOtherSource = 2;
+
+    {
+        gm20b::Remote remote(kernel.call(), kStack);
+        EXPECT_EQ(remote.registerLibrary(lib.data(), lib.size(), kSource), 0u);
+        EXPECT_EQ(kernel.registerLibraries, 0u);
+    }
+
+    kernel.flags |= TegraGM20BCompilerLibraries;
+    gm20b::Remote remote(kernel.call(), kStack);
+    const uint64_t id = remote.registerLibrary(lib.data(), lib.size(), kSource);
+    EXPECT_EQ(id, 1u);
+    EXPECT_EQ(kernel.registerLibraries, 1u);
+    EXPECT_EQ(remote.registerLibrary(lib.data(), lib.size(), kSource), 1u);
+    EXPECT_EQ(kernel.registerLibraries, 1u);
+    EXPECT_EQ(remote.registerLibrary(lib.data(), lib.size(), kOtherSource), 2u);
+    EXPECT_EQ(kernel.registerLibraries, 2u);
+
+    std::string lib2 = "another-library";
+    constexpr uint64_t d2 = 3;
+    kernel.registerLibraryCalled = kIOReturnNoResources;
+    EXPECT_EQ(remote.registerLibrary(lib2.data(), lib2.size(), d2), 0u);
+    kernel.registerLibraryCalled = kIOReturnSuccess;
+    EXPECT_EQ(remote.registerLibrary(lib2.data(), lib2.size(), d2), 3u);
+
+    std::string lib3 = "third-library";
+    constexpr uint64_t d3 = 4;
+    kernel.registerLibraryCalled = kIOReturnUnsupported;
+    EXPECT_EQ(remote.registerLibrary(lib3.data(), lib3.size(), d3), 0u);
+    const unsigned callsAfterUnsupported = kernel.registerLibraries;
+    EXPECT_EQ(remote.registerLibrary(lib3.data(), lib3.size(), d3), 0u);
+    EXPECT_EQ(kernel.registerLibraries, callsAfterUnsupported);
 }
 
 // Completion's queue (TegraGM20BMetalComplete.mm) runs each block at its asker's class, below its own default as well as above it,

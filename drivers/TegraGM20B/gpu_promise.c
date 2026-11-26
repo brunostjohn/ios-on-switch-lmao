@@ -2,6 +2,7 @@
 // Writer promises (SwitchGpuWriterPromise.h): the GPU jobs that park on them (SwitchGpuPromiseGiveUp.h), what was
 // given up, and the one a direct present watches (SwitchGpuPresentWatch.h).
 #include "gpu_internal.h"
+#include "SwitchGpuBridge.h"
 
 /* The reader's job (its acquires pushed, nothing to roll them back) parks on the pending promises it acquires */
 void switch_gpu_chan_park_promises_locked(struct tgm_chan *chan,
@@ -114,6 +115,8 @@ int tgm_promise_abandoned(uint32_t offset, uint32_t value)
 void tgm_promise_abandon(uint32_t offset, uint32_t value)
 {
 	switch_gpu_promise_abandoned_add(&promise_abandoned, offset, value);
+	/* Promise reads failed ahead of both callers' raises: close the bridge gate before the word moves. */
+	switch_gpu_bridge_gate_close();
 	nvxnu_work_schedule(promise_wake_work);
 	tgm_present_promise_released(offset, value);
 }

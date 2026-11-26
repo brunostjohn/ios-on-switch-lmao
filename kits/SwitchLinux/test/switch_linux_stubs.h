@@ -46,6 +46,8 @@ void switch_linux_record(const char *fmt, ...) __attribute__((format(printf, 1, 
 extern boolean_t switch_linux_stub_interrupts;
 extern int switch_linux_stub_preemption;
 extern uint64_t switch_linux_stub_now;
+// what each mach_absolute_time call moves the clock on by (0: a stopped clock)
+extern uint64_t switch_linux_stub_tick;
 extern wait_result_t switch_linux_stub_wait_result;
 
 void IOLog(const char *fmt, ...) __attribute__((format(printf, 1, 2)));

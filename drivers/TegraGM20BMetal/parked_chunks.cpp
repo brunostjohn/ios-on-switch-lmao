@@ -3,6 +3,8 @@
 #include "gpu.h"
 
 #include <algorithm>
+#include <os/log.h>
+#include <time.h>
 
 #include "gm20b_gpu_internal.h"
 
@@ -19,6 +21,8 @@ std::vector<Device::Chunk> &Device::chunkVec(ChunkVec vec, uint32_t zetaIndex)
         return zChunks_[zetaIndex];
     case ChunkVec::Wc:
         return wcChunks_;
+    case ChunkVec::VolatileWc:
+        return volatileWcChunks_;
     }
     return chunks_;
 }
@@ -30,7 +34,7 @@ bool Device::hasTransientChunksLocked() const
             return ch.park == ChunkPark::Parking || ch.park == ChunkPark::Unparking;
         });
     };
-    if (busy(chunks_) || busy(blChunks_) || busy(wcChunks_))
+    if (busy(chunks_) || busy(blChunks_) || busy(wcChunks_) || busy(volatileWcChunks_))
         return true;
     for (const std::vector<Chunk> &z : zChunks_)
         if (busy(z))
@@ -43,7 +47,8 @@ void Device::collectParkableChunksLocked(std::vector<ParkCandidate> &out)
     auto stage = [&](ChunkVec vec, uint32_t zetaIndex, uint32_t index, Chunk &ch) {
         if (ch.park != ChunkPark::Live || ch.used || !ch.bo.handle || ch.bo.control)
             return;
-        if (vec != ChunkVec::Wc && !ch.memory)
+        const bool wc = vec == ChunkVec::Wc || vec == ChunkVec::VolatileWc;
+        if (!wc && !ch.memory)
             return;
         const uint64_t mapped = ch.bo.mapped;
         ch.park = ChunkPark::Parking;
@@ -52,7 +57,7 @@ void Device::collectParkableChunksLocked(std::vector<ParkCandidate> &out)
         ch.free.clear();
         if (vec == ChunkVec::Pool && !ch.dedicated)
             poolFree_ -= ch.bytes;
-        if (vec == ChunkVec::Wc) {
+        if (wc) {
             retiring_.wcBytes.fetch_add(ch.bytes, std::memory_order_relaxed);
             if (!ch.dedicated)
                 retiring_.wcSharedBytes.fetch_add(ch.bytes, std::memory_order_relaxed);
@@ -81,6 +86,8 @@ void Device::collectParkableChunksLocked(std::vector<ParkCandidate> &out)
             stage(ChunkVec::Zeta, z, i, zChunks_[z][i]);
     for (uint32_t i = 0; i < wcChunks_.size(); ++i)
         stage(ChunkVec::Wc, 0, i, wcChunks_[i]);
+    for (uint32_t i = 0; i < volatileWcChunks_.size(); ++i)
+        stage(ChunkVec::VolatileWc, 0, i, volatileWcChunks_[i]);
     if (!out.empty())
         ++offLockChunkOps_;
 }
@@ -110,7 +117,7 @@ void Device::finishParkChunks(std::vector<ParkCandidate> &candidates)
     std::vector<size_t> toFreeOnClose;
     for (size_t i = 0; i < candidates.size(); ++i) {
         ParkCandidate &cand = candidates[i];
-        if (cand.vec == ChunkVec::Wc) {
+        if (cand.vec == ChunkVec::Wc || cand.vec == ChunkVec::VolatileWc) {
             retiring_.wcBytes.fetch_sub(cand.bytes, std::memory_order_relaxed);
             if (!cand.dedicated)
                 retiring_.wcSharedBytes.fetch_sub(cand.bytes, std::memory_order_relaxed);
@@ -158,7 +165,8 @@ void Device::finishParkChunks(std::vector<ParkCandidate> &candidates)
 }
 
 bool Device::tryUnparkChunk(std::unique_lock<gm20b::Mutex> &l, ChunkVec vec, uint32_t zetaIndex, uint64_t bytes,
-                            bool dedicated, uint64_t align, uint32_t setAccess, uint32_t &index, bool &resident)
+                            bool dedicated, uint64_t align, uint32_t setAccess, uint32_t &index, bool &resident,
+                            uint64_t maxBytes)
 {
     index = ~0u;
     resident = false;
@@ -170,7 +178,7 @@ bool Device::tryUnparkChunk(std::unique_lock<gm20b::Mutex> &l, ChunkVec vec, uin
         const Chunk &ch = chunks[i];
         if (ch.park != ChunkPark::Parked || ch.used || ch.dedicated != dedicated)
             continue;
-        if (dedicated ? ch.bytes != bytes : ch.bytes < bytes)
+        if (dedicated ? ch.bytes != bytes : (ch.bytes < bytes || (maxBytes && ch.bytes > maxBytes)))
             continue;
         if (align && (ch.bo.va & (align - 1)))
             continue;
@@ -191,9 +199,15 @@ bool Device::tryUnparkChunk(std::unique_lock<gm20b::Mutex> &l, ChunkVec vec, uin
     SWITCH_METAL_DIAGNOSTIC(stats.parkedChunkBytes -= chBytes);
     l.unlock();
 
+#if SWITCH_METAL_DIAGNOSTICS
+    const uint64_t began = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+#endif
     uint64_t addr = 0, mappedBytes = 0;
     uint32_t status = 0;
     const int kr = k_.unpark(bo.handle, addr, mappedBytes, status);
+#if SWITCH_METAL_DIAGNOSTICS
+    const uint64_t unparked = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+#endif
     if (kr == KERN_SUCCESS && status == TegraGM20BUnparkResident && addr != 0) {
         bo.parked = false;
         bo.cpu = reinterpret_cast<uint8_t *>(uintptr_t(addr));
@@ -206,9 +220,9 @@ bool Device::tryUnparkChunk(std::unique_lock<gm20b::Mutex> &l, ChunkVec vec, uin
             if (pitchVa) {
                 Bo view = bo;
                 view.va = view.vaBase = pitchVa;
-                set_.add(k_, {{&bo, setAccess}, {&view, TegraGM20BSurfaceWrite}});
+                set_.addLater({{&bo, setAccess}, {&view, TegraGM20BSurfaceWrite}});
             } else {
-                set_.add(k_, bo, setAccess);
+                set_.addLater({{&bo, setAccess}});
             }
         }
     } else {
@@ -216,6 +230,15 @@ bool Device::tryUnparkChunk(std::unique_lock<gm20b::Mutex> &l, ChunkVec vec, uin
         if (pitchVa)
             k_.releaseVa(pitchVa, chBytes);
     }
+#if SWITCH_METAL_DIAGNOSTICS
+    // HW Test gpu.path.parked_bo's ceiling is 200 us for the whole create: which call on this thread took it
+    if (const uint64_t ended = clock_gettime_nsec_np(CLOCK_UPTIME_RAW); ended - began > 150000)
+        os_log(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "gm20b"),
+               "SwitchMetal: chunk unpark %llu us for %llu KiB: BoUnpark %llu us (status %u), resource set %llu us",
+               (unsigned long long)((ended - began) / 1000), (unsigned long long)(chBytes >> 10),
+               (unsigned long long)((unparked - began) / 1000), status,
+               (unsigned long long)((ended - unparked) / 1000));
+#endif
 
     l.lock();
     if (gotResident && !closing_) {
@@ -224,13 +247,14 @@ bool Device::tryUnparkChunk(std::unique_lock<gm20b::Mutex> &l, ChunkVec vec, uin
         slot.memory = bo.cpu;
         slot.parkedVa = 0;
         slot.park = ChunkPark::Live;
+        slot.highWater = chBytes;
         if (!dedicated) {
             slot.free.clear();
             slot.free[0] = chBytes;
         }
         if (vec == ChunkVec::Pool && !dedicated)
             poolFree_ += chBytes;
-        if (vec != ChunkVec::Wc) {
+        if (vec != ChunkVec::Wc && vec != ChunkVec::VolatileWc) {
             SWITCH_METAL_DIAGNOSTIC(stats.poolBytes += chBytes);
             SWITCH_METAL_DIAGNOSTIC(stats.poolChunks++);
         }
@@ -284,6 +308,7 @@ void Device::releaseParkedChunksOnClose()
     for (std::vector<Chunk> &z : zChunks_)
         detachParked(z);
     detachParked(wcChunks_);
+    detachParked(volatileWcChunks_);
 }
 
 }  // namespace gm20b

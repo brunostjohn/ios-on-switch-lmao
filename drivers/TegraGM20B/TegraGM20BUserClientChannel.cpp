@@ -197,14 +197,16 @@ IOReturn AGXDeviceUserClient::surfaceLayoutInfo(const TegraGM20BAbiSurfaceLayout
 		object->retain();
 	IOLockUnlock(lock_);
 	const bool packed = switch_gpu_surface_packed(surface);
+	const bool asksLayout = in->width || in->height || in->bpp || in->bytes_per_row ||
+				(in->flags & TegraGM20BLayoutWrites);
 	const bool same = switch_gpu_surface_shape_matches(surface, in->width, in->height, in->bpp,
 							   in->bytes_per_row);
 	const bool exclusive = switch_gpu_surface_layout_exclusive(object, true) == 0;
-	const int writes =
-		tgm_layout_ask_flags(exclusive, packed, surface.client_memory, canonical || same,
-				     (in->flags & TegraGM20BLayoutWrites) != 0,
-				     tgm_surface_unwritten(object), firstAsk) |
-		(canCompress ? TGM_LAYOUT_ASK_COMPRESS : 0);
+	const int writes = tgm_layout_ask_flags(exclusive, packed, surface.client_memory,
+						asksLayout && (canonical || same),
+						(in->flags & TegraGM20BLayoutWrites) != 0,
+						tgm_surface_unwritten(object), firstAsk) |
+			   (canCompress ? TGM_LAYOUT_ASK_COMPRESS : 0);
 	const uint32_t width = uint32_t(surface.width), height = uint32_t(surface.height),
 		       pitch = uint32_t(surface.pitch);
 	const int layout =
@@ -286,7 +288,8 @@ IOReturn AGXDeviceUserClient::surfaceLayoutInfo(const TegraGM20BAbiSurfaceLayout
 void AGXDeviceUserClient::applyLevel(bool allChannels)
 {
 	level_ = tgm_priority_level(priority_, backgroundPriority_,
-				    static_cast<int>(backgroundRole_));
+				    static_cast<int>(backgroundRole_),
+				    static_cast<int>(restartNoKill_));
 	const bool wasCritical = critical_;
 	critical_ = tgm_compositor(static_cast<enum tgm_level>(level_),
 				   static_cast<int>(restartNoKill_));
@@ -329,6 +332,8 @@ IOReturn AGXDeviceUserClient::channelCreate(const TegraGM20BAbiChannelCreate *in
 	switch_gpu_chan_visibility(
 		chans_[slot], fence_va_ + TegraGM20BFencePageVisibleFirst / 4 + slot,
 		fence_gpu_ + TegraGM20BFencePageVisibleFirst + uint64_t(slot) * 4);
+	switch_gpu_chan_progress(chans_[slot], fence + TegraGM20BFencePageChannelProgressOffset /
+							       sizeof(uint32_t));
 	auto *semantic = reinterpret_cast<volatile TegraGM20BAbiFenceSemantic *>(fence + 4);
 	switch_gpu_chan_semantic_visibility(chans_[slot], semantic);
 	auto *identity = reinterpret_cast<volatile TegraGM20BAbiFenceIdentity *>(fence + 8);

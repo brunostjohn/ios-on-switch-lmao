@@ -60,6 +60,9 @@
 static uint64_t a64x_images, a64x_pages, a64x_stub_words, a64x_mismatch, a64x_traps, a64x_traps_unhandled;
 static uint64_t a64x_cache_pages, a64x_images_native, a64x_images_marked, a64x_island_words;
 static uint64_t a64x_images_installed;
+#if DEVELOPMENT || DEBUG
+static uint64_t a64x_jit_patches;
+#endif
 
 LCK_GRP_DECLARE(a64x_lck_grp, "a64x");
 static LCK_MTX_DECLARE(a64x_plan_lock, &a64x_lck_grp);
@@ -79,7 +82,8 @@ struct a64x_image {
     uint32_t *stubs;
     uint32_t nstub, stubcap;
     uint32_t nranges;
-    struct a64x_range *ranges; /* instruction sections, absolute file offsets, sorted */
+    uint32_t ranges_cap;
+    struct a64x_range *ranges; /* instruction sections, absolute file offsets, sorted and merged */
     uint32_t map_flags;        /* A64X_MAP_NO_PAC for plain arm64 */
     uint64_t changed;          /* words the scan rewrote */
     uint8_t *data;             /* [npages * 128]: 1 bit per word of the segment, set = data in __text */
@@ -118,7 +122,7 @@ static void a64x_image_free(struct a64x_image *im)
         kfree_data(im->stubs, im->stubcap * sizeof(uint32_t));
     }
     if (im->ranges) {
-        kfree_data(im->ranges, im->nranges * sizeof(struct a64x_range));
+        kfree_data(im->ranges, im->ranges_cap * sizeof(struct a64x_range));
     }
     if (im->data) {
         kfree_data(im->data, (size_t)im->npages * (A64X_WORDS / 8));
@@ -193,16 +197,21 @@ static int a64x_stub_page(const void *src, void *dst, unsigned long long off, vo
 #define A64X_MAX_SECTIONS 64
 
 /* load commands -> executable segment and instruction sections (over 1 KB: allocated, never on the stack) */
+struct a64x_cand {
+    uint64_t va, size, off;
+};
+
 struct a64x_layout {
     uint64_t exec_fileoff, exec_filesize, exec_vmaddr;
     uint64_t vm_end;
-    uint32_t nsect;
+    uint32_t nsect, ncand;
     bool marked;                               /* has the __TEXT,__a64x_target section: built for this core */
     uint64_t text_vmaddr;                      /* __TEXT (function starts count from it) */
     uint32_t fs_off, fs_size;                  /* LC_FUNCTION_STARTS, slice-relative */
     uint32_t dic_off, dic_size;                /* LC_DATA_IN_CODE, slice-relative */
     uint32_t cs_off, cs_size;                  /* LC_CODE_SIGNATURE, slice-relative */
     struct a64x_range sect[A64X_MAX_SECTIONS]; /* instruction sections, absolute file offsets, file order */
+    struct a64x_cand cand[A64X_MAX_SECTIONS];  /* flagless S_REGULAR sections, promoted via LC_FUNCTION_STARTS */
 };
 
 static int a64x_parse(const void *lcmds, size_t size, off_t slice_off, struct a64x_layout *lay)
@@ -256,18 +265,47 @@ static int a64x_parse(const void *lcmds, size_t size, off_t slice_off, struct a6
                 if (nexec++) {
                     return ENOTSUP; /* one executable segment (__TEXT) is all arm64e images have */
                 }
-                lay->exec_fileoff = (uint64_t)slice_off + sg->fileoff;
+                uint64_t seg_end = 0, abs_seg_end = 0;
+                if (slice_off < 0 || os_add_overflow((uint64_t)slice_off, sg->fileoff, &lay->exec_fileoff) ||
+                    os_add_overflow(sg->fileoff, sg->filesize, &seg_end) ||
+                    os_add_overflow((uint64_t)slice_off, seg_end, &abs_seg_end)) {
+                    return EBADMACHO;
+                }
                 lay->exec_filesize = sg->filesize;
                 lay->exec_vmaddr = sg->vmaddr;
                 const struct section_64 *sc = (const void *)(sg + 1);
                 for (uint32_t s = 0; s < sg->nsects; s++) {
-                    if ((sc[s].flags & (S_ATTR_PURE_INSTRUCTIONS | S_ATTR_SOME_INSTRUCTIONS)) && sc[s].size) {
+                    enum a64x_sect_kind sk =
+                        a64x_classify_exec_section(sc[s].sectname, sc[s].addr, sc[s].size, sc[s].flags);
+                    if (sk == A64X_SECT_DATA) {
+                        continue;
+                    }
+                    uint64_t lo = 0, hi = 0;
+                    if (sc[s].offset < sg->fileoff || sc[s].offset > seg_end || sc[s].size > seg_end - sc[s].offset ||
+                        os_add_overflow((uint64_t)slice_off, sc[s].offset, &lo) ||
+                        os_add_overflow(lo, sc[s].size, &hi)) {
+                        return EBADMACHO;
+                    }
+                    if (sk == A64X_SECT_CODE) {
+                        if (!(sc[s].flags & (S_ATTR_PURE_INSTRUCTIONS | S_ATTR_SOME_INSTRUCTIONS)) &&
+                            (sc[s].offset & 3u) != 0u) {
+                            continue;
+                        }
                         if (lay->nsect >= A64X_MAX_SECTIONS) {
                             return ENOTSUP;
                         }
-                        lay->sect[lay->nsect].lo = (uint64_t)slice_off + sc[s].offset;
-                        lay->sect[lay->nsect].hi = (uint64_t)slice_off + sc[s].offset + sc[s].size;
+                        lay->sect[lay->nsect].lo = lo;
+                        lay->sect[lay->nsect].hi = hi;
                         lay->nsect++;
+                    } else if ((sc[s].offset & 3u) == 0u && lay->ncand < A64X_MAX_SECTIONS) {
+                        uint64_t va_end = 0;
+                        if (os_add_overflow(sc[s].addr, sc[s].size, &va_end)) {
+                            return EBADMACHO;
+                        }
+                        lay->cand[lay->ncand].va = sc[s].addr;
+                        lay->cand[lay->ncand].size = sc[s].size;
+                        lay->cand[lay->ncand].off = lo;
+                        lay->ncand++;
                     }
                 }
             }
@@ -282,20 +320,22 @@ static int a64x_parse(const void *lcmds, size_t size, off_t slice_off, struct a6
  * over the segment. Words found to be data leave the code map (img_is_code), so neither the scan nor the pager
  * touches them. Without LC_FUNCTION_STARTS the runs are cut at padding and terminators only.
  */
-static void a64x_find_islands(struct a64x_image *im, const struct a64x_layout *lay, off_t slice_off)
+static int a64x_find_islands(struct a64x_image *im, const struct a64x_layout *lay, off_t slice_off)
 {
+    _Static_assert(A64X_MAX_SECTIONS <= 64, "cand_hit bitmask");
     size_t nbits = (size_t)im->npages * A64X_WORDS, nbytes = nbits / 8;
     uint8_t *fs = NULL;
+    uint64_t cand_hit = 0;
+    int error = 0;
     uint32_t *page = kalloc_data(A64X_PAGE, Z_WAITOK);
     im->data = kalloc_data(nbytes, Z_WAITOK | Z_ZERO);
-    if (!page || !im->data) {
-        goto out;
-    }
     int resid = 0;
     if (lay->fs_size && lay->fs_size <= (1u << 24)) {
         uint8_t *buf = kalloc_data(lay->fs_size, Z_WAITOK);
-        fs = kalloc_data(nbytes, Z_WAITOK | Z_ZERO);
-        if (buf && fs &&
+        if (nbytes) {
+            fs = kalloc_data(nbytes, Z_WAITOK | Z_ZERO);
+        }
+        if (buf &&
             !vn_rdwr(UIO_READ, im->vp, (caddr_t)buf, (int)lay->fs_size, slice_off + lay->fs_off, UIO_SYSSPACE,
                      IO_NODELOCKED, vfs_context_ucred(vfs_context_kernel()), &resid, current_proc()) &&
             !resid) {
@@ -303,22 +343,38 @@ static void a64x_find_islands(struct a64x_image *im, const struct a64x_layout *l
             for (uint32_t q = 0; q < lay->fs_size;) {
                 uint64_t v = 0;
                 int sh = 0;
-                while (q < lay->fs_size && sh < 64) {
+                bool ok = false;
+                while (q < lay->fs_size) {
                     uint8_t b = buf[q++];
-                    v |= (uint64_t)(b & 0x7F) << sh;
-                    sh += 7;
-                    if (!(b & 0x80)) {
+                    if (sh == 63 && b > 1u) {
                         break;
                     }
+                    v |= (uint64_t)(b & 0x7Fu) << sh;
+                    if (!(b & 0x80u)) {
+                        ok = true;
+                        break;
+                    }
+                    if (sh >= 63) {
+                        break;
+                    }
+                    sh += 7;
                 }
-                if (!v) {
+                if (!ok || !v || v > UINT64_MAX - addr) {
                     break;
                 }
                 addr += v;
-                if (addr >= lay->exec_vmaddr) {
+                if (fs && addr >= lay->exec_vmaddr) {
                     uint64_t k = (addr - lay->exec_vmaddr) / 4;
                     if (k < nbits) {
                         fs[k >> 3] |= (uint8_t)(1u << (k & 7));
+                    }
+                }
+                if ((addr & 3u) == 0u) {
+                    for (uint32_t c = 0; c < lay->ncand; c++) {
+                        if (!(cand_hit & (1ull << c)) && addr >= lay->cand[c].va &&
+                            addr - lay->cand[c].va < lay->cand[c].size) {
+                            cand_hit |= 1ull << c;
+                        }
                     }
                 }
             }
@@ -326,6 +382,61 @@ static void a64x_find_islands(struct a64x_image *im, const struct a64x_layout *l
         if (buf) {
             kfree_data(buf, lay->fs_size);
         }
+    }
+    uint32_t nrange = lay->nsect;
+    for (uint32_t c = 0; c < lay->ncand; c++) {
+        if (cand_hit & (1ull << c)) {
+            nrange++;
+        }
+    }
+    if (nrange > A64X_MAX_SECTIONS) {
+        error = ENOTSUP;
+        goto out;
+    }
+    if (nrange) {
+        im->ranges = kalloc_data(nrange * sizeof(struct a64x_range), Z_WAITOK);
+        if (!im->ranges) {
+            error = ENOMEM;
+            goto out;
+        }
+        im->ranges_cap = nrange;
+        if (lay->nsect) {
+            bcopy(lay->sect, im->ranges, lay->nsect * sizeof(struct a64x_range));
+        }
+        uint32_t nr = lay->nsect;
+        for (uint32_t c = 0; c < lay->ncand; c++) {
+            if (cand_hit & (1ull << c)) {
+                uint64_t hi = 0;
+                if (os_add_overflow(lay->cand[c].off, lay->cand[c].size, &hi)) {
+                    error = EBADMACHO;
+                    goto out;
+                }
+                im->ranges[nr].lo = lay->cand[c].off;
+                im->ranges[nr].hi = hi;
+                nr++;
+            }
+        }
+        for (uint32_t i = 1; i < nr; i++) {
+            for (uint32_t j = i; j > 0 && im->ranges[j - 1].lo > im->ranges[j].lo; j--) {
+                struct a64x_range t = im->ranges[j];
+                im->ranges[j] = im->ranges[j - 1];
+                im->ranges[j - 1] = t;
+            }
+        }
+        uint32_t merged = 0;
+        for (uint32_t i = 0; i < nr; i++) {
+            if (merged > 0 && im->ranges[i].lo <= im->ranges[merged - 1].hi) {
+                if (im->ranges[i].hi > im->ranges[merged - 1].hi) {
+                    im->ranges[merged - 1].hi = im->ranges[i].hi;
+                }
+            } else {
+                im->ranges[merged++] = im->ranges[i];
+            }
+        }
+        im->nranges = merged;
+    }
+    if (!page || !im->data) {
+        goto out;
     }
     if (lay->dic_size && lay->dic_size <= (1u << 20)) {
         uint8_t *buf = kalloc_data(lay->dic_size, Z_WAITOK);
@@ -374,6 +485,7 @@ out:
     if (page) {
         kfree_data(page, A64X_PAGE);
     }
+    return error;
 }
 
 /* read the executable segment once and lay out its stubs; stub_delta must be fixed before */
@@ -465,7 +577,7 @@ static int a64x_map_image(vm_map_t map, struct vnode *vp, off_t slice_off, const
         OSIncrementAtomic64((SInt64 *)&a64x_images_marked);
         return 0;
     }
-    if (kind == A64X_IMAGE_ARM64E) {
+    {
         int error = a64x_map_translation(map, vp, slice_off, lay, exec_va);
         if (error != ENOENT) {
             return error;
@@ -478,17 +590,6 @@ static int a64x_map_image(vm_map_t map, struct vnode *vp, off_t slice_off, const
     im->text_size = lay->exec_filesize;
     im->npages = (uint32_t)((lay->exec_filesize + A64X_PAGE - 1) / A64X_PAGE);
     im->cursor = kalloc_data((im->npages + 1) * sizeof(uint32_t), Z_WAITOK | Z_ZERO);
-    im->nranges = lay->nsect;
-    im->ranges = kalloc_data(lay->nsect * sizeof(struct a64x_range), Z_WAITOK);
-    bcopy(lay->sect, im->ranges, lay->nsect * sizeof(struct a64x_range));
-    /* sections are in file order already; keep the table sorted for the binary search */
-    for (uint32_t i = 1; i < im->nranges; i++) {
-        for (uint32_t j = i; j > 0 && im->ranges[j - 1].lo > im->ranges[j].lo; j--) {
-            struct a64x_range t = im->ranges[j];
-            im->ranges[j] = im->ranges[j - 1];
-            im->ranges[j - 1] = t;
-        }
-    }
     if (vnode_ref(vp)) {
         im->refs = 1;
         a64x_image_release(im);
@@ -500,8 +601,16 @@ static int a64x_map_image(vm_map_t map, struct vnode *vp, off_t slice_off, const
     vm_map_offset_t image_end = exec_va + (lay->vm_end - lay->exec_vmaddr);
     vm_map_offset_t stub_va = vm_map_round_page(image_end, vm_map_page_mask(map));
     im->stub_delta = (int64_t)(stub_va - exec_va);
-    a64x_find_islands(im, lay, slice_off);
-    int error = a64x_scan(im);
+    int error = a64x_find_islands(im, lay, slice_off);
+    if (!error) {
+        error = a64x_scan(im);
+    }
+    if (error) {
+        im->refs = 1;
+        a64x_image_release(im);
+        printf("a64x: %s: translation failed (%d)\n", vp->v_name ? vp->v_name : "?", error);
+        return error;
+    }
     if (!error && kind == A64X_IMAGE_ARM64 && im->changed == 0) {
         /* plain arm64 with nothing the A57 lacks: keep the file's own mapping (byte-identical, no pager) */
         im->refs = 1;
@@ -845,6 +954,9 @@ extern int a64x_copyio_rmw(user_addr_t uaddr, uint32_t size, uint32_t op, uint64
 extern int a64x_copyio_cas(user_addr_t uaddr, uint32_t size, uint64_t expected, uint64_t desired, uint64_t *old);
 extern int a64x_copyio_casp(user_addr_t uaddr, uint64_t e0, uint64_t e1, uint64_t d0, uint64_t d1, uint64_t *o0,
                             uint64_t *o1);
+extern bool a64x_pc_is_jit(user_addr_t pc);
+extern bool a64x_user_neon_d(uint32_t regno, uint64_t *out);
+extern int switch_user_cache_maintenance(user_addr_t va, vm_size_t len, uint32_t op);
 
 static uint64_t reg(arm_saved_state_t *s, uint32_t r)
 {
@@ -862,9 +974,57 @@ static void set_reg(arm_saved_state_t *s, uint32_t r, uint64_t v)
     }
 }
 
+static void set_pc(arm_saved_state_t *s, uint64_t pc)
+{
+#if XNU_12377_121_6
+    set_user_saved_state_pc(s, (register_t)pc);
+#else
+    set_saved_state_pc(s, (register_t)pc);
+#endif
+}
+
+static void set_lr(arm_saved_state_t *s, uint64_t lr)
+{
+#if XNU_12377_121_6
+    set_user_saved_state_lr(s, (register_t)lr);
+#else
+    set_saved_state_lr(s, (register_t)lr);
+#endif
+}
+
+static void set_nzcv_z(arm_saved_state_t *s, bool z)
+{
+#if XNU_12377_121_6
+    mask_user_saved_state_cpsr(s, z ? PSR64_Z : 0, PSR64_NZCV_MASK);
+#else
+    mask_saved_state_cpsr(s, z ? PSR64_Z : 0, PSR64_NZCV_MASK);
+#endif
+}
+
 int a64x_emulate_user(arm_saved_state_t *state, uint32_t w)
 {
     enum a64x_class c = a64x_classify(w);
+    user_addr_t pc = get_saved_state_pc(state);
+    uint32_t out = 0;
+    bool is_jit = false;
+
+    if (!(pc & 3) && a64x_rewrite1(w, &out)) {
+        is_jit = a64x_pc_is_jit(pc);
+        if (is_jit) {
+            uint64_t patched_old = 0;
+            if (a64x_copyio_cas(pc, 2, w, out, &patched_old) == 0 &&
+                switch_user_cache_maintenance(pc, sizeof(uint32_t), SWITCH_UCM_SYNC_I) == 0) {
+#if DEVELOPMENT || DEBUG
+                if ((uint32_t)patched_old == w) {
+                    OSIncrementAtomic64((SInt64 *)&a64x_jit_patches);
+                }
+#endif
+                switch_a64x_trap_noted(c, true);
+                return 1;
+            }
+        }
+    }
+
     uint32_t rs = (w >> 16) & 31, rn = (w >> 5) & 31, rt = w & 31, size = w >> 30;
     user_addr_t addr = rn == 31 ? get_saved_state_sp(state) : get_saved_state_reg(state, rn);
     uint64_t old = 0, old2 = 0;
@@ -908,22 +1068,97 @@ int a64x_emulate_user(arm_saved_state_t *state, uint32_t w)
             }
         }
         break;
-    default: {
-        /*
-		 * Not emulated: pointer authentication (by design: it is rewritten, never trapped; JIT is refused so no
-		 * untranslated arm64e code exists), FP16/FCMA/FJCVTZS/RDM (the translators give them stubs; here only a
-		 * marked image breaking its promise or a form without a stub arrives), and A13+ features (code that uses
-		 * them checked hw.optional first). One line each for the first ones, then SIGILL as before.
-		 */
-        OSIncrementAtomic64((SInt64 *)&a64x_traps_unhandled);
-        static int logged;
-        if (logged < 32) {
-            logged++;
-            printf("a64x: %s[%d] pc 0x%llx: %08x (%s) not emulated\n", current_proc()->p_comm,
-                   proc_getpid(current_proc()), get_saved_state_pc(state), w, a64x_class_name(c));
+    case A64X_JSCVT: {
+        uint64_t bits = 0;
+        if (!a64x_user_neon_d(rn, &bits)) {
+            return 0;
         }
-        return 0;
+        uint32_t res = 0;
+        bool exact = a64x_eval_jscvt(bits, &res);
+        set_reg(state, rt, res);
+        set_nzcv_z(state, exact);
+        error = 0;
+        break;
     }
+    case A64X_PAC_LDRA: {
+        int32_t imm = 0;
+        bool wb = false;
+        uint64_t val = 0;
+        a64x_decode_ldra(w, &imm, &wb);
+        user_addr_t ea = addr + (int64_t)imm;
+        user_addr_t load_ea = (ea & (1ull << 55)) ? ea : (ea & ~0xFF00000000000000ull);
+        /* Single-copy atomic 64-bit load on 8-byte-aligned addresses; LDRAA/LDRAB allows unaligned loads. */
+        error = (load_ea & 7) == 0 ? copyin_atomic64(load_ea, &val) : copyin(load_ea, &val, sizeof(val));
+        if (!error) {
+            if (wb) {
+                if (rn == 31) {
+                    set_saved_state_sp(state, (register_t)ea);
+                } else {
+                    set_reg(state, rn, ea);
+                }
+            }
+            set_reg(state, rt, val);
+        }
+        break;
+    }
+    case A64X_SB:
+        __builtin_arm_dsb(DSB_SY);
+        __builtin_arm_isb(ISB_SY);
+        error = 0;
+        break;
+    case A64X_PAC_DP:
+    case A64X_PAC_XPAC:
+        if (!is_jit) {
+            goto unhandled;
+        }
+        error = 0;
+        break;
+    case A64X_PAC_PACGA:
+        if (!is_jit) {
+            goto unhandled;
+        }
+        set_reg(state, rt, 0);
+        error = 0;
+        break;
+    case A64X_PAC_RET:
+        if (!is_jit) {
+            goto unhandled;
+        }
+        set_pc(state, get_saved_state_lr(state));
+        OSIncrementAtomic64((SInt64 *)&a64x_traps);
+        switch_a64x_trap_noted(c, false);
+        return 1;
+    case A64X_PAC_BR:
+        if (!is_jit) {
+            goto unhandled;
+        }
+        set_pc(state, reg(state, rn));
+        OSIncrementAtomic64((SInt64 *)&a64x_traps);
+        switch_a64x_trap_noted(c, false);
+        return 1;
+    case A64X_PAC_BLR: {
+        if (!is_jit) {
+            goto unhandled;
+        }
+        uint64_t target = reg(state, rn);
+        set_lr(state, pc + 4);
+        set_pc(state, target);
+        OSIncrementAtomic64((SInt64 *)&a64x_traps);
+        switch_a64x_trap_noted(c, false);
+        return 1;
+    }
+    default:
+    unhandled:
+        {
+            OSIncrementAtomic64((SInt64 *)&a64x_traps_unhandled);
+            static int logged;
+            if (logged < 32) {
+                logged++;
+                printf("a64x: %s[%d] pc 0x%llx: %08x (%s) not emulated\n", current_proc()->p_comm,
+                       proc_getpid(current_proc()), pc, w, a64x_class_name(c));
+            }
+            return 0;
+        }
     }
     if (error) {
         return 0; /* the fault is reported as the undefined instruction it was */
@@ -934,24 +1169,30 @@ int a64x_emulate_user(arm_saved_state_t *state, uint32_t w)
     add_saved_state_pc(state, 4);
 #endif
     OSIncrementAtomic64((SInt64 *)&a64x_traps);
+    switch_a64x_trap_noted(c, false);
     return 1;
 }
 
-SYSCTL_NODE(_kern, OID_AUTO, a64x, CTLFLAG_RW | CTLFLAG_LOCKED, 0, "arm64e translation");
-SYSCTL_QUAD(_kern_a64x, OID_AUTO, images, CTLFLAG_RD | CTLFLAG_LOCKED, &a64x_images, "");
-SYSCTL_QUAD(_kern_a64x, OID_AUTO, text_pages, CTLFLAG_RD | CTLFLAG_LOCKED, &a64x_pages, "");
-SYSCTL_QUAD(_kern_a64x, OID_AUTO, cache_pages, CTLFLAG_RD | CTLFLAG_LOCKED, &a64x_cache_pages, "");
-SYSCTL_QUAD(_kern_a64x, OID_AUTO, stub_words, CTLFLAG_RD | CTLFLAG_LOCKED, &a64x_stub_words, "");
-SYSCTL_QUAD(_kern_a64x, OID_AUTO, stub_mismatch, CTLFLAG_RD | CTLFLAG_LOCKED, &a64x_mismatch, "");
-SYSCTL_QUAD(_kern_a64x, OID_AUTO, traps, CTLFLAG_RD | CTLFLAG_LOCKED, &a64x_traps, "");
-SYSCTL_QUAD(_kern_a64x, OID_AUTO, traps_unhandled, CTLFLAG_RD | CTLFLAG_LOCKED, &a64x_traps_unhandled, "");
+SYSCTL_NODE(_kern, OID_AUTO, a64x, CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_KERN, 0, "arm64e translation");
+SYSCTL_QUAD(_kern_a64x, OID_AUTO, images, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_images, "");
+SYSCTL_QUAD(_kern_a64x, OID_AUTO, text_pages, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_pages, "");
+SYSCTL_QUAD(_kern_a64x, OID_AUTO, cache_pages, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_cache_pages, "");
+SYSCTL_QUAD(_kern_a64x, OID_AUTO, stub_words, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_stub_words, "");
+SYSCTL_QUAD(_kern_a64x, OID_AUTO, stub_mismatch, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_mismatch, "");
+SYSCTL_QUAD(_kern_a64x, OID_AUTO, traps, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_traps, "");
+SYSCTL_QUAD(_kern_a64x, OID_AUTO, traps_unhandled, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_traps_unhandled,
+            "");
+#if DEVELOPMENT || DEBUG
+SYSCTL_QUAD(_kern_a64x, OID_AUTO, jit_patches, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_jit_patches, "");
+#endif
 /* arm64 images that needed nothing (mapped as is) and images marked as built for this core */
-SYSCTL_QUAD(_kern_a64x, OID_AUTO, images_native, CTLFLAG_RD | CTLFLAG_LOCKED, &a64x_images_native, "");
-SYSCTL_QUAD(_kern_a64x, OID_AUTO, images_marked, CTLFLAG_RD | CTLFLAG_LOCKED, &a64x_images_marked, "");
+SYSCTL_QUAD(_kern_a64x, OID_AUTO, images_native, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_images_native, "");
+SYSCTL_QUAD(_kern_a64x, OID_AUTO, images_marked, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_images_marked, "");
 /* images of installed staged system apps mapped from the pretranslated tree */
-SYSCTL_QUAD(_kern_a64x, OID_AUTO, images_installed, CTLFLAG_RD | CTLFLAG_LOCKED, &a64x_images_installed, "");
+SYSCTL_QUAD(_kern_a64x, OID_AUTO, images_installed, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_images_installed,
+            "");
 /* words of __text found to be data (assembler tables) and left untranslated */
-SYSCTL_QUAD(_kern_a64x, OID_AUTO, island_words, CTLFLAG_RD | CTLFLAG_LOCKED, &a64x_island_words, "");
+SYSCTL_QUAD(_kern_a64x, OID_AUTO, island_words, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_island_words, "");
 
 bool switch_a64x_mmap_refused(vm_map_t map, struct vnode *vp, off_t file_pos, vm_map_offset_t addr, vm_map_size_t size)
 {

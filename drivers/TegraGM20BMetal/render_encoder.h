@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <utility>
 #include <vector>
+#include "alpha_control.h"
 #include "attachment_order.h"
 #include "attachment_view.h"
 #include "band_rates.h"
@@ -14,11 +15,14 @@
 #include "depth_bias.h"
 #include "depth_stencil_state.h"
 #include "descriptors.h"
+#include "draw_bands.h"
 #include "draw_refusal.h"
 #include "draw_times.h"
 #include "fetch_order.h"
+#include "fetch_route.h"
 #include "geometry.h"
 #include "icb.h"
+#include "mixed_samples.h"
 #include "mme.h"
 #include "pack.h"
 #include "pass_desc.h"
@@ -277,8 +281,14 @@ public:
     // A counter sample where the pass starts: in its prologue, after the barrier to the work before
     void timestampAtStart(uint64_t va, counters::Point point);
     void end();
+#if SWITCH_METAL_DIAGNOSTICS
+    // nvn_probes.cpp
+    void nvnPassEnd();
+    void nvnKnob(Push &p);
+    void nvnZcullFormats(Push &p, const DepthStencilAttachment &zs, uint32_t &regionFormat, uint32_t &zFormat);
+#endif
 
-    void continuePass(uint8_t stores);
+    void continuePass(uint8_t stores, uint8_t discards = 0);
     // A pass whose draws bind colours `storage` as storage images, `arrayed` of them as 2D arrays, fused into this one:
     // false where this pass's begin laid those colours out otherwise (a colour bound as storage takes an uncompressed
     // backing where a storage form cannot view compressed memory, one bound as a 2D array a block-linear target), else
@@ -390,6 +400,25 @@ private:
         return amplifications_ > 1 && !amplifying_;
     }
 
+    // Each SlotGuestBase hole of `pl` (Pipeline::guestBases) given its slot's bound address in `want`; the push words it
+    // wrote
+    uint32_t guestBaseWords(const Pipeline &pl, uint32_t (&want)[32]);
+    // Whether a hole's slot was bound again since the last draw's push words (moved_)
+    bool guestSlotMoved(const Pipeline &pl) const;
+
+    // How a draw of `pl` keeps a mixed pass's sample rule (mixed_samples.h), whole where HW Test's probe row asks
+    // (kTirProbeWhole)
+    MixedDraw mixedForm(const Pipeline &pl) const
+    {
+        const MixedDraw form =
+            mixedDraw(pl, ds_, pass_.depthStencil, samples_, rasterSamples_, (alphaWanted_ & kAlphaToCoverage) != 0);
+#if SWITCH_METAL_DIAGNOSTICS
+        if (splitsSamples(form) && (tirProbe_ & kTirProbeWhole))
+            return MixedDraw::Whole;
+#endif
+        return form;
+    }
+
     bool runsPerAmplification(uint32_t primitive, uint32_t count, uint32_t instances, bool indexed);
     void amplificationScratch(Push &p, const Pipeline &pl);
     void amplifyCall(const Pipeline &pl, bool indexed, uint32_t first, uint32_t count, uint32_t instances,
@@ -450,10 +479,10 @@ private:
     void emitDraw(bool indexed, uint32_t first, uint32_t count, uint32_t instances, uint32_t root,
                   uint32_t baseInstance);
     uint64_t drawUnits(uint32_t instances) const;
-    uint32_t drawBands(uint32_t vertices, uint32_t instances, uint64_t units) const;
+    BandGrid drawBands(uint32_t vertices, uint32_t instances, uint64_t units) const;
     void noteCandidate(uint64_t units, uint32_t bands);
 #if SWITCH_METAL_DIAGNOSTICS
-    void notePrice(uint64_t units, uint32_t bands) const;
+    void notePrice(uint64_t units, BandGrid grid, uint32_t instances) const;
 #endif
     bool measurePass(bool drained);
     uint32_t passDraws_ = 0;
@@ -558,7 +587,7 @@ private:
     Pipeline *splitTwin(Pipeline *pl, WrittenRegion::Analysis &analysis) const;
     // the facts of a draw of `pl` its bindings decide, worked out where the bindings moved since the last draw, never as
     // one is bound
-    uint32_t bindingFacts(const Pipeline &pl);
+    uint32_t bindingFacts(const Pipeline &pl, const VariantTable *variants);
     const Pipeline *factsPipeline_ = nullptr;
     uint64_t factsRevision_ = 0;
     uint32_t facts_ = 0;
@@ -690,7 +719,7 @@ private:
     // `pl`, its fetch-free form where its rung's rule holds, else its barrier twin where an attachment of this pass cannot
     // be viewed as one of its storage images or rule fetch.twin (twin_rule.h) takes the draw's shape
     Pipeline *formFor(Pipeline *pl, const FetchDraw &shape);
-    Pipeline *fetchFreeFor(const Pipeline &pl);
+    Pipeline *fetchFreeFor(const Pipeline &pl, StorageRoute *route = nullptr);
     bool matrixConstants(const Pipeline &pl, const char **why);
     uint32_t colorTargets() const;
     StorageFallback storageFallback(const Pipeline &pl) const;

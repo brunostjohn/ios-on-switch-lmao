@@ -28,7 +28,7 @@ struct SwitchMetalPassEntry {
 // `d`'s contents, as the key a find and a keep take: false where `d` is not of Metal's own descriptor classes, a sample
 // buffer attachment names a buffer (counter marks read and clear them on the pass's copy), or it names an object that is no
 // texture or buffer of this device
-bool gm20bPassKey(MTLRenderPassDescriptor *d, std::vector<uint8_t> &key, uint64_t &hash);
+bool gm20bPassKey(MTLRenderPassDescriptor *d, std::vector<uint8_t> &key, uint64_t &hash, bool *hasCounters = nullptr);
 // A command buffer owns its bank from gm20bTakeRecording to gm20bRecordingDone: no trim touches an entry it found.
 SwitchMetalPassEntry *gm20bPassFind(SwitchMetalCommandBuffer *cb, const std::vector<uint8_t> &key, uint64_t hash);
 // The pass just opened from `copy`, kept for the next one of the same contents

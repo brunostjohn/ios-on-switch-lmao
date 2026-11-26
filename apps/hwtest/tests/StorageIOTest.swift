@@ -1,6 +1,8 @@
 import Darwin
 import Foundation
 import HWTestCore
+import HWTestKit
+import HWTestShared
 
 /// The SD driver's own accounting (kern.switch_sd, debug kernels; drivers/NativeSwitchBlock/SwitchSdIo.h) around this
 /// test's reads: random 4 KiB pages of a 16 MiB file with F_NOCACHE into page-aligned memory, one reader at a time and

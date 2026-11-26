@@ -22,7 +22,7 @@ std::vector<uint32_t> publishedWords;
 uint32_t arena[SWITCH_HOST1X_ARENA_WORDS], reservedWords, submittedSyncpt, submittedThreshold;
 uint32_t arenaShort, arenaWaits, cancels, reservedCapacity;
 uint32_t begins, aborts, commits, retained, bridges, released, roomWaits, submits, powerUses, powerDones;
-int bridgeError, submitError, retainError, statusError, powerError, semanticResult = 1, batchSettled = 1;
+int bridgeError, bridgeFailed, submitError, retainError, statusError, powerError, semanticResult = 1, batchSettled = 1;
 std::vector<switch_host1x_fence *> fences;
 std::vector<uint32_t> fenceBounds, watchedBounds;
 std::map<std::pair<uint32_t, uint64_t>, int> producerPhysical;  // by engine and value; absent: ran
@@ -34,7 +34,7 @@ struct Notification {
 
 std::vector<Notification> notifications;
 uint64_t nextTestSequence = 0;
-bool transactionLocked, changeProducer, busyOnce;
+bool transactionLocked, changeProducer, busyOnce, failBridgeAfterSubmit;
 bool semanticCapture;
 uint32_t preparedBatches;
 
@@ -233,6 +233,11 @@ int switch_gpu_bridge_submit(const switch_gpu_backing_token *tokens, uint32_t co
         ++sourceTokens[0].value;
         changeProducer = false;
     }
+    if (failBridgeAfterSubmit) {
+        bridgeFailed = -5;
+        sourceTokens.clear();
+        failBridgeAfterSubmit = false;
+    }
     return 0;
 }
 
@@ -240,6 +245,11 @@ void switch_gpu_bridge_syncpoint(const switch_gpu_bridge *, uint32_t *id, uint32
 {
     *id = 170;
     *threshold = 0x1000001;
+}
+
+int switch_gpu_bridge_failed(const switch_gpu_bridge *)
+{
+    return bridgeFailed;
 }
 
 int switch_gpu_bridge_covers(const switch_gpu_bridge *bridge, const switch_gpu_backing_token *token)
@@ -605,7 +615,7 @@ protected:
         begins = aborts = commits = retained = bridges = released = roomWaits = submits = preparedBatches = 0;
         reservedWords = submittedSyncpt = submittedThreshold = arenaShort = arenaWaits = cancels = reservedCapacity = 0;
         powerUses = powerDones = 0;
-        bridgeError = submitError = retainError = statusError = powerError = 0;
+        bridgeError = bridgeFailed = submitError = retainError = statusError = powerError = 0;
         semanticResult = batchSettled = 1;
         fences.clear();
         fenceBounds.clear();
@@ -614,7 +624,7 @@ protected:
         notifications.clear();
         for (auto &stage : Stages::stages)
             stage = {};
-        transactionLocked = changeProducer = busyOnce = semanticCapture = false;
+        transactionLocked = changeProducer = busyOnce = failBridgeAfterSubmit = semanticCapture = false;
         sourceTokens.clear();
         bridgePhysicalAtRelease.clear();
         promiseTokens.clear();
@@ -1538,4 +1548,16 @@ TEST_F(SwitchNVDECSubmitTest, ASubmitIntoAFullQueueSleepsUntilTheOldestRetiresAn
     EXPECT_TRUE(waitedForRoom);
     EXPECT_EQ(gQueue.completed, nextTestSequence + 1);
     EXPECT_EQ(fence, nextTestSequence + SwitchNVDECQueue::kSlots + 1);
+}
+
+TEST_F(SwitchNVDECSubmitTest, AFailedBridgeBetweenPassesRefusesSubmissionBeforeHardwarePublication)
+{
+    gpu();
+    failBridgeAfterSubmit = true;
+    EXPECT_EQ(submit(), -5);
+    EXPECT_EQ(submits, 0u);
+    EXPECT_EQ(commits, 0u);
+    EXPECT_EQ(gQueue.count, 0u);
+    EXPECT_EQ(bridges, 1u);
+    EXPECT_EQ(released, 1u);
 }

@@ -1,5 +1,6 @@
 import Foundation
 import HWTestCore
+import HWTestGPU
 import UIKit
 
 /// ui.glass_live's read-back loop, on a thread of its own so the display link keeps its frames: each presented frame

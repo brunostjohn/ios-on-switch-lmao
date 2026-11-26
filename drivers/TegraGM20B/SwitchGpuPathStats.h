@@ -11,7 +11,7 @@ extern "C" {
 #endif
 
 enum switch_gpu_path {
-	SWITCH_GPU_PATH_INTERNAL_JOB, /* JobVisibility: a job that ended without its L2 flush */
+	SWITCH_GPU_PATH_INTERNAL_JOB, /* JobVisibility: a job that ended without its L2 flush, neither External nor volatile */
 	SWITCH_GPU_PATH_EXTERNAL_JOB, /* JobVisibility: a job the runtime or the kernel made External */
 	SWITCH_GPU_PATH_UNLOCKED_WRITE, /* External because it wrote an IOSurface over its creator's memory */
 	SWITCH_GPU_PATH_VOLATILE_BIND, /* JobVisibility: a control BO bound GPU-volatile */
@@ -39,6 +39,7 @@ enum switch_gpu_path {
 	SWITCH_GPU_PATH_WRITER_PROMISE, /* method 34: a writer promise made (SwitchGpuWriterPromise.h) */
 	SWITCH_GPU_PATH_PROMISE_WAIT, /* a job, present or VIC/NVDEC job that waits on the GPU for another's writer promise */
 	SWITCH_GPU_PATH_PROMISE_CPU_RELEASE, /* a pending writer promise's word written by the CPU (cancel, kill, close, give-up) */
+	SWITCH_GPU_PATH_VOLATILE_JOB, /* JobVisibility: a job whose writes are GPU-volatile (no L2 flush, not External) */
 	SWITCH_GPU_PATH_COUNT
 };
 

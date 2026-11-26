@@ -4,7 +4,9 @@
 #include "SwitchVICMapping.h"
 #include "SwitchVICJobs.h"
 #include "SwitchVICSurfaceAccess.h"
+#include "SwitchVICTiledDst.h"
 #include "SwitchNativeVICImage.h"
+#include "TegraVICBounce.h"
 #include "../TegraGM20B/TegraGM20BLayout.h"
 
 namespace {
@@ -77,13 +79,33 @@ int switch_vic_transform(const TegraVICSurface *source, const TegraVICSurface *d
     work->refs = 1;
     work->completion = completion;
     work->context = context;
-    int error = switch_vic_surface_access(destination, true, &work->access[1]);
+    const TegraVICTraits *traits = tegra_vic_traits();
+    int error = switch_vic_surface_access_destination(destination, &work->access[1], dstReserve);
+    SwitchVICTiledDst tiledDst = {};
+    bool directTiledDst = false;
+    if (!error) {
+        auto *output = work->access[1].backing;
+        const uint64_t destinationExtent = tegra_vic_surface_extent(&destination->desc);
+        directTiledDst = switch_vic_tiled_dst(destination, output, work->access[1].offset, plan, traits, &tiledDst);
+        if (!directTiledDst &&
+            (destinationExtent > UINT64_MAX - work->access[1].offset ||
+             !switch_vic_pitch_backing(output, work->access[1].offset + destinationExtent) ||
+             tegra_vic_bounce_needed(&destination->desc, tegra_vic_pitch_align(traits, false)) != 1)) {
+            release(work);
+            return 0;
+        }
+    }
     if (!error && plan->readsSource) {
         const int native = switch_native_surface_acquire(source, &work->native, false);
-        if (native == -2 || native == -95 || native == SWITCH_GPU_BACKING_STALE)
+        if (native == -2 || native == -95 || native == SWITCH_GPU_BACKING_STALE) {
+            if (tegra_vic_bounce_needed(&source->desc, tegra_vic_pitch_align(traits, true)) != 1) {
+                release(work);
+                return 0;
+            }
             error = switch_vic_surface_access(source, false, &work->access[0], work->access[1].owned != nullptr);
-        else
+        } else {
             error = native;
+        }
     }
     if (error) {
         release(work);
@@ -91,11 +113,8 @@ int switch_vic_transform(const TegraVICSurface *source, const TegraVICSurface *d
     }
     auto *input = work->native.owner ? work->native.native : work->access[0].backing;
     auto *output = work->access[1].backing;
-    const uint64_t destinationExtent = tegra_vic_surface_extent(&destination->desc);
     const uint64_t sourceExtent = plan->readsSource ? tegra_vic_surface_extent(&source->desc) : 0;
-    if (destinationExtent > UINT64_MAX - work->access[1].offset ||
-        !switch_vic_pitch_backing(output, work->access[1].offset + destinationExtent) ||
-        (plan->readsSource && !work->native.owner &&
+    if ((plan->readsSource && !work->native.owner &&
          (sourceExtent > UINT64_MAX - work->access[0].offset ||
           !switch_vic_pitch_backing(input, work->access[0].offset + sourceExtent))) ||
         (plan->readsSource && (input == output || work->native.logical == output))) {
@@ -110,8 +129,9 @@ int switch_vic_transform(const TegraVICSurface *source, const TegraVICSurface *d
         return -12;
     }
     TegraVICImage src = {}, dst = {};
-    const char *why = tegra_vic_image_from(
-        &destination->desc, switch_vic_mapping_address(work->mappings[1]) + work->access[1].offset, &dst);
+    const uint64_t dstBase = switch_vic_mapping_address(work->mappings[1]);
+    const char *why = directTiledDst ? switch_vic_tiled_image(destination, tiledDst, dstBase, &dst)
+                                     : tegra_vic_image_from(&destination->desc, dstBase + work->access[1].offset, &dst);
     if (chromaSite)
         dst.chromaSite = chromaSite;
     if (!why && plan->readsSource) {

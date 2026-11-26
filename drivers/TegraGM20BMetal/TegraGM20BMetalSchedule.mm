@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #import "TegraGM20BMetalInternal.h"
+#include "compute.h"
+#include "compute_lookup.h"
 #include "scheduled_wait.h"
 #include "texel_rows.h"
 #include "TegraGM20BJobABI.h"
@@ -236,6 +238,8 @@ static bool canFastPathEmpty(SwitchMetalCommandBuffer *cb)
     return true;
 }
 
+static bool scheduleAppEarly(SwitchMetalCommandBuffer *cb, bool atCommit);
+
 void commitBuffer(SwitchMetalCommandBuffer *cb)
 {
     gm20b::followers().committing();
@@ -258,6 +262,8 @@ void commitBuffer(SwitchMetalCommandBuffer *cb)
     }
 #endif
     armEventWaits(cb);
+    if (r.raw->role() != gm20b::Device::Role::RenderServer)
+        scheduleAppEarly(cb, true);
     SWITCH_METAL_DIAGNOSTIC(r.stats.deferred++);
     if (const uint32_t submitter = r.submitThread.load(std::memory_order_acquire))
         cb->_submitOwner.setOwner(submitter);
@@ -367,12 +373,27 @@ static void earlyWrittenSurfaces(SwitchMetalCommandBuffer *cb, std::vector<uint6
     });
 }
 
+// A refusal the kernel answered once per process: an early schedule it refuses leaves Core Animation waiting for the
+// submit worker's encode every frame
+static void noteEarlyRefused(int kr, size_t surfaces)
+{
+    static std::atomic<bool> told{false};
+    if (!told.exchange(true, std::memory_order_relaxed))
+        os_log_error(
+            gm20bLog(),
+            "SwitchMetal: the kernel refused the render server's early writer promise for %zu surfaces (0x%x): "
+            "its frames wait for their encode",
+            surfaces, kr);
+}
+
 static bool promiseWritesEarly(SwitchMetalCommandBuffer *cb, const std::vector<uint64_t> &handles)
 {
     if (handles.empty())
         return true;
-    if (handles.size() > size_t(TegraGM20BMaxJobPromises) * TegraGM20BMaxPromiseUses)
+    if (handles.size() > size_t(TegraGM20BMaxJobPromises) * TegraGM20BMaxPromiseUses) {
+        noteEarlyRefused(kIOReturnNoSpace, handles.size());
         return false;
+    }
     {
         std::lock_guard<gm20b::Mutex> l(cb->_lock);
         if (cb->_promised.load(std::memory_order_relaxed) || cb->_promisesTaken)
@@ -384,9 +405,11 @@ static bool promiseWritesEarly(SwitchMetalCommandBuffer *cb, const std::vector<u
                                          handles.begin() +
                                              ptrdiff_t(std::min(handles.size(), at + TegraGM20BMaxPromiseUses)));
         uint32_t id = 0;
-        if (!gRM->raw->promise(part, id)) {
+        int kr = KERN_SUCCESS;
+        if (!gRM->raw->promise(part, id, &kr)) {
             for (uint32_t prior : made)
                 gRM->raw->cancelPromise(prior, false);
+            noteEarlyRefused(kr, handles.size());
             return false;
         }
         made.push_back(id);
@@ -408,37 +431,84 @@ static bool promiseWritesEarly(SwitchMetalCommandBuffer *cb, const std::vector<u
     return true;
 }
 
-static bool tryEarlySchedule(GM20BState &r, SwitchMetalCommandBuffer *cb, bool queueHead, bool workerBusy,
-                             bool readyChecked)
+// An app's command buffer is scheduled once its dependencies (shared events) are met and its queue's earlier command
+// buffer is scheduled, before its encode and its kernel submission: SubmitJob waits in the kernel for room on the app's
+// channel while the GPU is behind (gpu_exec.c tgm_chan_wait_ready), and Metal's waitUntilScheduled does not wait on GPU
+// progress (25 Nov: Maps' main thread hung 603 ms in endFrame's waitUntilScheduled behind the worker's room wait). An
+// app's drawable is presented at its completion (deferPresent), so no present reads a surface before the kernel knows
+// its writes. The render server keeps tryEarlySchedule's promise path. At the commit (the committing thread, before the
+// worker is handed the command buffer) it needs its queue's earlier one scheduled; at its queue head (the worker) that
+// holds by the queue's order.
+static bool scheduleAppEarly(SwitchMetalCommandBuffer *cb, bool atCommit)
 {
-    if (r.raw->role() != gm20b::Device::Role::RenderServer)
-        return false;
     if (cb->_scheduledSent.load(std::memory_order_acquire) || cb->_held.load(std::memory_order_acquire) ||
         cb->_segError.set() || cb->_segs.empty() || cb->_predicates.recorded())
-        return false;
-    const bool allChecked = readyChecked && cb->_segs.size() == 1;
-    const bool variantPending = (cb->_pipelineVeto.load(std::memory_order_acquire) & VetoVariant) != 0;
-    if (!allChecked && (!cb->_computeJobs.empty() || variantPending))
         return false;
     for (const SwitchMetalSegment &seg : cb->_segs)
         if (seg.event || seg.held)
             return false;
+    // a pipeline still being made keeps it: its waitUntilScheduled lends the compile its priority (CompileWait)
+    if (cb->_pipelineVeto.load(std::memory_order_acquire) & VetoVariant)
+        return false;
+    for (const auto &[set, kernels] : cb->_computeJobs)
+        if (kernels->state() == gm20b::ComputeKernelSet<gm20b::ComputeState>::State::Pending)
+            return false;
+    const bool ordered = atCommit || cb->_enqueueState.load(std::memory_order_acquire) == 1;
+    if (ordered && cb->_before && !cb->_before->_scheduledTurn.ran())
+        return false;
+    SWITCH_METAL_DIAGNOSTIC(
+        gm20b::frameCpuCounts().early[size_t(gm20b::EarlyOutcome::Made)].fetch_add(1, std::memory_order_relaxed));
+    scheduled(cb);
+    if (!atCommit)
+        markQueueScheduled(cb);
+    return true;
+}
+
+static bool tryEarlySchedule(GM20BState &r, SwitchMetalCommandBuffer *cb, bool queueHead, bool workerBusy,
+                             bool readyChecked)
+{
+    if (r.raw->role() != gm20b::Device::Role::RenderServer)
+        return queueHead && scheduleAppEarly(cb, false);
+#if SWITCH_METAL_DIAGNOSTICS
+    // a commit's try is followed by its queue head's: the head's is the one counted
+    const auto refused = [queueHead](gm20b::EarlyOutcome why) {
+        if (queueHead)
+            gm20b::frameCpuCounts().early[size_t(why)].fetch_add(1, std::memory_order_relaxed);
+        return false;
+    };
+#else
+    const auto refused = [](auto) {
+        return false;
+    };
+#endif
+    using O = gm20b::EarlyOutcome;
+    if (cb->_scheduledSent.load(std::memory_order_acquire) || cb->_held.load(std::memory_order_acquire) ||
+        cb->_segError.set() || cb->_segs.empty() || cb->_predicates.recorded())
+        return refused(O::Shape);
+    const bool allChecked = readyChecked && cb->_segs.size() == 1;
+    const bool variantPending = (cb->_pipelineVeto.load(std::memory_order_acquire) & VetoVariant) != 0;
+    if (!allChecked && (!cb->_computeJobs.empty() || variantPending))
+        return refused(O::Pending);
+    for (const SwitchMetalSegment &seg : cb->_segs)
+        if (seg.event || seg.held)
+            return refused(O::Shape);
     const uint8_t enqueueState = cb->_enqueueState.load(std::memory_order_acquire);
     if (!queueHead && (cb->_queue->_unscheduled != 1 || enqueueState == 2))
         return false;
     if (enqueueState == 1 && cb->_before && !cb->_before->_scheduledTurn.ran())
-        return false;
+        return refused(O::Order);
     uint32_t remaining = 0;
     bool multiRange = false;
     gm20bPipelineEarlyWork(cb, gm20b::kEarlySchedulePasses, remaining, multiRange);
     if (!gm20b::earlySchedule(true, workerBusy, remaining, multiRange))
-        return false;
+        return refused(O::Small);
     static thread_local std::vector<uint64_t> handles;
     earlyWrittenSurfaces(cb, handles);
     if (!handles.empty() && hasEarlyPromisedHandle(handles))
-        return false;
+        return refused(O::Busy);
     if (!promiseWritesEarly(cb, handles))
-        return false;
+        return refused(O::Kernel);
+    SWITCH_METAL_DIAGNOSTIC(gm20b::frameCpuCounts().early[size_t(O::Made)].fetch_add(1, std::memory_order_relaxed));
     if (!handles.empty()) {
         earlyPromised().push_back({(__bridge void *)cb, handles});
         cb->_earlyPromised = true;
@@ -478,7 +548,7 @@ static void applyChange(GM20BState &r, const SwitchMetalScheduleChange &change)
             promiseWrites(cb, writtenSurfaces(cb));
             cb->_held = true;
             armBound(cb, cb->_queue->_heldBound);
-            cb->_submitOwner.clear();
+            cb->_submitOwner.clearIf(r.submitThread.load(std::memory_order_relaxed));
             gm20bChanged(cb);
         } else {
             const bool workerBusy = r.waiting.committed() > 1 || r.waiting.parked() != 0;
@@ -584,7 +654,7 @@ static void markHeld(std::vector<SwitchMetalCommandBuffer *> &buffers, bool held
         if (held && cb != head)
             armBound(cb, cb->_queue->_heldBound);
         if (held) {
-            cb->_submitOwner.clear();
+            cb->_submitOwner.clearIf(gRM->submitThread.load(std::memory_order_relaxed));
             gm20bChanged(cb);
         }
     }
@@ -705,7 +775,7 @@ void submitLoop()
                 if (wait == gm20b::HeadWait::compile)
                     gm20bSetCompileWaits(cb, std::move(compileWaits));
                 else
-                    cb->_submitOwner.clear();
+                    cb->_submitOwner.clearIf(selfPort);
                 SWITCH_METAL_DIAGNOSTIC(gm20bNoteParked(cb, unsigned(wait)));
                 if (!gm20b::holds(wait)) {
                     markHeld(marked, true);
@@ -732,7 +802,7 @@ void submitLoop()
             }
             r.waiting.release(ticket.key, marked);
             if (submitted) {
-                cb->_submitOwner.clear();
+                cb->_submitOwner.clearIf(selfPort);
                 r.waiting.retire(ticket);
                 markQueueScheduled(cb);
                 releaseEarlyPromised(cb);

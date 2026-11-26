@@ -4071,6 +4071,12 @@ int tegra_dfll_register(struct platform_device *pdev,
 		dev_err(td->dev, "built invalid LUT\n");
 		return ret;
 	}
+#if DEVELOPMENT || DEBUG
+	/* SWITCH: the LUT once, so a landing's output (cpu.dfll_landing's I2C_STS) reads as a voltage. */
+	dev_info(td->dev, "LUT %d outputs, %d..%d mV (output 1 %d mV, output %d %d mV), up to %lu kHz\n", td->lut_size,
+		 td->lut_uv[0] / 1000, td->lut_uv[td->lut_size - 1] / 1000, td->lut_uv[1] / 1000, td->lut_size / 2,
+		 td->lut_uv[td->lut_size / 2] / 1000, td->out_rate_max / 1000);
+#endif
 
 	mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (!mem) {

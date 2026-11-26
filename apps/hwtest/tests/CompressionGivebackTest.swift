@@ -2,6 +2,8 @@ import Darwin
 import Foundation
 import HWTestCore
 import HWTestGPU
+import HWTestKit
+import HWTestShared
 import Metal
 
 /// A private target whose compressed memory the kernel refused for a shortage asks again when this process gives some

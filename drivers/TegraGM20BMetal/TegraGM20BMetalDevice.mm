@@ -46,7 +46,7 @@
     d[@"pipeline_handoff_wakes"] = @(s.handoffWakes.load());
     static const char *const vetoes[VetoKinds] = {"-",        "counters",   "shadows", "variant", "probes",
                                                   "parallel", "ops",        "refused", "planar",  "native",
-                                                  "failed",   "other_work", "device",  "zcull",   "channel"};
+                                                  "failed",   "other_work", "device",  "channel"};
     for (uint32_t k = 0; k < VetoKinds; ++k)
         if (const uint64_t n = s.pipelineAbandons[k].load())
             d[[NSString stringWithFormat:@"pipeline_abandons.%s", vetoes[k]]] = @(n);
@@ -62,6 +62,8 @@
     d[@"pass_pixel_openings"] = @(gRM->raw->stats.passPixelOpenings.load());
     d[@"raster_ordered_draws"] = @(gRM->raw->stats.rasterOrderedDraws.load());
     d[@"banded_draws"] = @(gRM->raw->stats.bandedDraws.load());
+    d[@"mixed_covering_draws"] = @(gRM->raw->stats.mixedCovering.load());
+    d[@"mixed_stage_off_draws"] = @(gRM->raw->stats.mixedStageOff.load());
     d[@"bands"] = @(gRM->raw->stats.bands.load());
     d[@"learned_draws"] = @(gRM->raw->stats.learnedDraws.load());
     d[@"priced_static"] = @(gRM->raw->stats.pricedStatic.load());
@@ -74,13 +76,29 @@
     d[@"texture_readbacks"] = @(gRM->raw->stats.textureReadbacks.load());
     d[@"blend_kill_states"] = @(gRM->raw->stats.blendKillStates.load());
     d[@"blend_kill_binds"] = @(gRM->raw->stats.blendKillBinds.load());
+    d[@"blend_kill_pack_disagreements"] = @(gRM->raw->stats.blendKillPackDisagreements.load());
+    d[@"amplified_draws"] = @(gRM->raw->stats.amplifiedDraws.load());
     d[@"resolve_twod"] = @(gRM->raw->stats.resolveTwod.load());
     d[@"fill_twod"] = @(gRM->raw->stats.fillTwod.load());
     d[@"resolve_exact"] = @(gRM->raw->stats.resolveExact.load());
     d[@"resolve_twod_compressed"] = @(gRM->raw->stats.resolveTwodCompressed.load());
+    d[@"bos_probe_direct"] = @(gRM->raw->kernel().probeDirectBos.load());
+    d[@"bos_smmu"] = @(gRM->raw->kernel().smmuBos.load());
     d[@"zcull_passes"] = @(gRM->raw->stats.zcullPasses.load());
     d[@"zcull_invalidations"] = @(gRM->raw->stats.zcullInvalidations.load());
     d[@"zcull_loads"] = @(gRM->raw->stats.zcullLoads.load());
+    d[@"nvn_bounds_opened"] = @(gRM->raw->stats.nvnBoundsOpened.load());
+    d[@"nvn_stencil_passes"] = @(gRM->raw->stats.nvnStencilPasses.load());
+    d[@"nvn_format_passes"] = @(gRM->raw->stats.nvnFormatPasses.load());
+    d[@"nvn_discards"] = @(gRM->raw->stats.nvnDiscards.load());
+    d[@"subtile_writes"] = @(gRM->raw->stats.subtileWrites.load());
+    d[@"zcull_rules_kept"] = @(gRM->raw->stats.zcullRulesKept.load());
+    d[@"residency_set_uses"] = @(gRM->raw->stats.residencySetUses.load());
+    d[@"residency_named"] = @(gRM->raw->stats.residencyNamed.load());
+    d[@"zcull_carried"] = @(gRM->raw->stats.zcullCarried.load());
+    d[@"zcull_stores"] = @(gRM->raw->stats.zcullStores.load());
+    d[@"zcull_unstored"] = @(gRM->raw->stats.zcullUnstored.load());
+    d[@"zcull_carries_lost"] = @(gRM->raw->stats.zcullCarriesLost.load());
     d[@"state_segment_binds"] = @(gRM->raw->stats.segmentBinds.load());
     d[@"state_segment_words"] = @(gRM->raw->stats.segmentWords.load());
     d[@"state_segment_skips"] = @(gRM->raw->stats.segmentSkips.load());
@@ -189,7 +207,11 @@
         @"parked_heap_count" : @(d.stats.parkedHeaps.load()),
         @"heap_parks" : @(d.stats.heapParks.load()),
         @"heap_unparks_resident" : @(d.stats.heapUnparksResident.load()),
-        @"heap_unparks_reclaimed" : @(d.stats.heapUnparksReclaimed.load())
+        @"heap_unparks_reclaimed" : @(d.stats.heapUnparksReclaimed.load()),
+        @"scrubbed_bytes" : @(d.stats.scrubbedBytes.load()),
+        @"scrubbed_runs" : @(d.stats.scrubbedRuns.load()),
+        @"compressed_moves" : @(d.stats.compressedMoves.load()),
+        @"compressed_move_bytes" : @(d.stats.compressedMoveBytes.load())
     };
 }
 
@@ -264,6 +286,8 @@
 - (id<MTLCommandQueue>)newCommandQueue
 {
     SwitchMetalQueue *q = [SwitchMetalQueue new];
+    if (!q)
+        return nil;
     q->_device = self;
     return (id<MTLCommandQueue>)q;
 }
@@ -280,29 +304,47 @@
     return [self newCommandQueue];
 }
 
-- (id<MTLBuffer>)newBufferWithLength:(NSUInteger)n options:(MTLResourceOptions)o
+- (id<MTLBuffer>)allocBufferWithLength:(NSUInteger)n options:(MTLResourceOptions)o zero:(BOOL)zero
 {
-    SWITCH_API(ApiObject);
+    const uint64_t maxBo = gRM->raw->kernelInfo().max_bo_bytes;
+    if (maxBo && uint64_t(n) > maxBo)
+        return nil;
     SwitchMetalBuffer *b = [SwitchMetalBuffer new];
     b->_device = self;
     b->_options = o;
     // a shared buffer: write-combined (gm20b::Buffer::wc), as every one Core Animation makes is written by the CPU and read by the
     // GPU (its buffer pool, its gamma and weight tables: QuartzCore MetalBufferPool::allocate_buffer, options 0): nothing to clean
-    // before a draw reads it, nothing to scan for the vertices an indexed draw reads (r16: 600-1300 KB cleaned a command buffer)
+    // before a draw reads it, nothing to scan for the vertices an indexed draw reads (r16: 600-1300 KB cleaned a command buffer).
+    // An app's is L2-cached: each job that uses it drops the L2's lines first (TegraGM20BSurfaceHostWritten) and one that
+    // writes it flushes them before its fence (External). Bound L2-bypassing (VOL=1), every GPU access was a DRAM round trip:
+    // a fragment's atomic took 414 ns, metal.compute went from 1.6 ms to 440 ms. The render server's stay VOL=1 until a
+    // measurement says which binding its frames want: its hot states moved both ways across that change.
     const bool wc = (o & MTLResourceStorageModeMask) == MTLResourceStorageModeShared;
     const bool hostVisible = (o & MTLResourceStorageModeMask) != MTLResourceStorageModePrivate;
-    if (!gRM->raw->createBuffer(n ? n : 16, b->_raw, wc, hostVisible, wc)) {
+    bool bypassL2 = wc && gRM->raw->role() == gm20b::Device::Role::RenderServer;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    bypassL2 |= wc && gRM->raw->probeSharedBypassesL2.load(std::memory_order_relaxed);
+#endif
+    if (!gRM->raw->createBuffer(n ? n : 16, b->_raw, wc, hostVisible, bypassL2, zero)) {
         os_log_error(gm20bLog(), "SwitchMetal: %{public}s: no memory for a %lu-byte buffer: none made", getprogname(),
                      (unsigned long)n);
         return nil;
     }
+    if (b->_raw.freshFill)
+        establishFreshBuffer(b);
     return (id<MTLBuffer>)b;
+}
+
+- (id<MTLBuffer>)newBufferWithLength:(NSUInteger)n options:(MTLResourceOptions)o
+{
+    SWITCH_API(ApiObject);
+    return [self allocBufferWithLength:n options:o zero:YES];
 }
 
 - (id<MTLBuffer>)newBufferWithBytes:(const void *)p length:(NSUInteger)n options:(MTLResourceOptions)o
 {
     SWITCH_API(ApiObject);
-    id<MTLBuffer> b = [self newBufferWithLength:n options:o];
+    id<MTLBuffer> b = [self allocBufferWithLength:n options:o zero:(p == nullptr || n == 0)];
     if (!b || !p || !n)
         return b;
     SwitchMetalBuffer *buffer = (SwitchMetalBuffer *)b;

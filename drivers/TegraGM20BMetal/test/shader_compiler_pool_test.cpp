@@ -33,6 +33,7 @@ Name nameOf(uint8_t n)
 
 struct Item : Work {
     uint8_t n = 0;
+    uint8_t content = 0;
 };
 
 // A pool whose compiles each wait to be let go, and which records what the pool told the hooks
@@ -96,6 +97,9 @@ public:
             answeredAt[w.id] = in;
             changed.notify_all();
         };
+        hooks.same = [](const Work &a, const Work &b) {
+            return static_cast<const Item &>(a).content == static_cast<const Item &>(b).content;
+        };
         hooks.idle = [this] {
             std::lock_guard<std::mutex> l(lock);
             idles.push_back(completed.size());
@@ -130,9 +134,17 @@ public:
 
     bool submit(uint8_t n, uint64_t waiter, Band b, bool split = false, uint64_t client = 0)
     {
-        auto item = std::make_unique<Item>();
-        item->n = n;
-        return pool->submit(nameOf(n), std::move(item), Waiter{waiter, client ? client : waiter, b, split});
+        return submitAs(n, n, 0, waiter, b, split, client);
+    }
+
+    // One name asked with the given content; the run is told apart by item.
+    bool submitAs(uint8_t name, uint8_t item, uint8_t content, uint64_t waiter, Band b, bool split = false,
+                  uint64_t client = 0)
+    {
+        auto work = std::make_unique<Item>();
+        work->n = item;
+        work->content = content;
+        return pool->submit(nameOf(name), std::move(work), Waiter{waiter, client ? client : waiter, b, split});
     }
 
     void release(uint8_t n)
@@ -183,6 +195,29 @@ TEST(ShaderCompilerPool, IdenticalRequestsFromSeveralProcessesAreOneCompile)
     EXPECT_EQ(h.completed[11], 1);
     EXPECT_EQ(h.completed[12], 1);
     EXPECT_EQ(h.completed[13], 1);
+    EXPECT_EQ(h.pool->stats().joined, 2u);
+}
+
+TEST(ShaderCompilerPool, AnotherContentUnderARunningJobsNameIsItsOwnCompile)
+{
+    Harness h;
+    EXPECT_TRUE(h.submitAs(1, 1, 0xA, 11, Band::Initiated));
+    h.waitRunning(1);
+    EXPECT_TRUE(h.submitAs(1, 2, 0xB, 12, Band::Initiated));
+    EXPECT_FALSE(h.submitAs(1, 3, 0xB, 13, Band::Initiated));
+    EXPECT_FALSE(h.submitAs(1, 4, 0xA, 14, Band::Initiated));
+    h.release(1);
+    h.release(2);
+    h.pool->drain();
+    EXPECT_EQ(h.runs[1], 1u);
+    EXPECT_EQ(h.runs[2], 1u);
+    EXPECT_EQ(h.runs[3], 0u);
+    EXPECT_EQ(h.runs[4], 0u);
+    EXPECT_EQ(h.completed[11], 1);
+    EXPECT_EQ(h.completed[12], 2);
+    EXPECT_EQ(h.completed[13], 2);
+    EXPECT_EQ(h.completed[14], 1);
+    EXPECT_EQ(h.pool->stats().jobs, 2u);
     EXPECT_EQ(h.pool->stats().joined, 2u);
 }
 

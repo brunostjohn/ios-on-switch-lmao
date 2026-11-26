@@ -6352,6 +6352,13 @@ upl_mark_decmp(upl_t upl)
 		upl->flags |= UPL_DECMP_REQ;
 		upl->upl_creator->decmp_upl = (void *)upl;
 	}
+#if DEVELOPMENT || DEBUG
+	/* Switch: whether the replay's page-ins of compressed files are tagged as its own (UPL_SWITCH_PREFETCH). */
+	if (__improbable(switch_vm_prefetch_is_replay_thread != NULL &&
+	    switch_vm_prefetch_is_replay_thread(current_thread())) && switch_vm_prefetch_count_replay_decmp != NULL) {
+		switch_vm_prefetch_count_replay_decmp(upl->u_size, (upl->flags & UPL_SWITCH_PREFETCH) != 0);
+	}
+#endif
 }
 
 void

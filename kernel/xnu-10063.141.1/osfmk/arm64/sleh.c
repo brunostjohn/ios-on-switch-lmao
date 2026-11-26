@@ -34,6 +34,7 @@
 #include <arm/rtclock.h>
 #include <arm/trap_internal.h> /* for IS_ARM_GDB_TRAP() et al */
 #include <arm64/proc_reg.h>
+#include <switch/sched.h>
 #include <arm64/machine_machdep.h>
 #include <arm64/monotonic.h>
 #include <arm64/instructions.h>
@@ -677,6 +678,7 @@ sleh_synchronous(arm_context_t *context, uint32_t esr, vm_offset_t far, __unused
 		}
 
 		thread->machine.exception_trace_code = (uint16_t)(ARM64_KDBG_CODE_USER | class);
+		switch_systime_entered(thread);
 		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
 		    MACHDBG_CODE(DBG_MACH_EXCP_SYNC_ARM, thread->machine.exception_trace_code) | DBG_FUNC_START,
 		    esr, far, get_saved_state_pc(state), 0, 0);

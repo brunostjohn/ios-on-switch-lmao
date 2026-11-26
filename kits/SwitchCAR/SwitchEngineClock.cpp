@@ -13,7 +13,7 @@ struct Pll {
     const char *name, *engines;
 };
 
-constexpr Pll kPllC2 = {0x4e8, 0x4ec, 0x4f0, 0x4f4, 0x4f8, "PLLC2", "NVJPG"};
+constexpr Pll kPllC2 = {0x4e8, 0x4ec, 0x4f0, 0x4f4, 0x4f8, "PLLC2", "NVJPG and VIC"};
 constexpr Pll kPllC3 = {0x4fc, 0x500, 0x504, 0x508, 0x50c, "PLLC3", "NVDEC and NVENC"};
 
 enum : uint32_t {

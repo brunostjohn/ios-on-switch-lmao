@@ -4,7 +4,9 @@
 // state's own ROP blend (its blob's registers, not the Metal descriptor: m2v may blend in the program instead), for every
 // value the target can hold:
 //  - one target written (SET_CT_WRITE), target 0; the probe drew one target, and a pixel kill decided on one output would
-//    drop the writes of the others;
+//    drop the writes of the others. Only the targets the state's key names count: a pass's attachments are its state's,
+//    and the pack's baseline keeps a target's SET_CT_WRITE where every state drawing that target writes it alike (24B119:
+//    targets 6 and 7 at 0x1111), which a state without that target reads as written;
 //  - its ROP blends (SET_BLEND), colour and alpha alike: op ADD or REVERSE_SUBTRACT (0 + D and D - 0 are D; SUBTRACT
 //    gives -D, MIN and MAX ignore the coefficients); destination coefficient ONE, ONE_MINUS_SRC_COLOR or
 //    ONE_MINUS_SRC_ALPHA (each 1 with that source); source coefficient one that is finite with that source, so 0 times it
@@ -87,19 +89,38 @@ inline uint32_t keyColorFormat(const char *keyString, uint32_t j)
     return at && sscanf(at + strlen(field), "%u", &format) == 1 ? format : 0;
 }
 
+// The colour targets a state key names, bit j its c<j> (record_parts.h targets for a key the runtime holds as a string)
+inline uint8_t keyColorTargets(const char *keyString)
+{
+    uint8_t targets = 0;
+    for (uint32_t j = 0; j < 8; j++)
+        if (keyColorFormat(keyString, j))
+            targets |= uint8_t(1u << j);
+    return targets;
+}
+
 // SET_ITERATED_BLEND_OPTIMIZATION's value for a state: its blob's (method, value) pairs, its targets' SET_CT_WRITE values
 // after them, its key and the targets its program writes as storage images
 inline uint32_t iteratedBlendNoop(const uint32_t *blob, uint32_t dwords, const uint32_t writes[8],
-                                  const char *keyString, uint8_t storageBits)
+                                  const char *keyString, uint8_t storageBits,
+                                  const uint32_t *defaultPerTarget = nullptr, uint8_t defaultSeen = 0)
 {
-    for (uint32_t j = 1; j < 8; j++)
-        if (writes[j] & 0x1111)
-            return kNoopNever;
     if (!(writes[0] & 0x1111) || (storageBits & 1) || !keyString)
         return kNoopNever;
+    const uint8_t targets = keyColorTargets(keyString);
+    for (uint32_t j = 1; j < 8; j++)
+        if ((writes[j] & 0x1111) && (targets >> j & 1))
+            return kNoopNever;
     bool blends = false;
     uint32_t perTarget[6] = {};
     bool seen[6] = {};
+    if (defaultPerTarget) {
+        for (uint32_t i = 0; i < 6; i++)
+            if (defaultSeen >> i & 1) {
+                perTarget[i] = defaultPerTarget[i];
+                seen[i] = true;
+            }
+    }
     for (uint32_t k = 0; k + 1 < dwords; k += 2) {
         const uint32_t m = blob[k], v = blob[k + 1];
         if (m == 0x153c && (v & 0x11))  // SET_ANTI_ALIAS_ALPHA_CONTROL: ALPHA_TO_COVERAGE, ALPHA_TO_ONE

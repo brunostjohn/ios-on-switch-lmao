@@ -7,6 +7,7 @@ public struct ContentView: View {
     @ObservedObject var prompter: Prompter
     @ObservedObject var stage: Stage
     @State private var benchShown = false
+    @AppStorage(LongRuns.defaultsKey) private var longRuns = false
 
     public init(suite: Suite) {
         self.suite = suite
@@ -35,15 +36,18 @@ public struct ContentView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Interactive") { suite.runInteractive() }
-                        .disabled(suite.running || suite.pendingRun != nil)
+                        .disabled(!suite.idle)
                 }
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Bench") { benchShown = true }
-                        .disabled(suite.running || suite.pendingRun != nil)
+                        .disabled(!suite.idle)
+                }
+                ToolbarItem(placement: .topBarLeading) {
+                    Toggle("Long runs", isOn: $longRuns).toggleStyle(.button).disabled(!suite.idle)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Run All") { suite.runAll() }
-                        .disabled(suite.running || suite.pendingRun != nil).bold()
+                        .disabled(!suite.idle).bold()
                 }
             }
         }
@@ -72,8 +76,8 @@ public struct ContentView: View {
                 if let error = suite.resumeError {
                     Text(error).foregroundStyle(.red)
                 }
-                Button("Continue run") { suite.continueRun() }.buttonStyle(.borderedProminent)
-                Button("Start new run") { suite.startNewRun() }.buttonStyle(.bordered)
+                Button("Continue run") { suite.continueRun() }.buttonStyle(.borderedProminent).disabled(suite.busy)
+                Button("Start new run") { suite.startNewRun() }.buttonStyle(.bordered).disabled(suite.busy)
             }
             .padding(24)
             .presentationDetents([.medium])
@@ -99,7 +103,7 @@ public struct ContentView: View {
             Section(group.subsystem.rawValue) {
                 ForEach(group.rows) { row in
                     TestRowView(row: row).contentShape(Rectangle()).onTapGesture {
-                        if !suite.running && suite.pendingRun == nil { suite.rerun(row.id) }
+                        if suite.idle { suite.rerun(row.id) }
                     }
                 }
             }
@@ -109,36 +113,45 @@ public struct ContentView: View {
 
 struct TestRowView: View {
     @ObservedObject var row: RowState
+    /// A row of the list while a run goes: one line each, at a fixed height, so neither a test boundary nor a scene turn
+    /// lays out its full metrics (hundreds for some tests) or self-sizes it. On 25 Nov anim.timing's 90° turn spent
+    /// 536 ms of this app's main thread in trait propagation and list cell sizing.
+    var compact = false
+    static let compactHeight: CGFloat = 76
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             badge.frame(width: 52)
             VStack(alignment: .leading, spacing: 3) {
-                Text(row.test.name).font(.body)
+                Text(row.test.name).font(.body).lineLimit(compact ? 1 : nil)
                 Text(row.test.id + (row.test.interactive ? " · interactive" : ""))
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(compact ? 1 : nil)
                 if let outcome = row.record?.outcome {
                     if !outcome.metrics.keys.isEmpty {
-                        Text(outcome.metrics.ordered.map { "\($0.0)=\($0.1.logText)" }.joined(separator: "  "))
-                            .font(.caption.monospaced())
+                        Text(
+                            outcome.metrics.ordered.prefix(compact ? 8 : .max).map { "\($0.0)=\($0.1.logText)" }
+                                .joined(separator: "  ")
+                        )
+                        .font(.caption.monospaced()).lineLimit(compact ? 1 : nil)
                     }
-                    if !outcome.proof.isEmpty {
+                    if !outcome.proof.isEmpty && !compact {
                         Text("hw: " + outcome.proof).font(.caption).foregroundStyle(.teal)
                     }
                     if !outcome.detail.isEmpty {
-                        Text(outcome.detail).font(.caption).foregroundStyle(
+                        Text(outcome.detail).font(.caption).lineLimit(compact ? 1 : nil).foregroundStyle(
                             outcome.verdict == .fail ? .red : .secondary
                         )
                     }
                 }
             }
         }
+        .frame(height: compact ? Self.compactHeight : nil, alignment: .topLeading)
         .padding(.vertical, 2)
     }
 
     @ViewBuilder var badge: some View {
         if row.running {
-            ProgressView()
+            Text("RUN").font(.caption2.bold().monospaced()).foregroundStyle(.secondary)
         } else if let verdict = row.record?.outcome.verdict {
             Text(verdict.rawValue)
                 .font(.caption.bold().monospaced())

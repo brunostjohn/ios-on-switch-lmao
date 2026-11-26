@@ -230,6 +230,7 @@ static OSStatus startStream(Encoder *e, CFTypeRef primaries, CFTypeRef transfer,
         // The H.264 config above stays the input copy's (h264enc_put_input); the stream is the HEVC config's.
         e->hevc = (HEVCEncConfig){.width = c->width,
                                   .height = c->height,
+                                  .fast = e->realTime || e->prioritizeSpeed,
                                   .full_range = c->full_range,
                                   .colour_description = c->colour_description,
                                   .colour_primaries = c->colour_primaries,
@@ -668,6 +669,8 @@ static OSStatus setProperty(CMBaseObjectRef ref, CFStringRef key, CFTypeRef valu
         e->allowTemporal = !value || CFGetTypeID(value) != CFBooleanGetTypeID() || CFBooleanGetValue(value);
     } else if (CFEqual(key, kVTCompressionPropertyKey_RealTime)) {
         e->realTime = value && CFGetTypeID(value) == CFBooleanGetTypeID() && CFBooleanGetValue(value);
+    } else if (CFEqual(key, kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality)) {
+        e->prioritizeSpeed = value && CFGetTypeID(value) == CFBooleanGetTypeID() && CFBooleanGetValue(value);
     } else if (CFEqual(key, kVTCompressionPropertyKey_DataRateLimits)) {
         // [bytes, seconds, ...]: the first pair is enforced.
         double bytes = 0, seconds = 0;
@@ -700,7 +703,6 @@ static OSStatus setProperty(CMBaseObjectRef ref, CFStringRef key, CFTypeRef valu
         e->maxFrameDelay = number(value, &v) ? (int32_t)v : -1;
     } else if (CFEqual(key, kVTCompressionPropertyKey_AllowOpenGOP) ||
                CFEqual(key, kVTCompressionPropertyKey_MaximizePowerEfficiency) ||
-               CFEqual(key, kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality) ||
                CFEqual(key, kVTCompressionPropertyKey_SourceFrameCount) ||
                CFEqual(key, kVTCompressionPropertyKey_ExpectedDuration)) {
         // Accepted: closed GOPs whatever is asked; nothing to tune on a fixed-function engine.

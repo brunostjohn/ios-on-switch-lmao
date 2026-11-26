@@ -101,19 +101,21 @@ void gm20bOwnPass(SwitchMetalRenderEncoder *e)
     [self begin:e];
     thread_local std::vector<uint8_t> key;
     uint64_t hash = 0;
-    const bool counters = gm20bCounterBuffersMade();
-    const bool keyed = !counters && gm20bPassKey(d, key, hash);
+    bool counters = false;
+    const bool keyed = gm20bPassKey(d, key, hash, &counters);
     if (keyed)
         if (const SwitchMetalPassEntry *kept = gm20bPassFind(self, key, hash)) {
             SWITCH_METAL_DIAGNOSTIC(gm20b::countPass(gm20b::PassOpen::Hit));
             return openKeptPass(self, e, *kept);
         }
+    const uint8_t zetaAspects = (d.depthAttachment.texture ? 1u : 0u) | (d.stencilAttachment.texture ? 2u : 0u);
     MTLRenderPassDescriptor *pass = [d copy];
     bool skipped = gm20bPassAsApple(self, pass);
     [self retain:pass];
     e->_pass = pass;
     e->_passAt = uint32_t(_passes.size());
     SwitchMetalPass &facts = _passes.emplace_back();
+    facts.zetaAspects = zetaAspects;
     e->_samples = 1;
     if (const char *rule = gm20bPassShapeInvalid(pass))
         gm20bPassInvalid(self, PredPassAttLevel, pass.renderTargetArrayLength, 0, rule);

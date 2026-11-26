@@ -6900,11 +6900,33 @@ switch_bootstrap_environment(struct image_params *imgp, int pointer_size)
 }
 
 static const char *const native_switch_bluetoothd_environment[] = {
-	"BT_HCI_TRANSPORT=H4BC:POSIX:com.apple.uart.bluetooth,3000000", NULL
+	"BT_HCI_TRANSPORT=H4BC:POSIX:com.apple.uart.bluetooth,3000000", "CA_DISABLE_GENERIC_SHADERS=1", NULL
 };
 static const char *const native_switch_backboardd_environment[] = {
 	"CA_DISABLE_DETACHED=1", "CA_DISABLE_GENERIC_SHADERS=1", NULL
 };
+/*
+ * Every process that renders Core Animation draws its specialised states, never the catch-all Core Animation draws while
+ * one builds (24B119's CA::OGL::MetalContext::draw reads CA_DISABLE_GENERIC_SHADERS): each state comes from the pack,
+ * which holds the closed set, and one the pack lacks is named (TegraGM20BMetalStatesMiss.mm).
+ */
+static const char *const native_switch_ca_environment[] = {
+	"CA_DISABLE_GENERIC_SHADERS=1", NULL
+};
+/* Whether the environment strings [env, end) already name `entry`'s variable: a process that passes its own environ on
+ * (a shell) keeps one copy, the first, which getenv reads */
+static bool
+native_switch_environment_holds(const char *env, const char *end, const char *entry)
+{
+	const char *equals = strchr(entry, '=');
+	const size_t name = equals ? (size_t)(equals - entry) + 1 : strlen(entry);
+	for (const char *s = env; s < end; s += strlen(s) + 1) {
+		if (strncmp(s, entry, name) == 0) {
+			return true;
+		}
+	}
+	return false;
+}
 
 /* The extra environment strings for imgp's executable, NULL-terminated, or NULL for none. */
 static const char *const *
@@ -6924,7 +6946,7 @@ native_switch_exec_environment(const struct image_params *imgp)
 		const int single = !native_legacy_detach_ready();
 		return single ? native_switch_backboardd_environment : native_switch_backboardd_environment + 1;
 	}
-	return NULL;
+	return native_switch_ca_environment;
 }
 
 /*
@@ -7133,6 +7155,9 @@ exec_extract_strings(struct image_params *imgp)
 	/* Switch: a chosen daemon's extra environment (native_switch_exec_environment). */
 	const char *const *native_environment = native_switch_exec_environment(imgp);
 	for (; native_environment && *native_environment; native_environment++) {
+		if (native_switch_environment_holds(imgp->ip_endargv, imgp->ip_strendp, *native_environment)) {
+			continue;
+		}
 		error = exec_add_user_string(imgp, CAST_USER_ADDR_T(*native_environment), UIO_SYSSPACE, TRUE);
 		if (error) {
 			goto bad;
@@ -9289,11 +9314,16 @@ native_switch_gamut_cache(proc_t p, user_addr_t scratch, mount_t data_mount)
 	printf("SwitchRawBoot: display gamut %s: MobileGestalt cache dropped (%d)\n", srgb ? "sRGB" : "not sRGB", error);
 }
 
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT && CONFIG_CODE_DECRYPTION
+extern int switch_ui_scale_main_screen_class(void);
+#endif
+
 /* MobileGestalt answers what it reads of /product (GraphicsFeatureSetClass and its fallbacks, the memory class, the
  * artwork traits), of /product/audio (acoustic-id, its AcousticID), of /arm-io (soc-generation, which gates its codec
  * answers) and of the root (platform-name, its HardwarePlatform) from the same build-keyed cache, so an answer made
- * before a package changed one of them outlives the change. A digest of the four nodes' own properties is kept in a
- * marker, and the cache is dropped once whenever it differs. Failures are logged only; the next boot tries again. */
+ * before a package changed one of them outlives the change. A digest of the four nodes' own properties, and of the
+ * main-screen-class its patched cache text answers (vm_unix.c), is kept in a marker, and the cache is dropped once
+ * whenever it differs. Failures are logged only; the next boot tries again. */
 static void
 native_switch_identity_cache(proc_t p, user_addr_t scratch, mount_t data_mount)
 {
@@ -9318,6 +9348,13 @@ native_switch_identity_cache(proc_t p, user_addr_t scratch, mount_t data_mount)
 			}
 		}
 	}
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT && CONFIG_CODE_DECRYPTION
+	/* The class comes from the UI scale site pager's cache text, which only a code-decryption kernel patches. */
+	const int screen_class = switch_ui_scale_main_screen_class();
+	for (size_t i = 0; i < sizeof(screen_class); ++i) {
+		digest = (digest ^ ((const uint8_t *)&screen_class)[i]) * 0x100000001b3ULL;
+	}
+#endif
 	char text[24];
 	const int length = snprintf(text, sizeof(text), "%016llx\n", digest);
 	if (native_switch_file_unchanged(marker, text, length, data_mount, 0, 0, 0644)) return;
@@ -9557,7 +9594,8 @@ native_switch_icon_cache(proc_t p, user_addr_t scratch, mount_t data_mount)
 	}
 #if DEVELOPMENT || DEBUG
 	else if (result.requested) {
-		printf("SwitchRawBoot: icon cache for GPU build %s: %d folder(s) moved to trash\n", result.build, result.dropped);
+		printf("SwitchRawBoot: icon cache for GPU build %s: %d folder(s) kept for the previous build, %d moved to trash, "
+		    "%d restored\n", result.build, result.kept, result.dropped, result.restored);
 	}
 #endif
 }
@@ -10247,6 +10285,11 @@ load_init_program(proc_t p)
 	/* Owner overlay unions over sealed directories (SwitchRawMount.h), now that Data is mounted. */
 	native_switch_raw_overlay(p, (user_addr_t)scratch_addr);
 	switch_boot_steps_mark(&steps, "overlay");
+	/* pack.bin is reachable from here (drivers/TegraGM20B/SwitchGpuPackImage.cpp) */
+	extern void switch_gpu_pack_volumes_mounted(void) __attribute__((weak));
+	if (switch_gpu_pack_volumes_mounted != NULL) {
+		switch_gpu_pack_volumes_mounted();
+	}
 	switch_bootstrap_capture();
 	switch_boot_steps_mark(&steps, "bootstrap");
 	switch_pretranslated_capture();

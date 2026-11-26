@@ -1,6 +1,8 @@
 import AVFoundation
 import Darwin
 import HWTestCore
+import HWTestKit
+import HWTestShared
 import HWTestVideo
 import UIKit
 

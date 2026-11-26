@@ -146,6 +146,30 @@ static bool line_allowed(uint64_t now, uint32_t *skipped)
     return true;
 }
 
+/*
+ * The display, on the swapping thread before its swap: this frame's window, its vsync (mach) and the thread's wake and
+ * first submission after it (us; first -1: none). Preemption off, so no dispatch of this thread opens another window
+ * between the reads.
+ */
+bool switch_sched_render_window(uint64_t *vsync, int64_t *woke_us, int64_t *first_us)
+{
+    const struct switch_render_window *w = &window;
+    bool open = false;
+
+    if (!on_render_thread()) {
+        return false;
+    }
+    disable_preemption();
+    open = w->woke != 0 && !w->swapped;
+    if (open) {
+        *vsync = w->vsync;
+        *woke_us = us_after(w->vsync, w->woke);
+        *first_us = w->first != 0 ? us_after(w->vsync, w->first) : -1;
+    }
+    enable_preemption();
+    return open;
+}
+
 void switch_sched_render_swapped(void)
 {
     const struct switch_render_window *w = &window;

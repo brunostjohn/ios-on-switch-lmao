@@ -12,6 +12,7 @@
 #include "SwitchGpuConnectionQuota.h"
 #include "SwitchGpuShaderCompiler.h"
 #include "TegraGM20BCompilerABI.h"
+#include "TegraGM20BSchedABI.h"
 #include "TegraGM20BVolatileABI.h"
 #include "TegraGM20BZcullABI.h"
 
@@ -247,15 +248,15 @@ void AGXDeviceUserClient::releaseBo(Bo *bo)
 	} else {
 		if (bo->view)
 			bo->view->release();
-		// a pool BO's pages are zeroed off this thread and go back clean; a cached BO no task maps any more goes to
-		// the spares as it is (CE-zeroed before reuse, or given back to the VM)
+		// a pool BO's pages are zeroed off this thread and go back clean; a cached or system BO no task maps any more
+		// goes to the spares of its kind as it is (CE-zeroed before reuse, or given back to the VM)
 		if (bo->pool_va &&
 		    !(bo->handle && poolZeroLater(bo->pool_va, bo->pool_pa, bo->bytes)))
 			tgm_pool_free(bo->pool_va, bo->bytes, bo->pool_pa);
 	}
-	if (bo->buffer.memory && bo->handle && !bo->system &&
-	    !(bo->flags & TegraGM20BBoContiguous) &&
+	if (bo->buffer.memory && bo->handle && !(bo->flags & TegraGM20BBoContiguous) &&
 	    spareKeep(bo->buffer, bo->pas, static_cast<uint64_t>(bo->backing_pages) << 12,
+		      bo->system ? SWITCH_GPU_SPARE_WC : SWITCH_GPU_SPARE_CACHED,
 		      bo->cachedMapping)) {
 		bo->buffer = {};
 		bo->pas = nullptr;
@@ -549,7 +550,7 @@ IOReturn AGXDeviceUserClient::packImageMap(const TegraGM20BAbiPackImageMap *in,
 		IOLockUnlock(lock_);
 		return kIOReturnExclusiveAccess;
 	}
-	const bool knownCompositor = critical_ || restartNoKill_;
+	const bool knownCompositor = critical_;
 	const bool checkEntitlement = !knownCompositor && !entitlementsRead_ && in->cpu_range_count;
 	IOLockUnlock(lock_);
 
@@ -579,6 +580,7 @@ IOReturn AGXDeviceUserClient::packImageMap(const TegraGM20BAbiPackImageMap *in,
 			return wireRet;
 		}
 		staged.cpuWiredCount = in->cpu_range_count;
+		staged.cpuWiredBytes = wiredBytes;
 	}
 
 	IOLockLock(lock_);
@@ -607,9 +609,11 @@ IOReturn AGXDeviceUserClient::packImageMap(const TegraGM20BAbiPackImageMap *in,
 			if (mapErr != 0) {
 				ret = ioreturn(mapErr);
 			} else {
-				packClient_.gpuMapping = gpuMapping;
+				__atomic_store_n(&packClient_.gpuMapping, gpuMapping,
+						 __ATOMIC_RELEASE);
 				packClient_.gpuBytes = view.tier0HeapBytes;
 				packClient_.cpuWiredCount = staged.cpuWiredCount;
+				packClient_.cpuWiredBytes = staged.cpuWiredBytes;
 				for (uint32_t i = 0; i < staged.cpuWiredCount; ++i)
 					packClient_.cpuWired[i] = staged.cpuWired[i];
 				staged = {};
@@ -644,11 +648,13 @@ void AGXDeviceUserClient::releaseMappings()
 	maps_ = nullptr;
 	SwitchGpuPackClient packCpu = {};
 	packCpu.cpuWiredCount = packClient_.cpuWiredCount;
+	packCpu.cpuWiredBytes = packClient_.cpuWiredBytes;
 	for (uint32_t i = 0; i < packCpu.cpuWiredCount; ++i) {
 		packCpu.cpuWired[i] = packClient_.cpuWired[i];
 		packClient_.cpuWired[i] = nullptr;
 	}
 	packClient_.cpuWiredCount = 0;
+	packClient_.cpuWiredBytes = 0;
 	IOLockUnlock(lock_);
 	switch_gpu_pack_client_release_cpu(&packCpu);
 	while (list) {
@@ -677,7 +683,9 @@ extern "C" uint32_t switch_gpu_info_flags(void)
 			 TegraGM20BInfoSubmitAddress | TegraGM20BInfoCpuPreserveDirty |
 			 TegraGM20BInfoCanonicalSurfaceLayout | TegraGM20BInfoChannelEpoch |
 			 TegraGM20BInfoPushFences;
-	flags |= TegraGM20BInfoPackImage | TegraGM20BInfoBoPark | TegraGM20BInfoVolatileWrites;
+	flags |= TegraGM20BInfoPackImage | TegraGM20BInfoBoPark | TegraGM20BInfoVolatileWrites |
+		 TegraGM20BInfoSameUses | TegraGM20BInfoPriorityReply |
+		 TegraGM20BInfoChannelProgress;
 	if (info.comptag_lines && switch_gpu_compression_on())
 		flags |= TegraGM20BInfoCompression;
 	if (switch_tiled_cache_on())

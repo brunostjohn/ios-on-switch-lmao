@@ -12,7 +12,8 @@
  *               (compatible "nvidia,tegra210b01-dfll", "nvidia,tegra210-dfll"), DT-nx tegra210b01-nx-common.dtsi:
  *               1282-1295 (status okay, vdd-cpu-supply = MAX77812 m4vout, align-step-uv 5000, sample-rate 12500,
  *               droop-ctrl 0xf00, force-mode 1, cf 6, ci 0, cg 2, i2c-fs-rate 400000, pmic-undershoot-gb 0;
- *               dfll-max-freq-khz commented out). The OLED (fric) dts adds nothing to it. Not set, so off:
+ *               dfll-max-freq-khz commented out there, set here: v_dfll_max_freq_khz). The OLED (fric) dts adds nothing
+ *               to it. Not set, so off:
  *               nvidia,pwm-to-pmic, cg-scale, calibrate-force-vmin, defer-force-calibrate, one-shot-calibrate,
  *               idle-override, align-offset-uv, dfll-override-*.
  *   CAR 0x60006000 (hekate t210.h): CL-DVFS gate = periph clock 155 = bank W bit 27 (L4T clk-tegra-periph.c:723-724),
@@ -146,6 +147,15 @@ static const u32 v_ci[] = {0};
 static const u32 v_cg[] = {2};
 static const u32 v_i2c_fs_rate[] = {400000};
 static const u32 v_pmic_undershoot_gb[] = {0};
+/*
+ * The LUT (clk-dfll.c dfll_build_i2c_lut) spreads its 33 outputs evenly from Vmin to the highest OPP's voltage, so its
+ * step is set by the top of the OPP table: L4T's speedo-0 table runs to switchroot's 2295 MHz overclock (1177 mV at
+ * speedo 1659), about 17 mV a step, while nothing here asks the DVCO for more than the ~1938 MHz high-tune floor that
+ * 1785 MHz is skipped down from. NVIDIA's own speedo-0 maximum, 1963.5 MHz (1042 mV), covers that target in every
+ * thermal range and makes each step about 13 mV. With the loop's integral term off (ci 0), a landing rests within one
+ * step of its target, so the step is the landing error: cpu.dfll_landing saw 1581 MHz land 2.3 % under at output 13.
+ */
+static const u32 v_dfll_max_freq_khz[] = {1963500};
 #define PROP_U32(n, v) {.name = (n), .cells = (v), .ncells = ARRAY_SIZE(v)}
 #define PROP_STR(n, v) {.name = (n), .strings = (v), .nstrings = ARRAY_SIZE(v)}
 static const struct tdfll_property dfll_props[] = {
@@ -166,6 +176,7 @@ static const struct tdfll_property dfll_props[] = {
 	PROP_U32("nvidia,cg", v_cg),
 	PROP_U32("nvidia,i2c-fs-rate", v_i2c_fs_rate),
 	PROP_U32("nvidia,pmic-undershoot-gb", v_pmic_undershoot_gb),
+	PROP_U32("nvidia,dfll-max-freq-khz", v_dfll_max_freq_khz),
 	{.name = NULL},
 };
 static struct device_node dfll_node = {

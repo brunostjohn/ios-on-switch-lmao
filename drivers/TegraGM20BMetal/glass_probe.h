@@ -2,8 +2,11 @@
 // DEVELOPMENT: what each Core Animation draw reads while HW Test's glass tests hold the glass probe armed in every
 // process (com.brunostjohn.switch.debug.glass-probe, TegraGM20BMetalGlassProbe.mm). A draw's line (gpu.cpp probeGlassDraw)
 // names its state, its program's form, its colour attachments, each texture it samples with whether this process ever
-// wrote it (a pass, copy, dispatch or upload) and the non-finite floats and halves in its uniform buffers' CPU view. A
-// command buffer logs each distinct line once; the window ends after kGlassProbeMs or kGlassProbeLines lines.
+// wrote it (a pass, copy, dispatch or upload) and the non-finite floats and halves in the CPU's view of the window of
+// each uniform buffer its program reads. An encoding thread logs each distinct line once an arming (Core Animation draws
+// the same states every frame: 6,183 lines in one ui.glass_ab run when each command buffer logged its own) and, at its
+// first draw of the next arming, one line counting the repeats it left out; the window ends after kGlassProbeMs or
+// kGlassProbeLines lines.
 #pragma once
 #include <mach/mach_time.h>
 #include <algorithm>
@@ -74,26 +77,34 @@ struct GlassCbEntry {
     }
 };
 
-// True the first time `line` comes in command buffer `cb` this generation (FNV-1a of its text)
-inline bool glassProbeFirst(const void *cb, const char *line)
+// A thread's lines of one arming: how many were distinct and how many repeats it left out
+struct GlassProbeTally {
+    uint32_t generation = 0, distinct = 0, repeats = 0;
+};
+
+// True the first time `line` comes on this thread this generation (FNV-1a of its text). On the thread's first call of a
+// new generation `ended` gets the previous one's tally (distinct 0: nothing to say)
+inline bool glassProbeFirst(const char *line, GlassProbeTally &ended)
 {
     struct Seen {
-        const void *cb = nullptr;
-        uint32_t generation = 0;
+        GlassProbeTally tally;
         std::unordered_set<uint64_t> lines;
     };
 
     static thread_local Seen seen;
+    ended = {};
     const uint32_t generation = gGlassProbeGeneration.load(std::memory_order_relaxed);
-    if (seen.cb != cb || seen.generation != generation) {
-        seen.cb = cb;
-        seen.generation = generation;
+    if (seen.tally.generation != generation) {
+        ended = seen.tally;
+        seen.tally = {generation, 0, 0};
         seen.lines.clear();
     }
     uint64_t hash = 0xcbf29ce484222325ull;
     for (const char *c = line; *c; ++c)
         hash = (hash ^ uint8_t(*c)) * 0x100000001b3ull;
-    return seen.lines.insert(hash).second;
+    const bool first = seen.lines.insert(hash).second;
+    (first ? seen.tally.distinct : seen.tally.repeats)++;
+    return first;
 }
 
 // "t<slot>:<w>x<h>/f<format>/<bl|pitch>[/L<levels>][+ml][+heap][+imp][+comp][+si][+pi][+sh]/<w|nw>": a sampled texture

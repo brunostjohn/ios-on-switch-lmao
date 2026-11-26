@@ -11,7 +11,7 @@
 static struct {
     uint64_t raw, encodeUs, draws, passes, copies, deferred, ringWaits, lastUs, poolStalls, eventsReleased, heldReturns,
         signalsPublished, signalsAfterWork, waitsOnPromise, scheduledWaits, scheduledWaitUs, completedWaits,
-        completedWaitUs, rtUnaligned, rtMixed, levelPasses;
+        completedWaitUs, rtUnaligned, rtMixed, levelPasses, zcullPasses, zcullInvalidations, zcullLoads;
 } gRates;
 
 #endif
@@ -80,12 +80,18 @@ size_t metal_rates(char *out, size_t size)
         (unsigned long long)k.resolveRoute[gm20b::ResolveByPass][1].exchange(0),
         (unsigned long long)k.resolveRoute[gm20b::ResolveByPass][2].exchange(0));
     {
-        // render state creations the pack held and every other, since the device opened (TegraGM20BMetalStatesCost.mm)
-        uint64_t packHits = 0, packMisses = 0;
-        gm20bPackCreations(packHits, packMisses);
+        uint64_t packHits = 0, packMisses = 0, packCold = 0, packCard = 0;
+        gm20bPackCreations(packHits, packMisses, packCold, packCard);
         const size_t used = strlen(diag);
-        snprintf(diag + used, sizeof diag - used, " pack=%llu/%llu", (unsigned long long)packHits,
-                 (unsigned long long)packMisses);
+        snprintf(diag + used, sizeof diag - used, " pack=%llu/%llu/%llu/%llu", (unsigned long long)packHits,
+                 (unsigned long long)packMisses, (unsigned long long)packCold, (unsigned long long)packCard);
+    }
+    {
+        const size_t used = strlen(diag);
+        snprintf(diag + used, sizeof diag - used, " zc=%llu/%llu/%llu",
+                 (unsigned long long)(k.zcullPasses.load() - gRates.zcullPasses),
+                 (unsigned long long)(k.zcullInvalidations.load() - gRates.zcullInvalidations),
+                 (unsigned long long)(k.zcullLoads.load() - gRates.zcullLoads));
     }
     {
         const size_t used = strlen(diag);
@@ -122,6 +128,9 @@ size_t metal_rates(char *out, size_t size)
     gRates.rtUnaligned = k.rtUnaligned.load();
     gRates.rtMixed = k.rtMixed.load();
     gRates.levelPasses = k.levelPasses.load();
+    gRates.zcullPasses = k.zcullPasses.load();
+    gRates.zcullInvalidations = k.zcullInvalidations.load();
+    gRates.zcullLoads = k.zcullLoads.load();
     const gm20b::ResourceSet::Counts sets = gRM->raw->setCounts();
     const gm20b::Device::Trimmed kept = gRM->raw->keptImports();
     const SwitchMetalPassTrim passes = gm20bPassHeld();
@@ -334,15 +343,16 @@ size_t metal_encode_rates(char *out, size_t size)
     const int tail = snprintf(
         out + head, size - head,
         " walk=%.0f rself=%.0f tself=%.0f sself=%.0f dself=%.0f pself=%.0f eself=%.0f apply=%.0f tex=%.0f retire=%.0f "
-        "pbeg=%.0f "
+        "pbeg=%.0f vlook=%.0f "
         "mal=%.1f free=%.1f lk=%.1f snd=%.1f applied=%.2f/d useadd=%.1f/%.1f descb=%.1f descu=%.1f geov=%.1f",
         own(EncodePart::Loop), own(EncodePart::Resources), own(EncodePart::Tail), own(EncodePart::State),
         own(EncodePart::Draw), own(EncodePart::Prepare), own(EncodePart::PassEnd), part(EncodePart::Apply),
-        part(EncodePart::Textures), part(EncodePart::Retire), part(EncodePart::PassBegin), mallocs, frees,
-        events(gm20b::EncodeCount::Locks), events(gm20b::EncodeCount::Sends),
-        draws ? events(gm20b::EncodeCount::Applied) / draws : 0.0, events(gm20b::EncodeCount::UseAdds),
-        events(gm20b::EncodeCount::Uses), events(gm20b::EncodeCount::DescriptorBuilds),
-        events(gm20b::EncodeCount::DescriptorUploads), events(gm20b::EncodeCount::GeometryVertices));
+        part(EncodePart::Textures), part(EncodePart::Retire), part(EncodePart::PassBegin),
+        part(EncodePart::VariantLookup), mallocs, frees, events(gm20b::EncodeCount::Locks),
+        events(gm20b::EncodeCount::Sends), draws ? events(gm20b::EncodeCount::Applied) / draws : 0.0,
+        events(gm20b::EncodeCount::UseAdds), events(gm20b::EncodeCount::Uses),
+        events(gm20b::EncodeCount::DescriptorBuilds), events(gm20b::EncodeCount::DescriptorUploads),
+        events(gm20b::EncodeCount::GeometryVertices));
     size_t n = size_t(head) + (tail > 0 ? size_t(tail) : 0);
     // the pooled encoders' blocks made and freed since the process began (object_pool.h): with none freed, made is
     // the most of each kind this process had alive at once
@@ -458,15 +468,15 @@ void gm20bStallTick()
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 // The fetch barrier's way, switched from the Mac within one boot (`idevicenotificationproxy -u <udid> post
-// com.brunostjohn.switch.debug.fetch-barrier-<ps|psonly|none>`), to measure what the barrier costs: the shipped barrier
-// and texture invalidate (ps) against the barrier alone (psonly) and nothing (none). Measurement only: psonly and none
+// com.brunostjohn.switch.debug.fetch-barrier-<ps|psonly|none|tiles>`), to measure what the barrier costs: the shipped
+// barrier and texture invalidate (ps) against the barrier alone (psonly), nothing (none) and the tile barrier (tiles). Measurement only: psonly and none
 // let a fetching draw read colors still being written. wfi, HW Test's ui.glass_ab, goes back to ps after a minute
 // unless another way was posted since
 void watchFetchBarrierWay(gm20b::Device *dev)
 {
     using Way = gm20b::Device::FetchBarrier;
     static std::atomic<uint32_t> posted{0};
-    for (const Way way : {Way::PixelShader, Way::PixelShaderOnly, Way::None, Way::WaitForIdle}) {
+    for (const Way way : {Way::PixelShader, Way::PixelShaderOnly, Way::None, Way::WaitForIdle, Way::Tiles}) {
         char name[96];
         snprintf(name, sizeof name, "com.brunostjohn.switch.debug.fetch-barrier-%s",
                  gm20b::Device::fetchBarrierName(way));

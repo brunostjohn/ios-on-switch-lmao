@@ -64,8 +64,10 @@ constexpr uint8_t kSpiPriority = 0xa0;  // below ArmCpu's timer PPI and IPI SGI 
 // Priorities around it (GIC-400 keeps the top five bits; GICC_PMR is 0xff). XNU runs every handler with IRQs masked
 // and never nests them, so a priority only decides which of the SPIs pending at one CPU interface ArmCpu takes next
 // from GICC_IAR; a tie goes to the lowest INTID.
+constexpr uint8_t kPmuPriority = 0x88;     // per-core PMUv3 overflow SPIs: above frames, below timers and IPIs
 constexpr uint8_t kFramePriority = 0x90;   // a late one is a late frame: above all other SPIs
 constexpr uint8_t kSerialPriority = 0xc0;  // high-rate UARTs behind hardware flow control: below all other SPIs
+constexpr uint32_t kPmuIntidFirst = 32 + 144, kPmuIntidLast = 32 + 147;
 // The SPIs a frame waits on: display controller A (frame end, vblank; NativeLegacyDisplay, TegraPanel), the GM20B
 // stall/nonstall lines (fences and the copy-engine present; TegraGM20B) and host1x's syncpoint line, which ends every
 // VIC job (Core Animation's IOSurfaceAccelerator copies, NVDEC -> VIC video frames; TegraHost1x).
@@ -87,6 +89,10 @@ constexpr SteeredSpi kSteered[] = {
     {32 + 44, 2},  // XUDC (SwitchXUDC)
     {32 + 39, 2},  // XUSB host (SwitchXHCI)
     {32 + 40, 2},  // XUSB mailbox (SwitchXHCI)
+    // Per-core Cortex-A57 PMUv3 overflow SPIs (INT_CPU1..3_PMU_INTR); CPU0's INTID 176 stays on CPU0.
+    {32 + 145, 1},
+    {32 + 146, 2},
+    {32 + 147, 3},
     // The C7 wake timers (ArmCpuIdle.cpp) on the core each one wakes; CPU0's TMR10 stays on CPU0.
     {32 + 177, 1},  // TMR11
     {32 + 178, 2},  // TMR12
@@ -198,6 +204,8 @@ class ArmGIC : public IOInterruptController {
     // for over a second and backboardd's waitFence panicked.
     static uint8_t priorityFor(uint32_t intid)
     {
+        if (intid >= kPmuIntidFirst && intid <= kPmuIntidLast)
+            return kPmuPriority;
         if (isFrame(intid))
             return kFramePriority;
         switch (intid) {

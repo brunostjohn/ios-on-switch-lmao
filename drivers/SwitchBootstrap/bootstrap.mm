@@ -118,7 +118,8 @@ static int switch_bootstrap_finish_activation(NSString *root)
 static int switch_bootstrap_command(NSString *path, NSArray<NSString *> *arguments,
                                     int (*run)(const char *, char *const[]) = switch_bootstrap_run)
 {
-    char *argv[9];
+    // A development image updates up to 9 managed packages in one dpkg call (3 flags + 9 debs).
+    char *argv[32];
     if (arguments.count > sizeof(argv) / sizeof(argv[0]) - 2)
         return E2BIG;
     argv[0] = (char *)path.fileSystemRepresentation;

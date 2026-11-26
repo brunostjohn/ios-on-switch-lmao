@@ -430,6 +430,11 @@ bool Device::open(const char *packPath, uint64_t stack, std::string &err, Role r
     return init(err);
 }
 
+// The interlock's ticket words (nak_nir_lower_fs_interlock.c interlock_ticket_word): word (SR_AFFINITY & 0xff) * 256 +
+// (ticket & 0xff), as NVIDIA's own programs index them. Nothing bounds the affinity byte below 256, and a word past the
+// buffer would spin on and add into the control memory mapped after it without a fault
+constexpr uint32_t kTicketBytes = 256 * 256 * 4;
+
 // Every process's: the header pools, the root table, the zero page, the interlock tickets and the shader heap's reservation,
 // which textures, samplers and states need before any submission. The render server's channel, heap and first chunks too.
 bool Device::init(std::string &err)
@@ -438,7 +443,7 @@ bool Device::init(std::string &err)
         !k_.allocControl(kTscCount * 32, tsc_, ControlUse::SamplerHeaders) ||
         !k_.allocControl(0x1000, root_, ControlUse::RootTable) ||
         !k_.allocControl(0x10000, zero_, ControlUse::ZeroPage) ||
-        !k_.allocControl(0x1000, tickets_, ControlUse::InterlockTickets) ||
+        !k_.allocControl(kTicketBytes, tickets_, ControlUse::InterlockTickets) ||
         !k_.allocControl(kColorTableBytes, colorTable_, ControlUse::ColorTable) ||
         !k_.allocControl(cbufBindBytes(kSrgbEncodeEntries * 2), srgbEncode_, ControlUse::ColorTable) ||
         !k_.allocControl(kStampBytes, stamps_, ControlUse::Stamps)) {
@@ -523,11 +528,26 @@ bool Device::init(std::string &err)
         }
     }
     constexprMappedCount_ = constexprCount_;
+    const uint32_t initCount = uint32_t(pack_.bytes(PackInit) / sizeof(PackInitMethod));
+    const PackInitMethod *im = pack_.section<PackInitMethod>(PackInit);
+    for (uint32_t i = 0; i < initCount; i++) {
+        if (im[i].subc == 0 && im[i].mthd >= 0x1e04 && im[i].mthd <= 0x1e18) {
+            const uint32_t idx = (im[i].mthd - 0x1e04) / 4;
+            blendPerTarget_[idx] = im[i].data;
+            blendPerTargetSeen_ |= uint8_t(1u << idx);
+        }
+    }
     // SET_CT_WRITE(i), as the baseline leaves it where a state's registers do not set it
     const uint32_t *base = pack_.section<uint32_t>(PackBaseline);
-    for (uint64_t i = 0; i < pack_.bytes(PackBaseline) / 8; i++)
+    for (uint64_t i = 0; i < pack_.bytes(PackBaseline) / 8; i++) {
         if (base[2 * i] >= CT_WRITE && base[2 * i] < CT_WRITE + 32)
             ctWrite_[(base[2 * i] - CT_WRITE) / 4] = base[2 * i + 1];
+        else if (base[2 * i] >= 0x1e04 && base[2 * i] <= 0x1e18) {
+            const uint32_t idx = (base[2 * i] - 0x1e04) / 4;
+            blendPerTarget_[idx] = base[2 * i + 1];
+            blendPerTargetSeen_ |= uint8_t(1u << idx);
+        }
+    }
     segmentHeap_.setGrow([this](uint64_t bytes, SegmentChunk &chunk) {
         Bo bo;
         if (!k_.allocControl(bytes, bo, ControlUse::StateSegments))
@@ -547,6 +567,9 @@ bool Device::init(std::string &err)
         const uint64_t packEnd = std::max(packWindowBytes_, packPages_.windowEnd());
         heapCopiesAt_ = heapBound_ = heapPlaced_ = (packEnd + kHeapStep - 1) & ~(kHeapStep - 1);
         heapStoresAt_ = heapCopiesAt_ + kHeapCopiesWindow;
+        tier0Pipelines_.reset(uint32_t(pack_.tier0Entries(PackPipelines, sizeof(PackPipeline))));
+        if (packWindowBytes_ && h.tier0SlmPerWarp)
+            (void)slmNeed(h.tier0SlmPerWarp);
     }
     if (role_ == Role::Client)
         return true;
@@ -601,6 +624,8 @@ bool Device::openChannel(std::string &err, bool &gaveBack)
         gaveBack = created;
         if (created)
             k_.closeChannel(ch);
+        progressVa_ = 0;
+        progressSeq_ = 0;
         k_.free(push_.bo);
         k_.free(upload_.bo);
         push_ = Ring();
@@ -625,6 +650,9 @@ bool Device::openChannel(std::string &err, bool &gaveBack)
         return undo(true);
     channel_.store(ch, std::memory_order_release);
     fence_.store(fence, std::memory_order_release);
+    progressVa_ = 0;
+    progressSeq_ = 0;
+    k_.channelProgress(ch, progressVa_);
     submittedThrough(seq);
     retire(push_, seq);
     return true;
@@ -757,7 +785,7 @@ bool Device::place(uint32_t prog, uint32_t &program, uint64_t &data)
 // (CommandBuffer::commit). False: no memory for it.
 bool Device::slmNeed(uint64_t perWarp)
 {
-    if (perWarp <= slmPerWarp_)
+    if (perWarp <= slmPerWarp_.load(std::memory_order_acquire))
         return true;
     const SlmArea a = slmArea(perWarp, k_.info().tpc_count);
     Bo area;

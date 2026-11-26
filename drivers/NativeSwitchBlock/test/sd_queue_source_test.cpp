@@ -60,22 +60,63 @@ TEST(SdQueueSource, MergeChains)
     // Fallback path keeps adjacent-only merging and checks active in-flight overlap for writes.
     EXPECT_THAT(pick, HasSubstr("last->next->lba == last->lba + last->sectors"));
     EXPECT_THAT(pick, HasSubstr("!overlapsInFlight(last->next)"));
-    // Worker passes any pending batch's LBA range to pickLocked so writes check overlap against active work.
+    // Worker passes any active slot's LBA range to pickLocked so writes check overlap against active work.
     const std::string worker = body("void NativeSwitchBlock::worker(");
-    EXPECT_THAT(worker, HasSubstr("SwitchLbaRange{pending->first->lba, pending->sectors}"));
-    EXPECT_THAT(worker, HasSubstr("self->pickLocked(&next->sectors, &next->count, &active,"));
+    EXPECT_THAT(worker, HasSubstr("activeRange = {self->pipe.active->lba, self->pipe.active->sectors};"));
+    EXPECT_THAT(
+        worker,
+        HasSubstr("self->pickLocked(&cand->batch.sectors, &cand->batch.count, &activeRange, hwActive ? 1u : 0u)"));
     // Every request starts unchained.
-    EXPECT_TRUE(
-        Search(source, R"(static_cast<uint8_t>\(priority >> 6\),\s*direction == kIODirectionOut,\s*false,\s*false,)"));
+    EXPECT_TRUE(Search(source, R"(klass,\s*direction == kIODirectionOut,\s*false,\s*false,)"));
+}
+
+// The chain's first request comes from SwitchSdPick.h (sd_pick_test.cpp), with a synchronize's writes ranked as reads;
+// doSetPriority raises queued requests under queueLock and never lowers one.
+TEST(SdQueueSource, PickAndRaise)
+{
+    const std::string pick = body("Request *NativeSwitchBlock::pickLocked(");
+    EXPECT_THAT(pick, HasSubstr("writes(windowOf(false)).awaitedBeforeNs()"));
+    EXPECT_THAT(pick, HasSubstr("writes(windowOf(true)).awaitedBeforeNs()"));
+    EXPECT_THAT(pick, HasSubstr("switchSdPick(head, awaitedBeforeNs, pickNs, &pickState)"));
+    const std::string promote = body("void NativeSwitchBlock::promote(");
+    EXPECT_LT(promote.find("IOLockLock(queueLock);"), promote.find("switchSdPromote("));
+    EXPECT_LT(promote.find("switchSdPromote("), promote.find("IOLockUnlock(queueLock);"));
+    const std::string set = body("IOReturn NativeSwitchBlockDevice::raise(");
+    EXPECT_LT(set.find("return kIOReturnBadArgument;"), set.find("owner->promote("));
+    EXPECT_THAT(body("IOReturn NativeSwitchBlockDevice::doSetPriority("),
+                HasSubstr("return raise(extents, count, priority, false);"));
+    EXPECT_THAT(body("extern \"C\" IOReturn switch_block_raise("),
+                HasSubstr("gOwner->device->raise(extents, count, priority, true)"));
+}
+
+// The boot replay's reads are known by the kernel's replay thread and queue one class below tier-0 demand reads.
+TEST(SdQueueSource, ReplayReadsAreKnownByTheKernelsReplayThread)
+{
+    const std::string io = body("IOReturn NativeSwitchBlockDevice::doAsyncReadWrite(");
+    EXPECT_THAT(io, HasSubstr("switch_vm_prefetch_is_replay_thread(current_thread())"));
+    EXPECT_LT(Index(io, "direction == kIODirectionIn && &switch_vm_prefetch_is_replay_thread"),
+              Index(io, "switchSdClassOf("));
+    EXPECT_THAT(io, HasSubstr("switchSdClassOf(static_cast<uint8_t>(priority >> 6), replay)"));
+    EXPECT_LT(Index(io, "switchSdClassOf("), Index(io, "owner->submit(spec)"));
+    EXPECT_TRUE(Search(io, R"(shared,\s*replay,\s*\*completion,)"));
+    const std::string pick = body("Request *NativeSwitchBlock::pickLocked(");
+    EXPECT_LT(Index(pick, "switchSdAgeReplay(head, pickNs, queuedReads, queuedReplay);"), Index(pick, "switchSdPick("));
+    EXPECT_THAT(driver(), Not(HasSubstr("gPrefetchThread")));
+
+    EXPECT_THAT(body("void NativeSwitchBlock::enqueueLocked("),
+                HasSubstr("if (switchSdAgeable(request))\n        ++queuedReplay;"));
+    EXPECT_THAT(body("void NativeSwitchBlock::takenLocked("),
+                HasSubstr("if (switchSdAgeable(r))\n            --queuedReplay;"));
+    EXPECT_THAT(body("Request *NativeSwitchBlock::drainQueueLocked("), HasSubstr("queuedReplay = 0;"));
 }
 
 // r14-sdcq: a read chain's gaps go to the sink and nowhere else; a write chain never has one.
 TEST(SdQueueSource, GapChains)
 {
     const std::string &source = driver();
-    const std::string begin = body("void NativeSwitchBlock::beginBatch(");
-    EXPECT_THAT(begin, HasSubstr("if (first->write && payload != sectors)"));
-    EXPECT_LT(Index(begin, "outside its partition"), Index(begin, "if (first->write && payload != sectors)"));
+    const std::string prep = body("void NativeSwitchBlock::prepareAndPublishSlot(");
+    EXPECT_THAT(prep, HasSubstr("if (first->write && payload != sectors)"));
+    EXPECT_LT(Index(prep, "outside its partition"), Index(prep, "if (first->write && payload != sectors)"));
     const std::string table = body("SwitchAdmaRefusal NativeSwitchBlock::buildTable(");
     EXPECT_EQ(Count(table, "staging.addSink(sinkPA, gap(r))"), 1u);
     EXPECT_EQ(Count(table, "table.addSealed(sinkPA, gap(r))"), 1u);

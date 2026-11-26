@@ -121,6 +121,11 @@ void switch_chan_new_set_level(int high, int critical)
 	tgm_chan_set_level(made, high ? TGM_LEVEL_HIGH : TGM_LEVEL_FOREGROUND, critical);
 }
 
+void switch_chan_new_set_raw_level(uint32_t level, int critical)
+{
+	tgm_chan_set_level(made, level, critical);
+}
+
 int switch_chan_new_high(void)
 {
 	return made->high;
@@ -129,6 +134,17 @@ int switch_chan_new_high(void)
 int switch_chan_new_critical(void)
 {
 	return made->critical;
+}
+
+int switch_chan_new_busy_low(void)
+{
+	const uint64_t bit = UINT64_C(1) << (made->chid % 64u);
+	return (tgm_busy.low[made->chid / 64u] & bit) != 0 ? 1 : 0;
+}
+
+void switch_chan_new_ramfc_due(void)
+{
+	tgm_chan_ramfc_due(made);
 }
 
 static void host_save(void)

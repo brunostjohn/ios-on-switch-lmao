@@ -137,11 +137,16 @@ void RenderEncoder::end()
     if (p_.room() < 64 + kSampleWords + kTirWords + 2 * kMaxViewports + kDrawStampWords)
         reserve();
     if (zcull_.store && !zcull_.invalidated) {
-        p_.m(kStoreZcull, 0);
+        uint32_t *store = p_.at;
+        *p_.at++ = kZcullUnstoredWord;
         const Texture &zeta = *pass_.depthStencil.texture;
         const auto memory = zeta.storageRange();
-        cb_->zcullPlanes_.stored(zcullStoredBy(zcull_, zeta.va, memory.va, memory.bytes));
+        cb_->zcullPlanes_.stored(zcullStoredBy(zcull_, zeta.va, memory.va, memory.bytes, store));
     }
+    // a slot taken for a region the pass ended without (invalidated, or a depth whose memory no write could be matched
+    // against) goes back: the job's owner could never take it again
+    if (zcull_.slot >= 0 && !cb_->zcullPlanes_.holdsSlot(zcull_.slot))
+        d.zcullSlots_.release(zcull_.slot);
     writeRaster(p_, Raster());
     unclampDepthRange(p_);
     if (rot_.turned()) {
@@ -167,6 +172,10 @@ void RenderEncoder::end()
         else
 #endif
             tirOff(p_);
+        if (cb_->sampleMaskHeld_ != kSampleMaskAll) {
+            p_.inc(NVB197_SET_SAMPLE_MASK_X0_Y0, {kSampleMaskAll, kSampleMaskAll, kSampleMaskAll, kSampleMaskAll});
+            cb_->sampleMaskHeld_ = kSampleMaskAll;
+        }
     }
     if (std::max(samples_, rasterSamples_) > 1)
         sampleWords(p_, 1, d.root_.va);
@@ -186,6 +195,9 @@ void RenderEncoder::end()
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     if (drew_ && !flush && tiledCache(d.k_.info()))
         cb_->taken_.flushes++;
+#endif
+#if SWITCH_METAL_DIAGNOSTICS
+    nvnPassEnd();
 #endif
     const bool measured = measurePass(drew_ && flush);
     if (drew_ && flush)
@@ -213,12 +225,12 @@ void RenderEncoder::end()
 #endif
     const std::vector<uint32_t> &restore = extrasAtBegin_ ? extrasAtBegin_->restore : std::vector<uint32_t>();
     const uint32_t room = 160 + SWITCH_GM20B_KIND_SWITCH_WORDS + 8 * 32 * layers + uint32_t(cl.size()) * 48 +
-                          kZetaTargetWords + kZcullRegionWords + kZetaClearWords + 16 + kSampleWords +
+                          3 * (kZetaTargetWords + kZetaClearWords + 24) + kZcullRegionWords + kSampleWords +
                           kTurnWordsMethods + uint32_t(restore.size()) + kSpanMarkWords +
                           startStampCount_ * counters::kTimestampWords + kDrawStampWords +
                           (separate_.stencil ? 64 + 128 * layers : 0) + (zetaShadowOf_ ? zetaShadowWords(layers) : 0) +
-                          (rasterSamples_ > samples_ ? kSampleWords + kTirWords + 16 : 0) + kTimedPassWords;
-    const uint32_t totalRoom = room + (uint32_t(cl.size()) + 1) * kTiledCacheSizeWords;
+                          (rasterSamples_ > samples_ ? 3 * kSampleWords + kTirWords + 16 : 0) + kTimedPassWords;
+    const uint32_t totalRoom = room + (uint32_t(cl.size()) + 3) * kTiledCacheSizeWords + 2 * kTiledCacheFlushWords;
     uint64_t va;
     uint32_t *start = reinterpret_cast<uint32_t *>(d.alloc(d.push_, totalRoom * 4, 256, va));
     Push p{start, start + totalRoom};
@@ -301,9 +313,64 @@ void RenderEncoder::end()
         cb_->tiledCacheDirty_ = true;
         own = true;
     }
+    const DepthStencilAttachment &zs = pass_.depthStencil;
+    uint32_t ownZetaCleared = 0;
+    if (!called_ && !pass_.drawn) {
+        bool zetaLayout = false;
+        const auto ownZetaClear = [&](const Texture &t, uint32_t bits) {
+            // a turned pass's zeta is a stand-in of its plane (turned_pass.h): the pass's frame turned
+            const Rotation frame = rot_.turned() ? rot_ : Rotation{0, t.width, t.height};
+            if (!bits || (frame.width <= areaW_ && frame.height <= areaH_))
+                return false;
+            const uint32_t zetaLayers = std::min(layers, std::max(t.layers, 1u));
+            cb_->use(t, true);
+            // a mixed pass's four-sample zeta under its own sample layout (the prologue left the colour's), and outside
+            // the zcull region the previous pass left active
+            if (rasterSamples_ > samples_ && !zetaLayout) {
+                sampleWords(p, t.samples, d.root_.va, pass_.positions, rot_);
+                zetaLayout = true;
+            }
+            if (d.zcullOn_)
+                zcullOffWords(p);
+            const Rect r = planeRect(0, 0, frame.width, frame.height);
+            kit(p, switch_gm20b_render_area, 0u, r.x1, r.y1);
+            zetaTargetWords(p, &t, zetaLayers);
+            tiledCacheSetSize(p, d.k_.info(), tiledCacheTileSize(t.bpp * std::max<uint32_t>(t.samples, 1u)),
+                              cb_->tiledCacheSize_);
+            zetaClearValues(p, bits & 1, zs.depth, bits & 2, zs.stencil);
+            if (bits & 1)
+                d.clearZbcDepth(t, true, zs.depth);
+            clearZeta(p, r, bits, 0, zetaLayers);
+            cb_->tiledCacheDirty_ = true;
+            own = true;
+            return true;
+        };
+        if (separate_.stencil) {
+            if (separate_.depth && separate_.storeDepth && zs.clearDepth && zetaHasDepth(separate_.depth->format))
+                ownZetaClear(*separate_.depth, 1);
+            if (separate_.storeStencil && zs.clearStencil && zetaHasStencil(separate_.stencil->format))
+                ownZetaClear(*separate_.stencil, 2);
+        } else if (zs.texture && !zetaShadowOf_ && zs.stored) {
+            const uint32_t bits = zetaClearBits(zs.clearDepth && zetaHasDepth(zs.texture->format),
+                                                zs.clearStencil && zetaHasStencil(zs.texture->format));
+            // a zcull candidate's depth is cleared again over the render area once its region is set, which that
+            // clear initialises (zcull_planes.h zcullBegin)
+            if (ownZetaClear(*zs.texture, bits))
+                ownZetaCleared = zcull_.candidate ? bits & ~1u : bits;
+        }
+        if (zetaLayout)
+            sampleWords(p, samples_, d.root_.va, pass_.positions, rot_);
+    }
     if (own) {
+        if (flush) {
+            tiledCacheDrain(p, d.k_.info());
+            cb_->tiledCacheDirty_ = false;
+        }
         kit(p, switch_gm20b_pass_drain, false);
     }
+#if SWITCH_METAL_DIAGNOSTICS
+    nvnKnob(p);
+#endif
     uint32_t count = 0;
     for (uint32_t j = 0; j < pass_.count && j < 8; j++)
         if (pass_.color[j].texture)
@@ -317,7 +384,6 @@ void RenderEncoder::end()
     // targets map to themselves (NVK writes all eight slots of the map; the hardware reads the first `count`), drawn from
     // (0, 0) over the render area
     kit(p, switch_gm20b_render_area, count, planeArea().x1, planeArea().y1);
-    const DepthStencilAttachment &zs = pass_.depthStencil;
     zetaTargetWords(p, zs.texture, layers);
     uint32_t totalBpp = 0;
     for (uint32_t j = 0; j < count; j++)
@@ -333,16 +399,17 @@ void RenderEncoder::end()
     zcullAfterTir = zcull_.candidate && (tirProbe_ & kTirProbeZcullAfter);
 #endif
     const auto zcullWords = [&] {
-        uint32_t criterion = 0;
+        uint32_t criterion = 0, regionFormat = 0, zFormat = ~0u;
 #if SWITCH_METAL_DIAGNOSTICS
         if (const uint32_t c = d.probeZcullCriterion.load(std::memory_order_relaxed))
             criterion = zcullCriterion(c & 0xff, c >> 8 & 0xff, c >> 16 & 0xff);
+        nvnZcullFormats(p, zs, regionFormat, zFormat);
 #endif
         zcullRegionWords(p, zcull_.region, zs.texture->format, zcull_.dir, zcull_.storage, zcull_.storageBytes,
-                         criterion);
+                         criterion, regionFormat, zFormat);
         if (zcull_.load)
             p.m(kLoadZcull, 0);
-        SWITCH_METAL_DIAGNOSTIC(d.stats.zcullPasses++; d.stats.zcullLoads += zcull_.load);
+        SWITCH_METAL_DIAGNOSTIC(cb_->zcullCounts_.passes++; cb_->zcullCounts_.loads += zcull_.load);
     };
     if (zcull_.candidate && !zcullAfterTir)
         zcullWords();
@@ -351,6 +418,7 @@ void RenderEncoder::end()
     // the backing's layers past a shorter zeta's own, which no copy fills, hold what an M4 Max tests there
     // (m2v-pass-forms/probe/layerprobe.mm): a loaded depth above 1.0 (a float zeta's 2.0) or Depth16Unorm's 1.0, a loaded
     // stencil 0xff; a DontCare aspect its clear value, as Apple's DontCare depth and stencil test against
+    bool cleared = false;
     if (const uint32_t own = zetaShadowOf_ ? std::min(std::max(zetaShadowOf_->layers, 1u), layers) : layers;
         own < layers) {
         const bool depth = zetaHasDepth(zs.texture->format) && !zs.clearDepth,
@@ -364,11 +432,13 @@ void RenderEncoder::end()
         if (depth || stencil) {
             clearZeta(p, planeArea(), zetaClearBits(depth, stencil), own, layers - own);
             cb_->tiledCacheDirty_ = true;
+            cleared = true;
         }
     }
     // NVK clears depth and stencil with the first color the pass clears over its render area, else on their own
     uint32_t zsBits = zs.texture ? zetaClearBits(zs.clearDepth && zetaHasDepth(zs.texture->format),
-                                                 zs.clearStencil && zetaHasStencil(zs.texture->format))
+                                                 zs.clearStencil && zetaHasStencil(zs.texture->format)) &
+                                       ~ownZetaCleared
                                  : 0;
     zetaClearValues(p, zsBits & 1, zs.depth, zsBits & 2, zs.stencil);
     if (zsBits & 1)
@@ -390,6 +460,7 @@ void RenderEncoder::end()
         const bool area = !mixed && !c.x0 && !c.y0 && c.x1 == areaW_ && c.y1 == areaH_;
         clearRect(p, r.x0, r.y0, r.x1, r.y1, v, c.target, area ? zsBits : 0, layers);
         cb_->tiledCacheDirty_ = true;
+        cleared = true;
         zsBits = area ? 0 : zsBits;
     }
     if (mixed) {
@@ -398,6 +469,7 @@ void RenderEncoder::end()
         if (zsBits) {
             clearZeta(p, planeArea(), zsBits, 0, layers);
             cb_->tiledCacheDirty_ = true;
+            cleared = true;
         }
         zsBits = 0;
         tirOn(p, rasterSamples_);
@@ -411,9 +483,14 @@ void RenderEncoder::end()
     if (zsBits) {
         clearZeta(p, planeArea(), zsBits, 0, layers);
         cb_->tiledCacheDirty_ = true;
+        cleared = true;
     }
-    if (drew_)
+    if (drew_) {
         cb_->tiledCacheDirty_ = !flush;
+    } else if (cleared && flush) {
+        tiledCacheDrain(p, d.k_.info());
+        cb_->tiledCacheDirty_ = false;
+    }
     if (measured)
         emitDrawStamp(p, d.stamps_.va, candidate_.slot, false, candidate_.payload);
     SWITCH_METAL_DIAGNOSTIC(markSpan(p, prologueMark_, SpanKind::Prologue));

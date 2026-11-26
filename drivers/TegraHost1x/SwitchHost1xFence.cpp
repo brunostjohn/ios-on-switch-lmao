@@ -35,6 +35,15 @@ struct Registers {
 IOLock *gLock;  // the lists, the hand-off, the timer's deadline
 Registers gRegisters;
 SwitchHost1xFenceList<Registers> gList;
+// Syncpoints whose channel stopped (switch_host1x_fences_fail) and has not restarted: a bound or a CPU wait that starts
+// on one fails at once, as the stop would have failed it.
+uint32_t gStopped[SwitchHost1xFenceList<Registers>::kSyncpts / 32];
+
+bool stoppedLocked(uint32_t id)
+{
+    return (gStopped[id / 32] & (1u << (id % 32))) != 0;
+}
+
 SwitchHost1xExpired gHandOff;
 IOInterruptEventSource *gKick;
 thread_call_t gBounds;
@@ -214,6 +223,40 @@ void switch_host1x_intr_handle()
     }
 }
 
+uint32_t switch_host1x_fences_fail(uint32_t id, int status)
+{
+    if (!gLock || id >= SwitchHost1xFenceList<Registers>::kSyncpts)
+        return 0;
+    SwitchHost1xExpired done;
+    uint32_t failed = 0;
+    IOLockLock(gLock);
+    gStopped[id / 32] |= 1u << (id % 32);
+    if (gUp)
+        failed = gList.fail(gRegisters, id, status, done);
+    settleLocked(done);
+    IOLockUnlock(gLock);
+    return failed;
+}
+
+void switch_host1x_fences_resume(uint32_t id)
+{
+    if (!gLock || id >= SwitchHost1xFenceList<Registers>::kSyncpts)
+        return;
+    IOLockLock(gLock);
+    gStopped[id / 32] &= ~(1u << (id % 32));
+    IOLockUnlock(gLock);
+}
+
+bool switch_host1x_fence_names(uint32_t id)
+{
+    if (!gLock || id >= SwitchHost1xFenceList<Registers>::kSyncpts)
+        return false;
+    IOLockLock(gLock);
+    const bool named = gList.names(id);
+    IOLockUnlock(gLock);
+    return named;
+}
+
 void switch_host1x_intr_stop()
 {
     IOLockLock(gLock);
@@ -258,6 +301,8 @@ extern "C" int switch_host1x_fence_add(switch_host1x_fence *fence, uint32_t boun
     fence->graced = 0;
     fence->deadline = boundUs ? deadlineIn(boundUs) : 0;
     gList.add(gRegisters, fence, done);
+    if (fence->state == SWITCH_HOST1X_FENCE_QUEUED && fence->deadline && stoppedLocked(fence->syncpt))
+        gList.fail(gRegisters, fence->syncpt, TEGRA_HOST1X_ETIMEDOUT, done);
     if (fence->state == SWITCH_HOST1X_FENCE_QUEUED && fence->deadline)
         armBoundsLocked(fence->deadline);
     settleLocked(done);
@@ -269,12 +314,17 @@ extern "C" void switch_host1x_fence_watch(switch_host1x_fence *fence, uint32_t b
 {
     if (!gLock || !fence)
         return;
+    SwitchHost1xExpired done;
     IOLockLock(gLock);
     if (fence->state == SWITCH_HOST1X_FENCE_QUEUED) {
         fence->graced = 0;
         fence->deadline = deadlineIn(boundUs);
-        armBoundsLocked(fence->deadline);
+        if (stoppedLocked(fence->syncpt))
+            gList.fail(gRegisters, fence->syncpt, TEGRA_HOST1X_ETIMEDOUT, done);
+        else
+            armBoundsLocked(fence->deadline);
     }
+    settleLocked(done);
     IOLockUnlock(gLock);
 }
 
@@ -396,6 +446,8 @@ extern "C" int tegra_host1x_syncpt_wait_unless(uint32_t id, uint32_t threshold, 
         return TEGRA_HOST1X_ENODEV;
     }
     gList.add(gRegisters, &waiter, done);
+    if (waiter.state == SWITCH_HOST1X_FENCE_QUEUED && stoppedLocked(id))
+        gList.fail(gRegisters, id, TEGRA_HOST1X_ETIMEDOUT, done);
     settleLocked(done);
     uint64_t deadline = deadlineIn(timeoutUs);
     int ret = TEGRA_HOST1X_OK;
@@ -425,7 +477,7 @@ extern "C" int tegra_host1x_syncpt_wait_unless(uint32_t id, uint32_t threshold, 
     gList.remove(gRegisters, &waiter, done);
     settleLocked(done);
     IOLockUnlock(gLock);
-    return ret;
+    return ret ? ret : waiter.status;
 }
 
 extern "C" void tegra_host1x_set_strict(void)

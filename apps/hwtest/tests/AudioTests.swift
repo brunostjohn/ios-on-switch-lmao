@@ -1,6 +1,7 @@
 import AVFoundation
 import Foundation
 import HWTestCore
+import HWTestKit
 
 /// Counts the frames an engine's render thread asks for, so the measured rate is what the hardware consumed.
 final class FrameCounter: @unchecked Sendable {

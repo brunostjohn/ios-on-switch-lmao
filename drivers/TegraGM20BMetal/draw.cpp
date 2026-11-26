@@ -4,11 +4,15 @@
 #include "icb.h"
 #include "gpu.h"
 #include "kit.h"
+#include "mixed_samples.h"
 #include "mme.h"
+#include "probe_restores.h"
 #include "tiled_cache.h"
 #include "view.h"
+#include "frame_cpu_counts.h"
 
 #include <algorithm>
+#include <iterator>
 #include <cstring>
 
 #include "gm20b_gpu_internal.h"
@@ -18,6 +22,23 @@ namespace gm20b {
 namespace {
 // An instance of a draw: BEGIN with INSTANCE_ID SUBSEQUENT (two words), the first vertex or index and the count (three), END
 constexpr uint32_t kInstanceWords = 6;
+
+// A split draw's samples 1-3 (mixed_samples.h splitsSamples): `again` drawn under their sample mask, colour writes off,
+// and the pixel stage off for MixedDraw::Split. `p` is the encoder's body, which `reserve` replaces when it runs short.
+template <typename Reserve, typename Again>
+void drawLaterSamples(Push &p, Reserve reserve, uint32_t &maskHeld, uint32_t rasterMask, const uint32_t (&ctWrite)[8],
+                      uint32_t targets, MixedDraw mixed, Again again)
+{
+    const bool stageOff = mixed == MixedDraw::Split;
+    if (p.room() < kLaterSamplesWords)
+        reserve();
+    laterSamplesOn(p, rasterMask, targets, stageOff);
+    maskHeld = rasterMask & kLaterSamplesMask;
+    again();
+    if (p.room() < kLaterSamplesWords)
+        reserve();
+    laterSamplesOff(p, ctWrite, targets, stageOff);
+}
 }  // namespace
 
 static_assert(kFetchPatch == icb::kPatchPrimitive);
@@ -56,8 +77,9 @@ void RenderEncoder::finishDraw(uint32_t vertices, uint32_t instances, bool indir
 #endif
     SWITCH_METAL_DIAGNOSTIC(if (cb_->drawTimes_) timeDraw(vertices, instances, indirect));
     const uint64_t vertexWork = BatchWork::product(BatchWork::product(vertices, instances), pl.vertexInstructions);
-    const uint64_t fragmentWork = BatchWork::product(BatchWork::product(drawPixels_, instances),
-                                                     uint64_t(pl.fragmentInstructions) * pl.samplePasses);
+    const uint64_t fragmentCost =
+        BatchWork::product(uint64_t(pl.fragmentInstructions) * pl.samplePasses, pl.writesMemory[1] ? 32u : 1u);
+    const uint64_t fragmentWork = BatchWork::product(BatchWork::product(drawPixels_, instances), fragmentCost);
     if (cb_->batchWork_.add(indirect ? BatchWork::kSaturated : vertexWork + fragmentWork, cb_->batchLimit()))
         cutBatch();
 }
@@ -128,6 +150,22 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
     }
     if (!prepare(pl, primitive, first, first, count, false, why))
         return skippedDraw();
+    const MixedDraw mixed = mixedForm(*emitted_);
+    const bool split = splitsSamples(mixed);
+    const uint32_t drawnInstances = amplifies() ? instances * amplifications_ : instances;
+    // samples 1-3 write no colour: no fetch of a colour they wrote to order, so the plain draw
+    const auto laterSamples = [&] {
+        drawLaterSamples(
+            p_,
+            [this] {
+                reserve();
+            },
+            cb_->sampleMaskHeld_, compatibleRasterMask_, emitted_->ctWrite, std::min(pass_.count, 8u), mixed,
+            [&] {
+                wholeDraw(*pl, false, first, count, instances, first, baseInstance);
+                finishDraw(count, drawnInstances);
+            });
+    };
     bool wholeQuad = instances == 1 && written_.lastNonOverlappingQuad();
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     if (dev_->probeFetchRung.load(std::memory_order_relaxed) == kProbeBlendTwinTriangles)
@@ -135,14 +173,16 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
 #endif
     if (ordered && !wholeQuad) {
         fetchDraw(primitive, false, first, count, instances, first, baseInstance);
+        if (split)
+            laterSamples();
         cb_->draws++;
         return true;
     }
     cb_->draws += amplifies() ? amplifications_ : 1;
-    const uint32_t drawnInstances = amplifies() ? instances * amplifications_ : instances;
+    SWITCH_METAL_DIAGNOSTIC(cb_->counts_.amplifiedDraws += amplifies());
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     if (const auto probe = instances == 1 ? dev_->armedProbe() : nullptr) {
-        if (p_.room() < kInstanceWords + probe->before.size() + probe->after.size())
+        if (p_.room() < kInstanceWords + probe->before.size() + probe->after.size() + 2 * std::size(kProbeRestores))
             reserve();
         if (!probe->before.empty())
             p_.raw(probe->before.data(), uint32_t(probe->before.size()));
@@ -150,6 +190,10 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
         wholeDraw(*pl, false, first, count, instances, first, baseInstance);
         if (!probe->after.empty())
             p_.raw(probe->after.data(), uint32_t(probe->after.size()));
+        for (uint32_t i = 0; i < std::size(kProbeRestores); i++)
+            if (probe->restores >> i & 1)
+                p_.m(kProbeRestores[i].method, kProbeRestores[i].value);
+        cb_->sampleMaskHeld_ = kSampleMaskUnknown;
         finishDraw(count, drawnInstances);
         return true;
     }
@@ -160,6 +204,8 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
     } else {
         emitDraw(false, first, count, instances, first, baseInstance);
     }
+    if (split)
+        laterSamples();
     return true;
 }
 
@@ -201,7 +247,7 @@ StorageFallback RenderEncoder::storageFallback(const Pipeline &pl) const
 {
     if (!pl.storageBits)
         return StorageFallback::None;
-    if (const Pipeline *twin = pl.barrierTwin;
+    if (const Pipeline *twin = __atomic_load_n(&pl.barrierTwin, __ATOMIC_ACQUIRE);
         twin && fetchesOnlyUnwritten(pl.fetchBits, pl.writeBits, pl.storageWriteBits, twin->fetchBits, twin->writeBits))
         return StorageFallback::ReadOnly;
     StorageFallback reason = StorageFallback::None;
@@ -215,12 +261,17 @@ StorageFallback RenderEncoder::storageFallback(const Pipeline &pl) const
 // The state's fetch-free form where this draw takes it (fetch_free.h): the blended colour's target in the pass,
 // CPU-visible memory that is not a surface, the rung-2 blends already over it, whether every image its program samples
 // is of unorm8 codes, and whether the pass loads it over an earlier command buffer's rung-2 blends decide rule fetch.blend
-Pipeline *RenderEncoder::fetchFreeFor(const Pipeline &pl)
+Pipeline *RenderEncoder::fetchFreeFor(const Pipeline &pl, [[maybe_unused]] StorageRoute *route)
 {
-    Pipeline *free = pl.fetchFree;
+    Pipeline *free = __atomic_load_n(&pl.fetchFree, __ATOMIC_ACQUIRE);
+    SWITCH_METAL_DIAGNOSTIC(if (route) route->free = FreeMiss::NoForm);
     if (!free)
         return nullptr;
     const FetchFreeForm &f = free->freeForm;
+    SWITCH_METAL_DIAGNOSTIC(if (route) {
+        route->free = FreeMiss::NoTarget;
+        route->rung = f.rung;
+    });
     const Texture *t = f.colour < pass_.count ? pass_.color[f.colour].texture : nullptr;
     if (t && f.colour < 8 && shadowOf_[f.colour])
         t = shadowOf_[f.colour];  // the texture the client holds, not the pool image the pass renders it through
@@ -235,8 +286,13 @@ Pipeline *RenderEncoder::fetchFreeFor(const Pipeline &pl)
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     forced = dev_->probeFetchRung.load(std::memory_order_relaxed);
 #endif
+    SWITCH_METAL_DIAGNOSTIC(if (route) {
+        route->free = FreeMiss::Rule;
+        route->draw = draw;
+    });
     if (!fetchFreeTaken(f, draw, forced))
         return nullptr;
+    SWITCH_METAL_DIAGNOSTIC(if (route) route->free = FreeMiss::None);
     if (f.rung == FetchBlend && fixedBlendCountsLayer(uint16_t(t->format), draw.eightBitSources) &&
         ropLayers_[f.colour] < 255)
         ropLayers_[f.colour]++;
@@ -249,37 +305,59 @@ Pipeline *RenderEncoder::fetchFreeFor(const Pipeline &pl)
 Pipeline *RenderEncoder::formFor(Pipeline *pl, const FetchDraw &shape)
 {
     uint8_t forced = 0;
+    Pipeline *blendTwin = pl ? __atomic_load_n(&pl->blendTwin, __ATOMIC_ACQUIRE) : nullptr;
+    Pipeline *barrierTwin = pl ? __atomic_load_n(&pl->barrierTwin, __ATOMIC_ACQUIRE) : nullptr;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     forced = dev_->probeFetchRung.load(std::memory_order_relaxed);
     if (pl && (forced == kProbeBlendTwinTriangles || forced == kProbeBlendTwinWhole))
-        if (Pipeline *twin = pl->blendTwin ? pl->blendTwin : pl->barrierTwin) {
+        if (Pipeline *twin = blendTwin ? blendTwin : barrierTwin) {
             dev_->stats.fetch.blendTwin++;
             return twin;
         }
 #endif
-    if (pl)
-        if (Pipeline *free = fetchFreeFor(*pl))
-            return free;
-    if (!pl || !pl->storageBits)
-        return pl;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    if (cb_->forms_.barrierFetch && pl->barrierTwin)
-        return pl->barrierTwin;
+    if (pl && pl->storageBits && cb_->forms_.barrierFetch)
+        if (Pipeline *twin = barrierTwin ? barrierTwin : blendTwin)
+            return twin;
 #endif
+    StorageRoute route;
+    if (pl)
+        if (Pipeline *free = fetchFreeFor(*pl, SWITCH_METAL_DIAGNOSTICS ? &route : nullptr))
+            return free;
+    if (!pl || !pl->storageBits) {
+#if SWITCH_METAL_DIAGNOSTICS
+        if (pl && pl->fetchBits && pl->rec) {
+            route.key = pl->rec->keyHash;
+            route.barrier = true;
+            route.triangles = triangles(shape);
+            route.areaPixels = areaW_ * areaH_;
+            noteStorageRoute(route);
+        }
+#endif
+        return pl;
+    }
     const StorageFallback reason = storageFallback(*pl);
     if (reason == StorageFallback::None) {
-        Pipeline *twin = pl->blendTwin ? pl->blendTwin : pl->barrierTwin;
-        if (forced || !twin || !twinTaken({shape, twin->primitiveId, uint64_t(areaW_) * areaH_, amplifications_ > 1}))
+        Pipeline *twin = blendTwin ? blendTwin : barrierTwin;
+        if (forced || !twin || !twinTaken({shape, twin->primitiveId, uint64_t(areaW_) * areaH_, amplifications_ > 1})) {
+#if SWITCH_METAL_DIAGNOSTICS
+            route.key = pl->rec ? pl->rec->keyHash : 0;
+            route.twin = !twin ? TwinMiss::NoTwin : forced ? TwinMiss::Probe : TwinMiss::Shape;
+            route.triangles = triangles(shape);
+            route.areaPixels = areaW_ * areaH_;
+            noteStorageRoute(route);
+#endif
             return pl;
+        }
         SWITCH_METAL_DIAGNOSTIC(cb_->counts_.twinRule++);
         return twin;
     }
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    const StorageFallback counted = pl->barrierTwin ? reason : StorageFallback::NoTwin;
+    const StorageFallback counted = barrierTwin ? reason : StorageFallback::NoTwin;
     dev_->stats.fetch.storageFallback[size_t(counted)]++;
     dev_->stats.fetch.fallbackKeys.note(pl->rec->keyHash);
 #endif
-    return pl->barrierTwin ? pl->barrierTwin : pl;
+    return barrierTwin ? barrierTwin : pl;
 }
 
 void RenderEncoder::refuseFetch(const Pipeline &pl, FetchRefusal refusal, uint32_t primitive, uint32_t count,
@@ -376,6 +454,21 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
         ibEnd_ = last;
         ibSize_ = indexSize;
     }
+    const MixedDraw mixed = mixedForm(*emitted_);
+    const bool split = splitsSamples(mixed);
+    const uint32_t drawnInstances = amplifies() ? instances * amplifications_ : instances;
+    const auto laterSamples = [&] {
+        drawLaterSamples(
+            p_,
+            [this] {
+                reserve();
+            },
+            cb_->sampleMaskHeld_, compatibleRasterMask_, emitted_->ctWrite, std::min(pass_.count, 8u), mixed,
+            [&] {
+                wholeDraw(*pl, true, 0, count, instances, uint32_t(baseVertex), baseInstance);
+                finishDraw(count, drawnInstances);
+            });
+    };
     bool wholeQuad = instances == 1 && written_.lastNonOverlappingQuad();
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     if (dev_->probeFetchRung.load(std::memory_order_relaxed) == kProbeBlendTwinTriangles)
@@ -383,16 +476,21 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
 #endif
     if (ordered && !wholeQuad) {
         fetchDraw(primitive, true, 0, count, instances, uint32_t(baseVertex), baseInstance);
+        if (split)
+            laterSamples();
         cb_->draws++;
         return true;
     }
     if (drawnWhole(*pl)) {
         wholeDraw(*pl, true, 0, count, instances, uint32_t(baseVertex), baseInstance);
-        finishDraw(count, amplifies() ? instances * amplifications_ : instances);
+        finishDraw(count, drawnInstances);
     } else {
         emitDraw(true, 0, count, instances, uint32_t(baseVertex), baseInstance);
     }
+    if (split)
+        laterSamples();
     cb_->draws += amplifies() ? amplifications_ : 1;
+    SWITCH_METAL_DIAGNOSTIC(cb_->counts_.amplifiedDraws += amplifies());
     return true;
 }
 
@@ -436,10 +534,29 @@ bool RenderEncoder::indirect(uint32_t primitive, bool indexed, const Buffer *arg
     }
     if (p_.room() < 8 + bytes / 4 + mme::kAmplificationScratchWords + mme::kAmplifyCallWords + mme::kFetchShapeWords)
         reserve();
-    // Prior shader writes must reach the command fetcher; NO_PREFETCH on the argument entry prevents early fetch.
-    p_.m(WAIT_FOR_IDLE, 0);
-    p_.m(INVALIDATE_SHADER_CACHES, kFlushData | kInvalidateConstant);
-    p_.m(0x0050, 0);  // NV906F_SET_REFERENCE: pre-Turing MME command-fetch visibility (NVK indirect-read barrier)
+    // Work earlier in this command buffer that wrote the arguments must be done and out of the shader caches before the
+    // command fetcher reads them; NO_PREFETCH on the argument entry prevents early fetch. Earlier command buffers' work
+    // ended in its job's wait-for-idle fence release, which the host passes before this job's entries.
+    const bool drain = cb_->bufferWrites_.meets(arguments->va + offset, bytes) ||
+                       cb_->textureWrites_.meets(arguments->va + offset, bytes);
+    if (drain) {
+        p_.m(WAIT_FOR_IDLE, 0);
+        p_.m(INVALIDATE_SHADER_CACHES, kFlushData | kInvalidateConstant);
+        p_.m(0x0050, 0);  // NV906F_SET_REFERENCE: pre-Turing MME command-fetch visibility (NVK indirect-read barrier)
+    }
+    SWITCH_METAL_DIAGNOSTIC((drain ? frameCpuCounts().indirectDrained : frameCpuCounts().indirectFree)
+                                .fetch_add(1, std::memory_order_relaxed));
+    const auto argumentWords = [&] {
+        if (inside) {
+            bodies_.push_back({bodyStart_, p_.at, 0, 0, true});
+            bodies_.push_back(PushBody::resident(arguments->va + offset, inside, TegraGM20BPushNoPrefetch));
+            dev_->push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - dev_->push_.bo.cpu);
+            bodyStart_ = nullptr;
+            reserve();
+        }
+        for (uint32_t k = inside; k < bytes / 4; k++)
+            *p_.at++ = 0;
+    };
     if (ordered) {
         mme::fetchShape(p_, primitive);
         mme::fetchHeader(p_, indexed);
@@ -451,17 +568,26 @@ bool RenderEncoder::indirect(uint32_t primitive, bool indexed, const Buffer *arg
     } else {
         mme::indirectHeader(p_, indexed);
     }
-    if (inside) {
-        bodies_.push_back({bodyStart_, p_.at, 0, 0, true});
-        bodies_.push_back(PushBody::resident(arguments->va + offset, inside, TegraGM20BPushNoPrefetch));
-        dev_->push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - dev_->push_.bo.cpu);
-        bodyStart_ = nullptr;
-        reserve();
-    }
-    for (uint32_t k = inside; k < bytes / 4; k++)
-        *p_.at++ = 0;
+    argumentWords();
+    if (const MixedDraw mixed = mixedForm(*emitted_); splitsSamples(mixed))
+        drawLaterSamples(
+            p_,
+            [this] {
+                reserve();
+            },
+            cb_->sampleMaskHeld_, compatibleRasterMask_, emitted_->ctWrite, std::min(pass_.count, 8u), mixed,
+            [&] {
+                if (p_.room() < 1 + bytes / 4)
+                    reserve();
+                if (amplifies())
+                    mme::amplifyHeader(p_, indexed);
+                else
+                    mme::indirectHeader(p_, indexed);
+                argumentWords();
+            });
     params_.unknown = true;
     cb_->draws += amplifies() ? amplifications_ : 1;
+    SWITCH_METAL_DIAGNOSTIC(cb_->counts_.amplifiedDraws += amplifies());
     finishDraw(0, 0, true);
     return true;
 }
@@ -576,20 +702,31 @@ bool RenderEncoder::executeSlots(const IcbExecute &x, const char **why)
         mme::fetchCommands(p_, true);
         SWITCH_METAL_DIAGNOSTIC(dev_->stats.fetch.sequential++);
     }
-    for (uint32_t a = 0; a < amplifications_; a++) {
-        if (amplifications_ > 1)
-            icbAmplification(a);
-        if (p_.at > bodyStart_)
-            bodies_.push_back({bodyStart_, p_.at});
-        bodies_.push_back(PushBody::resident(x.slots->va + offset, uint32_t(bytes / 4), TegraGM20BPushNoPrefetch));
-        dev_->push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - dev_->push_.bo.cpu);
-        bodyStart_ = nullptr;
-        reserve();
-    }
-    if (patches)
-        icbPatchesDone();
+    const auto commands = [&] {
+        for (uint32_t a = 0; a < amplifications_; a++) {
+            if (amplifications_ > 1)
+                icbAmplification(a);
+            if (p_.at > bodyStart_)
+                bodies_.push_back({bodyStart_, p_.at});
+            bodies_.push_back(PushBody::resident(x.slots->va + offset, uint32_t(bytes / 4), TegraGM20BPushNoPrefetch));
+            dev_->push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - dev_->push_.bo.cpu);
+            bodyStart_ = nullptr;
+            reserve();
+        }
+    };
+    commands();
     if (ordered)
         mme::fetchCommands(p_, false);
+    // the commands again for samples 1-3, which write no colour: drawn whole, not a primitive at a time
+    if (const MixedDraw mixed = mixedForm(*emitted_); splitsSamples(mixed))
+        drawLaterSamples(
+            p_,
+            [this] {
+                reserve();
+            },
+            cb_->sampleMaskHeld_, compatibleRasterMask_, emitted_->ctWrite, std::min(pass_.count, 8u), mixed, commands);
+    if (patches)
+        icbPatchesDone();
     // the commands set the polygon offset of their own kinds (icb::polygonOffset)
     p_.m(NVB197_SET_POLY_OFFSET_POINT, rasterHeld_.bias);
     p_.m(NVB197_SET_POLY_OFFSET_LINE, rasterHeld_.bias);

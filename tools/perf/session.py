@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import bisect
+import itertools
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -52,6 +53,7 @@ class Session:
 def build(boot: str, recs: list[Rec]) -> Session:
     s = Session(boot, recs)
     s.windows = {
+        'press': windows.presses(recs),
         'mark': windows.marks(recs),
         'launch': windows.launches(recs),
         'touch': windows.touches(recs),
@@ -95,6 +97,14 @@ def families(s: Session) -> Counter[str]:
     return counts
 
 
+HOLE = timedelta(seconds=120)  # the kernel's stats lines come every 5-10 s: this long without a record is a hole
+
+
+def holes(recs: list[Rec]) -> list[tuple[datetime, datetime]]:
+    """Return the stretches of the boot with no record at all: a pull's window, or a log daemon's loss."""
+    return [(a.time, b.time) for a, b in itertools.pairwise(recs) if b.time - a.time >= HOLE]
+
+
 def lost(slows: list[pacing.Slow]) -> list[pacing.Slow]:
     return [x for x in slows if pacing.counted(x)]
 
@@ -110,7 +120,7 @@ def pacing_row(s: Session, w: Window) -> str:
         f'presents 1:{hist[0]} 2:{hist[1]} 3:{hist[2]} 4+:{hist[3]}'
         + (f' ({100 * hist[0] / shown:.0f}% one period apart, worst {worst:.0f} ms)' if shown else '')
         + f' in {covered / 1000:.0f} s of stats{" around it" if around and shown else ""}; {len(slows)} lost, '
-        + f'{sum(x.frame.frames - 1 for x in slows)} periods'
+        + f'{sum(x.chain_periods for x in slows)} periods'
         + (' (' + ', '.join(f'{k} {n}' for k, n in stages.most_common(4)) + ')' if stages else '')
         + ''.join(f'; {n} {stage}' for stage, n in untold.most_common())
     )

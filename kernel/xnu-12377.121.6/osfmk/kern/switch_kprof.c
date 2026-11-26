@@ -86,7 +86,18 @@
 extern void qsort(void *a, size_t n, size_t es, int (*cmp)(const void *, const void *));
 extern int  vsnprintf(char *, size_t, const char *, va_list);
 
-#if (DEVELOPMENT || DEBUG) && defined(SWITCH_KPROF) && SWITCH_KPROF
+/*
+ * A flight-recorder build (--//kernel:recorder) without --//kernel:kprof samples the boot alone, for KPROF_BOOT_NS of
+ * uptime: on 25 Nov SpringBoard spent 5-9 s of CPU per 10 s window before the Home Screen and no line said where.
+ */
+#if !(defined(SWITCH_KPROF) && SWITCH_KPROF) && defined(SWITCH_RECORDER) && SWITCH_RECORDER
+#define KPROF_BOOT_ONLY 1
+#else
+#define KPROF_BOOT_ONLY 0
+#endif
+#define KPROF_BOOT_NS     240000000000ull
+
+#if (DEVELOPMENT || DEBUG) && ((defined(SWITCH_KPROF) && SWITCH_KPROF) || KPROF_BOOT_ONLY)
 #define SWITCH_KPROF_ROLE_ON 1
 #include <switch/kprof_role.h>
 #else
@@ -1926,6 +1937,17 @@ kprof_summary(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
 			kprof_zero_cost_line();
 		}
 	}
+	if (KPROF_BOOT_ONLY) {
+		uint64_t uptime_ns = 0;
+
+		absolutetime_to_nanoseconds(now, &uptime_ns);
+		if (uptime_ns >= KPROF_BOOT_NS) {
+			os_atomic_store(&kprof_ready, false, release);
+			os_log(OS_LOG_DEFAULT, "SwitchKprof: boot window over: off after %llu s of uptime (a recorder build)",
+			    uptime_ns / NSEC_PER_SEC);
+			return;
+		}
+	}
 	thread_call_enter_delayed_with_leeway(kprof_call, NULL, now + kprof_window, kprof_window / 10,
 	    THREAD_CALL_DELAY_LEEWAY);
 }
@@ -2008,7 +2030,7 @@ kprof_function_starts(void)
  * waits) see kprof_ready false and return; the user trap line and the footprint breakdown below are per event and stay
  * on. Not a boot-arg: a release must not be able to turn it on.
  */
-#if defined(SWITCH_KPROF) && SWITCH_KPROF
+#if (defined(SWITCH_KPROF) && SWITCH_KPROF) || KPROF_BOOT_ONLY
 static bool kprof_wanted = true;
 #else
 static bool kprof_wanted = false;

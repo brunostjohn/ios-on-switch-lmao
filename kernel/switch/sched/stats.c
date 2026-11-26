@@ -20,6 +20,7 @@
 #include <switch/xnu.h>
 
 #include "stats.h"
+#include "../diag/deployed.h"
 #include "SwitchPowerTrail.h"
 
 #include <kern/clock.h>
@@ -91,7 +92,8 @@ struct slot {
     uint32_t hist[SWITCH_SCHED_BUCKETS];
     uint32_t runs, failsafe_runs, limit_blocks;
     uint64_t limit_us;
-    uint64_t window_max_us;
+    uint64_t window_longest;             /* switch_sched_longest */
+    uint64_t window_start_ms;            /* uptime at the last report; written only by the report */
     struct switch_sched_window reported; /* the counters at the last report */
 };
 
@@ -142,7 +144,12 @@ void switch_sched_dispatched(thread_t thread, uint64_t now)
     }
     os_atomic_inc(&s->hist[switch_sched_bucket(us)], relaxed);
     os_atomic_inc(&s->runs, relaxed);
-    os_atomic_max(&s->window_max_us, us, relaxed);
+    /* A slot's thread is dispatched on one core at a time and the report only exchanges the word for 0, so the max
+     * never pairs one wait's length with another's start. A dispatch racing the exchange can skip the next window's
+     * max for that one sample: the load filters, os_atomic_max decides. */
+    if (us > os_atomic_load(&s->window_longest, relaxed) >> 32) {
+        os_atomic_max(&s->window_longest, switch_sched_longest_since(us, abs_to_us(made)), relaxed);
+    }
     if (thread->sched_flags & TH_SFLAG_FAILSAFE) {
         os_atomic_inc(&s->failsafe_runs, relaxed);
     }
@@ -320,6 +327,9 @@ void switch_sched_limit_asked(uint8_t percentage, uint64_t interval_ns, bool lif
     }
     asked_requests++;
     simple_unlock(&asked_lock);
+    if (lifted) {
+        switch_sched_limit_shadow(percentage, interval_ns);
+    }
 }
 
 /* The requests so far, when there were new ones since the last report. */
@@ -385,7 +395,8 @@ static struct switch_sched_window take_window(struct slot *s)
     w.failsafe_runs = now.failsafe_runs - s->reported.failsafe_runs;
     w.limit_blocks = now.limit_blocks - s->reported.limit_blocks;
     w.limit_us = now.limit_us - s->reported.limit_us;
-    w.max_us = os_atomic_xchg(&s->window_max_us, 0, relaxed);
+    s->window_start_ms = switch_sched_take_longest(&w, os_atomic_xchg(&s->window_longest, 0, relaxed),
+                                                   s->window_start_ms, abs_to_us(mach_absolute_time()));
     s->reported = now;
     return w;
 }
@@ -493,6 +504,7 @@ static size_t append_kernel_top(char *line, size_t at)
 static void switch_sched_report(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
 {
     static uint64_t last_ns;
+    static bool boot_totals_logged, deployed_logged;
     static char line[LINE];
     uint64_t now_ns = 0;
     uint64_t window_ns = 0;
@@ -523,9 +535,19 @@ static void switch_sched_report(__unused thread_call_param_t p0, __unused thread
     append_slots(line, MIN(at, LINE - 1), FIRST_GPU, SLOTS);
     os_log(OS_LOG_DEFAULT, "%s", line);
     switch_sched_cpu_report(line, window_ns);
+    if (boot_ns != 0 && !boot_totals_logged) {
+        boot_totals_logged = true;
+        switch_sched_cpu_boot_totals(line, boot_ns);
+    }
+    if (!deployed_logged) {
+        deployed_logged = switch_log_deployed();
+    }
+    switch_sched_systime_report(line, LINE, window_ns);
+    switch_sched_callout_report(line, LINE, window_ns);
     switch_sched_watch_report(line, LINE, window_ns);
     switch_diag_pagein_report(line, LINE, window_ns);
     report_asked(line);
+    switch_sched_limit_report(line, LINE, window_ns);
 }
 
 #endif /* DEVELOPMENT || DEBUG */

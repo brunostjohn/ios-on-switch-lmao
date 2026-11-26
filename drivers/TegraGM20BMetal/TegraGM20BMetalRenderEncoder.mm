@@ -320,6 +320,8 @@ static void forwardCall(SwitchMetalEncoder *e, SEL selector, const void *argumen
     _eligibility++;
     if (gm20b::testsHiddenZeta(_ds))
         _cb->_passes[_passAt].testsHiddenZeta = true;
+    if (!gm20b::stencilNoop(_ds.front) || !gm20b::stencilNoop(_ds.back))
+        _cb->_passes[_passAt].testsStencil = true;
     setBinding(_cb, OpDepthStencil, 0, 0, s, 0);
     const uint32_t zeta = _zeta ? _zeta : _cb->_passes[_passAt].testsHiddenZeta ? gm20b::kZetaFormat : 0;
     if (const gm20b::Pipeline *pl = _pipe ? _pipe->_raw : nullptr;

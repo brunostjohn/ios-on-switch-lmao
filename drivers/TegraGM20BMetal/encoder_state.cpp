@@ -32,9 +32,17 @@ void RenderEncoder::bindState(Push &p, const Pipeline &pl)
         return;
     }
     rasterHeld_.units = Raster::Units::Unknown;
+    const auto reselectRoot = [&] {
+        if (!pl.reselectRoot)
+            return;
+        constexpr uint32_t kRootBytes = 0x800;
+        p.inc(NVB197_SET_CONSTANT_BUFFER_SELECTOR_A,
+              {kRootBytes, uint32_t(dev_->root_.va >> 32), uint32_t(dev_->root_.va)});
+    };
     if (!pl.segment || !bindsBySegment()) {
         SWITCH_METAL_DIAGNOSTIC(cb_->counts_.segmentCopies += pl.segment && !measuringInline());
-        p.raw(pl.methods.data(), uint32_t(pl.methods.size()));
+        p.raw(pl.methodWords(), pl.methodCount());
+        reselectRoot();
         if (pl.segment && !measuringInline())
             held.bound(pl.segment);
         else
@@ -42,6 +50,7 @@ void RenderEncoder::bindState(Push &p, const Pipeline &pl)
         return;
     }
     bindSegment(bodies_, bodyStart_, p.at, pl.segment);
+    reselectRoot();
     held.bound(pl.segment);
     cb_->segmentBinds_++;
     SWITCH_METAL_DIAGNOSTIC(cb_->counts_.segmentBinds++);
@@ -133,7 +142,7 @@ bool RenderEncoder::writeClipControl(Push &p, const Pipeline &pl, const Raster &
     }
     // Metal's draws store each depth within its bounds (depth_bounds.h) through the pixel clamp, which a float
     // zeta's clip control (MIN_Z_ZERO_MAX_Z_ONE clear, emit.cpp) and a clamping one leave to the range
-    if (pass_.metalDepth) {
+    if (pass_.metalDraws) {
         const float unit = raster.units == Raster::Units::Unorm24 ? 0x1p-24f : 0x1p-23f;
         const DepthBounds bounds =
             metalDepthBounds(depthClamp_, depthRange_, pl.fragmentDepth,

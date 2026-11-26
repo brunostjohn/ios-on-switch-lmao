@@ -40,6 +40,7 @@ void fillDeviceLimits(id device)
 API_AVAILABLE(ios(18.0), macos(15.0))
 @interface SwitchMetalResidencySet : SwitchMetalObject <MTLResidencySet>
 - (instancetype)initWithDescriptor:(MTLResidencySetDescriptor *)descriptor device:(id)device;
+- (std::shared_ptr<const SwitchMetalResidencySnapshot>)gm20bSnapshot;
 @end
 
 @interface SwitchMetalDevice (Base)
@@ -154,6 +155,7 @@ API_AVAILABLE(ios(18.0), macos(15.0))
     gm20b::Mutex _lock;
     NSMutableArray<id<MTLAllocation>> *_pending;
     NSArray<id<MTLAllocation>> *_committed;
+    std::shared_ptr<const SwitchMetalResidencySnapshot> _snapshot;
 }
 
 @dynamic device, label;
@@ -229,8 +231,44 @@ API_AVAILABLE(ios(18.0), macos(15.0))
 
 - (void)commit
 {
+    auto snapshot = std::make_shared<SwitchMetalResidencySnapshot>();
     std::lock_guard<gm20b::Mutex> hold(_lock);
     _committed = [_pending copy];
+    snapshot->committed = _committed;
+    for (id allocation in _committed) {
+        if ([allocation isKindOfClass:[SwitchMetalBuffer class]]) {
+            SwitchMetalBuffer *b = (SwitchMetalBuffer *)allocation;
+            const MTLStorageMode mode =
+                MTLStorageMode((b->_options & MTLResourceStorageModeMask) >> MTLResourceStorageModeShift);
+            if (mode != MTLStorageModePrivate && mode != MTLStorageModeMemoryless)
+                snapshot->hostVisible.push_back({allocation, SwitchMetalResidencyEntry::Kind::Buffer, true});
+        } else if ([allocation isKindOfClass:[SwitchMetalTexture class]]) {
+            SwitchMetalTexture *t = (SwitchMetalTexture *)allocation;
+            const MTLStorageMode mode = t->_descriptor ? t->_descriptor.storageMode : MTLStorageModeShared;
+            if (mode == MTLStorageModePrivate || mode == MTLStorageModeMemoryless)
+                continue;
+            const MTLTextureUsage usage = t->_descriptor ? t->_descriptor.usage : MTLTextureUsageUnknown;
+            if (usage != MTLTextureUsageUnknown && !(usage & (MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite)))
+                continue;
+            __unsafe_unretained SwitchMetalTexture *root = (t->_levelsOwner && !t->_ownForm) ? t->_levelsOwner : t;
+            const bool surface = root->_surface != nil;
+            const bool write = surface ? (usage & MTLTextureUsageShaderWrite) != 0
+                                       : (usage == MTLTextureUsageUnknown || (usage & MTLTextureUsageShaderWrite) != 0);
+            snapshot->hostVisible.push_back({allocation, SwitchMetalResidencyEntry::Kind::Texture, write});
+        } else if ([allocation isKindOfClass:[SwitchMetalHeap class]]) {
+            SwitchMetalHeap *h = (SwitchMetalHeap *)allocation;
+            const MTLStorageMode mode = h->_descriptor ? h->_descriptor.storageMode : MTLStorageModeShared;
+            if (mode != MTLStorageModePrivate && mode != MTLStorageModeMemoryless)
+                snapshot->hostVisible.push_back({allocation, SwitchMetalResidencyEntry::Kind::Heap, false});
+        }
+    }
+    _snapshot = std::move(snapshot);
+}
+
+- (std::shared_ptr<const SwitchMetalResidencySnapshot>)gm20bSnapshot
+{
+    std::lock_guard<gm20b::Mutex> hold(_lock);
+    return _snapshot;
 }
 
 - (void)requestResidency
@@ -240,3 +278,112 @@ API_AVAILABLE(ios(18.0), macos(15.0))
 {}
 
 @end
+
+void gm20bQueueAddResidencySet(SwitchMetalQueue *queue, id set)
+{
+    if (@available(iOS 18.0, macOS 15.0, *)) {
+        if (![set isKindOfClass:[SwitchMetalResidencySet class]])
+            return;
+    } else {
+        return;
+    }
+    std::lock_guard<gm20b::Mutex> hold(queue->_residencyLock);
+    if (!queue->_residencySets)
+        queue->_residencySets = [NSMutableArray array];
+    if (![queue->_residencySets containsObject:set]) {
+        [queue->_residencySets addObject:set];
+        queue->_residencySetCount.store(uint32_t(queue->_residencySets.count), std::memory_order_release);
+    }
+}
+
+void gm20bQueueRemoveResidencySet(SwitchMetalQueue *queue, id set)
+{
+    if (!set)
+        return;
+    std::lock_guard<gm20b::Mutex> hold(queue->_residencyLock);
+    [queue->_residencySets removeObject:set];
+    queue->_residencySetCount.store(uint32_t(queue->_residencySets.count), std::memory_order_release);
+}
+
+void gm20bUseResidencySet(SwitchMetalCommandBuffer *cb, id set)
+{
+    if (!cb)
+        return;
+    if (@available(iOS 18.0, macOS 15.0, *)) {
+        if (![set isKindOfClass:[SwitchMetalResidencySet class]])
+            return;
+    } else {
+        return;
+    }
+    SWITCH_METAL_DIAGNOSTIC(gRM->raw->stats.residencySetUses++);
+    if (!cb->_residencySets)
+        cb->_residencySets = [NSMutableArray array];
+    if (![cb->_residencySets containsObject:set])
+        [cb->_residencySets addObject:set];
+}
+
+void gm20bSnapshotResidencySets(SwitchMetalCommandBuffer *cb)
+{
+    SwitchMetalQueue *queue = cb->_queue;
+    const bool hasQueueSets = queue && queue->_residencySetCount.load(std::memory_order_acquire) != 0;
+    if (!cb->_residencySets && !hasQueueSets)
+        return;
+    if (@available(iOS 18.0, macOS 15.0, *)) {
+        NSArray *queued = nil;
+        if (hasQueueSets) {
+            std::lock_guard<gm20b::Mutex> hold(queue->_residencyLock);
+            queued = [queue->_residencySets copy];
+        }
+        auto take = [&](SwitchMetalResidencySet *set) {
+            if (auto snap = [set gm20bSnapshot]; snap && snap->committed.count)
+                cb->_residencySnapshots.push_back(std::move(snap));
+        };
+        for (SwitchMetalResidencySet *set in cb->_residencySets)
+            take(set);
+        for (SwitchMetalResidencySet *set in queued)
+            if (!cb->_residencySets || ![cb->_residencySets containsObject:set])
+                take(set);
+    }
+    cb->_residencySets = nil;
+}
+
+static void nameResident(gm20b::CommandBuffer *rc, const SwitchMetalResidencyEntry &entry)
+{
+    switch (entry.kind) {
+    case SwitchMetalResidencyEntry::Kind::Buffer: {
+        SWITCH_METAL_DIAGNOSTIC(gRM->raw->stats.residencyNamed++);
+        SwitchMetalBuffer *b = (SwitchMetalBuffer *)entry.allocation;
+        if (b->_raw.hostVisible && !b->_raw.wc)
+            rc->clean(b->_raw.cpu, b->_raw.length, true);
+        useBuffer(rc, b, true);
+        break;
+    }
+    case SwitchMetalResidencyEntry::Kind::Texture: {
+        SwitchMetalTexture *t = (SwitchMetalTexture *)entry.allocation;
+        // A shader reaches a texture through a residency set only via gpuResourceID (render targets and direct binds
+        // name themselves on their encoders), so drawables and unbound IOSurfaces in a set ask nothing of unrelated jobs
+        if (!t->_idNamed.load(std::memory_order_acquire) && !t->_viewIdNamed.load(std::memory_order_acquire))
+            return;
+        SWITCH_METAL_DIAGNOSTIC(gRM->raw->stats.residencyNamed++);
+        __unsafe_unretained SwitchMetalTexture *root = (t->_levelsOwner && !t->_ownForm) ? t->_levelsOwner : t;
+        if (entry.write && root->_surface)
+            declareGpuWrites(root);
+        if (root->_buffer && root->_buffer->_raw.hostVisible && !root->_buffer->_raw.wc)
+            rc->clean(root->_buffer->_raw.cpu, root->_buffer->_raw.length, entry.write);
+        useTexture(rc, t, entry.write);
+        break;
+    }
+    case SwitchMetalResidencyEntry::Kind::Heap:
+        SWITCH_METAL_DIAGNOSTIC(gRM->raw->stats.residencyNamed++);
+        if (const auto &members = ((SwitchMetalHeap *)entry.allocation)->_members)
+            rc->useHeap(*members, true);
+        break;
+    }
+}
+
+void gm20bNameResidencySets(SwitchMetalCommandBuffer *cb, gm20b::CommandBuffer *rc)
+{
+    for (const auto &snapshot : cb->_residencySnapshots)
+        for (const SwitchMetalResidencyEntry &entry : snapshot->hostVisible)
+            nameResident(rc, entry);
+}

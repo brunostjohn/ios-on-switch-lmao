@@ -22,7 +22,7 @@ std::vector<uint32_t> publishedWords;
 uint32_t arena[SWITCH_HOST1X_ARENA_WORDS], reservedWords, submittedSyncpt, submittedThreshold;
 uint32_t arenaShort, arenaWaits, reservedCapacity;
 uint32_t begins, aborts, commits, retained, bridges, released, roomWaits, submits, powerUses, powerDones;
-int bridgeError, submitError, retainError, statusError, powerError, semanticResult = 1, batchSettled = 1;
+int bridgeError, bridgeFailed, submitError, retainError, statusError, powerError, semanticResult = 1, batchSettled = 1;
 switch_gpu_event_waits *preparedBatch;
 std::vector<switch_host1x_fence *> fences;
 std::vector<uint32_t> fenceBounds, watchedBounds;
@@ -35,7 +35,7 @@ struct Notification {
 
 std::vector<Notification> notifications;
 uint64_t nextTestSequence = 0;
-bool transactionLocked, changeProducer, busyOnce;
+bool transactionLocked, changeProducer, busyOnce, failBridgeAfterSubmit;
 volatile uint64_t *changeGeneration;
 
 // The engine and host1x behind the queue: the job syncpoint's value, what the cancellation did to the channel and the
@@ -241,6 +241,11 @@ int switch_gpu_bridge_submit(const switch_gpu_backing_token *tokens, uint32_t co
         ++sourceTokens[0].value;
         changeProducer = false;
     }
+    if (failBridgeAfterSubmit) {
+        bridgeFailed = -5;
+        sourceTokens.clear();
+        failBridgeAfterSubmit = false;
+    }
     return 0;
 }
 
@@ -248,6 +253,11 @@ void switch_gpu_bridge_syncpoint(const switch_gpu_bridge *, uint32_t *id, uint32
 {
     *id = 170;
     *threshold = 0x1000001;
+}
+
+int switch_gpu_bridge_failed(const switch_gpu_bridge *)
+{
+    return bridgeFailed;
 }
 
 int switch_gpu_bridge_covers(const switch_gpu_bridge *bridge, const switch_gpu_backing_token *token)
@@ -585,7 +595,7 @@ protected:
     {
         begins = aborts = commits = retained = bridges = released = roomWaits = submits = powerUses = powerDones = 0;
         reservedWords = submittedSyncpt = submittedThreshold = arenaShort = arenaWaits = reservedCapacity = 0;
-        bridgeError = submitError = retainError = statusError = powerError = 0;
+        bridgeError = bridgeFailed = submitError = retainError = statusError = powerError = 0;
         semanticResult = batchSettled = 1;
         preparedBatch = nullptr;
         fences.clear();
@@ -593,7 +603,7 @@ protected:
         watchedBounds.clear();
         producerPhysical.clear();
         notifications.clear();
-        transactionLocked = changeProducer = busyOnce = false;
+        transactionLocked = changeProducer = busyOnce = failBridgeAfterSubmit = false;
         changeGeneration = nullptr;
         sourceTokens.clear();
         bridgePhysicalAtRelease.clear();
@@ -736,6 +746,32 @@ TEST_F(SwitchVICJobsTest, ABatchIsGatheredFromWhereItWasWrittenWithItsLastJobsFe
     EXPECT_EQ(submittedSyncpt, gSyncpt);
     EXPECT_EQ(submittedThreshold, static_cast<uint32_t>(nextTestSequence + 3));
     EXPECT_EQ(publishedWords.size(), 3u * (2 + 3));
+}
+
+// A cancelled producer's queued job renders its background alone (NVJPG's cancelled re-pack): slot 0 goes off in that
+// job's staged configuration, cleaned for VIC, and no other job's changes
+TEST_F(SwitchVICJobsTest, AQueuedJobOfACancelledProducerRendersItsBackgroundAlone)
+{
+    for (auto &job : jobs)
+        TEGRA_VIC_SET(job.config, TEGRA_VIC_SLOTS, SLOT_ENABLE, 1);
+    const SwitchVICOwnership ownership = {uses, 1, nullptr, 0, nullptr, 0};
+    uint32_t first = 0, second = 0;
+    ASSERT_EQ(switch_vic_submit_checked(jobs, 1, nullptr, ownership, nullptr, nullptr, &first), 0);
+    ASSERT_EQ(switch_vic_submit_checked(jobs + 1, 1, nullptr, ownership, nullptr, nullptr, &second), 0);
+    const auto enabled = [&](uint32_t fence) {
+        for (uint32_t i = 0; i < gQueue.count; ++i) {
+            const uint32_t slot = (gQueue.head + i) % SwitchVICQueue::kSlots;
+            if (static_cast<uint32_t>(gQueue.jobs[slot].fence) == fence)
+                return TEGRA_VIC_GET(configurations + uint64_t(slot) * kSwitchVICConfigStride, TEGRA_VIC_SLOTS,
+                                     SLOT_ENABLE);
+        }
+        return uint64_t(~0ull);
+    };
+    ASSERT_EQ(enabled(second), 1u);
+    EXPECT_TRUE(switch_vic_job_background(second));
+    EXPECT_EQ(enabled(second), 0u) << "the cancelled producer's job writes none of its source";
+    EXPECT_EQ(enabled(first), 1u) << "another job keeps its source";
+    EXPECT_FALSE(switch_vic_job_background(second + 7)) << "no job of that fence";
 }
 
 TEST_F(SwitchVICJobsTest, NoArenaRoomSleepsOutsideTheQueueAndOwnershipLocks)
@@ -1531,4 +1567,16 @@ TEST_F(SwitchVICJobsTest, AParkedQueueHoldsTheNextSubmissionUntilAResumeRebasesI
     ASSERT_EQ(submit(), 0);
     EXPECT_EQ(gQueue.submitted, base + 3);
     EXPECT_EQ(powerUses, powerDones);
+}
+
+TEST_F(SwitchVICJobsTest, AFailedBridgeBetweenPassesRefusesSubmissionBeforeHardwarePublication)
+{
+    gpu();
+    failBridgeAfterSubmit = true;
+    EXPECT_EQ(submit(), -5);
+    EXPECT_EQ(submits, 0u);
+    EXPECT_EQ(commits, 0u);
+    EXPECT_EQ(gQueue.count, 0u);
+    EXPECT_EQ(bridges, 1u);
+    EXPECT_EQ(released, 1u);
 }

@@ -43,8 +43,8 @@ uint64_t hashPrefix(const uint8_t *bytes, size_t n)
 constexpr uint64_t kLongWaitUs = 50000;
 
 const char *const kVetoNames[32] = {
-    "-",      "counters", "shadows", "variant", "probes", "parallel", "ops",     "refused",
-    "planar", "native",   "failed",  "other",   "device", "zcull",    "channel",
+    "-",       "counters", "shadows", "variant", "probes", "parallel", "ops",
+    "refused", "planar",   "native",  "failed",  "other",  "device",   "channel",
 };
 
 const char *const kLostNames[] = {"-", "short", "busy", "late"};
@@ -295,8 +295,17 @@ size_t metal_frame_rates(char *out, size_t size)
     const uint64_t pipelined = gRM->stats.pipelinedEncoders.load(std::memory_order_relaxed),
                    sealed = gRM->stats.sealedEncoders.load(std::memory_order_relaxed);
     const uint64_t kicks = take(c.kicks), kickUs = take(c.kickUs);
+    put(line, " ind=%llu/%llu", (unsigned long long)take(c.indirectDrained), (unsigned long long)take(c.indirectFree));
     put(line, " split=%llu kick=%llu/%lluus", (unsigned long long)take(c.splits),
         (unsigned long long)(kicks ? kickUs / kicks : 0), (unsigned long long)take(c.kickMaxUs));
+    // the Shared spans zeroed at the front of a command buffer since the last line (scrubs.cpp), against buffers
+    static uint64_t lastScrubRuns, lastScrubBytes;
+    const uint64_t scrubRuns = gRM->raw->stats.scrubbedRuns.load(std::memory_order_relaxed),
+                   scrubBytes = gRM->raw->stats.scrubbedBytes.load(std::memory_order_relaxed);
+    put(line, " scrub=%llu/%lluKiB", (unsigned long long)(scrubRuns - lastScrubRuns),
+        (unsigned long long)((scrubBytes - lastScrubBytes) >> 10));
+    lastScrubRuns = scrubRuns;
+    lastScrubBytes = scrubBytes;
     put(line, " ahead=%llu/%llu enc=%llu/%llu why=", (unsigned long long)take(c.ahead), (unsigned long long)buffers,
         (unsigned long long)(pipelined - lastPipelined), (unsigned long long)(sealed - lastSealed));
     lastPipelined = pipelined;
@@ -337,6 +346,9 @@ size_t metal_frame_rates(char *out, size_t size)
         (unsigned long long)take(c.longestParts[0]), (unsigned long long)take(c.longestParts[1]),
         (unsigned long long)take(c.longestParts[2]), (unsigned long long)take(c.longestParts[3]),
         (unsigned long long)take(c.longestParts[4]));
+    put(line, " early=");
+    for (size_t k = 0; k < size_t(gm20b::EarlyOutcome::Count); k++)
+        put(line, "%s%llu", k ? "/" : "", (unsigned long long)take(c.early[k]));
     using E = gm20b::EnqueueTiming;
     put(line, " enq=%llu/%llu/%llu latew=%llu/%llu/%llu/%llu",
         (unsigned long long)take(c.enqueues[size_t(E::BeforeFirstEncoder)]),

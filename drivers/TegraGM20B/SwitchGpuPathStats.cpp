@@ -34,6 +34,7 @@ const char *const kNames[SWITCH_GPU_PATH_COUNT] = {
 	"stale_sets",     "shared_uses",     "relayout_fresh",  "relayout_deferred",
 	"relayout_lazy",  "relayout_never",  "relayout_moved",  "quiet_jobs",
 	"wake_asks",      "writer_promises", "promise_waits",   "promise_cpu_releases",
+	"volatile_jobs",
 };
 
 // Every path is taken in the syscall or trap of the process it is for, or on a kernel thread charged to it
@@ -123,7 +124,7 @@ int pathsSysctl SYSCTL_HANDLER_ARGS
 	(void)oidp;
 	(void)arg1;
 	(void)arg2;
-	char line[512];
+	char line[1024];
 	switch_gpu_path_line(line, sizeof(line));
 	return SYSCTL_OUT(req, line, strlen(line) + 1);
 }
@@ -288,6 +289,8 @@ extern "C" void switch_gpu_path_job(uint32_t visibility, int unlocked_writes, in
 	if (visibility & SWITCH_GPU_SUBMIT_VISIBILITY_EXPLICIT)
 		switch_gpu_path_taken(visibility & SWITCH_GPU_SUBMIT_EXTERNAL_VISIBILITY
 					      ? SWITCH_GPU_PATH_EXTERNAL_JOB
+				      : visibility & SWITCH_GPU_SUBMIT_VOLATILE_VISIBILITY
+					      ? SWITCH_GPU_PATH_VOLATILE_JOB
 					      : SWITCH_GPU_PATH_INTERNAL_JOB,
 				      1);
 	switch_gpu_path_taken(SWITCH_GPU_PATH_UNLOCKED_WRITE, unlocked_writes ? 1 : 0);
@@ -342,6 +345,7 @@ extern "C" void switch_gpu_path_line(char *line, size_t size)
 			snprintf(line + used, size - used, " preempt_%s_us=%u", kBuckets[b],
 				 landed.bucket[b]);
 	}
+	tgm_spare_seeds_line(line, size);
 }
 
 extern "C" void switch_gpu_path_register(void)

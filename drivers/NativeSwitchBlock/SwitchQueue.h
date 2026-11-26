@@ -166,39 +166,84 @@ inline bool switchChainFitsDirection(const Request *head, uint64_t start, uint32
 {
     if (write && (maxGap || gapBudget))
         return false;
-    uint64_t total = 0;
+    constexpr uint32_t kStackCap = 256;
+    if (count > kStackCap) {
+        uint64_t total = 0;
+        uint32_t found = 0;
+        const Request *first = nullptr;
+        bool atStart = false;
+        bool atEnd = false;
+        for (const Request *r = head; r; r = r->next) {
+            if (!r->chained)
+                continue;
+            if (!first)
+                first = r;
+            ++found;
+            if (!switchSameWindow(r, first, 0) || r->write != write || !r->sectors || r->lba < start ||
+                r->sectors > sectors || r->lba - start > sectors - r->sectors)
+                return false;
+            total += r->sectors;
+            atStart |= r->lba == start;
+            atEnd |= r->lba + r->sectors == start + sectors;
+            uint64_t before = start;
+            for (const Request *other = head; other; other = other->next) {
+                if (!other->chained || other == r)
+                    continue;
+                if (switchOverlaps(r, other))
+                    return false;
+                const uint64_t end = other->lba + other->sectors;
+                if (end <= r->lba && end > before)
+                    before = end;
+            }
+            if (r->lba - before > maxGap)
+                return false;
+        }
+        return found == count && atStart && atEnd && total <= sectors && sectors - total <= gapBudget;
+    }
+    SwitchLbaRange spans[kStackCap];
     uint32_t found = 0;
     const Request *first = nullptr;
-    bool atStart = false;
-    bool atEnd = false;
+    uint64_t total = 0;
+    bool sorted = true;
     for (const Request *r = head; r; r = r->next) {
         if (!r->chained)
             continue;
         if (!first)
             first = r;
-        ++found;
+        if (found >= count)
+            return false;
         if (!switchSameWindow(r, first, 0) || r->write != write || !r->sectors || r->lba < start ||
             r->sectors > sectors || r->lba - start > sectors - r->sectors)
             return false;
+        if (found && r->lba < spans[found - 1].lba)
+            sorted = false;
+        spans[found++] = {r->lba, r->sectors};
         total += r->sectors;
-        atStart |= r->lba == start;
-        atEnd |= r->lba + r->sectors == start + sectors;
-        uint64_t before = start;
-        for (const Request *other = head; other; other = other->next) {
-            if (!other->chained || other == r)
-                continue;
-            if (switchOverlaps(r, other))
-                return false;
-            const uint64_t end = other->lba + other->sectors;
-            if (end <= r->lba && end > before)
-                before = end;
-        }
-        if (r->lba - before > maxGap)
-            return false;
     }
     if (!found)
         return !count && !sectors;
-    return found == count && atStart && atEnd && total <= sectors && sectors - total <= gapBudget;
+    if (found != count || total > sectors || sectors - total > gapBudget)
+        return false;
+    if (!sorted) {
+        for (uint32_t i = 1; i < found; ++i) {
+            const SwitchLbaRange key = spans[i];
+            uint32_t j = i;
+            while (j && spans[j - 1].lba > key.lba) {
+                spans[j] = spans[j - 1];
+                --j;
+            }
+            spans[j] = key;
+        }
+    }
+    if (spans[0].lba != start)
+        return false;
+    uint64_t end = spans[0].lba + spans[0].sectors;
+    for (uint32_t i = 1; i < found; ++i) {
+        if (spans[i].lba < end || spans[i].lba - end > maxGap)
+            return false;
+        end = spans[i].lba + spans[i].sectors;
+    }
+    return end == start + sectors;
 }
 
 // Whether the `count` requests marked `chained` are reads that fit [start, start + sectors) as a chain may: inside it,

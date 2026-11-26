@@ -82,6 +82,28 @@ bool SetView::named(uint64_t handle) const
     return false;
 }
 
+bool SetView::UseCache::matches(uint32_t ch, uint32_t setId, bool isAdmitted, const TegraGM20BAbiSurfaceUse *items,
+                                uint32_t count) const
+{
+    if (!valid || channel != ch || set != setId || admitted != isAdmitted || uses.size() != count)
+        return false;
+    for (uint32_t i = 0; i < count; ++i)
+        if (uses[i].handle != items[i].handle || uses[i].access != items[i].access ||
+            uses[i].reserved != items[i].reserved)
+            return false;
+    return true;
+}
+
+void SetView::UseCache::save(uint32_t ch, uint32_t setId, bool isAdmitted, const TegraGM20BAbiSurfaceUse *items,
+                             uint32_t count)
+{
+    channel = ch;
+    set = setId;
+    admitted = isAdmitted;
+    uses.assign(items, items + count);
+    valid = true;
+}
+
 void ResourceSet::insertLocked(const Bo &bo, uint32_t access, bool always)
 {
     const uint64_t va = bo.vaBase ? bo.vaBase : bo.va;
@@ -229,15 +251,54 @@ bool ResourceSet::registerLocked(Kernel &k, const char *when)
 bool ResourceSet::add(Kernel &k, std::initializer_list<Candidate> candidates, bool always)
 {
     std::lock_guard<gm20b::Mutex> l(lock_);
+    return addLocked(k, candidates.begin(), candidates.end(), always, "for a new member");
+}
+
+void ResourceSet::addLater(std::initializer_list<Candidate> candidates)
+{
+    std::lock_guard<gm20b::Mutex> l(lock_);
+    for (const Candidate &c : candidates)
+        pending_.push_back({*c.bo, c.access});
+    hasPending_.store(true, std::memory_order_release);
+}
+
+void ResourceSet::addPending(Kernel &k)
+{
+    if (!hasPending_.load(std::memory_order_acquire))
+        return;
+    std::lock_guard<gm20b::Mutex> l(lock_);
+    hasPending_.store(false, std::memory_order_relaxed);
+    if (pending_.empty())
+        return;
+    std::vector<Candidate> candidates;
+    candidates.reserve(pending_.size());
+    for (const auto &[bo, access] : pending_)
+        candidates.push_back({&bo, access});
+    addLocked(k, candidates.data(), candidates.data() + candidates.size(), false, "for an unparked member");
+    pending_.clear();
+}
+
+// A BO that leaves before the next begin is not added then
+void ResourceSet::dropPendingLocked(uint64_t handle)
+{
+    pending_.erase(std::remove_if(pending_.begin(), pending_.end(),
+                                  [handle](const std::pair<Bo, uint32_t> &p) {
+                                      return p.first.handle == handle;
+                                  }),
+                   pending_.end());
+}
+
+bool ResourceSet::addLocked(Kernel &k, const Candidate *first, const Candidate *last, bool always, const char *when)
+{
     std::vector<uint64_t> joining;
-    for (const Candidate &c : candidates)
+    for (const Candidate *c = first; c != last; ++c)
         if (std::none_of(members_.begin(), members_.end(), [&](const SetMember &m) {
-                return m.handle == c.bo->handle;
+                return m.handle == c->bo->handle;
             }))
-            joining.push_back(c.bo->handle);
-    for (const Candidate &c : candidates)
-        insertLocked(*c.bo, c.access, always);
-    if (!registerLocked(k, "for a new member")) {
+            joining.push_back(c->bo->handle);
+    for (const Candidate *c = first; c != last; ++c)
+        insertLocked(*c->bo, c->access, always);
+    if (!registerLocked(k, when)) {
         // Only the BOs this add brought take their members out. A candidate of a BO that was a member already (an arena's
         // view alias) stays: the kernel's set still holds that BO, at every VA, until a free or a refusal takes it out.
         members_.erase(std::remove_if(members_.begin(), members_.end(),
@@ -248,9 +309,9 @@ bool ResourceSet::add(Kernel &k, std::initializer_list<Candidate> candidates, bo
         version_.fetch_add(1, std::memory_order_release);
         return false;
     }
-    for (const Candidate &c : candidates)
+    for (const Candidate *c = first; c != last; ++c)
         if (std::none_of(members_.begin(), members_.end(), [&](const SetMember &m) {
-                return m.handle == c.bo->handle;
+                return m.handle == c->bo->handle;
             }))
             return false;
     return true;
@@ -276,6 +337,7 @@ void ResourceSet::remove(Kernel &k, const std::vector<uint64_t> &handles)
     std::lock_guard<gm20b::Mutex> l(lock_);
     bool changed = false;
     for (uint64_t handle : handles) {
+        dropPendingLocked(handle);
         if (eraseLocked(handle)) {
             ++removals_;
             changed = true;
@@ -299,6 +361,7 @@ void ResourceSet::remove(Kernel &k, const std::vector<uint64_t> &handles)
 bool ResourceSet::leaving(uint64_t handle)
 {
     std::lock_guard<gm20b::Mutex> l(lock_);
+    dropPendingLocked(handle);
     if (!eraseLocked(handle))
         return false;
     ++removals_;
@@ -352,6 +415,9 @@ bool submitInSet(Kernel &k, ResourceSet &set, SetView &view, bool named, KernelJ
 {
     set.view(view);
     view.refused.clear();
+    const bool isCancel = (job.admissionFlags & TegraGM20BJobAdmissionCancel) != 0;
+    const bool admitted = (job.admissionFlags & (TegraGM20BJobAdmissionBegin | TegraGM20BJobAdmissionContinue)) != 0;
+    bool retriedSameUses = false;
     for (;;) {
         if (uses) {
             for (const SetMember &m : view.outside)
@@ -370,12 +436,49 @@ bool submitInSet(Kernel &k, ResourceSet &set, SetView &view, bool named, KernelJ
         }
         job.set = named ? view.set : 0;
         job.generation = job.set ? view.generation : 0;
+        const bool canSameUses = !isCancel && !retriedSameUses && k.supportsSameUses() && job.useCount > 0 &&
+                                 job.uses != nullptr &&
+                                 view.useCache.matches(job.channel, job.set, admitted, job.uses, job.useCount);
+        KernelJob attempt = job;
+        if (canSameUses) {
+            attempt.sameUses = true;
+            attempt.uses = nullptr;
+            attempt.useCount = 0;
+        }
         int kr = KERN_SUCCESS;
-        const bool submitted = k.submitJob(job, seqno, &kr);
+        const bool submitted = k.submitJob(attempt, seqno, &kr);
         if (result)
             *result = kr;
-        if (submitted)
+        if (submitted) {
+            if (!isCancel && !canSameUses) {
+                if (k.supportsSameUses() && job.useCount > 0 && job.uses != nullptr)
+                    view.useCache.save(job.channel, job.set, admitted, job.uses, job.useCount);
+                else
+                    view.useCache.clear();
+            }
             return true;
+        }
+        if (canSameUses && kr == kIOReturnNotReady) {
+            view.useCache.clear();
+            retriedSameUses = true;
+            if (job.set) {
+                switch (set.renew(k, job.generation)) {
+                case ResourceSet::Renewal::renewed:
+                    set.view(view);
+                    break;
+                case ResourceSet::Renewal::current:
+                    break;
+                case ResourceSet::Renewal::refused:
+                    view.refused = set.refusal();
+                    if (result)
+                        *result = kIOReturnBadArgument;
+                    return false;
+                }
+            }
+            continue;
+        }
+        if (!isCancel)
+            view.useCache.clear();
         if (kr != kIOReturnNotReady || !job.set)
             return false;
         switch (set.renew(k, job.generation)) {

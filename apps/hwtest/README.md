@@ -18,9 +18,10 @@ boot's identity alongside the original run. When a GPU test times out, a one-fil
 if the probe hangs too, the later tests that draw are skipped and named after the test that wedged it. `pull_logs`
 copies the reports off the card, and `//tools/hwtest` compares each run with the ones before it.
 
-One library, `HWTestKit` (`kit/` and `tests/`), holds the tests, the runner, the log lines and the report. Each iOS
-version has an app that wraps it and adds the tests only that version has: `SwitchHWTest17` (`app17/`, built for iOS
-17.4) and `SwitchHWTest27` (`app27/`, built for iOS 27, adding Liquid Glass, QuartzCore 27's glass states, Metal 4 and
+`HWTestKit` (`kit/`) holds the runner, log lines, report and bundled resources, while `tests/` and `gpu/` split into
+per-family Swift modules listed in `modules.bzl` and assembled by `HWTestRegistry`. Each iOS version has an app that
+wraps them and adds the tests only that version has: `SwitchHWTest17` (`app17/`, built for iOS 17.4) and
+`SwitchHWTest27` (`app27/`, built for iOS 27, adding Liquid Glass, QuartzCore 27's glass states, Metal 4 and
 VideoToolbox's frame processors). The apps use the compiler's default CPU for their deployment target. From iOS 26 on
 that is an A12, so the 27 app carries LSE and FP16 code the A57 lacks, as any app built for iOS 27 does, and
 `a64x.self` checks that the a64x loader translated it.
@@ -76,10 +77,21 @@ under `Documents/gpu/<id>/`.
 pack's corpus (`ca_states.log`, cut from `precompile/corpus.log` at build time). It compares each attachment with that
 state as the same IPSW's QuartzCore draws it on a Mac (`goldens/ca_<build>.txt`). The comparison is the 8x8 block means
 of every channel, which another GPU's filtering and rounding move by a step or two and a wrong blend, format or texture
-moves by far more. `bazel run --config=remote //apps/hwtest:ca_goldens` (again with `--config=ios27`) redraws the
-reference after a harvest adds states; until then a new state counts as `no_golden`. Every state's verdict goes to
+moves by far more. `//apps/hwtest:ca_goldens` redraws the reference after a harvest adds states (the steps are in
+BUILD.bazel); until then a new state counts as `no_golden`. It draws only on the build hosts' M4 GPUs
+(`CAGoldens.referenceGPU`), since an M1 moves a third of the states by a code, and the sweep fails on a reference that
+names another GPU. Every state's verdict goes to
 `Documents/gpu/gpu.ca.sweep/states.txt`, with PNGs or raw bytes of the wrong ones. Set `HWTEST_SWEEP_ALL=1` in the app's
 environment to draw every corpus state instead of one per class.
+
+Run All keeps each test to seconds. The Long runs switch on the main screen (or `HWTEST_LONG=1` in the app's
+environment) brings back the long forms, and suite.harness then reports `long_runs=1`:
+
+- the full trial targets of the barrier probes (pass_pixel_barrier, subchannel_switch_drain, job_boundary_idle);
+- storage_forms' timing sweep;
+- glass_live's plain variant.
+
+The GPU lanes use these as benchmarks.
 
 `bazel test --config=remote //apps/hwtest:gpu_test` runs every scene on the Mac's GPU against the same references. Run
 it after changing a scene or a reference, so a failure on the Switch can't come from a wrong reference. It's tagged

@@ -1,6 +1,7 @@
 import Foundation
 import HWTestCore
 import HWTestGPU
+import HWTestKit
 import Metal
 
 /// What a render state the pack holds costs to make: 300 of Core Animation's states (the last of ca_asked.log, which

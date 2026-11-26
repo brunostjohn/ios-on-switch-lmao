@@ -110,6 +110,37 @@ void noteReused(const tgm_coh *c, bool same)
 #endif
 }
 
+// A first lock's fill, its steps' ends in ns: its scratch got, the scratch's pages cleaned from the CPU caches before
+// the copy engine writes them, the copy engine's move, and the pages cleaned again before the CPU reads them.
+struct FillTimes {
+	uint64_t began, got, cleaned, moved, done;
+};
+
+// Debug kernels: a first lock's fill past 2 ms, split into getting its scratch (one the pool lacks is made, wired and
+// pinned), the two CPU cache cleans of the scratch and the copy engine's move between them, so a slow CPU lock of a
+// block-linear surface names where it waited; once a surface
+void noteSlowFill(const tgm_coh *c, tgm_tiled &t, const FillTimes &f, bool reused)
+{
+#if TGM_STATS
+	if (f.done - f.began < 2000000 || t.slow_fill_named)
+		return;
+	t.slow_fill_named = 1;
+	char name[32];
+	proc_selfname(name, sizeof(name));
+	os_log(OS_LOG_DEFAULT,
+	       "tegra-gm20b: IOSurface %u: a CPU lock's rows took %llu us (%s[%d]): scratch %llu "
+	       "us (%s), clean %llu us, move %llu us, clean %llu us",
+	       tgm_coh_surface_id(c), (f.done - f.began) / 1000, name, proc_selfpid(),
+	       (f.got - f.began) / 1000, reused ? "its last lock's" : "the pool's",
+	       (f.cleaned - f.got) / 1000, (f.moved - f.cleaned) / 1000, (f.done - f.moved) / 1000);
+#else
+	(void)c;
+	(void)t;
+	(void)f;
+	(void)reused;
+#endif
+}
+
 int move(tgm_coh *c, const tgm_tiled &t, const tgm_relayout_pages &rows, int op)
 {
 	const tgm_relayout_pages pages = tgm_coh_pages(c);
@@ -158,6 +189,8 @@ int fill(tgm_coh *c, tgm_tiled &t, uint32_t options)
 	tgm_relayout_writer writers[TGM_RELAYOUT_MAX_WAITS];
 	if ((options & kLockAvoidSync) && tgm_coh_writers(c, writers, TGM_RELAYOUT_MAX_WAITS))
 		return 1;
+	FillTimes times = {};
+	times.began = TGM_STATS ? tgm_timestamp_ns() : 0;
 	const uint64_t written = tgm_coh_written(c);
 	tgm_relayout_pages rows;
 	bool same = false;
@@ -167,9 +200,11 @@ int fill(tgm_coh *c, tgm_tiled &t, uint32_t options)
 		t.scratch = scratch;
 		return 0;
 	}
+	const bool reused = scratch != nullptr;
 	if (!scratch)
 		scratch = tgm_scratch_get(static_cast<uint64_t>(tgm_coh_pages(c).npages) << 12, 1,
 					  &rows);
+	times.got = TGM_STATS ? tgm_timestamp_ns() : 0;
 	if (!scratch) {
 		switch_refusal("iosurface-layout", "no-scratch",
 			       "IOSurface %u: no memory for a CPU lock's rows: the lock is refused",
@@ -177,11 +212,17 @@ int fill(tgm_coh *c, tgm_tiled &t, uint32_t options)
 		return 1;
 	}
 	tgm_cpu_clean_pages(rows.pas, rows.npages);
+	times.cleaned = TGM_STATS ? tgm_timestamp_ns() : 0;
 	if (move(c, t, rows, TGM_RELAYOUT_TO_ROWS)) {
 		tgm_scratch_put(scratch);
 		return 1;
 	}
+	times.moved = TGM_STATS ? tgm_timestamp_ns() : 0;
 	tgm_cpu_clean_pages(rows.pas, rows.npages);
+	if (TGM_STATS) {
+		times.done = tgm_timestamp_ns();
+		noteSlowFill(c, t, times, reused);
+	}
 	t.scratch = scratch;
 	return 0;
 }

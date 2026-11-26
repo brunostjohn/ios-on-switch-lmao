@@ -92,7 +92,7 @@ struct Stats {
     std::atomic<uint64_t> scheduledWaits{0}, scheduledWaitUs{0}, completedWaits{0}, completedWaitUs{0};
     // encoders the worker encoded before their command buffer's commit (TegraGM20BMetalPipeline.mm), of the encoders of the raw
     // command buffers it sealed; encodes ahead given back, by the first reason (SwitchMetalPipelineVeto's bit)
-    std::atomic<uint64_t> pipelinedEncoders{0}, sealedEncoders{0}, pipelineAbandons[15]{};
+    std::atomic<uint64_t> pipelinedEncoders{0}, sealedEncoders{0}, pipelineAbandons[VetoKinds]{};
     // command buffers handed to the worker as encoders ended, and those hand-offs that found it asleep (woken by them)
     std::atomic<uint64_t> handoffs{0}, handoffWakes{0};
 #if SWITCH_FRAME_TIMELINE
@@ -206,11 +206,6 @@ struct GM20BState {
     // then (gm20bPublishEncoder; with its _published, a store then a load on each side, both sequentially consistent)
     std::atomic<bool> submitAsleep{false};
     std::atomic<uint32_t> submitThread{0};  // mach thread port name of submitLoop, for OwnedWord priority inheritance
-    // ranges handed to the kernel and not completed (gm20bRangeHandedOff): the idle deadline's drain and its
-    // in-flight count, which a command buffer parked on an event the CPU has not signalled holds no part of
-    std::atomic<uint32_t> rangesInFlight{0};
-    // gRawRelease's idle release: the completion thread's wait for its next range carries it (completionLoop)
-    IdleDeadline idle;
     Stats stats;
     std::unique_ptr<gm20b::Completion> completion;  // the states the pack lacks (metal_complete_states)
 };
@@ -277,7 +272,7 @@ std::string libraryName(SwitchMetalFunction *f);
 - (NSUInteger)requiredLinearTextureBytesPerRowForDescriptor:(MTLTextureDescriptor *)descriptor;
 @end
 
-// A packed state's variants placed with its own record at creation (TegraGM20BMetalCubic.mm)
+// A packed state's run kept for its variants, each placed when a draw first selects its name (TegraGM20BMetalCubic.mm)
 void packedVariants(SwitchMetalPipeline *p, const gm20b::PackRun &run);
 // A state this process made: the variants its creation already names (its test classes), made and waited for before
 // the creation returns, as the pack builder makes a packed state's
@@ -305,6 +300,12 @@ void traceSurfaceImage(SwitchMetalTexture *t, const char *what, uint32_t seed);
 // TegraGM20BMetalEncode.mm: the imports a texture's or buffer's memory lies in, named to the submission
 void useTexture(gm20b::CommandBuffer *rc, SwitchMetalTexture *t, bool write);
 void useBuffer(gm20b::CommandBuffer *rc, SwitchMetalBuffer *b, bool write);
+// TegraGM20BMetalDeviceBase.mm: residency sets on queues and command buffers, snapshotted at commit and named at seal
+void gm20bQueueAddResidencySet(SwitchMetalQueue *queue, id set);
+void gm20bQueueRemoveResidencySet(SwitchMetalQueue *queue, id set);
+void gm20bUseResidencySet(SwitchMetalCommandBuffer *cb, id set);
+void gm20bSnapshotResidencySets(SwitchMetalCommandBuffer *cb);
+void gm20bNameResidencySets(SwitchMetalCommandBuffer *cb, gm20b::CommandBuffer *rc);
 // TegraGM20BMetalTessellation.mm: a patch draw on the raw encoder
 bool encodePatches(gm20b::RenderEncoder *re, gm20b::CommandBuffer *rc, const SwitchMetalPlanDraw &draw,
                    const SwitchMetalPlanPatches &patches, bool indirect, const char **why);
@@ -520,6 +521,8 @@ void gm20bWantCompressed(id<MTLTexture> texture);
 // or not
 void gm20bMoveWanting();
 
+// TegraGM20BMetalCompiledLibraries.mm: drop cached front-end function specializations on memory pressure
+void gm20bTrimCompiledLibraries();
 // TegraGM20BMetalCommandBuffer.mm: the kept recordings and setBytes chunks past what steady frames take, given back
 void releaseRecordings();
 void gm20bTakeRecording(SwitchMetalCommandBuffer *cb);

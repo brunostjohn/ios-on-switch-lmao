@@ -1,6 +1,7 @@
 import Foundation
 import HWTestCore
 import HWTestGPU
+import HWTestKit
 import Metal
 
 /// The system shader compiler's store (drivers/TegraGM20BMetal/compiler) across requesters and processes. Each run salts a

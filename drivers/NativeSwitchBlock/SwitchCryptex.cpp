@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // The unchanged System/App cryptex images from Preboot as read-only block devices: read from the SD card through a
-// cache of 128 KiB windows (the direct read map), or through the original DiskImages hook if that map is refused, and
+// cache of 32 KiB windows (the direct read map), or through the original DiskImages hook if that map is refused, and
 // the APFS volume each one publishes.
 #include <IOKit/IOBSD.h>
 #include <IOKit/IOBufferMemoryDescriptor.h>
@@ -18,6 +18,7 @@
 #include <libkern/c++/OSNumber.h>
 #include <libkern/c++/OSString.h>
 #include <kern/clock.h>
+#include <kern/thread.h>
 #include <kern/thread_call.h>
 #include <mach/memory_object_types.h>
 #include <sys/disk.h>
@@ -33,6 +34,7 @@
 #include "SwitchCryptexCache.h"
 #include "SwitchCryptexMap.h"
 #include "SwitchCryptexStats.h"
+#include "SwitchSdPick.h"
 #include "../../kits/SwitchTime/SwitchTime.h"
 
 extern "C" {
@@ -45,6 +47,8 @@ void switch_diag_cryptex_cache(size_t (*counts)(char *out, size_t size));  // ke
 LIBKERN_RETURNS_NOT_RETAINED IOBlockStorageDevice *
 switch_block_device(IOService **controller, dev_t *whole, uint64_t *sectors,
                     uint32_t *maxReadSectors);  // NativeSwitchBlock.cpp
+IOReturn switch_block_raise(const IOBlockStorageDeviceExtent *extents, uint32_t count,
+                            IOStoragePriority priority);  // NativeSwitchBlock.cpp
 }
 
 namespace {
@@ -133,7 +137,7 @@ int outputs(unsigned index, dev_t *device, char *path, size_t capacity)
 // thread, no VNOP_READ.
 //
 // The device reports itself as SD storage, not a virtual (disk image) interface, so the cryptex APFS mounts without
-// MNTK_VIRTUALDEV. Small requests go through a cache of 128 KiB windows (SwitchCryptexCache.h): a small read that
+// MNTK_VIRTUALDEV. Small requests go through a cache of 32 KiB windows (SwitchCryptexCache.h): a small read that
 // misses reads its whole window in one command, and the reads that follow copy their blocks out of it (copypv, as the
 // SD driver's bounce path copies into requests). A large read the cache does not hold goes straight into the request's
 // pages. APFS checks every block it gets against the seal's hashes, wherever it came from.
@@ -148,12 +152,12 @@ constexpr uint32_t kImageBlock = 4096;  // the cryptex device's block (APFS's), 
 constexpr uint32_t kSdSector = 512;
 constexpr uint32_t kMaxExtents = 1u << 16;
 static_assert(kImageBlock == kSwitchCacheBlock, "the cache's block is the device's");
-// The cache's windows stay at the steady size (8 MiB) from the first attach; boot prefetch pages into the files' own
-// VM cache rather than driver windows.
-constexpr uint32_t kSteadyWindows = 64;
-constexpr uint32_t kMinWindows = 8;
+// The cache's windows stay at the steady size (8 MiB: 256 x 32 KiB) from the first attach; boot prefetch pages into
+// the files' own VM cache rather than driver windows.
+constexpr uint32_t kSteadyWindows = 256;
+constexpr uint32_t kMinWindows = 32;
 constexpr uint32_t kBuckets = 1024;
-constexpr uint64_t kAroundBytes = 16ULL * kImageBlock;  // reads up to 64 KiB read their windows around them
+constexpr uint64_t kAroundBytes = 4ULL * kImageBlock;  // reads up to 16 KiB read their 32 KiB windows around them
 constexpr uint32_t kRequestReads = kSwitchAroundWindows * kSwitchWindowReads;
 
 using Extent = SwitchExtent;  // bytes: image offset, offset on the SD APFS window, length
@@ -513,6 +517,7 @@ OSDeclareDefaultStructors(SwitchCryptexDevice)
 
     IOReturn doAsyncReadWrite(IOMemoryDescriptor *, UInt64, UInt64, IOStorageAttributes *,
                               IOStorageCompletion *) override;
+    IOReturn doSetPriority(IOBlockStorageDeviceExtent *extentList, UInt32 count, IOStoragePriority priority) override;
 
     uint64_t imageBytes() const
     {
@@ -527,10 +532,9 @@ private:
     IOBlockStorageDevice *sd = nullptr;
     uint64_t maxPiece = 0;  // bytes per SD read
     bool holes = false;     // some of the image reads as zeros (a sparse file)
-    // `raised`: the card read goes in the SD driver's high class although no client asked for it there (debug kernels'
-    // counts).
-    bool cacheRead(Pending *p, IOMemoryDescriptor *buffer, uint64_t block, uint64_t count, bool raised);
-    uint32_t issueRead(const SwitchCacheRead &read, bool raised);
+    bool cacheRead(Pending *p, IOMemoryDescriptor *buffer, uint64_t block, uint64_t count, IOStoragePriority priority);
+    uint32_t issueRead(const SwitchCacheRead &read, IOStoragePriority priority);
+    void raiseQueuedReads(uint64_t block, uint64_t count, IOStoragePriority priority);
 };
 
 OSDefineMetaClassAndStructors(SwitchCryptexDevice, IOBlockStorageDevice)
@@ -562,6 +566,11 @@ OSDefineMetaClassAndStructors(SwitchCryptexDevice, IOBlockStorageDevice)
         setProperty(kIOPropertyDeviceCharacteristicsKey, device);
         device->release();
     }
+    if (OSDictionary *features = OSDictionary::withCapacity(1)) {
+        features->setObject(kIOStorageFeaturePriority, kOSBooleanTrue);
+        setProperty(kIOStorageFeaturesKey, features);
+        features->release();
+    }
     setProperty("SwitchImage", paths[image]);
     setProperty("SwitchImage extents", count, 32);
     setName(image ? "SwitchAppCryptex" : "SwitchSystemCryptex");
@@ -588,8 +597,16 @@ IOReturn SwitchCryptexDevice::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt6
     p->status = kIOReturnSuccess;
     p->remaining = 1;
     p->cached = p->waited = false;
-    const bool lower = !attributes || (attributes->priority >> 6) != 0;  // the client asked below high (none: default)
-    if (cacheRead(p, buffer, block, count, lower))
+    // A window fill reads at High for a tier-0 requester and at Default for any other, the boot replay included (the
+    // card's class for it, SwitchSdPick.h): a thread that faults a page a fill has busy sleeps in vm_page_sleep and
+    // never reaches cacheRead, so only XNU's DKIOCSETTIER (doSetPriority) could raise a fill made at Low or Background,
+    // and the debug line counts whether it does. A tier-0 request that joins a fill raises it (cacheRead).
+    const bool replay = &switch_vm_prefetch_is_replay_thread && switch_vm_prefetch_is_replay_thread(current_thread());
+    const IOStoragePriority cachePriority =
+        attributes && switchSdClassOf(static_cast<uint8_t>(attributes->priority >> 6), replay) == 0
+            ? kIOStoragePriorityHigh
+            : kIOStoragePriorityDefault;
+    if (cacheRead(p, buffer, block, count, cachePriority))
         return kIOReturnSuccess;
     uint32_t pieces = 0;
     uint32_t at = switchExtentAt(extents, extentCount, start);
@@ -641,7 +658,8 @@ IOReturn SwitchCryptexDevice::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt6
 }
 
 // True when the cache took the request (finishRequest completes it once its windows hold every block).
-bool SwitchCryptexDevice::cacheRead(Pending *p, IOMemoryDescriptor *buffer, uint64_t block, uint64_t count, bool raised)
+bool SwitchCryptexDevice::cacheRead(Pending *p, IOMemoryDescriptor *buffer, uint64_t block, uint64_t count,
+                                    IOStoragePriority priority)
 {
     if (!__atomic_load_n(&gCache.on, __ATOMIC_ACQUIRE))
         return false;
@@ -654,10 +672,12 @@ bool SwitchCryptexDevice::cacheRead(Pending *p, IOMemoryDescriptor *buffer, uint
     uint32_t n = 0;
     IOLockLock(gCache.lock);
     const bool taken = gCache.cache.plan(&p->cache, static_cast<uint8_t>(index), block, static_cast<uint32_t>(count),
-                                         blocks, mode, p->reads, kRequestReads, &n);
+                                         blocks, mode, p->reads, kRequestReads, &n, priority == kIOStoragePriorityHigh);
+    bool joined = false;
     if (taken) {
         p->remaining = p->cache.waiting ? 2 : 1;  // the issuing reference, and the wait for the windows
         p->waited = p->cache.waiting != 0;
+        joined = p->cache.joined;
     }
     IOLockUnlock(gCache.lock);
     if (!taken) {
@@ -668,19 +688,81 @@ bool SwitchCryptexDevice::cacheRead(Pending *p, IOMemoryDescriptor *buffer, uint
     buffer->retain();
     uint32_t cardReads = 0;
     for (uint32_t i = 0; i < n; ++i)
-        cardReads += issueRead(p->reads[i], raised);
+        cardReads += issueRead(p->reads[i], priority);
     reportDirect(p->length, cardReads);
+    // After gCache.lock is dropped: the SD driver's queueLock is never taken under gCache.lock.
+    // The whole of each window it joined: the fill it waits for may be pieces its own blocks do not cover (an extent
+    // boundary or a hole inside the window). The request's pin keeps each window's tag until it releases them.
+    if (joined && priority == kIOStoragePriorityHigh) {
+        for (uint32_t i = 0; i < p->cache.windows; ++i) {
+            const uint64_t tag = p->cache.window[i]->tag;
+            raiseQueuedReads(tag, blocks - tag < kSwitchWindowBlocks ? blocks - tag : kSwitchWindowBlocks, priority);
+        }
+#if DEVELOPMENT || DEBUG
+        switch_cryptex_stats::count(&switch_cryptex_stats::Counters::joinedRaises);
+#endif
+    }
     pieceDone(this, p, kIOReturnSuccess, 0);  // the issuing reference
     return true;
 }
 
-// Returns the card reads it issued. The window's blocks are marked being read: nothing else touches them until
-// jobFinish. Every cache read goes in the SD driver's high class, whichever request started it: a foreground read may
-// be waiting on it, and in a lower class it would wait out the SD driver's 100 ms aging behind a busy foreground.
-uint32_t SwitchCryptexDevice::issueRead(const SwitchCacheRead &read, bool raised)
+// Raises the SD reads still queued for image blocks [block, block + count): the window fills that hold them and
+// direct reads of them. A fill already on the card keeps its class.
+void SwitchCryptexDevice::raiseQueuedReads(uint64_t block, uint64_t count, IOStoragePriority priority)
 {
-    IOStorageAttributes high = {};
-    high.priority = kIOStoragePriorityHigh;
+    constexpr uint32_t kBatch = 8;
+    IOBlockStorageDeviceExtent pieces[kBatch];
+    uint32_t n = 0;
+    const uint64_t start = block * kImageBlock;
+    const uint64_t length = count * kImageBlock;
+    uint32_t at = switchExtentAt(extents, extentCount, start);
+    for (uint64_t done = 0; done < length;) {
+        const SwitchPiece piece = switchNextPiece(extents, extentCount, &at, start + done, length - done, maxPiece);
+        if (!piece.length)
+            break;
+        if (piece.disk != kSwitchHole)
+            pieces[n++] = {piece.disk / kSdSector, piece.length / kSdSector};
+        if (n == kBatch) {
+            switch_block_raise(pieces, n, priority);
+            n = 0;
+        }
+        done += piece.length;
+    }
+    if (n)
+        switch_block_raise(pieces, n, priority);
+}
+
+// The same contract as the SD device's (XNU's busy-page reprioritisation), in this image's blocks.
+IOReturn SwitchCryptexDevice::doSetPriority(IOBlockStorageDeviceExtent *extentList, UInt32 count,
+                                            IOStoragePriority priority)
+{
+    if (count && !extentList)
+        return kIOReturnBadArgument;
+    for (UInt32 i = 0; i < count; ++i) {
+        if (extentList[i].blockStart >= blocks || extentList[i].blockCount > blocks - extentList[i].blockStart)
+            return kIOReturnBadArgument;
+    }
+    // A fill planned and not yet queued is raised by its issuer, which reads the mark after queuing it (issueRead).
+    if (priority == kIOStoragePriorityHigh && __atomic_load_n(&gCache.on, __ATOMIC_ACQUIRE)) {
+        IOLockLock(gCache.lock);
+        for (UInt32 i = 0; i < count; ++i)
+            gCache.cache.markUrgent(static_cast<uint8_t>(index), extentList[i].blockStart, extentList[i].blockCount);
+        IOLockUnlock(gCache.lock);
+    }
+    for (UInt32 i = 0; i < count; ++i)
+        raiseQueuedReads(extentList[i].blockStart, extentList[i].blockCount, priority);
+#if DEVELOPMENT || DEBUG
+    switch_cryptex_stats::count(&switch_cryptex_stats::Counters::setPriorityCalls);
+#endif
+    return kIOReturnSuccess;
+}
+
+// Returns the card reads it issued. The window's blocks are marked being read: nothing else touches them until
+// jobFinish.
+uint32_t SwitchCryptexDevice::issueRead(const SwitchCacheRead &read, IOStoragePriority priority)
+{
+    IOStorageAttributes attrs = {};
+    attrs.priority = priority;
     Job *j = takeJob();
     if (!j) {  // the read fails at once: its blocks are read again by the next request that wants them
         IOLockLock(gCache.lock);
@@ -716,7 +798,7 @@ uint32_t SwitchCryptexDevice::issueRead(const SwitchCacheRead &read, bool raised
         __atomic_fetch_add(&j->remaining, 1, __ATOMIC_RELAXED);
         IOStorageCompletion pieceCompletion = {this, jobPieceDone, j};
         const IOReturn issued =
-            sd->doAsyncReadWrite(sub, piece.disk / kSdSector, piece.length / kSdSector, &high, &pieceCompletion);
+            sd->doAsyncReadWrite(sub, piece.disk / kSdSector, piece.length / kSdSector, &attrs, &pieceCompletion);
         sub->release();
         if (issued != kIOReturnSuccess)
             jobPieceDone(this, j, issued, 0);
@@ -727,11 +809,16 @@ uint32_t SwitchCryptexDevice::issueRead(const SwitchCacheRead &read, bool raised
         jobFail(j, kIOReturnNoMemory);  // the rest was never issued
 #if DEVELOPMENT || DEBUG
     switch_cryptex_stats::add(&switch_cryptex_stats::Bytes::card, done);
-    if (raised)
-        switch_cryptex_stats::add(&switch_cryptex_stats::Bytes::raised, done);
-#else
-    (void)raised;
 #endif
+    // A tier-0 request joined this fill, or XNU raised it, between its plan and its queuing: the SD queue held nothing
+    // for that raise. Its pieces are queued now, under the SD's queueLock, so either the raiser's promote found them or
+    // the mark it set before promoting is seen here. The window stays reading until the issuing reference goes.
+    if (priority != kIOStoragePriorityHigh && __atomic_load_n(&read.window->urgent, __ATOMIC_ACQUIRE)) {
+        raiseQueuedReads(read.window->tag + read.first, read.count, kIOStoragePriorityHigh);
+#if DEVELOPMENT || DEBUG
+        switch_cryptex_stats::count(&switch_cryptex_stats::Counters::lateRaises);
+#endif
+    }
     jobPieceDone(this, j, kIOReturnSuccess, 0);  // the issuing reference
     return pieces;
 }

@@ -13,6 +13,11 @@
 #if TGM_STATS
 extern int proc_selfpid(void);
 
+struct tgm_hold_progress_stamp {
+	u32 payload, pad;
+	u64 ns;
+};
+
 /* The gate writes the landings; `lock` keeps them whole against tgm_hold_samples_take, and is taken in the gate only
  * when a sample lands. */
 static struct {
@@ -20,11 +25,28 @@ static struct {
 	int pid[HOLD_CHIDS];
 	u32 n[HOLD_CHIDS];
 	u64 max_ns[HOLD_CHIDS];
+	const volatile struct tgm_hold_progress_stamp *progress[HOLD_CHIDS];
 	struct switch_gpu_batch_release
 		last[HOLD_CHIDS]; /* each app channel's last batch release (the gate's) */
 	struct switch_gpu_preempt_counts counts[HOLD_CHIDS];
 } sampled;
 #endif
+
+void tgm_hold_progress(unsigned int chid, const volatile void *progress_cpu)
+{
+#if TGM_STATS
+	unsigned long flags = 0;
+
+	if (chid >= HOLD_CHIDS)
+		return;
+	spin_lock_irqsave(&sampled.lock, flags);
+	sampled.progress[chid] = progress_cpu;
+	spin_unlock_irqrestore(&sampled.lock, flags);
+#else
+	(void)chid;
+	(void)progress_cpu;
+#endif
+}
 
 void tgm_hold_owner(unsigned int chid)
 {
@@ -40,6 +62,8 @@ void tgm_hold_landed(unsigned int chid, uint64_t asked_pt, uint64_t start_pt, ui
 {
 #if TGM_STATS
 	unsigned long flags = 0;
+	u64 progress_pt = 0;
+	const volatile struct tgm_hold_progress_stamp *progress = NULL;
 
 	if (chid >= HOLD_CHIDS)
 		return;
@@ -47,8 +71,11 @@ void tgm_hold_landed(unsigned int chid, uint64_t asked_pt, uint64_t start_pt, ui
 	if (sample > __atomic_load_n(&sampled.max_ns[chid], __ATOMIC_RELAXED))
 		__atomic_store_n(&sampled.max_ns[chid], sample, __ATOMIC_RELAXED);
 	spin_lock_irqsave(&sampled.lock, flags);
-	sampled.counts[chid]
-		.landed[switch_gpu_preempt_landing(&sampled.last[chid], asked_pt, start_pt)]++;
+	progress = sampled.progress[chid];
+	if (progress && READ_ONCE(progress->payload))
+		progress_pt = READ_ONCE(progress->ns);
+	sampled.counts[chid].landed[switch_gpu_preempt_landing_with_progress(
+		&sampled.last[chid], progress_pt, asked_pt, start_pt)]++;
 	sampled.counts[chid].bucket[switch_gpu_preempt_bucket(sample)]++;
 	spin_unlock_irqrestore(&sampled.lock, flags);
 #else

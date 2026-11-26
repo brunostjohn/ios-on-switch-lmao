@@ -109,7 +109,7 @@ bool poolZeroLater(void *va, uint64_t pa, uint64_t bytes)
 	p->poolDirty = z;
 	p->poolZeroing += bytes;
 	IOLockUnlock(p->lock);
-	thread_call_enter(p->call);
+	thread_call_enter(p->recycleCall);
 	return true;
 }
 }  // namespace tgm_uc

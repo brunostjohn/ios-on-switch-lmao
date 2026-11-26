@@ -67,6 +67,8 @@ _PLUGIN_CFLAGS = [
     if TREE_ROOT != OLD_TREE
 ]
 
+_OUTPUT_SPELLING = "bazel-out/bin"
+
 def _plugin_objects(ctx, name, stack):
     """Each unit of the plugin compiled on its own (objects in link order), with `stack` as the stack key's file."""
 
@@ -78,6 +80,12 @@ def _plugin_objects(ctx, name, stack):
     if stack:
         defines.append("-DTEGRA_STACK_KEY=0x@FILE:%s@ull" % stack.path)
     headers = ctx.files.hdrs + ctx.files.include_markers + ([stack] if stack else [])
+
+    # A generated header's path names its configuration's output directory, which a platform suffix or a transition
+    # (the release catalog's) renames: __FILE__ and the line tables spell every output root one way, so the objects
+    # are the same bytes in every configuration.
+    roots = {ctx.bin_dir.path: None} | {f.root.path: None for f in headers if f.root.path}
+    output_maps = ["-ffile-prefix-map={}={}".format(r, _OUTPUT_SPELLING) for r in sorted(roots)]
     objects = []
     for language, sources in (("objective-c++", ctx.files.srcs), ("c++", ctx.files.cc_srcs), ("c", ctx.files.c_srcs)):
         # Plain C++ sends no Objective-C messages (clang calls the flag unused there, an error under -Werror); C takes
@@ -95,7 +103,8 @@ def _plugin_objects(ctx, name, stack):
                 ctx,
                 "ObjcxxCompile",
                 "Compiling %s" % src.short_path,
-                [compiler] + _IOS + cflags + includes + defines + ["-x", language, "-c", src.path, "-o", obj.path],
+                [compiler] + _IOS + cflags + output_maps + includes + defines +
+                ["-x", language, "-c", src.path, "-o", obj.path],
                 [src] + headers,
                 [obj],
             )
@@ -112,6 +121,16 @@ def _metal_plugin_impl(ctx):
     objects = _plugin_objects(ctx, ctx.attr.name, ctx.file.stack)
     out = ctx.actions.declare_file(ctx.attr.name + "/TegraGM20BMetal")
     frameworks = _frameworks(ctx)
+
+    # The debug map names each object below the output directory, which a transition renames: an archive with debug
+    # information from another one would be named by its worker's absolute path instead.
+    if ctx.file.translate.root.path != ctx.bin_dir.path:
+        fail("{}: the translation ({}) is not in the plugin's output directory {}".format(
+            ctx.label,
+            ctx.file.translate.path,
+            ctx.bin_dir.path,
+        ))
+    objects_root = "@PWD@/" + ctx.bin_dir.path
     _xcode_run(
         ctx,
         "MetalPluginLink",
@@ -120,7 +139,8 @@ def _metal_plugin_impl(ctx):
         # deduplication it turns on (118 KB less __text).
         ["clang++"] + _IOS + _PLUGIN_CFLAGS + ["-bundle"] + [o.path for o in objects] + [ctx.file.translate.path] +
         [ctx.file.compile.path] +
-        ["-Wl,-dead_strip", "-Wl,-oso_prefix,@PWD@/", "-lobjc"] + frameworks + ctx.attr.linkopts + ["-o", out.path],
+        ["-Wl,-dead_strip", "-Wl,-oso_prefix,{}/".format(objects_root), "-lobjc"] + frameworks + ctx.attr.linkopts +
+        ["-o", out.path],
         objects + [ctx.file.translate, ctx.file.compile],
         [out],
     )
@@ -129,7 +149,7 @@ def _metal_plugin_impl(ctx):
         ctx,
         "Dsymutil",
         "Writing the plugin's dSYM",
-        ["dsymutil", "--oso-prepend-path=@PWD@", out.path, "-o", dsym.path],
+        ["dsymutil", "--oso-prepend-path=" + objects_root, out.path, "-o", dsym.path],
         objects + [ctx.file.translate, ctx.file.compile, out],
         [dsym],
     )
@@ -383,25 +403,53 @@ def _gpu_stage_impl(ctx):
     args.add("--base", base.path)
     args.add("--base-rlocation", _rlocation(ctx, base))
     args.add("--from-part", part)
+    args.add("--kext-digest", ctx.file.kext_digest)
     args.add("--out", manifest)
     ctx.actions.run(
         executable = ctx.executable._tool,
         arguments = [args],
-        inputs = [base, part],
+        inputs = [base, part, ctx.file.kext_digest],
         outputs = [manifest],
         mnemonic = "GpuStageManifest",
         progress_message = "Listing the GPU bundle, the shader seed and the pack for the Data volume",
     )
     files = [manifest, base, seed.replies, seed.native, ctx.file.raw]
-    return [DefaultInfo(files = depset([manifest]), runfiles = ctx.runfiles(files = files))]
+
+    # The same files copied out, at their paths below the Data volume: only for what takes the tree whole (a release
+    # asset), so a deploy, which reads the runfiles, never copies the seed and the pack.
+    tree = ctx.actions.declare_directory(ctx.attr.name + ".tree")
+    args = ctx.actions.args()
+    args.add("--tree", manifest)
+    for directory in (base, seed.replies, ctx.file.raw, seed.native):
+        args.add("--root", "{}={}".format(_rlocation(ctx, directory), directory.path))
+    args.add("--out", tree.path)
+    ctx.actions.run(
+        executable = ctx.executable._tool,
+        arguments = [args],
+        inputs = files,
+        outputs = [tree],
+        mnemonic = "GpuStageTree",
+        progress_message = "Copying the GPU stage into a tree",
+    )
+    return [
+        DefaultInfo(files = depset([manifest]), runfiles = ctx.runfiles(files = files)),
+        OutputGroupInfo(tree = depset([tree])),
+    ]
 
 gpu_stage = rule(
     implementation = _gpu_stage_impl,
-    doc = "The file deploy's stager syncs the Data volume to: every file, its sha256 and where it is in the runfiles.",
+    doc = """The file deploy's stager syncs the Data volume to (tools/gpu/stage_format.py): every file, its sha256 and
+    where it is in the runfiles, and the preferences merged there. Output group `tree`: the stage tree, every file at its
+    path below the Data volume with the same records in its gpu.stage.""",
     attrs = {
         "base": attr.label(mandatory = True, doc = "//gpu:base: the signed bundle"),
         "seed": attr.label(mandatory = True, providers = [SeedInfo]),
         "raw": attr.label(mandatory = True, allow_single_file = True, doc = "the pack's directory"),
+        "kext_digest": attr.label(
+            default = "//kernel:gpu_kext_digest",
+            allow_single_file = True,
+            doc = "the GPU kext's build identity, for the icon cache record (the stager's `# kext` line)",
+        ),
         "_tool": attr.label(default = "//tools/gpu:stage_manifest", executable = True, cfg = "exec"),
     },
 )

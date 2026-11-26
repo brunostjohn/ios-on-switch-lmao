@@ -33,7 +33,7 @@ typedef struct {
     size_t avccCap;
     int32_t maxKeyInterval, averageBitRate, constantBitRate;
     double maxKeyDuration, quality, expectedFrameRate, limitBytes, limitSeconds;
-    bool allowTemporal, realTime, allowReordering;
+    bool allowTemporal, realTime, prioritizeSpeed, allowReordering;
     int32_t maxFrameDelay;  // MaxFrameDelayCount: frames held at most, -1 unlimited
     CFStringRef profileLevel, entropy, primaries, transfer, matrix;
     bool haveRef, keyPending;

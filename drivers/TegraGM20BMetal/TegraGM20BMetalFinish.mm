@@ -72,6 +72,19 @@ const gm20b::RetirementWrites *captureWrittenRange(SwitchMetalCommandBuffer *cb,
     writes.captureInto(
         [&](auto visit) {
             plan.forEachWritten(from, to, visit);
+            for (const auto &snapshot : cb->_residencySnapshots)
+                for (const SwitchMetalResidencyEntry &entry : snapshot->hostVisible) {
+                    if (entry.kind == SwitchMetalResidencyEntry::Kind::Buffer) {
+                        SwitchMetalBuffer *b = (SwitchMetalBuffer *)entry.allocation;
+                        if (b->_raw.hostVisible && !b->_raw.wc)
+                            visit((__bridge void *)entry.allocation);
+                    } else if (entry.kind == SwitchMetalResidencyEntry::Kind::Texture && entry.write) {
+                        SwitchMetalTexture *t = (SwitchMetalTexture *)entry.allocation;
+                        if (t->_idNamed.load(std::memory_order_acquire) ||
+                            t->_viewIdNamed.load(std::memory_order_acquire))
+                            visit((__bridge void *)entry.allocation);
+                    }
+                }
         },
         [&](void *value) {
             if (const SwitchMetalResourceFacts *facts = plan.factsOf(value))
@@ -87,7 +100,6 @@ const gm20b::RetirementWrites *captureWrittenRange(SwitchMetalCommandBuffer *cb,
 void gm20bRangeHandedOff(SwitchMetalCommandBuffer *cb)
 {
     cb->_finishState.submitted();
-    gRM->rangesInFlight.fetch_add(1, std::memory_order_relaxed);
 }
 
 void retireRawRange(SwitchMetalCommandBuffer *cb, size_t from, size_t to)
@@ -133,16 +145,23 @@ static void dispatchScheduled(SwitchMetalCommandBuffer *cb, NSArray *handlers)
         return;
     }
     cb->_handlersQueued = true;
-    cb->_submitOwner.clear();
-    dispatch_async(cb->_queue->_handlers, ^{
-        for (MTLCommandBufferHandler h in handlers)
-            h((id<MTLCommandBuffer>)cb);
+    // Ownership goes straight from the submit worker to the queue's handler thread, so waitUntilScheduled donates
+    // priority across the handlers' queuing and run with no ownerless gap. The worker's own clears after this are
+    // clearIf(its port): they leave the handler thread owning it. A waiter asleep on _changes (no owner: held or parked)
+    // takes the new owner at the change.
+    cb->_submitOwner.setOwner(cb->_queue->_handlerExec.ownerPort());
+    gm20bChanged(cb);
+    cb->_queue->_handlerExec.enqueue([cb, handlers] {
+        @autoreleasepool {
+            for (MTLCommandBufferHandler h in handlers)
+                h((id<MTLCommandBuffer>)cb);
 #if SWITCH_FRAME_TIMELINE
-        cb->_frame.mark(switch_frame::Scheduled);
+            cb->_frame.mark(switch_frame::Scheduled);
 #endif
-        cb->_scheduledDone = true;
-        cb->_submitOwner.clear();
-        gm20bChanged(cb);
+            cb->_scheduledDone = true;
+            cb->_submitOwner.clear();
+            gm20bChanged(cb);
+        }
     });
 }
 
@@ -266,8 +285,6 @@ void segmentCompleted(SwitchMetalCommandBuffer *cb, NSError *error, const gm20b:
             cb->_segError = error;
     }
     const bool last = cb->_finishState.completed();
-    if (gRM->rangesInFlight.fetch_sub(1, std::memory_order_acq_rel) == 1)
-        gRM->idle.drained(clock_gettime_nsec_np(CLOCK_UPTIME_RAW));
     if (gRM->progress.progressed())  // a queue head is parked: it is judged again (progress_gate.h)
         wakeSubmit((__bridge void *)cb->_queue, dependencies);
     if (last)
@@ -328,6 +345,8 @@ static void completeBuffer(SwitchMetalCommandBuffer *cb)
         for (MTLCommandBufferHandler h in handlers)
             h((id<MTLCommandBuffer>)cur);
         cur->_owners.clear();  // the resources may die now: no submission uses them any more (its capacity is recycled)
+        cur->_residencySets = nil;
+        cur->_residencySnapshots.clear();
         gm20bBytesDone(cur);
         cur->_computeJobs.clear();
         cur->_sharedEventWaits.clear();
@@ -446,7 +465,9 @@ static void deliverCompletion(SwitchMetalCommandBuffer *cb)
     }
     void *context = (__bridge_retained void *)cb;
     if (cb->_doneBehindScheduled)
-        dispatch_async_f(cb->_queue->_handlers, context, completeOnTarget);
+        cb->_queue->_handlerExec.enqueue([context] {
+            completeOnTarget(context);
+        });
     else
         dispatch_async_f(q ?: followingRootQueue(), context, completeHeld);
 }
@@ -492,7 +513,7 @@ void finish(SwitchMetalCommandBuffer *cb, NSError *error)
     // A failed command buffer submits no more: its waitUntilScheduled returns now, not once its earlier work completes
     if (error) {
         gm20bClearCompileWaits(cb);
-        cb->_submitOwner.clear();
+        cb->_submitOwner.clearIf(gRM->submitThread.load(std::memory_order_relaxed));
         gm20bChanged(cb);
     }
 }
@@ -566,7 +587,7 @@ static void finished(SwitchMetalCommandBuffer *cb)
     }
     const bool behindScheduled = cb->_handlersQueued;
     gm20bClearCompileWaits(cb);
-    cb->_submitOwner.clear();
+    cb->_submitOwner.clearIf(gRM->submitThread.load(std::memory_order_relaxed));
     gm20bChanged(cb);
 #if SWITCH_METAL_DIAGNOSTICS
     if (cb->_gpuStamped)
@@ -620,23 +641,18 @@ void completionLoop()
             std::optional<size_t> target;
             for (;;) {
                 gm20b::CompletionLook look;
-                uint64_t idleDue = 0;
                 r.inflight.waitFor([&](const auto &taken) {
                     look = gm20b::completionLook(taken, r.submitPromised.load(std::memory_order_acquire),
                                                  r.completionWaiters.load(std::memory_order_acquire) != 0,
                                                  clock_gettime_nsec_np(CLOCK_UPTIME_RAW));
-                    idleDue = r.idle.due(r.rangesInFlight.load(std::memory_order_acquire));
-                    return look.target.has_value() || look.heldUntil || idleDue;
+                    return look.target.has_value() || look.heldUntil;
                 });
                 target = look.target;
                 if (target)
                     break;
                 const uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
-                const uint64_t until = look.heldUntil ? look.heldUntil : idleDue;
-                if (until > now)
-                    r.inflight.sleep(dispatch_time(DISPATCH_TIME_NOW, int64_t(until - now)));
-                else if (!look.heldUntil && r.idle.claim(idleDue))
-                    gRawRelease.releaseSoon();
+                if (look.heldUntil > now)
+                    r.inflight.sleep(dispatch_time(DISPATCH_TIME_NOW, int64_t(look.heldUntil - now)));
             }
             if (*target) {
                 const SwitchMetalRawRetirement &cover = r.inflight.at(*target);

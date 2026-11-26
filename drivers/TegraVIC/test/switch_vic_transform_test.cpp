@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 #include <gtest/gtest.h>
+#include <string>
 #include <vector>
 #include "switch_vic_backing_stubs.h"
 #include "../SwitchNativePicture.h"
@@ -15,7 +16,7 @@ OSObject inputObject, outputObject;
 IOMemoryDescriptor inputMemory, outputMemory;
 switch_gpu_backing inputPitch, inputNative, outputPitch;
 volatile uint64_t inputGeneration = 1, outputGeneration = 1, payloadGeneration = 1;
-bool nativeInput = true, immediate = false;
+bool nativeInput = true, immediate = false, dstTiled = false, dstCompressed = false;
 int admission = 0, mappings = 0, gates = 0, pitchInputs = 0, notifications = 0;
 void (*pending)(void *, int);
 void *pendingContext;
@@ -25,6 +26,13 @@ std::vector<switch_gpu_backing_use> declaredUses;
 std::vector<switch_gpu_backing_guard> declaredGuards;
 std::vector<switch_gpu_cpu_lease *> declaredLeases;
 unsigned writeReleases = 0;
+int gateRefusals = 0;  // destination accesses that would not wait refused (a publisher holds the gate)
+std::vector<std::string> refusals;
+}
+
+extern "C" void switch_refusal(const char *, const char *reason, const char *, ...)
+{
+    refusals.emplace_back(reason);
 }
 
 extern "C" const TegraVICTraits *tegra_vic_traits()
@@ -42,22 +50,34 @@ extern "C" uint64_t tegra_vic_filter_address()
     return 0x80002000;
 }
 
-extern "C" int tegra_gm20b_surface_layout(uint64_t, tgm_layout *)
+extern "C" int tegra_gm20b_surface_layout(uint64_t pa, tgm_layout *out)
 {
-    return 0;
+    if (!dstTiled || pa != 0x200000)
+        return 0;
+    return tgm_layout_tiled(1280, 720, 4, out);
 }
 
-extern "C" void switch_gpu_backing_describe(switch_gpu_backing *, switch_gpu_backing_info *info)
+extern "C" int tegra_gm20b_surface_compressed(uint64_t pa)
 {
-    static uint64_t pages[1] = {0x100000};
+    return dstCompressed && pa == 0x200000 ? 1 : 0;
+}
+
+extern "C" void switch_gpu_backing_describe(switch_gpu_backing *backing, switch_gpu_backing_info *info)
+{
+    static uint64_t inputPages[1] = {0x100000};
+    static uint64_t outputPages[1] = {0x200000};
     *info = {};
-    info->pages = pages;
+    info->pages = backing == &outputPitch ? outputPages : inputPages;
     info->page_count = 1024;
 }
 
-int switch_vic_surface_access(const TegraVICSurface *surface, bool write, SwitchVICSurfaceAccess *access, bool,
+int switch_vic_surface_access(const TegraVICSurface *surface, bool write, SwitchVICSurfaceAccess *access, bool avoid,
                               switch_gpu_backing *)
 {
+    if (write && avoid && gateRefusals) {
+        --gateRefusals;
+        return -16;
+    }
     ++gates;
     pitchInputs += !write;
     access->descriptor = surface->memory;
@@ -171,15 +191,22 @@ unsigned publishedTurns = 0;
 }
 
 SwitchVICEvents *publishedEvents = nullptr;
+const SwitchVICWriteReservation *publishedHeld = nullptr;
+int publishError = 0;
+const char *publishWhy = nullptr;
 
 int switch_native_surface_publish_turned(const TegraVICSurface *, const SwitchNativeSurfaceView &source,
-                                         const TegraVICOp &op, uint32_t, const char **, SwitchVICEvents *events)
+                                         const TegraVICOp &op, uint32_t, const char **why, SwitchVICEvents *events,
+                                         const SwitchVICWriteReservation *held)
 {
     EXPECT_EQ(source.native, &inputNative);
     EXPECT_EQ(op.transform, 7u);
     ++publishedTurns;
     publishedEvents = events;
-    return 0;
+    publishedHeld = held;
+    if (why)
+        *why = publishWhy;
+    return publishError;
 }
 
 switch_gpu_backing *switch_vic_surface_backing(const TegraVICSurface *)
@@ -213,6 +240,8 @@ protected:
     {
         nativeInput = true;
         immediate = false;
+        dstTiled = false;
+        dstCompressed = false;
         admission = mappings = gates = pitchInputs = notifications = 0;
         pending = nullptr;
         pendingContext = nullptr;
@@ -220,6 +249,8 @@ protected:
         declaredGuards.clear();
         declaredLeases.clear();
         writeReleases = 0;
+        gateRefusals = 0;
+        refusals.clear();
         source.surface = &inputObject;
         source.memory = &inputMemory;
         source.desc.fourcc = TEGRA_VIC_FOURCC('4', '2', '0', 'v');
@@ -402,6 +433,23 @@ TEST_F(SwitchVICTransformTest, PreReservedWriteLeaseIsForwardedAndReleasedAfterS
     EXPECT_EQ(reservation.backing, nullptr);
 }
 
+// A publisher holding the destination's gate may be waiting on the job's reservation: the job gives it up rather than
+// wait for the gate, and its copy goes ahead without it.
+TEST_F(SwitchVICTransformTest, ADestinationGateItCannotEnterCostsTheJobItsReservationNotAWait)
+{
+    immediate = true;
+    gateRefusals = 1;
+    auto *lease = reinterpret_cast<switch_gpu_cpu_lease *>(0x1ea5e);
+    ++outputPitch.refs;
+    SwitchVICWriteReservation reservation{&outputPitch, lease};
+    ASSERT_EQ(switch_vic_transform(&source, &destination, &plan, 0, done, nullptr, nullptr, nullptr, &reservation), 1);
+    EXPECT_EQ(gateRefusals, 0);
+    EXPECT_EQ(writeReleases, 1u);
+    EXPECT_EQ(reservation.lease, nullptr);
+    EXPECT_TRUE(declaredLeases.empty());
+    EXPECT_EQ(notifications, 1);
+}
+
 TEST_F(SwitchVICTransformTest, BounceFallbackPreservesPreReservedWriteLeaseForCaller)
 {
     source.memory = destination.memory;
@@ -412,6 +460,49 @@ TEST_F(SwitchVICTransformTest, BounceFallbackPreservesPreReservedWriteLeaseForCa
     EXPECT_EQ(writeReleases, 0u);
     EXPECT_EQ(reservation.lease, lease);
     switch_vic_surface_release_write(&reservation);
+}
+
+TEST_F(SwitchVICTransformTest, UncompressedTiledDestinationWritesDirectBlockLinear)
+{
+    dstTiled = true;
+    immediate = true;
+    ASSERT_EQ(submit(), 1);
+    EXPECT_EQ(notifications, 1);
+    tgm_layout expected = {};
+    ASSERT_EQ(tgm_layout_tiled(1280, 720, 4, &expected), 1);
+    EXPECT_EQ(TEGRA_VIC_GET(submittedJob.config, TEGRA_VIC_OUTPUT_SURFACE, SURF_BLK_KIND),
+              uint64_t(TEGRA_VIC_BLK_16Bx2));
+    EXPECT_EQ(TEGRA_VIC_GET(submittedJob.config, TEGRA_VIC_OUTPUT_SURFACE, SURF_BLK_HEIGHT), expected.y_log2);
+    EXPECT_EQ(TEGRA_VIC_GET(submittedJob.config, TEGRA_VIC_OUTPUT_SURFACE, SURF_LUMA_HEIGHT), expected.rows - 1);
+}
+
+TEST_F(SwitchVICTransformTest, CompressedPartialOrTransposedTiledDestinationFallsBackToBounce)
+{
+    dstTiled = true;
+    dstCompressed = true;
+    EXPECT_EQ(submit(), 0);
+    EXPECT_TRUE(declaredUses.empty());
+
+    dstCompressed = false;
+    plan.op[0].dstW = 640;
+    EXPECT_EQ(submit(), 0);
+    EXPECT_TRUE(declaredUses.empty());
+
+    plan.op[0].dstW = 1280;
+    plan.op[0].transform = TEGRA_VIC_ROT90;
+    EXPECT_EQ(submit(), 0);
+    EXPECT_TRUE(declaredUses.empty());
+}
+
+TEST_F(SwitchVICTransformTest, NativeSourceWithUnalignedLogicalPitchRunsDirect)
+{
+    source.desc.planeBytesPerRow[0] = source.desc.planeBytesPerRow[1] = 1344;
+    source.desc.planeOffset[1] = 1344 * 720;
+    source.desc.length = 1344 * 720 * 3 / 2;
+    immediate = true;
+    ASSERT_EQ(submit(), 1);
+    EXPECT_EQ(notifications, 1);
+    EXPECT_EQ(pitchInputs, 0);
 }
 
 // A landscape video's turn (SwitchVICTurn.h): a native picture a quarter turn onto all of a portrait '420v' is left to
@@ -425,6 +516,9 @@ protected:
         SwitchVICTransformTest::SetUp();
         publishedTurns = 0;
         publishedEvents = nullptr;
+        publishedHeld = nullptr;
+        publishError = 0;
+        publishWhy = nullptr;
         auto &d = destination.desc;
         d.fourcc = TEGRA_VIC_FOURCC('4', '2', '0', 'v');
         d.width = 720;
@@ -440,11 +534,34 @@ protected:
         plan.op[0].transform = 7;
     }
 
-    int defer(SwitchVICEvents **events, const SwitchDisplayTraits &traits = kProven)
+    int defer(SwitchVICEvents **events, const SwitchDisplayTraits &traits = kProven,
+              const SwitchVICWriteReservation *held = nullptr)
     {
-        return switch_vic_turn_defer(&source, &destination, &plan, 0, events, traits);
+        return switch_vic_turn_defer(&source, &destination, &plan, 0, events, traits, held);
     }
 };
+
+// The job's write reservation from when it was queued is the record's: TegraVIC's engine thread holds it across the
+// turn, so a reservation of the record's own would never be granted.
+TEST_F(TurnDefer, TheJobsReservationGoesWithTheRecord)
+{
+    SwitchVICWriteReservation held = {};
+    EXPECT_EQ(defer(nullptr, kProven, &held), 1);
+    EXPECT_EQ(publishedHeld, &held);
+}
+
+// A turn the record refuses is copied by VIC, once a boot per reason the record gave; one copied before it was offered
+// to the record (the display cannot scan it) names none.
+TEST_F(TurnDefer, ATurnTheRecordRefusesIsCopiedAndSaysWhy)
+{
+    publishError = -16;
+    publishWhy = "native export into a surface a CPU user or another publication holds";
+    EXPECT_EQ(defer(nullptr), 0);
+    EXPECT_EQ(refusals, std::vector<std::string>{publishWhy});
+    refusals.clear();
+    EXPECT_EQ(defer(nullptr, {}), 0);
+    EXPECT_TRUE(refusals.empty());
+}
 
 TEST_F(TurnDefer, AProvenTurnIsRecordedAndNothingIsSubmitted)
 {

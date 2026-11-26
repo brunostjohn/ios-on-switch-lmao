@@ -17,6 +17,38 @@
 
 namespace gm20b {
 
+bool Device::makeZcullSlot(Bo &bo, uint64_t bytes)
+{
+    if (!k_.allocControl(bytes, bo, ControlUse::ZcullStorage))
+        return false;
+    // a slot the jobs would write unnamed is no slot
+    if (!set_.add(k_, bo, TegraGM20BSurfaceWrite)) {
+        k_.free(bo);
+        bo = {};
+        return false;
+    }
+    return true;
+}
+
+uint64_t CommandBuffer::zcullSlot(uint64_t zetaVa, uint64_t bytes, int &slot)
+{
+    Device &d = *dev_;
+    const uint64_t slotBytes = ZcullSlots::slotBytes(d.zcullInfo_);
+    if (bytes > slotBytes)
+        return 0;
+    slot = zcullPlanes_.slotOf(zetaVa);
+    if (slot < 0) {
+        const ZcullCarry &carry = d.zcullCarry_;
+        const uint64_t reserved = carry.live(d.channelGeneration(), d.lastSubmitted()) ? carry.owner : 0;
+        slot = d.zcullSlots_.take(zcullOwner_, reserved, slotBytes, [&d](Bo &bo, uint64_t n) {
+            return d.makeZcullSlot(bo, n);
+        });
+    }
+    if (slot < 0)
+        slot = zcullPlanes_.reclaim();
+    return slot < 0 ? 0 : d.zcullSlots_.va(slot);
+}
+
 void RenderEncoder::remake()
 {
     auto *const bytes = reinterpret_cast<unsigned char *>(this);
@@ -174,7 +206,8 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass, const char **why)
         if (const Texture *t = pass.color[j].texture; t && (backed(*t) || t->shadowTarget || t->zetaPages || t->zeta ||
                                                             shortOf(*t) || (blockLinear && !t->blockLinear)))
             scratchMask |= uint8_t(1u << j);
-    const auto scratchTags = transientColorTags(scratchMask);
+    const auto scratchTags =
+        transientColorTags(scratchMask, pass.metalDraws ? kTransientColorTag : kDriverPassColorTag);
     for (uint32_t j = 0; j < pass.count && j < 8; j++) {
         const Texture *t = pass.color[j].texture;
         if (!t)
@@ -294,7 +327,7 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass, const char **why)
     e.tirProbe_ = e.samples_ == 1 && e.rasterSamples_ == 4 ? dev_->probeTir.load(std::memory_order_relaxed) : 0;
     zask.on |= dev_->zcullOn_ && (e.tirProbe_ & kTirProbeZcull);
 #endif
-    zask.depth = zeta && !pass.separate.stencil && zetaHasDepth(zeta->format);
+    zask.depth = zeta && !pass.separate.stencil && zetaHasDepth(zeta->format) && pass.depthStencil.depthEnabled;
     zask.cleared = pass.depthStencil.clearDepth && !std::isnan(pass.depthStencil.depth);
     zask.layers = layers;
     zask.zetaLayers = zeta ? std::max(zeta->layers, 1u) : 1;
@@ -304,14 +337,15 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass, const char **why)
     if (e.tirProbe_ & kTirProbeSampleGrid)
         zcullArea = {zcullArea.x0 * 2, zcullArea.y0 * 2, zcullArea.x1 * 2, zcullArea.y1 * 2};
 #endif
-    const bool zcullKeep =
-        zeta && e.pass_.depthStencil.texture == zeta && pass.depthStencil.stored && pass.depthStencil.loadedLater;
+    const bool zcullKeep = zeta && e.pass_.depthStencil.texture == zeta && pass.depthStencil.stored;
     zcullBegin(e.zcull_, zask, dev_->zcullInfo_, zcullArea.x0, zcullArea.y0, zcullArea.x1 - zcullArea.x0,
-               zcullArea.y1 - zcullArea.y0, layers, zcullHeld, zcullKeep, [this](uint64_t bytes) {
-                   uint64_t va = 0;
-                   dev_->alloc(dev_->upload_, uint32_t(bytes), kZcullStorageAlign, va);
-                   return va;
+               zcullArea.y1 - zcullArea.y0, layers, zcullHeld, zcullKeep, [&](uint64_t bytes, int &slot) {
+                   return zcullSlot(zeta->va, bytes, slot);
                });
+    if (e.zcull_.load) {
+        [[maybe_unused]] const bool carried = zcullPlanes_.loaded(zeta->va);
+        SWITCH_METAL_DIAGNOSTIC(zcullCounts_.carried += carried);
+    }
     // DontCare can become a clear after later draws establish readBits_. Treat its deferred prologue write like Clear.
     for (uint32_t j = 0; j < pass.count && j < 8; j++)
         if (e.pass_.color[j].texture && e.pass_.color[j].load != ColorAttachment::Load)

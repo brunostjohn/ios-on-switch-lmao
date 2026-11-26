@@ -277,8 +277,15 @@ void Device::compMake(std::unique_lock<gm20b::Mutex> &l)
             }
             break;
         }
+#if SWITCH_METAL_DIAGNOSTICS
+        const auto bindStart = std::chrono::steady_clock::now();
+#endif
         if (made)
             kr = k_.bindCompressed(bo, w.kind);
+#if SWITCH_METAL_DIAGNOSTICS
+        long long bindUs =
+            std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - bindStart).count();
+#endif
         uint64_t evictedBytes = 0;
         if (kr != KERN_SUCCESS && compShortage(kr) && !comp_.ready.empty()) {
             if (made) {
@@ -319,8 +326,22 @@ void Device::compMake(std::unique_lock<gm20b::Mutex> &l)
                     }
                     break;
                 }
+#if SWITCH_METAL_DIAGNOSTICS
+                const auto rebindStart = std::chrono::steady_clock::now();
+#endif
                 if (made)
                     kr = k_.bindCompressed(bo, w.kind);
+#if SWITCH_METAL_DIAGNOSTICS
+                bindUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() -
+                                                                               rebindStart)
+                             .count();
+#endif
+                SWITCH_METAL_DIAGNOSTIC(os_log(compLog(),
+                                               "SwitchMetal: compressed memory %llu KiB kind 0x%x: %zu idle buffers "
+                                               "(%llu KiB) given back for it, then %{public}s (0x%x)",
+                                               (unsigned long long)(w.bytes >> 10), w.kind, evict.size(),
+                                               (unsigned long long)(evictedBytes >> 10),
+                                               made && kr == KERN_SUCCESS ? "made" : "refused again", unsigned(kr)));
             }
         }
         if (auto it = std::find(comp_.wanted.begin(), comp_.wanted.end(), w); it != comp_.wanted.end())
@@ -335,9 +356,12 @@ void Device::compMake(std::unique_lock<gm20b::Mutex> &l)
             SWITCH_METAL_DIAGNOSTIC(stats.compHeld++);
             SWITCH_METAL_DIAGNOSTIC(stats.compHeldBytes += bo.bytes);
             SWITCH_METAL_DIAGNOSTIC(glassMemEvent("compressed memory made", bo.bytes));
-            SWITCH_METAL_DIAGNOSTIC(os_log_debug(compLog(),
-                                                 "SwitchMetal: compressed memory %llu KiB kind 0x%x made in %lld us",
-                                                 (unsigned long long)(w.bytes >> 10), w.kind, (long long)us));
+            // at the default level, which a pulled log archive keeps (25 Nov's lost these at debug): the two kernel calls a
+            // texture born compressed would make on its creating thread
+            SWITCH_METAL_DIAGNOSTIC(os_log(compLog(),
+                                           "SwitchMetal: compressed memory %llu KiB kind 0x%x made in %lld us, "
+                                           "bound in %lld us",
+                                           (unsigned long long)(w.bytes >> 10), w.kind, (long long)us, bindUs));
             continue;
         }
         if (made) {
@@ -458,8 +482,12 @@ uint64_t Device::compDeadline() const
 
 void Device::compTrim(uint64_t now, DeferredFrees &deferred)
 {
+    bool probeKinds = true;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    probeKinds = probeMs4Cbr.load(std::memory_order_relaxed);
+#endif
     for (auto it = comp_.ready.begin(); it != comp_.ready.end();) {
-        if (readyStale(commits(), it->madeAt, now, it->readyNs)) {
+        if (readyStale(commits(), it->madeAt, now, it->readyNs) || (!probeKinds && probeOnlyKind(it->kind))) {
             SWITCH_METAL_DIAGNOSTIC(stats.compHeld--);
             SWITCH_METAL_DIAGNOSTIC(stats.compHeldBytes -= it->bo.bytes);
             SWITCH_METAL_DIAGNOSTIC(glassMemEvent("compressed memory freed unused", it->bo.bytes));
@@ -540,5 +568,20 @@ void Device::zbcMake(std::unique_lock<gm20b::Mutex> &l)
                          e.format, unsigned(kr));
     }
 }
+
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+// The 2CBR probe turned off: no texture asks for its kinds again, so what was asked for them goes, and what was made
+void Device::dropProbeCompressedKinds()
+{
+    DeferredFrees deferred(*this);
+    std::lock_guard<gm20b::Mutex> l(lock_);
+    const auto probeOnly = [](const CompWant &w) {
+        return probeOnlyKind(w.kind);
+    };
+    comp_.wanted.erase(std::remove_if(comp_.wanted.begin(), comp_.wanted.end(), probeOnly), comp_.wanted.end());
+    comp_.refused.erase(std::remove_if(comp_.refused.begin(), comp_.refused.end(), probeOnly), comp_.refused.end());
+    compTrim(compClock(), deferred);
+}
+#endif
 
 }  // namespace gm20b

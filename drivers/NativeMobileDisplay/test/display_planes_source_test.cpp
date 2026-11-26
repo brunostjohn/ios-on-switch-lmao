@@ -127,9 +127,19 @@ TEST(DisplayPlanesSource, DriverFollowsTheRules)
     const CodeText limits = Block(source, "void publishPlaneLimits()");
     EXPECT_TRUE(limits.has("{\"PlaneBaseAlignmentLinear\", native_planes::kPublishedBaseAlignment}"));
     // iOS 27's own limits; iOS 17's dictionary has no key they add.
-    EXPECT_TRUE(limits.has("publish(\"IOMFBMaxSrcPixels\", source, limits.compressionUnsupported ? 8 : 7, 64);"));
-    EXPECT_TRUE(limits.before("#if SWITCH_IPSW_KIND_24B119", "native_planes::kLimits24B119;"));
+    EXPECT_TRUE(limits.has("publish(\"IOMFBMaxSrcPixels\", source, sourceKeys, 64);"));
+    EXPECT_TRUE(limits.before("if (limits.compressionUnsupported) source[sourceKeys++]",
+                              "if (limits.rotation) source[sourceKeys++] = {\"MaxSrcRotRectTotal\""));
+    EXPECT_TRUE(limits.has("if (limits.rotation) setProperty(\"IOMFBSupportsRotation\", true);"));
+    // One per-kind limits value is both what is published and what a swap is checked against.
+    EXPECT_TRUE(code.before("#if SWITCH_IPSW_KIND_24B119",
+                            "static constexpr native_planes::Limits kPlaneLimits = native_planes::kLimits24B119;"));
+    EXPECT_TRUE(limits.has("constexpr native_planes::Limits limits = kPlaneLimits;"));
     EXPECT_TRUE(limits.has("if (limits.packedYuvUnsupported) setProperty(\"IOMFBYUVPackedUnSupported\", true);"));
+    EXPECT_TRUE(limits.has("if (limits.flipUnsupported) setProperty(\"IOMFBDisableFlip\", true);"));
+    // A swap refused for a transform names the transform word once per value (the line a device check reads).
+    EXPECT_TRUE(code.has("if (reason == native_planes::kTransformed) noteTransformRefused(layers);"));
+    EXPECT_TRUE(Block(source, "static void noteTransformRefused(").has("__atomic_fetch_or(&transformsRefused, bit"));
     // The service is found as J120's: IOServiceMatching("AppleCLCD").
     EXPECT_TRUE(code.has(": OSMetaClass(\"AppleCLCD\", NativeLegacyDisplay::superClass, sizeof(NativeLegacyDisplay))"));
 }
@@ -141,7 +151,8 @@ TEST(DisplayPlanesSource, DriverFollowsTheRules)
 TEST(DisplayPlanesSource, TheConsoleHoldKeepsTheScreen)
 {
     const std::string source = Display(), planes = Planes();
-    const CodeText release(Configured(source, "(defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)", false));
+    const CodeText release(
+        Configured(source, "(defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)", false));
     EXPECT_FALSE(release.has("extern \"C\" __attribute__((weak)) volatile int switch_console_hold"));
     EXPECT_FALSE(release.has("if (consoleHolds())"));
     EXPECT_FALSE(release.has("void kickHeld("));
@@ -234,8 +245,8 @@ TEST(DisplayPlanesSource, Ios27CoreVideoMakesNoCompressedSurfaces)
 TEST(DisplayPlanesSource, RefusedLayoutsLoggedOnlyByDebugKernels)
 {
     EXPECT_TRUE(CodeText(Display()).before(
-        "reason = native_planes::checkUpdated(updated, background, hasSurface, layers, width, height);",
-        "planeNoteRefused(reason, updated, hasSurface, layers, width, height);"));
+        "reason = native_planes::checkUpdated(updated, background, hasSurface, layers, width, height, kPlaneLimits);",
+        "planeNoteRefused(reason, updated, hasSurface, layers, width, height, kPlaneLimits);"));
     const std::string totals = SourceText("../NativePlanesTotals.h");
     const CodeText debug(Configured(totals, "SWITCH_FRAME_TIMELINE", true));
     const CodeText release(Configured(totals, "SWITCH_FRAME_TIMELINE", false));
@@ -243,7 +254,7 @@ TEST(DisplayPlanesSource, RefusedLayoutsLoggedOnlyByDebugKernels)
     EXPECT_FALSE(release.has("switch_refusal_k(key, \"display\", \"plane-layout\","));
     EXPECT_TRUE(
         release.has("static void planeNoteRefused(unsigned, uint32_t, const bool *, const native_planes::Layer *, "
-                    "uint32_t, uint32_t) {}"));
+                    "uint32_t, uint32_t, const native_planes::Limits &) {}"));
 }
 
 // Window B changes whose surface the GPU renders follow NativePlaneFence.h: they ride on the window A frame's present,
@@ -272,7 +283,8 @@ TEST(DisplayPlanesSource, WindowBWaitsForTheGpuOnSurfacesItRenders)
     EXPECT_TRUE(admission.before("planeFencePending = true;", "copySource->interruptOccurred"));
     EXPECT_TRUE(Block(source, "void copyWork()").has("planeFenceWork();"));
     const CodeText worker(SourceText("../SwitchPlaneFenceAdmission.h"));
-    EXPECT_TRUE(worker.has("switch_gpu_bridge_fence(producers, count"));
+    EXPECT_TRUE(worker.has("switch_gpu_bridge_submit(producers, count, &bridge)"));
+    EXPECT_TRUE(worker.has("error = switch_gpu_bridge_notify(bridge, native_legacy_gpu_complete, this);"));
     EXPECT_TRUE(worker.has("switch_gpu_bridge_wait_room()"));
     EXPECT_TRUE(Block(fence, "bool planeFenced(const PlaneSet &p) const").has("planeOverlayWaits(*native)"));
     EXPECT_TRUE(Block(SourceText("../SwitchNativePlaneDisplay.h"), "static bool planeOverlayWaits(")

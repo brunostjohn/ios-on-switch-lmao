@@ -110,16 +110,16 @@ static void endedTwice(SwitchMetalCommandBuffer *cb)
     (void)s;
 }
 
-// (as the command buffer's: everything is resident)
+// (as the command buffer's, for its every range)
 - (void)useResidencySet:(id)set
 {
-    (void)set;
+    gm20bUseResidencySet(_cb, set);
 }
 
 - (void)useResidencySets:(const __unsafe_unretained id *)sets count:(NSUInteger)count
 {
-    (void)sets;
-    (void)count;
+    for (NSUInteger k = 0; k < count; k++)
+        gm20bUseResidencySet(_cb, sets[k]);
 }
 
 - (void)updateFence:(id<MTLFence>)fence

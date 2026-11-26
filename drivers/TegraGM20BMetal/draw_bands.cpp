@@ -13,16 +13,27 @@ uint64_t RenderEncoder::drawUnits(uint32_t instances) const
     return laneWork(laneWork(drawPixels_, instances), emitted_->samplePasses);
 }
 
-uint32_t RenderEncoder::drawBands(uint32_t vertices, uint32_t instances, uint64_t units) const
+BandGrid RenderEncoder::drawBands(uint32_t vertices, uint32_t instances, uint64_t units) const
 {
     const Pipeline &pl = *emitted_;
-    if (dev_->compositorClass() || pl.vertexStores || cb_->bands >= kBandsPerCommandBuffer)
-        return 1;
+    const uint64_t budget = dev_->bandBudgetNs();
+    if (!budget || dev_->compositorClass() || pl.vertexStores)
+        return {};
+    const bool hasProgress = dev_->channelProgressVa() != 0;
+    if (!hasProgress && cb_->bands >= kBandsPerCommandBuffer)
+        return {};
+    const bool unmeasured = units >= kMeasureUnits && !measuredOnce(pl.bandRate);
     BandDraw d;
     d.fragmentNs = estimatedNs(pl.bandRate, units, workNs(laneWork(units, pl.fragmentInstructions)));
-    d.vertexNs = workNs(laneWork(laneWork(vertices, instances), pl.vertexInstructions));
+    // what each band repeats: its vertices at their static price, or what its banded draws were measured to repeat
+    d.vertexNs = std::max<uint64_t>(workNs(laneWork(laneWork(vertices, instances), pl.vertexInstructions)),
+                                    pl.bandRate.nsPerBand.load(std::memory_order_relaxed));
     d.rows = drawBox_.empty() ? 0 : drawBox_.y1 - drawBox_.y0;
-    return bandCount(d, dev_->bandBudgetNs(), kBandsPerCommandBuffer - cb_->bands);
+    d.cols = drawBox_.empty() ? 0 : drawBox_.x1 - drawBox_.x0;
+    d.unmeasured = unmeasured;
+    const uint32_t maxBands = hasProgress ? kMaxTileBands : kMaxBands;
+    const uint32_t left = hasProgress ? kMaxTileBands : kBandsPerCommandBuffer - cb_->bands;
+    return bandGrid(d, budget, left, maxBands);
 }
 
 // The pass's first draw, the one a pass of one draw measures at its end (measurePass): the render server is never banded,
@@ -41,8 +52,10 @@ void RenderEncoder::noteCandidate(uint64_t units, uint32_t bands)
 }
 
 #if SWITCH_METAL_DIAGNOSTICS
-// A draw large enough to measure, by where its price came from, and a line for one priced at a long draw's length
-void RenderEncoder::notePrice(uint64_t units, uint32_t bands) const
+// A draw large enough to measure, by where its price came from, and a line for one priced at a long draw's length or
+// drawn in bands: its target's format and size (a planar target's stand-in named), instances, band grid and box, which
+// tie a wrong banded render on the device to the draw that made it
+void RenderEncoder::notePrice(uint64_t units, BandGrid grid, uint32_t instances) const
 {
     const Pipeline &pl = *emitted_;
     if (units < kMeasureUnits || dev_->compositorClass() || pl.vertexStores)
@@ -50,11 +63,16 @@ void RenderEncoder::notePrice(uint64_t units, uint32_t bands) const
     const bool learned = pl.bandRate.psPerUnit.load(std::memory_order_relaxed) != 0;
     (learned ? dev_->stats.pricedLearned : dev_->stats.pricedStatic)++;
     const uint64_t ns = estimatedNs(pl.bandRate, units, workNs(laneWork(units, pl.fragmentInstructions)));
-    if (ns >= kLongDrawNs)
-        os_log(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "gm20b"),
-               "SwitchMetal: banded draw k%016llx %llu kunits priced %llu us (%s) in %u bands",
-               (unsigned long long)(pl.rec ? pl.rec->keyHash : 0), (unsigned long long)(units / 1000),
-               (unsigned long long)(ns / 1000), learned ? "learned" : "static", bands);
+    if (ns < kLongDrawNs && grid.total() < 2)
+        return;
+    const Texture *t = pass_.color[0].texture;
+    os_log(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "gm20b"),
+           "SwitchMetal: banded draw k%016llx %llu kunits priced %llu us (%s) in %u bands (%ux%u) of %u instances, "
+           "box %u,%u-%u,%u, target format %u%s %ux%u",
+           (unsigned long long)(pl.rec ? pl.rec->keyHash : 0), (unsigned long long)(units / 1000),
+           (unsigned long long)(ns / 1000), learned ? "learned" : "static", grid.total(), grid.rows, grid.cols,
+           instances, drawBox_.x0, drawBox_.y0, drawBox_.x1, drawBox_.y1, t ? t->format : 0u,
+           t && t->planarStandIn ? " through its stand-in" : "", t ? t->width : 0u, t ? t->height : 0u);
 }
 #endif
 
@@ -80,10 +98,11 @@ void RenderEncoder::emitDraw(bool indexed, uint32_t first, uint32_t count, uint3
         mme::draw(p, params_, indexed, first, count, instances, root, baseInstance);
     };
     const uint64_t units = drawUnits(instances);
-    const uint32_t bands = drawBands(count, instances, units);
-    noteCandidate(units, bands);
-    SWITCH_METAL_DIAGNOSTIC(notePrice(units, bands));
+    const BandGrid grid = drawBands(count, instances, units);
+    const uint32_t bands = grid.total();
+    SWITCH_METAL_DIAGNOSTIC(notePrice(units, grid, instances));
     if (bands < 2) {
+        noteCandidate(units, bands);
         if (p_.room() < kBandWords)
             reserve();
         words(p_);
@@ -93,7 +112,8 @@ void RenderEncoder::emitDraw(bool indexed, uint32_t first, uint32_t count, uint3
     const PixelBox area = {sc_[0], sc_[1], sc_[0] + sc_[2], sc_[1] + sc_[3]};
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     if (dev_->probeMacroBands.load(std::memory_order_relaxed) && !indexed && instances == 1 && rot_.turn == 0 &&
-        area.y1 > area.y0) {
+        grid.cols == 1 && area.y1 > area.y0) {
+        noteCandidate(units, bands);
         if (p_.room() < mme::kBandDrawMaxWords)
             reserve();
         mme::bandDraw(p_, params_, bands, first, count, root, baseInstance, uint16_t(area.x0), uint16_t(area.x1),
@@ -104,18 +124,57 @@ void RenderEncoder::emitDraw(bool indexed, uint32_t first, uint32_t count, uint3
         return;
     }
 #endif
-    if (cb_->batchWork_.operations)
-        cutBatch();
-    emitBands(
-        p_, rot_, area, drawBox_, bands,
+    const uint64_t progressVa = dev_->channelProgressVa();
+    if (cb_->batchWork_.operations) {
+        if (progressVa) {
+            if (p_.room() < kProgressReleaseWords)
+                reserve();
+            emitProgressRelease(p_, progressVa, dev_->nextProgressSeq());
+            cb_->batchWork_ = {};
+        } else {
+            cutBatch();
+        }
+    }
+    bool selfMeasured = false;
+    DrawTiming selfTiming;
+    if (!dev_->compositorClass() && cb_->timings.size() < kMeasuredPerCommandBuffer &&
+        measure(emitted_->bandRate, units)) {
+        selfMeasured = true;
+        const uint32_t n = dev_->drawStamps_++;
+        selfTiming = {&emitted_->bandRate,
+                      units,
+                      n % kDrawStampSlots,
+                      n + 1 ? n + 1 : 1,
+                      emitted_->rec ? emitted_->rec->keyHash : 0,
+                      emitted_->fragmentInstructions,
+                      bands};
+        cb_->timings.push_back(selfTiming);
+        if (p_.room() < kDrawStampWords)
+            reserve();
+        emitDrawStamp(p_, dev_->stamps_.va, selfTiming.slot, false, selfTiming.payload);
+    }
+    uint32_t bandIndex = 0;
+    const uint32_t perBandRoom = kBandWords + kDrawStampWords + kProgressReleaseWords;
+    emitBandGrid(
+        p_, rot_, area, drawBox_, grid,
         [&] {
-            if (p_.room() < kBandWords)
+            if (p_.room() < perBandRoom)
                 reserve();
         },
         words,
         [&] {
-            cutBatch();
+            if (progressVa)
+                emitProgressRelease(p_, progressVa, dev_->nextProgressSeq());
+            else
+                cutBatch();
+            if (selfMeasured && ++bandIndex == bands) {
+                if (p_.room() < kDrawStampWords)
+                    reserve();
+                emitDrawStamp(p_, dev_->stamps_.va, selfTiming.slot, true, selfTiming.payload);
+            }
         });
+    if (progressVa)
+        cb_->batchWork_ = {};
     cb_->bands += bands;
     SWITCH_METAL_DIAGNOSTIC(if (cb_->drawTimes_) timeDraw(count, instances, false));
     SWITCH_METAL_DIAGNOSTIC(dev_->stats.bandedDraws++; dev_->stats.bands += bands);
@@ -143,7 +202,7 @@ void Device::learnCompleted()
         const auto *slot = reinterpret_cast<const volatile StampSlot *>(stamps_.cpu + drawStampOffset(t.slot, false));
         uint64_t ns = 0;
         if (stampedNanoseconds(*slot, t.payload, ns)) {
-            learn(*t.rate, ns, t.units);
+            learn(*t.rate, ns, t.units, t.bands);
             SWITCH_METAL_DIAGNOSTIC(stats.learnedDraws++);
 #if SWITCH_METAL_DIAGNOSTICS
             if (ns >= kLongDrawNs)

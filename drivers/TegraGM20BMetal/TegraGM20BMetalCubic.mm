@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #import "TegraGM20BMetalInternal.h"
-#import "TegraGM20BMetalStatesKey.h"
+#import "TegraGM20BMetalPipelineVariants.h"
 #include "fragment_tests.h"
 #include "render_variant.h"
 #include "shader_test_push.h"
@@ -47,71 +47,33 @@ static void cubicBinds(__unsafe_unretained SwitchMetalRenderEncoder *encoder, co
 
 void packedVariants(SwitchMetalPipeline *p, const gm20b::PackRun &run)
 {
-    std::lock_guard<gm20b::Mutex> lock(p->_variantLock);
-    for (const auto &[name, pl] : gRM->raw->variantPipelines(run, p->_caTransform)) {
-        auto variant = std::make_shared<gm20b::Variant<gm20b::Pipeline>>();
-        variant->publish(pl);
-        p->_variants.emplace(name, std::move(variant));
+    // p is unshared until gm20bPipelineShell returns it; a variant is placed when a draw first selects its name.
+    p->_packRun = run;
+    p->_hasPackVariants = false;
+    for (uint32_t i = 0; i < run.records; ++i) {
+        if (run.first[i].flags & gm20b::PipelineVariantRecord) {
+            p->_hasPackVariants = true;
+            break;
+        }
     }
 }
 
-// A variant the compiler refused (`failure` empty) or no compiler made: the command buffers that draw it fail, and its
-// key is named once
-static void settleUnmade(gm20b::Variant<gm20b::Pipeline> &variant, const std::string &key, const std::string &failure)
-{
-    SWITCH_REFUSE_DETAIL("gm20b", "state.variant", gm20b::Pack::fnv(key.data(), key.size()),
-                         "the shader compiler %s the variant %s%s%s: the command buffers that draw it fail",
-                         failure.empty() ? "refused" : "made none of", key.c_str(), failure.empty() ? "" : ": ",
-                         failure.c_str());
-    if (failure.empty())
-        variant.publish(nullptr);
-    else
-        variant.fail();
-}
-
-// Binding and pass preparation starts asynchronous variant work. Sampled variants can use stand-ins while
-// pending; other variants hold the queue head until they publish or fail (TegraGM20BMetalSchedule.mm variantReadiness).
-// A compiler's answer about a key holds for the process: refused or not made, the variant stays so, and keeps the
-// object plans name. An ask that found no compiler to ask is no answer: the next pass that needs the variant asks
-// again, and that ask checks the compiler as a state's creation does (TegraGM20BMetalComplete.mm Completion::request).
+// A draw's first select of a name places a tier-0 record there and queues any other to the placer
+// (TegraGM20BMetalPipelineVariants.mm). Sampled variants can use stand-ins while pending; other variants hold the queue head until they publish or fail (TegraGM20BMetalSchedule.mm
+// variantReadiness). A variant failed for want of a compiler is asked again by the next pass that needs it (reopen).
 static gm20b::Variant<gm20b::Pipeline> *renderVariant(SwitchMetalPipeline *p, const gm20b::RenderVariant &forms)
 {
-    const std::string name = forms.name();
     std::shared_ptr<gm20b::Variant<gm20b::Pipeline>> variant;
     {
         std::lock_guard<gm20b::Mutex> lock(p->_variantLock);
-        auto [at, inserted] = p->_variants.try_emplace(name);
+        auto [at, inserted] = p->_variants.try_emplace(forms.name());
         if (inserted)
             at->second = std::make_shared<gm20b::Variant<gm20b::Pipeline>>();
         else if (!at->second->reopen())
             return at->second.get();
         variant = at->second;
     }
-    const std::string key = gm20bStateKey(p) + name;
-    gm20b::Completion *completion = gRM->completion.get();
-    if (!completion) {
-        variant->failUnserved();
-        return variant.get();
-    }
-    gm20b::Completion::Ask request;
-    request.descriptor = gm20bMadeFrom(p);
-    request.facade = request.descriptor;
-    request.key = key;
-    request.caTransform = p->_caTransform;
-    request.own = !p->_packable;
-    request.variant = forms;
-    request.resolveDescriptor = true;
-    request.bindWait = [variant](std::function<bool()> wait) {
-        variant->setWait(std::move(wait));
-    };
-    completion->askVariant(std::move(request), [variant, key](gm20b::Pipeline *made, const std::string &failure) {
-        if (made)
-            variant->publish(made);
-        else if (failure == gm20b::Completion::kNoCompilerComes)
-            variant->failUnserved();
-        else
-            settleUnmade(*variant, key, failure);
-    });
+    gm20bPlaceVariant(p, variant, forms);
     return variant.get();
 }
 
@@ -292,6 +254,9 @@ static gm20b::Variant<gm20b::Pipeline> *preparedVariant(__unsafe_unretained Swit
     // a Depth16Unorm a draw tests in its shader renders converted (TegraGM20BMetalRangeForms.mm depth16Tested)
     if ((_forms.fragmentTests && gm20b::zetaHasDepth(zeta)) || (base->rec->shaderTests.flags & gm20b::kShaderTestDepth))
         _cb->_passes[_passAt].shaderTestsDepth = true;
+    if (_forms.fragmentTests == uint8_t(gm20b::FragmentTests::StencilWrite) ||
+        (base->rec->shaderTests.flags & gm20b::kShaderTestStencil))
+        _cb->_passes[_passAt].testsStencil = true;
     reboundTextures(*base, _tex[1], _forms.written);
     if (!_forms.cubic.empty() || _forms.fragmentTests || !_forms.written.empty())
         _formVariant = preparedVariant(self, _forms);

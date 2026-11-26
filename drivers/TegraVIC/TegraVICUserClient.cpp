@@ -37,6 +37,7 @@
 //
 // Present (TegraVICPresent.cpp): TegraNVDEC's decoders hand each decoded picture to VIC on their own thread, under the
 // same engine lock.
+#include <IOKit/IOBSD.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
 #include <IOKit/IOService.h>
@@ -47,6 +48,7 @@
 #include <os/log.h>
 #include <string.h>
 #include "TegraVIC.h"
+#include "../../kits/SwitchEntitlement/SwitchEntitlement.h"
 #include "../../kits/SwitchRefusal/SwitchRefusal.h"
 #include "../../kits/SwitchTime/SwitchTime.h"
 #include "TegraVICBounce.h"
@@ -67,6 +69,7 @@
 #include "SwitchVICGateABI.h"
 #include "../NativeMobileDisplay/SwitchLandscapeRunABI.h"
 #include "../TegraGM20B/TegraGM20BLayout.h"
+#include "../TegraGM20B/TegraGM20BPathsABI.h"
 
 // The kernel's IOService/IOUserClient implementations, called directly (they are the defaults the vtable copies
 // keep or fall back to), and their vtables, where the slots are found.
@@ -241,13 +244,15 @@ struct Job {
     SwitchVICEvents *events;
     bool eventReady, listed;
     int eventStatus;
+    const void *touched[2];  // SwitchVICRequests.h
+    bool reserving, reserveWhenRun;
     IOUserClient *client;  // retained
     struct Conn *conn;
     TegraVICSurface src, dst;
     SwitchVICWriteReservation dstReserve;
     TegraVICPlan plan;
     uint32_t chromaSite;
-    bool bounceSrc, bounceDst, mayDeferTurn;  // through the copy engine's scratch (TegraVICBounce.h)
+    bool bounceSrc, bounceDst;  // through the copy engine's scratch (TegraVICBounce.h)
     bool async, reply;
     OSAsyncReference64 ref;
     uint64_t info;
@@ -321,8 +326,11 @@ bool runJob(Job *job, IOReturn *status)
             switch_vic_surface_release_write(&reservation);
         }
     };
+
     WriteReservationGuard dstReserve{job->dstReserve};
     job->dstReserve = {};
+    if (job->reserveWhenRun)
+        switch_vic_surface_reserve_write(&job->dst, &dstReserve.reservation);
 #if TEGRA_VIC_STATS
     const uint64_t entered = mach_absolute_time();
     const bool eventTurn = job->events && job->plan.count == 1 && (job->plan.op[0].transform & TEGRA_VIC_ROT90);
@@ -331,8 +339,8 @@ bool runJob(Job *job, IOReturn *status)
     // A quarter turn of a decoder's picture window A scans itself: recorded on the destination, nothing to submit.
     SwitchDisplayTraits traits = switch_display_traits();
     traits.columnScanYuv = traits.columnScanYuv && switch_display_landscape_ready();
-    if (!job->bounceSrc && !job->bounceDst &&
-        switch_vic_turn_defer(&job->src, &job->dst, &job->plan, job->chromaSite, &job->events, traits)) {
+    if (!job->bounceDst && switch_vic_turn_defer(&job->src, &job->dst, &job->plan, job->chromaSite, &job->events,
+                                                 traits, &dstReserve.reservation)) {
 #if TEGRA_VIC_STATS
         switch_vic_turn_count(job->origin, false, true, eventTurn, mach_absolute_time() - entered);
 #endif
@@ -348,7 +356,11 @@ bool runJob(Job *job, IOReturn *status)
     const uint64_t addressed = tegra_vic_surface_extent(&job->dst.desc) +
                                (job->plan.readsSource ? tegra_vic_surface_extent(&job->src.desc) : 0);
 #endif
-    if (!job->bounceSrc && !job->bounceDst)
+    const TegraVICFormat *srcFormat = job->plan.readsSource ? tegra_vic_format(job->src.desc.fourcc) : nullptr;
+    const TegraVICFormat *dstFormat = tegra_vic_format(job->dst.desc.fourcc);
+    const bool tryDirect = (!job->bounceSrc || (srcFormat && srcFormat->kind != TEGRA_VIC_KIND_RGB)) &&
+                           (!job->bounceDst || (dstFormat && dstFormat->planes == 1));
+    if (tryDirect)
         submitted = switch_vic_transform(&job->src, &job->dst, &job->plan, job->chromaSite, transformed, job,
                                          job->events, nullptr, &dstReserve.reservation);
     const bool bounced = !submitted;
@@ -382,13 +394,24 @@ void statsLine()
 void eventsReady(void *context, int status)
 {
     auto *job = static_cast<Job *>(context);
-    if (!status && !job->dstReserve.lease && !job->mayDeferTurn &&
-        !__atomic_load_n(&job->conn->closing, __ATOMIC_ACQUIRE))
-        switch_vic_surface_reserve_write(&job->dst, &job->dstReserve);
     IOLockLock(gQueueLock);
+    const bool reserves = job->listed && !status && !job->eventStatus && !job->dstReserve.lease &&
+                          !__atomic_load_n(&job->conn->closing, __ATOMIC_ACQUIRE);
+    const bool reserve = reserves && gRequests.alone(job->dst.memory, job);
+    if (reserve)
+        job->reserving = true;
+    else if (reserves)
+        job->reserveWhenRun = true;
     gRequests.ready(job, status);
     IOLockWakeup(gQueueLock, &gRequests, false);
     IOLockUnlock(gQueueLock);
+    if (reserve) {
+        switch_vic_surface_reserve_write(&job->dst, &job->dstReserve);
+        IOLockLock(gQueueLock);
+        gRequests.reserved(job);
+        IOLockWakeup(gQueueLock, &gRequests, false);
+        IOLockUnlock(gQueueLock);
+    }
 }
 
 void engineThread(void *, wait_result_t)
@@ -404,6 +427,9 @@ void engineThread(void *, wait_result_t)
         switch_gpu_events_charge(job->caller);
         const bool finished = runJob(job, &status);
         switch_gpu_events_charge(0);
+        IOLockLock(gQueueLock);
+        gRequests.finished();
+        IOLockUnlock(gQueueLock);
         if (finished)
             finishJob(job, status);
     }
@@ -454,20 +480,34 @@ void finishJob(Job *job, IOReturn status)
 
 namespace {
 // Interruptible, so a client stalled behind its own events that never fire can still be killed; its close then fails
-// those jobs.
+// those jobs. A job without events reserves its destination for writing (so the external display does not latch it
+// before VIC writes it) from now if no other job touches it, else when it runs. The reservation is taken outside the
+// queue's lock: it can register the surface's backing.
 bool queueJob(Job *job)
 {
     IOLockLock(gQueueLock);
     bool interrupted = false;
     while (!__atomic_load_n(&job->conn->closing, __ATOMIC_ACQUIRE) && !gRequests.admits(*job) && !interrupted)
         interrupted = IOLockSleep(gQueueLock, &gRequests, THREAD_ABORTSAFE) == THREAD_INTERRUPTED;
+    bool reserve = false;
     if (!interrupted) {
         if (__atomic_load_n(&job->conn->closing, __ATOMIC_ACQUIRE))
             gRequests.fail(job, -125);
+        const bool reserves = job->eventReady && !job->eventStatus;
+        reserve = reserves && gRequests.alone(job->dst.memory);
+        job->reserving = reserve;
+        job->reserveWhenRun = reserves && !reserve;
         gRequests.push(job);
         IOLockWakeup(gQueueLock, &gRequests, false);
     }
     IOLockUnlock(gQueueLock);
+    if (reserve) {
+        switch_vic_surface_reserve_write(&job->dst, &job->dstReserve);
+        IOLockLock(gQueueLock);
+        gRequests.reserved(job);
+        IOLockWakeup(gQueueLock, &gRequests, false);
+        IOLockUnlock(gQueueLock);
+    }
     return !interrupted;
 }
 
@@ -631,11 +671,9 @@ IOReturn transform(Conn *conn, const void *in, uint32_t size)
         iouc_set_async_reference64(job->ref, port, r.cb_fn, r.cb_refcon, conn->task);
     IOLockUnlock(conn->lock);
     job->eventReady = job->events == nullptr;
+    job->touched[0] = job->dst.memory;
+    job->touched[1] = job->plan.readsSource ? job->src.memory : nullptr;
     const bool async = job->async;
-    job->mayDeferTurn = !job->bounceSrc && !job->bounceDst && job->plan.count == 1 &&
-                        (job->plan.op[0].transform & TEGRA_VIC_ROT90) != 0 && job->dst.desc.planes == 2;
-    if (!job->events && !job->mayDeferTurn)
-        switch_vic_surface_reserve_write(&job->dst, &job->dstReserve);
     switch_vic_events_arm(job->events);
     if (!queueJob(job)) {
         abandonUnqueued(job);
@@ -651,8 +689,11 @@ IOReturn transform(Conn *conn, const void *in, uint32_t size)
 // The display's window probes come through here too: the app's sandbox admits this client, not the display's.
 extern "C" IOReturn switch_display_window_probe_call(const IOExternalMethodArguments *) __attribute__((weak));
 
+// Every request writes hardware or kernel state no client's job may reach, so only HW Test may make one.
 static IOReturn kernelTest(const Conn *conn, const IOExternalMethodArguments *a)
 {
+    if (!switch_task_entitled(conn->task, SWITCH_GPU_PROBES_ENTITLEMENT))
+        return kIOReturnNotPrivileged;
     uint32_t magic = 0;
     if (a->structureInput && a->structureInputSize >= sizeof(magic))
         memcpy(&magic, a->structureInput, sizeof(magic));
@@ -662,6 +703,8 @@ static IOReturn kernelTest(const Conn *conn, const IOExternalMethodArguments *a)
         return switch_vic_gate_call(conn, a);
     if (magic == SWITCH_DISPLAY_WINDOW_PROBE_MAGIC)
         return switch_display_window_probe_call ? switch_display_window_probe_call(a) : kIOReturnUnsupported;
+    if (!switch_vic_probes_entitled(conn->task))
+        return kIOReturnNotPrivileged;
     return switch_vic_kernel_test_call(a);
 }
 #endif
@@ -736,6 +779,7 @@ IOReturn tegra_vic_client_close(IOUserClient *self)
     if (Conn *conn = connOf(self)) {
 #if TEGRA_VIC_STATS
         switch_display_traits_release(conn);
+        switch_vic_landscape_release(conn);
         switch_vic_gate_close(conn);
 #endif
         __atomic_store_n(&conn->closing, true, __ATOMIC_RELEASE);

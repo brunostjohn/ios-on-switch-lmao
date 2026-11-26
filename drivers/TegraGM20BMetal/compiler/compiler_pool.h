@@ -64,6 +64,10 @@ public:
         std::function<void(void *token)> lower;
         // Called once on each worker thread with its 1-based slot (1..kWorkers) before taking jobs
         std::function<void(uint32_t worker)> registerWorker;
+        // Whether two works compile one record: a request joins a job of its name only then. Names are what any client
+        // can steer (store_key.h), so a job of another content under the same name runs apart, under the next free key.
+        // None: every job of a name is the same.
+        std::function<bool(const Work &a, const Work &b)> same;
         // Bind kernel request `id` to the worker registered in `worker` (1..kWorkers)
         std::function<void(uint64_t id, uint32_t worker)> serve;
         // On the worker whose job was the last one queued or running, after its waiters were answered, at the background
@@ -104,15 +108,17 @@ private:
 
     Hooks hooks_;
     mutable std::mutex lock_;
-    std::condition_variable work_, idle_;
+    std::condition_variable work_, idle_, idleWork_;
     std::map<Name, std::shared_ptr<Job>> jobs_;
     std::vector<std::thread> workers_;
+    std::thread idleWorker_;
     unsigned foregroundRunning_ = 0, backgroundStarting_ = 0;
-    uint64_t arrivals_ = 0;
+    uint64_t arrivals_ = 0, idleEpoch_ = 0, idleHandled_ = 0;
     bool stopping_ = false;
     Stats stats_;
 
     void workerLoop(unsigned slot);
+    void idleLoop();
     std::shared_ptr<Job> next();
     void primary(const std::shared_ptr<Job> &job, int32_t result);
     void finish(const std::shared_ptr<Job> &job, int32_t splitResult);

@@ -1,7 +1,9 @@
 import Foundation
+import HWTestCommon
 import HWTestCore
 import HWTestGPU
 import HWTestKit
+import HWTestShared
 import UIKit
 
 /// A Liquid Glass panel (UIGlassEffect, regular) across the middle of vertical stripes and of flat grey. Outside it the

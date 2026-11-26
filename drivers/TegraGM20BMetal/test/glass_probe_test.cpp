@@ -81,17 +81,25 @@ TEST(GM20BGlassProbe, UniformsCountNonFiniteFloatsAndHalves)
     EXPECT_STREQ(out, "u1.0:272/nocpu");
 }
 
-TEST(GM20BGlassProbe, EachLineOnceACommandBufferAndGeneration)
+// 25 Nov: one ui.glass_ab run logged 6,183 draw lines, the same states in every command buffer
+TEST(GM20BGlassProbe, EachLineOnceAThreadAndGenerationThenTheRepeatsCounted)
 {
-    const int a = 0, b = 0;
+    gm20b::GlassProbeTally ended;
     gm20b::armGlassProbe();
     EXPECT_TRUE(gm20b::glassProbeArmed());
-    EXPECT_TRUE(gm20b::glassProbeFirst(&a, "state x"));
-    EXPECT_FALSE(gm20b::glassProbeFirst(&a, "state x"));
-    EXPECT_TRUE(gm20b::glassProbeFirst(&a, "state y"));
-    EXPECT_TRUE(gm20b::glassProbeFirst(&b, "state x"));
+    EXPECT_TRUE(gm20b::glassProbeFirst("state x", ended));
+    EXPECT_FALSE(gm20b::glassProbeFirst("state x", ended));
+    EXPECT_FALSE(gm20b::glassProbeFirst("state x", ended));
+    EXPECT_TRUE(gm20b::glassProbeFirst("state y", ended));
+    EXPECT_EQ(ended.distinct, 0u);
+    const uint32_t first = gm20b::gGlassProbeGeneration.load();
     gm20b::armGlassProbe();
-    EXPECT_TRUE(gm20b::glassProbeFirst(&b, "state x"));
+    EXPECT_TRUE(gm20b::glassProbeFirst("state x", ended));
+    EXPECT_EQ(ended.generation, first);
+    EXPECT_EQ(ended.distinct, 2u);
+    EXPECT_EQ(ended.repeats, 2u);
+    EXPECT_FALSE(gm20b::glassProbeFirst("state x", ended));
+    EXPECT_EQ(ended.distinct, 0u);
     gm20b::disarmGlassProbe();
     EXPECT_FALSE(gm20b::glassProbeArmed());
 }

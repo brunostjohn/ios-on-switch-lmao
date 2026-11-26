@@ -292,6 +292,9 @@ struct Texture {
     uint64_t imagePitchVa = 0;
     bool surfaceView = false;
     uint32_t surfaceX = 0, surfaceY = 0;
+    // A texture over a surface the kernel laid out block-linear: the stride of the surface's rows as the CPU's lock view
+    // holds them (the pitch it was made at), along which Metal's plane copies run (blit_planes.h planeRunPieces)
+    uint32_t rowsPitch = 0;
     // A texel buffer over a surface the kernel laid out block-linear (texel_rows.h): this texture is a pitch pool of its
     // bytes, which the copy engine fills from the surface's rows and copies back into them
     TexelRows *texelRows = nullptr;
@@ -383,7 +386,7 @@ struct NativeSurface {
     std::map<Key, Texture> textures;
     uint64_t channelGeneration = 0, generation = 0;
     uint32_t lastUse = 0, encodingReferences = 0, seed = 0;
-    bool cached = true;
+    bool cached = true, writable = false;
 };
 
 constexpr uint8_t kIdentitySwizzle[4] = {2, 3, 4, 5};
@@ -427,6 +430,9 @@ struct Buffer {
     Lease *lease = nullptr;    // as Texture::lease
     bool arena = false;        // as Texture::arena
     bool hostVisible = true;
+    // made on a reused span no CPU zeroed (a Private buffer in a chunk no host-visible buffer reached): Metal's new buffer
+    // reads zeros, so the copy engine fills it ahead of its first use (TegraGM20BMetalFresh.h establishFreshBuffer)
+    bool freshFill = false;
 #if SWITCH_METAL_DIAGNOSTICS
     uint64_t keptBytes = 0;  // a decoded texture's kept blocks: in Stats::textureBytes until destroyBuffer
 #endif

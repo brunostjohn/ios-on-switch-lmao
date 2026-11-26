@@ -241,6 +241,71 @@ TEST(FpStubs, JscvtMatchesTheInstruction)
     expectExact(A64X_JSCVT, "3000000");
 }
 
+TEST(FpStubs, EvalJscvtMatchesHardwareInstruction)
+{
+    const auto check = [](uint64_t bits) {
+        uint32_t hw_w = 0;
+        uint64_t hw_nzcv = 0;
+        asm("fmov d0, %[bits]\n"
+            "fjcvtzs %w[w], d0\n"
+            "mrs %[nzcv], nzcv\n"
+            : [w] "=r"(hw_w), [nzcv] "=r"(hw_nzcv)
+            : [bits] "r"(bits)
+            : "d0", "cc");
+        uint32_t sw_w = 0;
+        const bool sw_z = a64x_eval_jscvt(bits, &sw_w);
+        const bool hw_z = ((hw_nzcv >> 30) & 1u) != 0;
+        EXPECT_EQ(sw_w, hw_w) << "bits=0x" << std::hex << bits;
+        EXPECT_EQ(sw_z, hw_z) << "bits=0x" << std::hex << bits;
+    };
+    const uint64_t edges[] = {
+        0x0000000000000000ull,  // +0.0
+        0x8000000000000000ull,  // -0.0
+        0x0000000000000001ull,  // +min subnormal
+        0x8000000000000001ull,  // -min subnormal
+        0x3FEFFFFFFFFFFFFFull,  // 1 - eps
+        0xBFEFFFFFFFFFFFFFull,  // -(1 - eps)
+        0x3FF0000000000000ull,  // +1.0
+        0xBFF0000000000000ull,  // -1.0
+        0x3FF8000000000000ull,  // +1.5
+        0xBFF8000000000000ull,  // -1.5
+        0x41DFFFFFFFC00000ull,  // +(2^31 - 1)
+        0xC1DFFFFFFFC00000ull,  // -(2^31 - 1)
+        0x41E0000000000000ull,  // +2^31
+        0xC1E0000000000000ull,  // -2^31 (INT32_MIN, Z=1)
+        0xC1E0000000100000ull,  // -2^31 - 0.5 (Z=0)
+        0x41E0000000200000ull,  // +2^31 + 1
+        0xC1E0000000200000ull,  // -2^31 - 1
+        0x41F0000000000000ull,  // +2^32
+        0xC1F0000000000000ull,  // -2^32
+        0x4330000000000000ull,  // +2^52
+        0xC330000000000001ull,  // -(2^52 + 1)
+        0x43E0000000000000ull,  // +2^63
+        0xC3E0000000000000ull,  // -2^63
+        0x452FFFFFFFFFFFFFull,  // near +2^84
+        0xC52FFFFFFFFFFFFFull,  // near -2^84
+        0x4530000000000000ull,  // +2^84
+        0xC530000000000000ull,  // -2^84
+        0x7FF0000000000000ull,  // +Inf
+        0xFFF0000000000000ull,  // -Inf
+        0x7FF8000000000000ull,  // qNaN
+        0xFFF8000000000001ull,  // -qNaN
+        0x7FF0000000000001ull,  // sNaN
+    };
+    for (uint64_t b : edges)
+        check(b);
+    uint64_t s = 0x9E3779B97F4A7C15ull;
+    for (int i = 0; i < 10000; i++) {
+        s ^= s << 13;
+        s ^= s >> 7;
+        s ^= s << 17;
+        check(s);
+        uint64_t near_exp =
+            (static_cast<uint64_t>(1020 + (i % 90)) << 52) | (s & ((1ull << 52) - 1)) | ((s & (1ull << 63)));
+        check(near_exp);
+    }
+}
+
 // FP16 and RDM: the classifier also flags unallocated encodings in these groups (valid code never holds them; data
 // in __text is kept away by the island pass). Every form the host executes must match.
 void expectMatches(enum a64x_class cls, const char *samples)

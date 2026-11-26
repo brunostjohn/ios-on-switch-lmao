@@ -75,6 +75,7 @@
 #include "SwitchGpuQuiet.h"
 #include "SwitchGpuWakeWord.h"
 #include "SwitchGpuChanTable.h"
+#include "SwitchGpuLiveDir.h"
 #include "SwitchGpuWriterPromise.h"
 #include "SwitchGpuPromiseGiveUp.h"
 #include "SwitchGpuJobTiming.h"
@@ -159,6 +160,7 @@ int tgm_clk_raise(char *line, unsigned int len);
 void tgm_clk_suspend(struct nvkm_device *device);
 int tgm_m2_device_init(struct nvkm_device *device, const char **at);
 extern u64 tgm_cpu_zeroes, tgm_cpu_zero_bytes;
+extern u64 tgm_retire_invalidates, tgm_retire_objects, tgm_retire_invalidate_ns;
 
 static void scrub_kick(void);
 
@@ -192,7 +194,9 @@ struct tgm_mem {
 	struct switch_gpu_memory_view *big_views;
 	bool big_views_ready;
 	u64 smmu_iova;
+	u32 smmu_npages;
 	u64 *smmu_pages;
+	struct tgm_mem *later; /* tgm_mem_del_later's batch */
 };
 
 int tgm_vm_kmap_raw(struct tgm_vm *vm, struct tgm_mem *mem, uint64_t bytes, int read_only,
@@ -256,6 +260,7 @@ struct tgm_chan {
 	struct nvif_vma ring_vma;
 	volatile u32 *fence_cpu;
 	volatile u32 *visible_cpu;
+	volatile u32 *progress_cpu;
 	u64 visible_gpu;
 	u64 fence_gpu;
 	u32 submitted;
@@ -280,7 +285,9 @@ struct tgm_chan {
 	u64 progress_held;
 	u32 progress_done;
 	u32 seen_done; /* a hang check's last look at the fence word (chan_progress_ns; tgm_live_lock) */
+	u32 progress_word_seen;
 	u32 stall_done; /* tgm_chan_check_progress: completed seqno first seen stalled, and when */
+	u32 stall_progress_word;
 	u64 stall_ns, stall_held;
 	int app;     /* a user channel: the hold may take it from its first submission */
 	int tracked; /* the hold may take it (tgm_hold_track) */
@@ -322,6 +329,7 @@ struct tgm_chan {
 	u8 stat_kick[CHAN_NSTAMPS]; /* stats: what each high kick found (tgm_sched_kick) */
 #if TGM_STATS
 	u8 stat_foreign[CHAN_NSTAMPS]; /* TGM_STAT_* per-seqno marks */
+	u64 stat_jobless; /* host1x consumers' bridges that waited on this channel's own syncpoint (tgm_live_lock) */
 #endif
 	u64 stat_exec,
 		stat_exec_max; /* stats: this window's stamped exec time (PTIMER units), for its owner */
@@ -381,12 +389,17 @@ struct tgm_chan {
 #define CHAN_SCRUB 2 /* the pool scrubber's */
 extern struct list_head tgm_live_chans;
 extern struct switch_gpu_chan_table tgm_chan_table;
+extern struct switch_gpu_live_dir tgm_live_dir;
 /* The interrupt pass, after nvkm's handlers or the nonstall line's acknowledgement (shim/xnu_glue.cpp gpuInterrupt):
  * every channel with work in flight; how many of them progressed. */
 unsigned tgm_chans_completed(void);
 /* gpu_nonstall.c, M1: the job interrupts' tree 1 (SwitchGpuNonstall.h) */
 int tgm_nonstall_init(struct nvkm_device *device);
 extern struct mutex tgm_live_lock;
+#if TGM_STATS
+/* tgm_live_lock held: the jobless bridges closed channels of processes named `owner` counted (tgm_chan_jobless) */
+u64 tgm_chan_jobless_gone_locked(const char *owner);
+#endif
 extern u64 tgm_live_ids;
 void tgm_chan_describe(struct tgm_chan *chan, char *buf, unsigned int len);
 #if DEVELOPMENT || DEBUG
@@ -403,7 +416,7 @@ void tgm_engine_state(char *buf, unsigned int len);
 #define TGM_ACQUIRE_NS (2 * TGM_STUCK_NS)
 #define RAMFC_TIMESLICE 0xf8
 #define RAMFC_TIMESLICE_DEFAULT 0x10003080
-#define RAMFC_TIMESLICE_HIGH 0x10005080
+#define RAMFC_TIMESLICE_HIGH 0x100080c3
 void tgm_ramfc_write(u32 chid, u32 offset, u32 value);
 #if TGM_STATS
 u32 tgm_ramfc_read(u32 chid, u32 offset);
@@ -419,6 +432,7 @@ enum tgm_wait_source {
 	TGM_WAITS_VICTIM,  /* a word the kernel releases (a bind epoch) or a host1x syncpoint */
 	TGM_WAITS_UNKNOWN, /* an acquire on an address only its own pushes name */
 	TGM_WAITS_UNREAD, /* parked on an acquire RAMFC does not name yet (the PBDMA still holds it): a victim */
+	TGM_WAITS_FAILED, /* a word whose producer stopped (switch_gpu_pack_failed_word): its waiter's work fails */
 };
 enum tgm_wait_source tgm_chan_wait_source(struct tgm_chan *chan, struct tgm_chan **source,
 					  char *what, unsigned int len);

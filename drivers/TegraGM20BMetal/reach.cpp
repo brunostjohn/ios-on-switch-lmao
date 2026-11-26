@@ -139,8 +139,9 @@ Pipeline *Device::reachTwin(Pipeline &pl, const char **why)
     t.vertexInstructions = pl.vertexInstructions;
     t.writesMemory[0] = pl.writesMemory[0];
     t.writesMemory[1] = false;
-    t.methods = pl.methods;
+    t.methods.assign(pl.methodWords(), pl.methodWords() + pl.methodCount());
     t.methods.insert(t.methods.end(), reachMethods_.begin(), reachMethods_.end());
+    t.reselectRoot = pl.reselectRoot;
     t.viewportClip = pl.viewportClip;
     t.namesViewportClip = pl.namesViewportClip;
     t.namesViewportClipRange = pl.namesViewportClipRange;

@@ -4,6 +4,7 @@
 #include "lock.h"
 #include "kernel.h"
 #include "TegraGM20BClockABI.h"
+#include "TegraGM20BSchedABI.h"
 #include "TegraGM20BVolatileABI.h"
 #include "encode_profile.h"
 
@@ -96,6 +97,7 @@ bool Kernel::open(std::string &err)
         return false;
     }
     volatileWrites_ = (info_.flags & TegraGM20BInfoVolatileWrites) != 0;
+    sameUses_ = (info_.flags & TegraGM20BInfoSameUses) != 0;
     const uint64_t start = (info_.va_start + kVaGranule - 1) & ~(kVaGranule - 1);
     uint64_t end = info_.va_end & ~(kVaGranule - 1);
     if (supportsPackImage() && end > TGM_PACK_WINDOW_VA)
@@ -189,12 +191,20 @@ bool Kernel::alloc(uint64_t bytes, bool coherent, Bo &bo, uint32_t kind, uint64_
         a.flags |= TegraGM20BBoControl;
     if (systemOnly && coherent && !control)
         a.flags |= TegraGM20BBoSystem;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    if (!coherent && probeDirect.load(std::memory_order_relaxed))
+        a.flags |= TegraGM20BBoProbeDirect;
+#endif
     TegraGM20BAbiBoAllocReply r = {};
     bo = {};
     if (call(TegraGM20BMethodBoAlloc, &a, sizeof a, &r, sizeof r) != KERN_SUCCESS) {
         setError("BoAlloc failed");
         return false;
     }
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    probeDirectBos += (a.flags & TegraGM20BBoProbeDirect) != 0;
+    smmuBos += (r.reserved & TegraGM20BBoReplySmmu) != 0;
+#endif
     bo.handle = r.handle;
     bo.token = r.map_token;
     bo.bytes = bytes;
@@ -263,12 +273,24 @@ bool Kernel::surfaceGpuWrites(uint32_t surfaceId)
     return false;
 }
 
-bool Kernel::priority(uint32_t priority, uint32_t background)
+bool Kernel::priority(uint32_t priority, uint32_t background, bool *critical)
 {
     if (!(info_.flags & TegraGM20BInfoPriority))
         return false;
     const TegraGM20BAbiPriority in = {priority, background};
-    return call(TegraGM20BMethodPriority, &in, sizeof in, nullptr, 0) == KERN_SUCCESS;
+    if (info_.flags & TegraGM20BInfoPriorityReply) {
+        TegraGM20BAbiPriorityReply out = {};
+        if (call(TegraGM20BMethodPriority, &in, sizeof in, &out, sizeof out) != KERN_SUCCESS)
+            return false;
+        if (critical)
+            *critical = (out.flags & TegraGM20BPriorityCritical) != 0;
+        return true;
+    }
+    if (call(TegraGM20BMethodPriority, &in, sizeof in, nullptr, 0) != KERN_SUCCESS)
+        return false;
+    if (critical)
+        *critical = false;
+    return true;
 }
 
 uint32_t Kernel::surfaceLayout(const Bo &bo, uint32_t width, uint32_t height, uint32_t bpp, uint32_t bytesPerRow,
@@ -331,13 +353,14 @@ uint32_t Kernel::surfaceLayout(const Bo &bo, uint32_t width, uint32_t height, ui
     return out.layout;
 }
 
-int Kernel::nativeSurfaceView(const Bo &source, Bo &view, TegraGM20BAbiNativeSurfaceViewReply &layout)
+int Kernel::nativeSurfaceView(const Bo &source, Bo &view, TegraGM20BAbiNativeSurfaceViewReply &layout, bool writable)
 {
     layout = {};
     view = {};
     if (!exactJobs())
         return KERN_SUCCESS;
-    const TegraGM20BAbiNativeSurfaceView in = {source.handle, 0, 0};
+    const TegraGM20BAbiNativeSurfaceView in = {source.handle, writable ? uint32_t(TegraGM20BNativeSurfaceWrite) : 0u,
+                                               0};
     const int result = call(TegraGM20BMethodNativeSurfaceView, &in, sizeof in, &layout, sizeof layout);
     if (result != KERN_SUCCESS || !layout.handle)
         return result;
@@ -470,6 +493,12 @@ int Kernel::park(uint64_t handle, bool guardNone)
     return call(TegraGM20BMethodBoPark, &in, sizeof in, nullptr, 0);
 }
 
+void Kernel::sparesGiveBack()
+{
+    const TegraGM20BAbiSparesGiveBack in = {};
+    (void)call(TegraGM20BMethodSparesGiveBack, &in, sizeof in, nullptr, 0);
+}
+
 int Kernel::unpark(uint64_t handle, uint64_t &address, uint64_t &bytes, uint32_t &status)
 {
     address = 0;
@@ -536,6 +565,19 @@ bool Kernel::channel(uint32_t engines, uint32_t &channel, const volatile uint32_
     opened_.fetch_add(1, std::memory_order_release);
     uint32_t reused = r.channel;
     lostChannel_.compare_exchange_strong(reused, 0, std::memory_order_relaxed);
+    return true;
+}
+
+bool Kernel::channelProgress(uint32_t channel, uint64_t &gpuVa)
+{
+    gpuVa = 0;
+    if (!(info_.flags & TegraGM20BInfoChannelProgress) || !channel)
+        return false;
+    const TegraGM20BAbiChannel in = {channel, 0};
+    TegraGM20BAbiChannelProgressReply r = {};
+    if (call(TegraGM20BMethodChannelProgress, &in, sizeof in, &r, sizeof r) != KERN_SUCCESS || !r.gpu_va)
+        return false;
+    gpuVa = r.gpu_va;
     return true;
 }
 

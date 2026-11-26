@@ -108,8 +108,40 @@ extern "C" void switch_vic_turn_counters(SwitchVICTurnCounters *out)
     out->ticks = __atomic_load_n(&gCounters.ticks, __ATOMIC_RELAXED);
 }
 
-// FORCE is held for the calling connection (TegraVIC drops it when that connection closes); SAMPLE and QUERY are the
-// display's.
+// The connection that holds each of PORTRAIT and COPY, which change the display's routing until their frame ends run out
+static const void *gHeldBy[2];
+
+static int holdIndex(uint32_t op)
+{
+    return op == SWITCH_DISPLAY_LANDSCAPE_PORTRAIT ? 0 : op == SWITCH_DISPLAY_LANDSCAPE_COPY ? 1 : -1;
+}
+
+static void landscapeHoldEnd(uint32_t op)
+{
+    SwitchDisplayLandscapeRequest request = {SWITCH_DISPLAY_LANDSCAPE_RUN_MAGIC, op, 0, 0};
+    SwitchDisplayLandscapeReply reply = {};
+    IOExternalMethodArguments args = {};
+    args.structureInput = &request;
+    args.structureInputSize = sizeof(request);
+    args.structureOutput = &reply;
+    args.structureOutputSize = sizeof(reply);
+    if (switch_display_landscape_run_call)
+        (void)switch_display_landscape_run_call(&args);
+}
+
+void switch_vic_landscape_release(const void *client)
+{
+    static const uint32_t ops[2] = {SWITCH_DISPLAY_LANDSCAPE_PORTRAIT, SWITCH_DISPLAY_LANDSCAPE_COPY};
+    for (uint32_t op : ops) {
+        const void *expected = client;
+        if (__atomic_compare_exchange_n(&gHeldBy[holdIndex(op)], &expected, nullptr, false, __ATOMIC_ACQ_REL,
+                                        __ATOMIC_ACQUIRE))
+            landscapeHoldEnd(op);
+    }
+}
+
+// FORCE, PORTRAIT and COPY are held for the calling connection (TegraVIC drops them when that connection closes);
+// SAMPLE and QUERY are the display's.
 IOReturn switch_vic_landscape_call(const void *client, const IOExternalMethodArguments *a)
 {
     const auto *request = static_cast<const SwitchDisplayLandscapeRequest *>(a->structureInput);
@@ -127,6 +159,11 @@ IOReturn switch_vic_landscape_call(const void *client, const IOExternalMethodArg
             switch_display_traits_release(client);
         return kIOReturnSuccess;
     }
-    return switch_display_landscape_run_call ? switch_display_landscape_run_call(a) : kIOReturnUnsupported;
+    if (!switch_display_landscape_run_call)
+        return kIOReturnUnsupported;
+    const IOReturn result = switch_display_landscape_run_call(a);
+    if (const int hold = holdIndex(request->op); hold >= 0 && result == kIOReturnSuccess)
+        __atomic_store_n(&gHeldBy[hold], request->value ? client : nullptr, __ATOMIC_RELEASE);
+    return result;
 }
 #endif

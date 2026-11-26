@@ -23,6 +23,7 @@ EMC = re.compile(r'EMC \d+ moves (?P<rates>(?:\d+:[\d.]+% ?)+)')
 EMC_RATE = re.compile(r'(?P<mhz>\d+):(?P<share>[\d.]+)%')
 THREAD = re.compile(
     r'(?P<name>[\w.\-]+)\[(?P<pid>\d+)\] [^:;]*: (?P<runs>\d+) runs (?P<p50>\d+)/(?P<p99>\d+)/(?P<max>\d+) us'
+    r'(?:, longest began (?P<before>\d+) ms before the window)?'
 )
 KPROF_KEEP = ('SwitchKprof tasks', 'SwitchKprof user', 'SwitchKprof waits', 'SwitchKprof images')
 KPROF_HEAD = re.compile(r'^SwitchKprof: (?P<ms>\d+) ms, ')
@@ -57,7 +58,8 @@ class Waits:
     runs: int = 0
     worst_p99: int = 0
     worst_us: int = 0
-    when: datetime | None = None  # the 10 s window that had the longest wait
+    when: datetime | None = None  # the end of the 10 s window the longest wait ended in
+    began_before_ms: int = 0  # how long before that window it began
     booting: bool = False  # that window ended before System Boot Complete
 
 
@@ -169,17 +171,21 @@ def core_waits(recs: list[Rec]) -> dict[str, Waits]:
             w.worst_p99 = max(w.worst_p99, int(m['p99']))
             if int(m['max']) > w.worst_us:
                 w.worst_us, w.when, w.booting = int(m['max']), r.time, 'no System Boot Complete yet' in r.msg
+                w.began_before_ms = int(m['before'] or 0)
     return out
 
 
 def kprof(recs: list[Rec]) -> tuple[str, list[Rec]]:
-    """Return kprof's state in this boot (off, absent or on) and its per-window lines about processes."""
+    """Return kprof's state in this boot (off, absent, on, or the boot window alone) and its per-window lines."""
     lines = [r for r in recs if r.proc == 'kernel' and r.msg.startswith('SwitchKprof')]
     if not lines:
         return 'absent', []
     if any(r.msg.startswith('SwitchKprof: off') for r in lines):
         return 'off (built without --//kernel:kprof)', []
-    return 'on', [r for r in lines if r.msg.startswith(KPROF_KEEP)]
+    kept = [r for r in lines if r.msg.startswith(KPROF_KEEP)]
+    if over := next((r for r in lines if r.msg.startswith('SwitchKprof: boot window over')), None):
+        return f'the boot window only, until {over.time:%H:%M:%S} (a --//kernel:recorder build)', kept
+    return 'on', kept
 
 
 def _parse_spots(body: str) -> tuple[tuple[KprofSpot, ...], int]:

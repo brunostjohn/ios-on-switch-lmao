@@ -60,5 +60,6 @@ host_test(
         "//drivers/SwitchSuspend:SwitchWake.cpp",
         "//drivers/SwitchTouch:SwitchHIDDevice.cpp",
     ],
+    defines = ["SWITCH_IPSW_KIND_21H461=1"],  # SwitchHID.h's per-build lengths; the buttons' reports are every build's
     deps = [":kernel"],
 )
