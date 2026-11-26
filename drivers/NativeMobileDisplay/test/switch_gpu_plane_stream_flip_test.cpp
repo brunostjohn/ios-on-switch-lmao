@@ -207,6 +207,26 @@ TEST_F(GpuPlaneStreamFlip, AMixedSetThatDoesNotStreamWaitsForEveryProducer)
     EXPECT_EQ(d.shown.back(), seq);
 }
 
+// A DC A frame end between the stream's completion and its pass (the gate thread against host1x's completion): the
+// written set it takes always has its pass signalled.
+TEST_F(GpuPlaneStreamFlip, AFrameEndDuringTheStreamsCompletionFindsItsPassSignalled)
+{
+    gWaitResult = -16;
+    ASSERT_TRUE(d.offerGpu(video(2), ++seq));
+    d.copyThread();
+    unsigned frameEnds = 0;
+    gDelivered = [this, &frameEnds](void *display, int status) {
+        d.frameEnd();
+        ++frameEnds;
+        static_cast<Display *>(display)->deliver(status);
+    };
+    ASSERT_NO_THROW(d.complete(0));
+    EXPECT_EQ(frameEnds, 1u);
+    settle();
+    EXPECT_EQ(d.shown.back(), seq);
+    EXPECT_EQ(d.model.active[kStartB], address(2));
+}
+
 // The one panic left: a set host1x wrote whose bridge says its producers finished, and whose frame was then lost.
 TEST_F(GpuPlaneStreamFlip, AWrittenSetLostWithNoFailureReportedIsTheKernels)
 {

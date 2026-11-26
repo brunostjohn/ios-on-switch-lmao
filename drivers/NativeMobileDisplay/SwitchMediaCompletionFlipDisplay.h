@@ -130,7 +130,7 @@ void writeEarlyMediaFlip(uint32_t generation)
 // kernel's own.
 int mediaFlipVerdict(int status)
 {
-    if (!status || !(mediaFlip.early() || mediaFlip.state() == SwitchCompletionFlip::kWritten))
+    if (!status || !(mediaFlip.early() || mediaFlipWrittenByStream()))
         return status;
     const int bridgeWhy = mediaHostStream.bridgeWhy;
     const int why =
@@ -145,9 +145,22 @@ int mediaFlipVerdict(int status)
     return 0;
 }
 
-// writeCompletionFlip's, on the completion's thread with interrupts off.
+bool mediaFlipWrittenByStream() const
+{
+    const uint32_t generation = mediaFlip.generation();
+    return generation && __atomic_load_n(&mediaHostWrote, __ATOMIC_RELAXED) == generation;
+}
+
+// writeCompletionFlip's, on the completion's thread with interrupts off: the set the stream wrote is claimed here.
 void writeMediaFlip(int status)
 {
+    if (mediaFlipWrittenByStream()) {
+        __atomic_store_n(&mediaHostWrote, 0u, __ATOMIC_RELAXED);
+        if (!gPanicRestore.panicking && mediaFlip.claim(0)) {
+            stampMediaHostFlip();
+            mediaFlip.claimed(SwitchCompletionFlip::kWritten);
+        }
+    }
     if (status || gPanicRestore.panicking)
         mediaFlip.withdraw();
 }
