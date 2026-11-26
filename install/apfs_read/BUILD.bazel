@@ -1,0 +1,17 @@
+load("@rules_rust//rust:defs.bzl", "rust_library")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+# node.rs and walk.rs are forked from dpp's apfs crate (MIT): LICENSE-dpp.
+rust_library(
+    name = "switch_apfs_read",
+    srcs = glob(["*.rs"]),
+    deps = [
+        "//install/apfs_alloc:switch_apfs_alloc",
+        "//install/apfs_format:switch_apfs_format",
+        "@installer_crates//:thiserror",
+    ],
+)

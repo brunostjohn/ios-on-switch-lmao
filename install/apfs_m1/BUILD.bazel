@@ -1,0 +1,63 @@
+# The APFS writer's first end-to-end check: a Data volume added to Apple's container.
+#
+#   bazel test //install/apfs_m1:m1_fixture_test     on a macOS worker with passwordless sudo
+#   bazel build //install/apfs_m1:all_m1             the driver for the six desktop platforms
+#
+# By hand on the IPSW's OS container (bazel-bin/install/apfs_m1/switch_apfs_m1):
+#   switch_apfs_m1 add-volume --source <os.img> [--source-offset N] --target <out.img> --target-bytes N ...
+load("@rules_rust//rust:defs.bzl", "rust_binary")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//bazel/desktop:defs.bzl", "desktop_binaries")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+rust_binary(
+    name = "switch_apfs_m1",
+    srcs = [
+        "mutate.rs",
+        "tool.rs",
+    ],
+    crate_root = "tool.rs",
+    deps = [
+        "//install/apfs_format:switch_apfs_format",
+        "//install/apfs_names:switch_apfs_names",
+        "//install/apfs_read:switch_apfs_read",
+        "//install/apfs_write:switch_apfs_write",
+        "@installer_crates//:clap",
+        "@installer_crates//:zerocopy",
+    ],
+)
+
+desktop_binaries(
+    name = "all_m1",
+    binary = ":switch_apfs_m1",
+)
+
+# dpp's reader, a dev-dependency: an independent check, never shipped.
+rust_binary(
+    name = "switch_apfs_m1_check",
+    testonly = True,
+    srcs = ["check.rs"],
+    deps = ["@installer_crates//:apfs"],
+)
+
+sh_test(
+    name = "m1_fixture_test",
+    size = "medium",
+    srcs = ["m1_fixture_test.sh"],
+    args = [
+        "$(rootpath :switch_apfs_m1)",
+        "$(rootpath :switch_apfs_m1_check)",
+    ],
+    data = [
+        ":switch_apfs_m1",
+        ":switch_apfs_m1_check",
+    ],
+    tags = [
+        "external",
+        "manual",
+    ],
+)
