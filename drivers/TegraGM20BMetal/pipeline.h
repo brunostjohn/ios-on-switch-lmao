@@ -87,8 +87,15 @@ struct Pipeline {
     StateSegment segment;                  // the same words in the device's segment heap; empty: they go inline
     uint32_t push[32] = {}, pushMask = 0;  // root table [0x700, 0x780): the words m2v's push ranges write, and which
     // m2v's SlotGuestBase holes: a buffer slot whose Metal address its programs read (a pointer compare, ptrtoint or a
-    // stored pointer), as its stage (0 vertex, 1 fragment), Metal buffer index and push word + 1 (0: no more). Each draw
-    // writes the bound slot's address there, a set*Bytes binding's being its upload copy's.
+    // stored pointer), as its stage (0 vertex, 1 fragment), Metal buffer index and push word + 1 (0: no more). Each direct
+    // draw writes the bound slot's address there, a set*Bytes binding's being its upload copy's
+    // (RenderEncoder::guestBaseWords). No builder fills these yet: m2v counts a draw's SlotGuestBase field as another
+    // hole (NativeMetalDirectDraw.rs) and directHeap refuses the state. Whoever fills them owes: render states only; at
+    // most kGuestBases holes, a state with more refused; the holes of each record of the state, its variants and its
+    // stride twin being records of their own. An indirect command buffer's draw of such a state is refused
+    // (RefGuestBaseIcb): its commands' binds never reach a hole. A compute kernel never gets here: m2v plans its
+    // SlotGuestBase against the probe's set*Bytes run and refuses it (MissingGuestAddress), so its dispatch fails the
+    // command buffer (PredComputeKernel) and never reads the record's static word as an address.
     struct GuestBase {
         uint8_t stage = 0, slot = 0, word = 0;
     };
