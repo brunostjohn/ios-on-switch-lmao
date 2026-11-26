@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * The flight recorder's store (--//kernel:recorder; state.h): captures wait in memory until a thread call at
- * THREAD_CALL_PRIORITY_LOW, which runs only when nothing else wants a core, compresses each (unless the capture thread
- * already did) into one file in mobile's CrashReporter, so `idevicecrashreport` fetches it and the write never competes
- * with the moment it recorded. The call asks for IOPOL_THROTTLE; whether a kernel_task thread's I/O gets that tier is
+ * THREAD_CALL_PRIORITY_LOW, which runs only when nothing else wants a core, compresses each into one file in mobile's
+ * CrashReporter, so `idevicecrashreport` fetches it and neither the compression nor the write competes with the moment
+ * it recorded. The call asks for IOPOL_THROTTLE; whether a kernel_task thread's I/O gets that tier is
  * open (the 25 Nov pack warm's reads, asked the same, went out at tier 0). A file holds one capture: a text header
  * (recorder.h's switch_recorder_header) written last, so a file pulled mid-write reads as incomplete, then the
  * stackshot and the ring as one raw deflate stream.
@@ -13,9 +13,9 @@
  * capture replaces: other boots' first, then this boot's automatic captures past its first ones; an owner's mark is
  * never replaced by an automatic capture.
  *
- * Memory: the captures waiting hold at most `budget` bytes. While the store is behind, the capture thread compresses
- * new captures itself (recorder.h's switch_recorder_compress_now), so about five times as many fit; a mark that still
- * does not fit takes the ring of the newest automatic capture still waiting (it keeps its stackshot).
+ * Memory: the captures waiting hold at most `budget` bytes, raw. When they fill it, an automatic capture gets no room for
+ * its stackshot or its ring and is dropped before it stops any CPU; a mark takes the ring of the newest automatic
+ * capture still waiting (it keeps its stackshot).
  */
 
 #include <switch/recorder.h>
@@ -63,7 +63,7 @@ static struct {
     uint32_t pending, capturing, seq;
     bool writing;
     uint64_t room;
-    uint32_t dumps, dropped, no_ring, packed;
+    uint32_t dumps, dropped, no_ring, no_room;
     unsigned nslots;
     struct switch_recorder_last last;
     /* The store call's alone. */
@@ -171,9 +171,6 @@ void switch_recorder_capture_free(struct switch_recorder_capture *c)
     if (c->ring != NULL) {
         kfree_data(c->ring, c->ring_alloc);
     }
-    if (c->packed != NULL) {
-        kfree_data(c->packed, c->packed_alloc);
-    }
     kfree_type(struct switch_recorder_capture, c);
 }
 
@@ -196,21 +193,15 @@ void switch_recorder_store_push(struct switch_recorder_capture *c)
     thread_call_enter(store.call);
 }
 
-uint64_t switch_recorder_store_held(void)
-{
-    uint64_t held = 0;
-
-    lck_mtx_lock(&store_mtx);
-    held = store.room;
-    lck_mtx_unlock(&store_mtx);
-    return held;
-}
-
-void switch_recorder_store_packed(void)
+/* An automatic capture that got no room for anything: it holds no memory, so it only leaves the count. */
+void switch_recorder_store_abandon(struct switch_recorder_capture *c)
 {
     lck_mtx_lock(&store_mtx);
-    store.packed++;
+    store.capturing--;
+    store.no_room++;
     lck_mtx_unlock(&store_mtx);
+    switch_recorder_expect_done(c->head.tid);
+    switch_recorder_capture_free(c);
 }
 
 bool switch_recorder_store_quiet(void)
@@ -230,7 +221,7 @@ void switch_recorder_store_counts(struct switch_recorder_counts *n, struct switc
     n->dumps = store.dumps;
     n->dropped = store.dropped;
     n->no_ring = store.no_ring;
-    n->packed = store.packed;
+    n->no_room = store.no_room;
     n->pending = store.pending;
     n->pending_bytes = store.room;
     n->slots = store.nslots;
@@ -378,15 +369,10 @@ static bool store_persist(struct switch_recorder_capture *c, struct switch_recor
         os_log(OS_LOG_DEFAULT, "SwitchRecorder: capture %u: %s refused (%d)", h->seq, path, error);
         return false;
     }
-    if (c->packed != NULL) {
-        error = store_write(vp, c->packed, h->deflate_bytes, at, ctx, &wticks);
-        at += (off_t)h->deflate_bytes;
-    } else {
-        (void)deflateReset(&store.zs);
-        error = store_deflate(vp, c->shot, h->shot_bytes, c->ring == NULL, &at, ctx, &zticks, &wticks);
-        if (error == 0 && c->ring != NULL) {
-            error = store_deflate(vp, c->ring, h->ring_bytes, true, &at, ctx, &zticks, &wticks);
-        }
+    (void)deflateReset(&store.zs);
+    error = store_deflate(vp, c->shot, h->shot_bytes, c->ring == NULL, &at, ctx, &zticks, &wticks);
+    if (error == 0 && c->ring != NULL) {
+        error = store_deflate(vp, c->ring, h->ring_bytes, true, &at, ctx, &zticks, &wticks);
     }
     h->deflate_bytes = (uint64_t)at - SWITCH_RECORDER_HEADER;
     if (error == 0 && !switch_recorder_header(text, h)) {
@@ -440,7 +426,7 @@ static void store_call(__unused thread_call_param_t p0, __unused thread_call_par
         lck_mtx_lock(&store_mtx);
         store.writing = false;
         store.pending--;
-        store.room -= c->shot_alloc + c->ring_alloc + c->packed_alloc;
+        store.room -= c->shot_alloc + c->ring_alloc;
         if (written) {
             store.dumps++;
             store.last = last;

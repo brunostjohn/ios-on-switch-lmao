@@ -26,8 +26,6 @@ struct switch_recorder_capture {
     size_t shot_alloc;
     void *ring; /* a RAW_VERSION1 header page, then head.ring_bytes - its size of events */
     size_t ring_alloc;
-    void *packed; /* the stackshot and the ring as the file's body (head.deflate_bytes), the two freed */
-    size_t packed_alloc;
 };
 
 /* recorder.c */
@@ -52,7 +50,6 @@ void switch_recorder_store_push(struct switch_recorder_capture *c);
 void switch_recorder_capture_free(struct switch_recorder_capture *c);
 void switch_recorder_store_counts(struct switch_recorder_counts *n, struct switch_recorder_last *last);
 bool switch_recorder_store_quiet(void);
-uint64_t switch_recorder_store_held(void);
-void switch_recorder_store_packed(void);
+void switch_recorder_store_abandon(struct switch_recorder_capture *c);
 
 #endif

@@ -94,4 +94,19 @@ TEST(XnuRecorderHooksSource, TheCaptureReadsTheRingThroughKdebugsMergeIntoMemory
     ASSERT_NE(off, std::string::npos);
 }
 
+// The capture thread runs at fixed priority 52, above SpringBoard's main thread: it compresses nothing (the store's
+// low-priority call does, as it writes), and an automatic capture with no room for its stackshot or ring is dropped
+// before the store ever holds it.
+TEST(XnuRecorderHooksSource, TheCaptureThreadNeverCompressesAndDropsAnAutomaticCaptureWithNoRoom)
+{
+    const std::string capture = SourceText("../switch/recorder/capture.c");
+    EXPECT_EQ(capture.find("deflate("), std::string::npos);
+    EXPECT_EQ(capture.find("zlib"), std::string::npos);
+    const std::string one = Between(capture, "static void switch_recorder_capture_one(", "\n}\n");
+    const size_t abandon = one.find("switch_recorder_store_abandon(c);");
+    ASSERT_NE(abandon, std::string::npos);
+    EXPECT_LT(abandon, one.find("switch_recorder_store_push(c);"));
+    EXPECT_NE(SourceText("../switch/recorder/store.c").find("deflate(&store.zs"), std::string::npos);
+}
+
 }  // namespace

@@ -60,8 +60,8 @@ main thread of SpringBoard, backboardd or a focal app, a present six periods or 
 Every press is captured, ahead of anything else waiting. Automatic captures are at least 2 s apart, and 10 s for the
 same reason and thread; each refusal is logged with its cause. A capture copies the ring and a stackshot into memory
 within tens of milliseconds; the stackshot stops every CPU for about 3 ms. A low-priority thread compresses and writes
-the capture later, when nothing else wants a core. When it falls behind, as at boot, the capture thread compresses new
-captures itself so that more fit in memory.
+the capture later, when nothing else wants a core. Captures wait in memory uncompressed. Once they fill it, as at boot,
+a new automatic capture is dropped before it stops any CPU, and a press takes the ring of an automatic one.
 
 A capture is one `Switch-recorder-<n>.rec` in the crash folder, which `pull` copies. Its text header names the boot, the
 trigger and how soon each step ended. The store keeps as many files as a tenth of the free space holds. When it is full,

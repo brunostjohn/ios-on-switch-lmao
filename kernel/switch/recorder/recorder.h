@@ -295,17 +295,6 @@ static inline bool switch_recorder_refusal_logged(struct switch_recorder_refusal
     return true;
 }
 
-/*
- * Whether the capture thread compresses a new capture of `bytes` in memory before handing it to the store: when the
- * captures the store has not written yet already hold that much (`held`, this one's not counted), the store is behind
- * (starved of CPU, as at boot on 25 Nov, when no core was idle for minutes), and raw captures would fill its memory
- * after five. Compressed, about five times as many fit; otherwise the compression waits for the store's low priority.
- */
-static inline bool switch_recorder_compress_now(uint64_t held, uint64_t bytes)
-{
-    return held >= bytes;
-}
-
 /* A slot of the store as its file's header says, or unused. */
 struct switch_recorder_slot {
     bool used;
@@ -475,7 +464,7 @@ struct switch_recorder_counts {
     uint32_t dumps;    /* captures written to the store */
     uint32_t dropped;  /* captures the store had no slot for */
     uint32_t no_ring;  /* captures kept without their ring: no memory for it */
-    uint32_t packed;   /* captures compressed by the capture thread: the store was behind */
+    uint32_t no_room;  /* automatic captures dropped before their stackshot: the ones waiting fill the memory */
     uint32_t pending;  /* captures in memory, not yet written */
     uint64_t pending_bytes;
     uint32_t slots;
@@ -491,7 +480,8 @@ static inline int switch_recorder_status(char *out, size_t size, const struct sw
     return snprintf(
         out, size,
         "ring=%u span_ms=%llu events_s=%llu samples=%llu captures=%u dumps=%u pending=%u pending_kib=%llu slots=%u "
-        "skipped=%u repeat=%u held=%u queued=%u full=%u dropped=%u no_ring=%u packed=%u taken=%u late_frame=%u hang=%u "
+        "skipped=%u repeat=%u held=%u queued=%u full=%u dropped=%u no_ring=%u no_room=%u taken=%u late_frame=%u "
+        "hang=%u "
         "slow_work=%u mark=%u "
         "last_reason=%s last_tid=%llu last_value=%llu last_slot=%u last_seq=%u last_trace_bytes=%llu "
         "last_shot_bytes=%llu last_deflate_bytes=%llu last_trace_us=%llu last_shot_us=%llu last_latency_us=%llu "
@@ -500,7 +490,7 @@ static inline int switch_recorder_status(char *out, size_t size, const struct sw
         (unsigned long long)c->samples, n->captures, n->dumps, n->pending, (unsigned long long)(n->pending_bytes >> 10),
         n->slots, n->refused[SWITCH_RECORDER_REFUSED_GAP], n->refused[SWITCH_RECORDER_REFUSED_REPEAT],
         n->refused[SWITCH_RECORDER_REFUSED_HELD], n->refused[SWITCH_RECORDER_REFUSED_QUEUED],
-        n->refused[SWITCH_RECORDER_REFUSED_FULL], n->dropped, n->no_ring, n->packed, n->taken,
+        n->refused[SWITCH_RECORDER_REFUSED_FULL], n->dropped, n->no_ring, n->no_room, n->taken,
         n->triggers[SWITCH_RECORDER_LATE_FRAME], n->triggers[SWITCH_RECORDER_HANG],
         n->triggers[SWITCH_RECORDER_SLOW_WORK], n->triggers[SWITCH_RECORDER_MARK],
         switch_recorder_reason_name(h->reason), (unsigned long long)h->tid, (unsigned long long)h->value, l->slot,

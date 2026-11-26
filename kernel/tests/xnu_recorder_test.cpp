@@ -204,31 +204,6 @@ TEST(XnuRecorder, ARefusalIsLoggedOnceASecondPerReasonAndThread)
     EXPECT_FALSE(switch_recorder_refusal_logged(&seen, ptr(Ask(SWITCH_RECORDER_HANG, 2400, 514)), 1000 * kMs));
 }
 
-// 25 Nov: no core was idle for minutes after boot, so the store's low-priority call would not run, and raw captures
-// (a 16 MiB ring and a stackshot) would fill its memory after a few. Once one waits unwritten, the capture thread
-// compresses the next ones itself (capture.c: a buffer of a third of the input while it deflates, then its exact size;
-// a ring compressed 5.0x on 25 Nov).
-TEST(XnuRecorder, TheCaptureThreadCompressesOnceTheStoreIsBehind)
-{
-    const uint64_t raw = (16ULL << 20) + (1ULL << 20);
-    const uint64_t deflating = raw / 3 + (64ULL << 10);
-    const uint64_t packed = raw / 5;
-    const uint64_t budget = 96ULL << 20;
-    uint64_t held = 0;
-    unsigned kept = 0;
-
-    EXPECT_FALSE(switch_recorder_compress_now(0, raw)) << "a store that keeps up compresses at its own priority";
-    for (;;) {
-        const bool now = switch_recorder_compress_now(held, raw);
-        if (held + raw + (now ? deflating : 0) > budget) {
-            break;
-        }
-        held += now ? packed : raw;
-        kept++;
-    }
-    EXPECT_GE(kept, 15u) << "captures kept with their ring while the store is starved";
-}
-
 switch_recorder_slot Slot(bool this_boot, bool mark, uint32_t seq)
 {
     return {.used = true, .this_boot = this_boot, .mark = mark, .seq = seq};
@@ -366,7 +341,7 @@ TEST(XnuRecorder, TheStatusLineCarriesTheCostAndEveryFieldHWTestReads)
                              "skipped=2 ",
                              "repeat=0 ",
                              "held=1 ",
-                             "packed=0 ",
+                             "no_room=0 ",
                              "taken=0 ",
                              "hang=3 ",
                              "late_frame=0 ",
