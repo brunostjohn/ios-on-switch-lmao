@@ -95,15 +95,36 @@ public:
         return true;
     }
 
-    // syncpt_thresh_isr: each armed syncpoint whose status is set has its interrupt disabled and cleared, then its
-    // reached fences expire and the next one is armed. Status bits of syncpoints nobody armed are sticky but do not
-    // drive the line, and are left alone.
     // Whether a fence is queued on syncpoint `id`.
     bool names(uint32_t id) const
     {
         return id < kSyncpts && head[id] != nullptr;
     }
 
+    // What a bound would fail on syncpoint `id`, failed now with `status`: its bounded fences and the CPU's waits not
+    // yet reached. A fence with neither (a consumer's, a filter waiter's) ends as it would have, by the release the
+    // failed engine's cancellation makes.
+    uint32_t fail(Registers &r, uint32_t id, int status, SwitchHost1xExpired &done)
+    {
+        uint32_t failed = 0;
+        for (bool removed = true; removed;) {
+            removed = false;
+            const uint32_t current = value(r, id);
+            for (auto *fence = head[id]; fence && !removed; fence = fence->next) {
+                if (switch_host1x_reached(current, fence->threshold) || (!fence->deadline && fence->signaled))
+                    continue;
+                remove(r, fence, done);
+                expire(fence, status, done);
+                removed = true;
+                ++failed;
+            }
+        }
+        return failed;
+    }
+
+    // syncpt_thresh_isr: each armed syncpoint whose status is set has its interrupt disabled and cleared, then its
+    // reached fences expire and the next one is armed. Status bits of syncpoints nobody armed are sticky but do not
+    // drive the line, and are left alone.
     void interrupt(Registers &r, SwitchHost1xExpired &done)
     {
         for (uint32_t word = 0; word < kSyncpts / 32; ++word) {

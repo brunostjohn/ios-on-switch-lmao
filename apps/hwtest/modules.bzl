@@ -638,6 +638,7 @@ TESTS_SYSTEM_SRCS = [
     "tests/DispatchSyncWorkloopTest.swift",
     "tests/FocusSearchTest.swift",
     "tests/FocusTest.swift",
+    "tests/Host1xIllegalOpcodeTest.swift",
     "tests/IconRenderTest.swift",
     "tests/IconServicesTests.swift",
     "tests/InputTests.swift",

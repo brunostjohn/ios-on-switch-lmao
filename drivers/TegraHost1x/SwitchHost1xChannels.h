@@ -37,6 +37,14 @@ void switch_host1x_syncpt_dropped(uint32_t id);
 // channel's do.
 void switch_host1x_display_channel_stopped_locked();
 
+// Channel `channel`'s command processor stopped on an error (SwitchHost1xErrors.cpp): its jobs fail now as their bound
+// would have failed them, through each queue's own path. The fenced jobs in flight have their syncpoints' bounded
+// fences and waits failed with TEGRA_HOST1X_ETIMEDOUT (the queues cancel: teardown, engine reset, restart), and those
+// syncpoints stay stopped until the channel restarts, so a bound or a wait that starts later fails at once too. A
+// display channel's error asks the display first, before any fence fails. `line` names each syncpoint and how many
+// fences failed on it now. Thread context, not under the submit lock.
+void switch_host1x_channels_failed(uint32_t channel, char *line, size_t size);
+
 // Under the submit lock, host1x up, once a failed producer's cancellation is stored: the display stream that waits on
 // it is cancelled, then the producer's syncpoint is released to `threshold`. An increment that does not take panics.
 void switch_host1x_channels_release_failed(uint32_t id, uint32_t threshold);

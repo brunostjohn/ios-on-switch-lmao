@@ -8,6 +8,15 @@ TEST_F(Host1xSubmit, BringUpMakesTheEnginesAndTheDisplaysChannelsAlone)
     EXPECT_EQ(gAllocated, 2u * (TEGRA_HOST1X_CHANNEL_DISPLAY + 1));
 }
 
+// The display's (SwitchHost1xDisplayChannel.h on its branch): whether the submit lock was held, and how many fences had
+// failed, when each channel-4 error asked it.
+struct DisplayAsked {
+    bool locked;
+    size_t failedBefore;
+};
+
+std::vector<DisplayAsked> gDisplayAsked;
+
 TEST_F(Host1xSubmit, EveryEngineRaisesTheMemoryClockBeforeItsDoorbell)
 {
     const uint32_t words[] = {tegra_host1x_op_setclass(TEGRA_HOST1X_CLASS_NVDEC, 0, 0),
@@ -842,3 +851,63 @@ TEST_F(Host1xSubmit, TheStatsLineReadsTheChannelCountersOnlyWhileHost1xRuns)
 #endif
 
 }  // namespace
+
+// A channel stopped on an illegal opcode (SwitchHost1xErrors.cpp): its jobs' bounded fences fail at once, through
+// each queue's own cancellation; the display's stream is cancelled as its own cancel does.
+TEST_F(Host1xSubmit, AStoppedEnginesChannelFailsItsJobsSyncpointOnceAndNoOtherChannels)
+{
+    constexpr uint32_t channel = TEGRA_HOST1X_CHANNEL_NVENC;
+    syncpoint(171) = 10;
+    uint32_t *words = nullptr;
+    for (const uint32_t threshold : {11u, 12u}) {
+        ASSERT_EQ(switch_host1x_job_reserve(channel, 4, &words), TEGRA_HOST1X_OK);
+        words[0] = tegra_host1x_op_setclass(TEGRA_HOST1X_CLASS_NVENC, 0, 0);
+        ASSERT_EQ(switch_host1x_job_submit(channel, words, 4, 171, threshold), TEGRA_HOST1X_OK);
+    }
+    gFencesFailed.clear();
+    char line[64];
+    switch_host1x_channels_failed(channel, line, sizeof(line));
+    EXPECT_EQ(gFencesFailed, (std::vector<std::pair<uint32_t, int>>{{171, TEGRA_HOST1X_ETIMEDOUT}}));
+    EXPECT_STREQ(line, "syncpoint 171: 1 failed");
+    gFencesFailed.clear();
+    switch_host1x_channels_failed(TEGRA_HOST1X_CHANNEL_NVJPG, line, sizeof(line));
+    EXPECT_TRUE(gFencesFailed.empty());
+    EXPECT_STREQ(line, "");
+    gRearmed.clear();
+    gFencesResumed.clear();
+    tegra_host1x_channel_teardown(channel);
+    tegra_host1x_channel_restart(channel);
+    EXPECT_EQ(gRearmed, std::vector<uint32_t>{channel}) << "a restart unmasks the channel's illegal opcode again";
+    EXPECT_EQ(gFencesResumed, std::vector<uint32_t>{171}) << "and its syncpoint is no longer stopped";
+}
+
+// An error on the display's channel asks the display first, in the same hold of the submit lock and before any fence
+// fails (the display panics there if an accepted swap is out); nothing cancels the stream on host1x's side.
+TEST_F(Host1xSubmit, AStoppedDisplayChannelAsksTheDisplayBeforeAnyFenceFails)
+{
+    SwitchHost1xDisplayStream stream;
+    uint32_t producer = 0;
+    ASSERT_EQ(tegra_host1x_syncpt_alloc(&producer), 0);
+    ASSERT_EQ(switch_host1x_display_start(&stream), 0);
+    const switch_gpu_backing_token token = {1, 1, SWITCH_GPU_ENGINE_NVDEC, producer};
+    const uint32_t word = 0xdc0, address = 0x20000000;
+    DisplayCompletion done;
+    ASSERT_EQ(
+        switch_host1x_display_submit(&stream, &token, 1, &word, &address, 1, 0x500, 5, DisplayCompletion::heard, &done),
+        0);
+    gDisplayAsked.clear();
+    gFencesFailed.clear();
+    char line[64];
+    switch_host1x_channels_failed(TEGRA_HOST1X_CHANNEL_DISPLAY, line, sizeof(line));
+    ASSERT_EQ(gDisplayAsked.size(), 1u);
+    EXPECT_TRUE(gDisplayAsked[0].locked) << "inside the submit lock";
+    EXPECT_EQ(gDisplayAsked[0].failedBefore, 0u) << "before any fence failed";
+    EXPECT_FALSE(gFencesFailed.empty()) << "then the channel's fenced jobs fail as usual";
+    EXPECT_FALSE(gChannelLock->held) << "one hold, released at the end";
+    EXPECT_NE(stream.status, SwitchHost1xDisplayStream::kCancelled) << "host1x no longer cancels the stream";
+    EXPECT_EQ(done.calls, 0u);
+
+    gDisplayAsked.clear();
+    switch_host1x_channels_failed(TEGRA_HOST1X_CHANNEL_VIC, line, sizeof(line));
+    EXPECT_TRUE(gDisplayAsked.empty()) << "another channel's error does not ask the display";
+}

@@ -218,6 +218,33 @@ cc_library(
 )
 
 host_test(
+    name = "sd_smmu_test",
+    srcs = [
+        "sd_smmu_test.cpp",
+        "//drivers/NativeSwitchBlock:SwitchAdma.h",
+        "//drivers/NativeSwitchBlock:SwitchSdSmmu.h",
+    ],
+)
+
+# What confining SDMMC1 costs a command: instructions (the fewest of five rounds) and the MC writes, reads and cleans
+# its commits make, for a page-in storm of scattered 4 KiB reads and for longer reads. Prints SDSMMU lines.
+host_test(
+    name = "sd_smmu_cost_test",
+    srcs = [
+        "sd_smmu_cost_test.cpp",
+        "//drivers/NativeSwitchBlock:SwitchAdma.h",
+        "//drivers/NativeSwitchBlock:SwitchSdSmmu.h",
+        "//drivers/TegraSMMU:SwitchSmmuRegisters.h",
+        "//drivers/TegraSMMU:TegraSMMUAttachments.h",
+        "//drivers/TegraSMMU:TegraSMMUDomain.h",
+        "//drivers/TegraSMMU:TegraSMMUIdentity.h",
+        "//drivers/TegraSMMU:TegraSMMU.h",
+    ],
+    copts = ["-O2"],
+    sanitize = False,
+)
+
+host_test(
     name = "sd_adma_source_test",
     srcs = ["sd_adma_source_test.cpp"],
     copts = ["-O1"],

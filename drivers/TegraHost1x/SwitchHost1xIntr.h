@@ -13,6 +13,11 @@ void switch_host1x_intr_start();
 void switch_host1x_intr_stop();
 // The syncpoint interrupt's action, on the work loop.
 void switch_host1x_intr_handle();
+// Syncpoint `id`'s channel stopped: what a bound would fail on it (SwitchHost1xFenceList.h fail) fails with `status`
+// now, and until switch_host1x_fences_resume (the channel's restart) a bounded fence added or watched there, or a CPU
+// wait on it, fails at once too. Returns how many failed now. Thread context.
+uint32_t switch_host1x_fences_fail(uint32_t id, int status);
+void switch_host1x_fences_resume(uint32_t id);
 // Whether a fence or waiter is queued on syncpoint `id` (tegra_host1x_syncpt_free's check). Thread context.
 bool switch_host1x_fence_names(uint32_t id);
 // The syncpoint interrupt's primary filter: the filter waiters whose thresholds passed. Reads syncpoint values only;

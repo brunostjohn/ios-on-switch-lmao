@@ -15,6 +15,7 @@
 #include "SwitchVICOddProbe.h"
 #include "SwitchVICPackedProbe.h"
 #include "SwitchVICPitchProbe.h"
+#include "../TegraHost1x/SwitchHost1xErrorProbe.h"
 #include "SwitchVICTransposeProbe.h"
 #include "../TegraHost1x/SwitchHost1xMlockProbe.h"
 
@@ -34,6 +35,7 @@ constexpr Probe kProbes[] = {
     {SWITCH_VIC_COMPOSE_PROBE_MAGIC, sizeof(SwitchVICComposeProbeReply), switch_vic_compose_probe_run},
     {SWITCH_VIC_ODD_PROBE_MAGIC, sizeof(SwitchVICOddProbeReply), switch_vic_odd_probe_run},
     {SWITCH_VIC_MC_FAULT_PROBE_MAGIC, sizeof(SwitchVICMcFaultProbeReply), switch_vic_mc_fault_probe_run},
+    {SWITCH_HOST1X_ERROR_PROBE_MAGIC, sizeof(SwitchHost1xErrorProbeReply), switch_host1x_error_probe_run},
     {SWITCH_VIC_COMPOSITE_ARM_MAGIC, SWITCH_VIC_COMPOSITE_REPLY_BYTES, switch_vic_composite_arm_run},
     {SWITCH_VIC_COMPOSITE_REPORT_MAGIC, SWITCH_VIC_COMPOSITE_REPLY_BYTES, switch_vic_composite_report_run},
     {SWITCH_HOST1X_MLOCK_PROBE_MAGIC, sizeof(SwitchHost1xMlockProbeReply), switch_host1x_mlock_probe_run},

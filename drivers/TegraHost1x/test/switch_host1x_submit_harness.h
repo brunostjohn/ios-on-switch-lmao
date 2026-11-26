@@ -293,6 +293,37 @@ bool switch_host1x_fence_names(uint32_t)
     return false;
 }
 
+// SwitchHost1xFence.cpp's and SwitchHost1xErrors.cpp's, which this test does not build: what was failed and rearmed.
+std::vector<std::pair<uint32_t, int>> gFencesFailed;
+std::vector<uint32_t> gRearmed;
+
+uint32_t switch_host1x_fences_fail(uint32_t id, int status)
+{
+    gFencesFailed.emplace_back(id, status);
+    return 1;
+}
+
+std::vector<uint32_t> gFencesResumed;
+
+void switch_host1x_fences_resume(uint32_t id)
+{
+    gFencesResumed.push_back(id);
+}
+
+void switch_host1x_errors_start(IOWorkLoop *, volatile uint8_t *)
+{}
+
+void switch_host1x_errors_stop()
+{}
+
+void switch_host1x_errors_resume()
+{}
+
+extern "C" void switch_host1x_errors_rearm(uint32_t channel)
+{
+    gRearmed.push_back(channel);
+}
+
 void switch_host1x_intr_filter()
 {}
 

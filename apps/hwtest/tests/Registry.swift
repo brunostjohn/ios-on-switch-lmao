@@ -188,7 +188,7 @@ public enum Registry {
         DispatchSyncTest(), DispatchSyncWorkloopTest(), WorkloopSyncTest(), WidgetsRenderTest(), IconRenderTest(),
         DispatchSyncHandoffTest(),
         SnapshotPurgeableTest(), RecorderHangDumpTest(), SharedCacheNestedTest(),
-        // A deliberate VIC fault: its interrupt never delivered panics the kernel.
+        // Deliberate faults: an interrupt that never delivers panics the kernel.
         MCFaultInterruptTest(),
     ]
 
