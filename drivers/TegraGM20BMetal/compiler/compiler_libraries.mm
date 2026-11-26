@@ -40,6 +40,22 @@ void LibraryCache::release(uint64_t generation)
     }
 }
 
+uint64_t LibraryCache::clientScopeLocked(uint64_t client)
+{
+    if (!client)
+        return nmb_offline_scope_new();
+    uint64_t &own = scopes_[client];
+    if (!own) {
+        own = nmb_offline_scope_new();
+        scopeOrder_.push_back(client);
+        if (scopeOrder_.size() > kClientScopes) {
+            scopes_.erase(scopeOrder_.front());
+            scopeOrder_.pop_front();
+        }
+    }
+    return own;
+}
+
 id<MTLLibrary> LibraryCache::library(const gm20b::RequestLibrary &l, std::string &why,
                                      const std::shared_ptr<const MappedClientLibrary> &mapped)
 {
@@ -51,8 +67,11 @@ id<MTLLibrary> LibraryCache::library(const gm20b::RequestLibrary &l, std::string
     const DataView view = mapped ? DataView{mapped->client, mapped->id, {}} : DataView{0, 0, l.bytes};
     std::shared_ptr<Slot> slot;
     std::shared_ptr<const std::string> bytes;
+    uint64_t scope = 0;
     {
         std::lock_guard<std::mutex> g(lock_);
+        if (!l.system && mapped)
+            scope = clientScopeLocked(mapped->client);
         std::shared_ptr<Slot> *kept = nullptr;
         if (l.system) {
             kept = &system_[real];
@@ -86,7 +105,7 @@ id<MTLLibrary> LibraryCache::library(const gm20b::RequestLibrary &l, std::string
             dispatch_data_create(mapped->data, mapped->size, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
                 (void)keep;
             });
-        slot->made = [device newLibraryWithData:bytes error:&error];
+        slot->made = [device newLibraryWithData:bytes scope:scope error:&error];
     } else {
         std::shared_ptr<const std::string> keep = bytes;
         dispatch_data_t data =

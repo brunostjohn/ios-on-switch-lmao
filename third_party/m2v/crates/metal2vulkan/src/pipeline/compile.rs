@@ -1715,6 +1715,32 @@ fn instanced_attributes(
     })
 }
 
+/// Color write rules pruned to the attachments `spec` writes or zeroes and normalized to the form
+/// lowering reads (`color_writes::read_rules`). Non-constant render-target indices keep all entries.
+fn read_color_writes(spec: &air::Entry, mut inputs: LowerInputs) -> LowerInputs {
+    let mut written: BTreeSet<u32> = inputs.zeroed_colors.keys().copied().collect();
+    let mut constant = true;
+    for o in &spec.ep.outputs {
+        match o.role {
+            OutputRole::RenderTarget {
+                attachment: AbiInt::Const(a),
+                ..
+            } => {
+                written.insert(a);
+            }
+            OutputRole::RenderTarget { .. } => constant = false,
+            _ => {}
+        }
+    }
+    if constant {
+        inputs.color_writes.retain(|a, _| written.contains(a));
+    }
+    for rules in inputs.color_writes.values_mut() {
+        *rules = crate::pipeline::color_writes::read_rules(*rules);
+    }
+    inputs
+}
+
 /// The lowering inputs of the specialized entry `spec` (see [`InputsFrom`]).
 fn lower_inputs(
     spec: &air::Entry,
@@ -1723,7 +1749,13 @@ fn lower_inputs(
     m: &mut Meter,
 ) -> Result<LowerInputs, Error> {
     match inputs {
-        InputsFrom::Given(i) => Ok(i.clone()),
+        InputsFrom::Given(i) => {
+            let mut out = i.clone();
+            for rules in out.color_writes.values_mut() {
+                *rules = crate::pipeline::color_writes::read_rules(*rules);
+            }
+            Ok(out)
+        }
         // A post-tessellation vertex function pulls every attribute it reads.
         InputsFrom::Vertex(desc, variant, depth)
             if matches!(spec.ep.stage, AbiStage::Vertex { patch: Some(_) }) =>
@@ -1796,7 +1828,7 @@ fn lower_inputs(
                     })
                     .collect();
             }
-            Ok(key::canonical_inputs(&out))
+            Ok(key::canonical_inputs(&read_color_writes(spec, out)))
         }
     }
 }

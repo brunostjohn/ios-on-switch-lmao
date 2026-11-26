@@ -157,7 +157,7 @@ impl Library {
     pub fn parse(bytes: &[u8]) -> Result<Library, Error> {
         crate::pipeline::compile::guarded(|| match container::parse(bytes)? {
             Container::Metallib(ml) => {
-                from_metallib(bytes, &ml, LibraryBytes::Owned(bytes.into()), false)
+                from_metallib(bytes, &ml, LibraryBytes::Owned(bytes.into()), own_scope())
             }
             Container::Module(module) => from_module(bytes, module.hash),
         })
@@ -187,7 +187,7 @@ impl Library {
     pub fn from_metallib(bytes: &[u8]) -> Result<Library, Error> {
         crate::pipeline::compile::guarded(|| match container::parse(bytes)? {
             Container::Metallib(ml) => {
-                from_metallib(bytes, &ml, LibraryBytes::Owned(bytes.into()), false)
+                from_metallib(bytes, &ml, LibraryBytes::Owned(bytes.into()), own_scope())
             }
             Container::Module(_) => Err(InputError::new(
                 InputErrorKind::Container(ContainerError::BadMagic),
@@ -199,8 +199,31 @@ impl Library {
 
     /// A metallib its caller holds (`held`) as a library, with no copy. Its functions' `HASH` tags
     /// are taken as stated, so only the function list is read until a function is compiled.
-    /// `sealed`: read from a sealed system volume (`container::parse_sealed`).
+    /// `sealed`: read from a sealed system volume (`container::parse_sealed`), else a library of its
+    /// own scope.
     pub fn from_held_metallib(held: Arc<dyn HeldBytes>, sealed: bool) -> Result<Library, Error> {
+        let scope = if sealed { 0 } else { own_scope() };
+        Library::held_in(held, sealed, scope)
+    }
+
+    /// [`Library::from_held_metallib`] of an unsealed library in `scope` from [`Library::new_scope`].
+    /// Libraries read in the same scope share kept translations ([`Library::scope`]).
+    pub fn from_held_metallib_in(held: Arc<dyn HeldBytes>, scope: u64) -> Result<Library, Error> {
+        if scope == 0 {
+            return Err(Error::Internal(InternalError::new(
+                InternalKind::Invariant,
+                "a library that is not sealed, in the sealed scope".to_owned(),
+            )));
+        }
+        Library::held_in(held, false, scope)
+    }
+
+    /// A fresh non-zero scope for [`Library::from_held_metallib_in`].
+    pub fn new_scope() -> u64 {
+        own_scope()
+    }
+
+    fn held_in(held: Arc<dyn HeldBytes>, sealed: bool, scope: u64) -> Result<Library, Error> {
         crate::pipeline::compile::guarded(|| {
             let bytes = held.bytes();
             let parsed = if sealed {
@@ -217,7 +240,7 @@ impl Library {
                     }
                 }
             };
-            from_metallib(bytes, &parsed, LibraryBytes::Held(Arc::clone(&held)), sealed)
+            from_metallib(bytes, &parsed, LibraryBytes::Held(Arc::clone(&held)), scope)
         })
     }
 
@@ -354,7 +377,7 @@ fn from_metallib(
     bytes: &[u8],
     ml: &container::Metallib<'_>,
     keep: LibraryBytes,
-    sealed: bool,
+    scope: u64,
 ) -> Result<Library, Error> {
     let mut functions = Vec::with_capacity(ml.functions.len());
     for f in &ml.functions {
@@ -419,7 +442,7 @@ fn from_metallib(
     };
     Ok(Library(Arc::new(LibraryInner {
         bytes: keep,
-        scope: if sealed { 0 } else { own_scope() },
+        scope,
         functions,
         dynamic,
     })))

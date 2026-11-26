@@ -60,6 +60,27 @@ public:
         return compile(r);
     }
 
+    void reread()
+    {
+        libraries_ = std::make_shared<switch_compiler::LibraryCache>(root());
+    }
+
+    void registered(uint64_t client, uint64_t id)
+    {
+        struct Owned {
+            std::string bytes;
+            switch_compiler::MappedClientLibrary mapped;
+        };
+
+        auto owned = std::make_shared<Owned>();
+        owned->bytes = fileBytes(library());
+        owned->mapped.client = client;
+        owned->mapped.id = id;
+        owned->mapped.data = reinterpret_cast<const uint8_t *>(owned->bytes.data());
+        owned->mapped.size = owned->bytes.size();
+        mapped_ = std::shared_ptr<const switch_compiler::MappedClientLibrary>(owned, &owned->mapped);
+    }
+
     Made compile(const gm20b::CompileRequest &r)
     {
         Made out;
@@ -75,8 +96,10 @@ public:
         uint64_t before[2] = {}, after[2] = {};
         nmb_kept_translations(before);
         switch_compiler::LibraryCache &cache = *libraries_;
-        const switch_compiler::Libraries libraries = [&cache](const gm20b::RequestLibrary &l, std::string &why) {
-            return cache.library(l, why);
+        const std::shared_ptr<const switch_compiler::MappedClientLibrary> mapped = mapped_;
+        const switch_compiler::Libraries libraries = [&cache, mapped](const gm20b::RequestLibrary &l,
+                                                                      std::string &why) {
+            return cache.library(l, why, l.system ? nullptr : mapped);
         };
         out.result = p.request.kind == gm20b::RequestKind::Facts
                          ? switch_compiler::makeFacts(p, libraries, out.entry, out.why)
@@ -106,6 +129,7 @@ private:
     };
 
     gm20b::Pack pack_;
+    std::shared_ptr<const switch_compiler::MappedClientLibrary> mapped_;
     std::shared_ptr<switch_compiler::LibraryCache> libraries_;
     switch_compiler::CompiledStages kept_{kKept};
     Recording recording_{kept_};
@@ -181,6 +205,51 @@ TEST_F(CompilerStages, AStateOfKeptStagesIsTheStateMadeColdAndEachFieldReachesTh
         if (!c.translated)
             EXPECT_EQ(made[i].translationsMade, 0u) << c.name << ": its functions were translated again";
     }
+}
+
+TEST_F(CompilerStages, AnInlineLibraryReadAgainTranslatesAgain)
+{
+    const std::string line = renderCases()[kRenderBase].line;
+    nmb_keep_translations(kKept);
+    Compiler compiler(true);
+    const Made first = compiler.render(line);
+    ASSERT_EQ(first.result, TegraGM20BCompileMade) << first.why;
+    EXPECT_GT(first.translationsMade, 0u);
+    compiler.reread();
+    const Made reread = compiler.render(line);
+    ASSERT_EQ(reread.result, TegraGM20BCompileMade) << reread.why;
+    EXPECT_EQ(reread.entry, first.entry);
+    EXPECT_EQ(reread.translationsMade, first.translationsMade);
+}
+
+TEST_F(CompilerStages, AClientsLibraryRegisteredAgainFindsItsTranslationsAndAnotherClientsDoesNot)
+{
+    const std::string line = renderCases()[kRenderBase].line;
+    nmb_keep_translations(kKept);
+    Compiler compiler(true);
+    compiler.registered(7, 1);
+    const Made first = compiler.render(line);
+    ASSERT_EQ(first.result, TegraGM20BCompileMade) << first.why;
+    EXPECT_EQ(first.stagesMade, first.stages.size());
+    EXPECT_GT(first.translationsMade, 0u);
+    compiler.registered(7, 2);
+    const Made again = compiler.render(line);
+    ASSERT_EQ(again.result, TegraGM20BCompileMade) << again.why;
+    EXPECT_EQ(again.entry, first.entry);
+    EXPECT_EQ(again.stagesMade, 0u) << "the client's own library, registered again, compiled its stages again";
+    EXPECT_EQ(again.translationsMade, 0u) << "and translated its functions again";
+    compiler.registered(8, 1);
+    const Made other = compiler.render(line);
+    ASSERT_EQ(other.result, TegraGM20BCompileMade) << other.why;
+    EXPECT_EQ(other.entry, first.entry);
+    EXPECT_EQ(other.translationsMade, first.translationsMade)
+        << "another client's library took a translation of this client's";
+
+    const std::string bytes = fileBytes(library());
+    dispatch_data_t data = dispatch_data_create(bytes.data(), bytes.size(), nullptr, DISPATCH_DATA_DESTRUCTOR_DEFAULT);
+    NSError *error = nil;
+    EXPECT_EQ([[GM20BOfflineDevice new] newLibraryWithData:data scope:0 error:&error], nil);
+    EXPECT_NE(error, nil);
 }
 
 TEST_F(CompilerStages, AKernelIsTranslatedOnceForItsFactsAndEveryDispatch)
