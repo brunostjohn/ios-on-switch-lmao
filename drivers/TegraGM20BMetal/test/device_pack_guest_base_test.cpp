@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // A packed state whose programs read a buffer's Metal address (pack v36 guestBaseWord, guestBaseSlot): its pipeline holds
-// the push words and slots each draw writes that address to (RenderEncoder::guestBaseWords), and the scan refuses words a
-// draw could not write.
+// the push words and slots each draw writes that address to (RenderEncoder::guestBaseWords), as each of its program
+// variants does and its stride twin holds its own record's, and the scan refuses words a draw could not write.
 #include "facade_harness.h"
 #include "pack_fixture_image.h"
 #include "../pack_scan.h"
@@ -42,6 +42,24 @@ TEST(PackGuestBases, APackedStatesMetalAddressWordsReachItsPipeline)
     const gm20b::Pipeline *plain = made(kPlainKey);
     ASSERT_NE(plain, nullptr);
     EXPECT_EQ(plain->guestBases[0].word, 0);
+
+    size_t variants = 0;
+    for (const gm20b::Pipeline *variant : guest->chosen) {
+        if (variant == guest)
+            continue;
+        ++variants;
+        for (uint32_t k = 0; k < gm20b::kGuestBases; k++) {
+            EXPECT_EQ(variant->guestBases[k].stage, guest->guestBases[k].stage) << k;
+            EXPECT_EQ(variant->guestBases[k].slot, guest->guestBases[k].slot) << k;
+            EXPECT_EQ(variant->guestBases[k].word, guest->guestBases[k].word) << k;
+        }
+    }
+    EXPECT_GT(variants, 0u) << "the state's program variants are placed";
+    ASSERT_NE(guest->strideTwin, nullptr);
+    EXPECT_EQ(guest->strideTwin->guestBases[0].stage, 0);
+    EXPECT_EQ(guest->strideTwin->guestBases[0].slot, 1);
+    EXPECT_EQ(guest->strideTwin->guestBases[0].word, 9);
+    EXPECT_EQ(guest->strideTwin->guestBases[1].word, 0);
 }
 
 TEST(PackGuestBases, TheScanRefusesWordsADrawCannotWrite)
