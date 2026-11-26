@@ -298,11 +298,11 @@ static gm20b::ProbeSurface probeSurface(const gm20b::Texture &t, uint32_t fmt2d)
     const uint32_t flags = gRM->raw->kernelInfo().flags;
     SwitchMetalTexture *t = gm20bTexture(texture);
     const gm20b::Texture now = t ? gRM->raw->lockedCopy(t->_raw) : gm20b::Texture();
-    return
-        [NSString stringWithFormat:@"raw=%d comptags=%d block_linear=%d pitch=%u tiled_cache=%d compression=%d kind=0x%x",
-                                   t != nil, t && now.comptags, t && now.blockLinear, t ? now.pitch : 0,
-                                   (flags & TegraGM20BInfoTiledCache) != 0, (flags & TegraGM20BInfoCompression) != 0,
-                                   t ? gRM->raw->privateKind(t->_raw) : 0u];
+    return [NSString
+        stringWithFormat:@"raw=%d comptags=%d block_linear=%d pitch=%u tiled_cache=%d compression=%d kind=0x%x",
+                         t != nil, t && now.comptags, t && now.blockLinear, t ? now.pitch : 0,
+                         (flags & TegraGM20BInfoTiledCache) != 0, (flags & TegraGM20BInfoCompression) != 0,
+                         t ? gRM->raw->privateKind(t->_raw) : 0u];
 }
 
 // gpu.x1.clean_l2_syncpoint's read: a buffer's bytes as the CPU sees them in its own mapping, with none of the driver's

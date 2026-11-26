@@ -20,11 +20,11 @@
 #define SWITCH_NVB197_INVALIDATE_TEXTURE_DATA_CACHE_PIXEL_ORDERED 0x0f74
 // deko3d's DiscardRenderTarget (dkCmdBufDiscardColor, dkCmdBufDiscardDepthStencil): bit 0 the depth/stencil target,
 // bits 6:4 a colour target's index
-#define SWITCH_NVB197_DISCARD_RENDER_TARGET                       0x0f78
-#define SWITCH_NVB197_TILED_CACHE_BARRIER                         0x0f7c
-#define SWITCH_NVB197_TILED_CACHE_FLUSH                           0x0f80
-#define SWITCH_NVB197_SET_TILED_CACHE_CONFIG_2                    0x1108
-#define SWITCH_NVB197_SET_CSAA_ENABLE                             0x15b4
+#define SWITCH_NVB197_DISCARD_RENDER_TARGET    0x0f78
+#define SWITCH_NVB197_TILED_CACHE_BARRIER      0x0f7c
+#define SWITCH_NVB197_TILED_CACHE_FLUSH        0x0f80
+#define SWITCH_NVB197_SET_TILED_CACHE_CONFIG_2 0x1108
+#define SWITCH_NVB197_SET_CSAA_ENABLE          0x15b4
 
 #define SWITCH_NVB06F_SYNCPOINTA                 0x0070
 #define SWITCH_NVB06F_SYNCPOINTA_PAYLOAD         31 : 0

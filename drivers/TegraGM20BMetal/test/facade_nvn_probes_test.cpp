@@ -39,8 +39,8 @@ id<MTLCommandBuffer> drawn(id<MTLTexture> into, id<MTLTexture> beside = nil, NSS
 {
     id<MTLCommandBuffer> cb = [[device() newCommandQueue] commandBuffer];
     if (forms) {
-        NSString *refused = ((NSString * (*)(id, SEL, id)) objc_msgSend)(cb, sel_registerName("switchMetalProbeForms:"),
-                                                                         forms);
+        NSString *refused =
+            ((NSString * (*)(id, SEL, id)) objc_msgSend)(cb, sel_registerName("switchMetalProbeForms:"), forms);
         EXPECT_EQ(refused, nil) << refused.UTF8String;
     }
     scale_frames::Shape shape;
