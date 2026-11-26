@@ -105,6 +105,7 @@ struct XRTwoPlaneTest: HWTest {
         metrics.set("pair_linear", linear.paired ? 1 : 0)
         metrics.set("pair_linear_apart", linearApart.apart)
         metrics.set("pair_linear_steps", linearApart.steps)
+        metrics.set("pair_linear_first", linearApart.first)
         metrics.set("pair_gather", gatherAlpha.paired && gatherRed.paired ? 1 : 0)
         metrics.set("pair_gather_alpha_wrong", gatherAlpha.wrong)
         metrics.set("pair_gather_red_wrong", gatherRed.wrong)

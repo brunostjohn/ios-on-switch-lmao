@@ -36,8 +36,9 @@ struct FormatTargetTest: HWTest {
             for pass in Self.passes {
                 let key = "\(format)_\(pass)"
                 do {
-                    let off = try await exercise(gpu, format, pass)
+                    let (off, worst) = try await exercise(gpu, format, pass)
                     metrics.set("off_" + key, off)
+                    if off != 0 { metrics.set("max_" + key, worst) }
                     checks.append(("\(key): every texel within its bound of Metal's", off == 0))
                 } catch {
                     metrics.set("off_" + key, "failed")
@@ -52,9 +53,10 @@ struct FormatTargetTest: HWTest {
     }
 
     /// The texels of one pass of `kind` into a target of `format` past the pass's bound of Metal's rule.
-    func exercise(_ gpu: GPU, _ format: UInt, _ kind: String) async throws -> Int {
+    /// With the largest distance from Metal's rule (FormatTargetTest.apart).
+    func exercise(_ gpu: GPU, _ format: UInt, _ kind: String) async throws -> (Int, Int) {
         guard let pixelFormat = MTLPixelFormat(rawValue: format) else { throw TestFailure("no format \(format)") }
-        if kind == "mips" { return try await mips(gpu, format, pixelFormat) }
+        if kind == "mips" { return (try await mips(gpu, format, pixelFormat), -1) }
         let (w, h) = (Self.width, Self.height)
         let bytes = format == 11 ? 1 : format == 93 ? 4 : 2
         let texture = try gpu.texture(pixelFormat, w, h, usage: [.renderTarget, .shaderRead], storage: .shared)
@@ -105,7 +107,7 @@ struct FormatTargetTest: HWTest {
             texture.getBytes($0.baseAddress!, bytesPerRow: w * bytes, from: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0)
         }
         let clearHeld = SIMD4<Float>(Float(clear.red), Float(clear.green), Float(clear.blue), Float(clear.alpha))
-        var off = 0
+        var off = 0, worst = 0
         for i in 0 ..< (w * h) {
             var stored: UInt32 = 0
             for k in 0 ..< bytes { stored |= UInt32(got[i * bytes + k]) << (8 * k) }
@@ -122,9 +124,11 @@ struct FormatTargetTest: HWTest {
                 want = Self.word(format, draws.map { $0[i] }, clear: clearHeld, drawn: drawn)
                 bound = blended ? (format == 93 ? draws.count + 1 : 1) : 0
             }
-            off += Self.apart(format, stored, want) > bound ? 1 : 0
+            let apart = Self.apart(format, stored, want)
+            off += apart > bound ? 1 : 0
+            worst = Swift.max(worst, apart)
         }
-        return off
+        return (off, worst)
     }
 
     /// The texels of each level generateMipmapsForTexture: made past one code of Metal's step from the level above (RGB9E5

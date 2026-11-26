@@ -51,7 +51,10 @@ struct PlanarRenderThenSampleTest: HWTest {
                     do {
                         let r = try await Cases.exercise(gpu, states, f, arm)
                         sameCb += r.off
-                        if r.off != 0 { metrics.set("\(f.key)_\(arm.key)_off", r.off) }
+                        if r.off != 0 {
+                            metrics.set("\(f.key)_\(arm.key)_off", r.off)
+                            metrics.set("\(f.key)_\(arm.key)_first", r.first)
+                        }
                         if r.unseen { unseen.append(arm.key) }
                         if let off = r.spotOff { spotOff = off }
                     } catch {
