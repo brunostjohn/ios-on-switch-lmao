@@ -72,7 +72,7 @@ std::vector<Case> renderCases()
         {"destination RGB factor", state(plain, "c0=80:15:1:4:1:0:4:5:0"), false, false, false},
         {"RGB operation", state(plain, "c0=80:15:1:4:5:1:4:5:0"), false, false, false},
         {"alpha factors and operation", state(plain, "c0=80:15:1:1:1:1:4:5:0"), false, false, false},
-        {"a second colour attachment", state(plain, kBlended + " c1=80:15:0:1:0:0:1:0:0"), false, false, true},
+        {"a second colour attachment", state(plain, kBlended + " c1=80:15:0:1:0:0:1:0:0"), false, true, true},
         {"four samples", state("samples=4 topo=0 ds=0/0", kBlended), false, true, true},
         {"topology class", state("samples=1 topo=3 ds=0/0", kBlended), false, false, false},
         {"depth attachment", state("samples=1 topo=0 ds=252/0", kBlended), false, false, false},

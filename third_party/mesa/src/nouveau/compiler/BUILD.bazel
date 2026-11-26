@@ -412,6 +412,20 @@ py_test(
     main = "run_host_test.py",
 )
 
+# ios-on-switch-lmao: a half output to an 8- or 10-bit unorm target widened on the half ALU (nak/opt_unorm_outputs.rs),
+# from the same binary
+py_test(
+    name = "unorm_outputs_test",
+    size = "small",
+    srcs = ["run_host_test.py"],
+    args = [
+        "$(rootpath :nak_sm53_half_test_bin)",
+        "opt_unorm_outputs::tests",
+    ],
+    data = [":nak_sm53_half_test_bin"],
+    main = "run_host_test.py",
+)
+
 # ios-on-switch-lmao: NAK's SM50 LOP3/IADD3/ISCADD encodings (nak/sm50/int3.rs sm53_int3_tests), from the same binary
 py_test(
     name = "sm53_int3_test",
