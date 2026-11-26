@@ -2,8 +2,10 @@
 // names what to release). Apple's driver keeps such memory in IOGPU's resource pools, which it can mark purgeable
 // (IOGPUResourceSetPurgeable), and AGXMetal listens for DISPATCH_SOURCE_TYPE_MEMORYPRESSURE. Ours are kernel BOs mapped
 // into the process and charged to its footprint as iokit_mapped until freed, so they go back on the events iOS's own
-// purge and jetsam act on: memory pressure (the system's level and the process's own limit), and the app going to the
-// background, before RunningBoard suspends it and memorystatus moves it to a band with a lower limit. A foreground app
+// purge and jetsam act on: memory pressure (the system's level and the process's own limit, which our memorystatus also
+// warns a daemon of as it goes clean, before its demotion applies its inactive limit: kern_memorystatus.c
+// memorystatus_dirty_set), and the app going to the background, before RunningBoard suspends it and memorystatus moves
+// it to a band with a lower limit. A foreground app
 // that pauses keeps its memory and pays no unpark at its next frame (owner, 25 Nov: no idle timer).
 #pragma once
 #include <dispatch/dispatch.h>
