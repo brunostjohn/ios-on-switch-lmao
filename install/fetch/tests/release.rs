@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 use std::fs;
 
+use switch_catalog::Digest;
 use switch_fetch::{Asset, Error, Url, content_length, fetch_release, parse_sums, verify_file};
 
 use crate::server::{Server, noise, sha256};
@@ -22,11 +23,13 @@ async fn fetches_assets_listed_in_sha256sums() {
     let assets = [
         Asset {
             name: "kernel.macho".into(),
-            sha256: sha256(&kernel),
+            size: kernel.len() as u64,
+            sha256: Digest(sha256(&kernel)),
         },
         Asset {
             name: "boot.tar".into(),
-            sha256: sha256(&boot),
+            size: boot.len() as u64,
+            sha256: Digest(sha256(&boot)),
         },
     ];
     let dir = tempfile::tempdir().unwrap();
@@ -51,7 +54,8 @@ async fn a_catalog_hash_sha256sums_disagrees_with_is_refused() {
     pinned[31] ^= 1;
     let assets = [Asset {
         name: "kernel.macho".into(),
-        sha256: pinned,
+        size: kernel.len() as u64,
+        sha256: Digest(pinned),
     }];
     let dir = tempfile::tempdir().unwrap();
     let error = fetch_release(
@@ -65,6 +69,31 @@ async fn a_catalog_hash_sha256sums_disagrees_with_is_refused() {
     .unwrap_err();
     assert!(matches!(error, Error::Release { .. }), "{error}");
     assert_eq!(server.requests().len(), 1);
+}
+
+/// The catalog and SHA256SUMS agree, and the release serves other bytes: nothing is kept.
+#[tokio::test]
+async fn an_asset_whose_bytes_arent_the_catalogs_is_refused() {
+    let (kernel, served) = (noise(70_000, 41), noise(70_000, 43));
+    let sums = sums_line("kernel.macho", &kernel);
+    let server = Server::start(&[("r/SHA256SUMS", sums.as_bytes()), ("r/kernel.macho", &served)]);
+    let assets = [Asset {
+        name: "kernel.macho".into(),
+        size: kernel.len() as u64,
+        sha256: Digest(sha256(&kernel)),
+    }];
+    let dir = tempfile::tempdir().unwrap();
+    let error = fetch_release(
+        &reqwest::Client::new(),
+        &server.url("r/"),
+        &assets,
+        dir.path(),
+        |_, _| {},
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(error, Error::HashMismatch { .. }), "{error}");
+    assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
 }
 
 #[test]
@@ -105,7 +134,8 @@ async fn asset_names_stay_under_the_release() {
     ]);
     let assets = [Asset {
         name: "../x".into(),
-        sha256: sha256(&outside),
+        size: outside.len() as u64,
+        sha256: Digest(sha256(&outside)),
     }];
     let dir = tempfile::tempdir().unwrap();
     let base: Url = server.url("r/");

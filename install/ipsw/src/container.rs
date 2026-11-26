@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 use std::io::{self, Read, Seek, SeekFrom, Write};
 
+use switch_catalog::{Container, Member};
 use udif::{DmgReader, DmgReaderOptions};
 
 use crate::error::{Error, Result};
@@ -13,13 +14,6 @@ const KOLY: &[u8; 4] = b"koly";
 const SECTOR_COUNT_AT: i64 = 0x1ec;
 const NXSB: &[u8; 4] = b"NXSB";
 const NXSB_AT: u64 = 0x20;
-
-/// How an OS image member is stored: a UDIF disk image holding a GPT with the APFS container, or the bare container.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Container {
-    Udif,
-    Apfs,
-}
 
 /// UDIF by its trailer, else APFS by the container superblock's magic.
 pub fn sniff<R: Read + Seek>(image: &mut R) -> io::Result<Option<Container>> {
@@ -64,6 +58,27 @@ pub fn os_container<R: Read + Seek, W: Write + Send>(
             hashed(out, |sink| Ok(dmg.decompress_partition_to(id, sink)?))?.1
         }
     };
+    Ok(written)
+}
+
+/// The APFS container of a disk image member's content, written to `out`, refused unless it is the one the member's
+/// catalog pins give.
+pub fn member_container<R: Read + Seek, W: Write + Send>(image: R, member: &Member, out: &mut W) -> Result<Written> {
+    let pins = member
+        .container
+        .as_ref()
+        .ok_or_else(|| Error::NoContainer(member.member.clone()))?;
+    let declared = Container::from_name(&pins.format).ok_or_else(|| Error::NoContainer(member.member.clone()))?;
+    let written = os_container(image, out, declared)?;
+    if written.len != pins.size || written.sha256 != pins.sha256.0 {
+        return Err(Error::ContainerContent {
+            member: member.member.clone(),
+            got_len: written.len,
+            got: hex::encode(written.sha256),
+            expected_len: pins.size,
+            expected: pins.sha256.to_string(),
+        });
+    }
     Ok(written)
 }
 

@@ -2,29 +2,23 @@
 use std::io::Read;
 
 use sha2::{Digest, Sha256};
+use switch_catalog::{Catalog, Role};
 use switch_fetch::{HttpFile, Span, Url, fetch_span};
 
-/// Each pinned kind's device tree member: its Apple URL, stored range and stored SHA-256, from pins.json.
+/// Each build's device tree member: its Apple URL, stored range and stored SHA-256, from the catalog.
 fn device_trees() -> Vec<(String, Span)> {
-    let runfiles = runfiles::Runfiles::create().unwrap();
-    let path = runfiles::rlocation!(runfiles, std::env::var("SWITCH_PINS").unwrap()).unwrap();
-    let pins: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-    let mut spans = Vec::new();
-    for (kind, ipsw) in pins.as_object().unwrap() {
-        let Some(member) = ipsw.pointer("/members/device_tree") else {
-            continue;
-        };
-        let mut sha256 = [0u8; 32];
-        hex::decode_to_slice(member["sha256"].as_str().unwrap(), &mut sha256).unwrap();
-        let span = Span {
-            url: Url::parse(ipsw["url"].as_str().unwrap()).unwrap(),
-            offset: member["offset"].as_u64().unwrap(),
-            len: member["stored_size"].as_u64().unwrap(),
-            sha256,
-        };
-        spans.push((kind.clone(), span));
-    }
-    assert!(!spans.is_empty(), "pins.json pins no device tree");
+    let path = std::env::var("SWITCH_RECORDS").expect("SWITCH_RECORDS is set by the BUILD file");
+    let catalog = Catalog::parse(&std::fs::read(path).unwrap()).unwrap();
+    let spans: Vec<_> = catalog
+        .builds
+        .iter()
+        .map(|record| {
+            let build = record.plan().unwrap();
+            let url = Url::parse(&record.ipsw.url).unwrap();
+            (record.build.clone(), Span::member(&url, build.member(Role::DeviceTree)))
+        })
+        .collect();
+    assert!(!spans.is_empty(), "the catalog has no builds");
     spans
 }
 

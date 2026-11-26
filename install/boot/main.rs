@@ -6,15 +6,18 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use clap::Parser;
-use switch_boot::{Assets, LaunchdCatalog, Members, Record, boot_files};
+use switch_boot::{Assets, LaunchdCatalog, Members, boot_files};
+use switch_catalog::Catalog;
 
-/// Writes a build's boot entry from its record, the release's boot assets and the IPSW's files.
+/// Writes a build's boot entry from its catalog record, the release's boot assets and the IPSW's files.
 #[derive(Parser)]
 struct Args {
-    /// The build's record (JSON).
+    /// The release's catalog.json.
     #[arg(long)]
-    record: PathBuf,
-    /// The release's boot assets for the build (tar).
+    catalog: PathBuf,
+    #[arg(long)]
+    build: String,
+    /// The release's boot assets for the build (tar), checked against the catalog.
     #[arg(long)]
     assets: PathBuf,
     #[arg(long)]
@@ -46,9 +49,14 @@ fn read(path: &PathBuf) -> Result<Vec<u8>, String> {
 
 fn run(args: &Args) -> Result<(), String> {
     let start = Instant::now();
-    let record = Record::from_json(&read(&args.record)?).map_err(|e| e.to_string())?;
+    let catalog = Catalog::parse(&read(&args.catalog)?).map_err(|e| e.to_string())?;
+    let record = catalog
+        .record(&args.build)
+        .ok_or_else(|| format!("the catalog has no {}", args.build))?;
+    let build = record.plan().map_err(|e| e.to_string())?;
+    let asset = build.asset("boot").map_err(|e| e.to_string())?;
     let tar = File::open(&args.assets).map_err(|e| format!("{}: {e}", args.assets.display()))?;
-    let assets = Assets::from_tar(BufReader::new(tar)).map_err(|e| e.to_string())?;
+    let assets = Assets::from_tar_checked(BufReader::new(tar), asset).map_err(|e| e.to_string())?;
     let catalog = match (&args.launchd_catalog, &args.launchd_catalog_signature) {
         (Some(plist), Some(signature)) => Some((read(plist)?, read(signature)?)),
         _ => None,
@@ -86,14 +94,14 @@ fn run(args: &Args) -> Result<(), String> {
             .map(|(plist, signature)| LaunchdCatalog { plist, signature }),
     };
     let read_at = start.elapsed();
-    let package = boot_files(&record, &assets, &members).map_err(|e| e.to_string())?;
+    let package = boot_files(&build, &assets, &members).map_err(|e| e.to_string())?;
     let made_at = start.elapsed();
     package
         .write(&args.out)
         .map_err(|e| format!("{}: {e}", args.out.display()))?;
     eprintln!(
         "{}: {} files, installd {}; read {:.2} s, made {:.2} s, written {:.2} s",
-        record.build,
+        build.build(),
         package.files.len(),
         hex::encode(package.installd_cdhash),
         read_at.as_secs_f64(),

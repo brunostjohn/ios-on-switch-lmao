@@ -7,7 +7,7 @@ use std::process::Command;
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
-use crate::{Error, Index, Result, decrypt};
+use crate::{Error, Index, Result, decrypt, decrypt_member};
 
 const KEY: [u8; 32] = [0x5a; 32];
 const RUN: usize = 16 << 10;
@@ -294,4 +294,66 @@ fn progress_reaches_the_raw_size() {
     let progress = |done| last.store(done, std::sync::atomic::Ordering::Relaxed);
     decrypt(file, &KEY, io::sink(), &sha256(&case.input), progress).unwrap();
     assert_eq!(last.into_inner(), SIZE as u64);
+}
+
+fn member(case: &Case, raw_size: u64) -> switch_catalog::Member {
+    let len = fs::metadata(&case.archive).unwrap().len();
+    switch_catalog::Member {
+        member: "archive.aea".into(),
+        component: "OS".into(),
+        offset: 0,
+        stored_size: len,
+        size: len,
+        sha256: switch_catalog::Digest([0; 32]),
+        content_sha256: switch_catalog::Digest(sha256(&case.input)),
+        deflated: false,
+        manifest_digest: switch_catalog::Digest([0; 48]),
+        aea: Some(switch_catalog::Aea {
+            key: format!("hex:{}", hex::encode(KEY)),
+            raw_size,
+        }),
+        container: None,
+        im4p: None,
+    }
+}
+
+#[test]
+fn a_member_decrypts_with_its_catalog_pins() {
+    let case = encrypt(mixed(SIZE), &[]);
+    let mut out = Vec::new();
+    let pins = member(&case, SIZE as u64);
+    assert_eq!(
+        decrypt_member(File::open(&case.archive).unwrap(), &pins, &mut out, |_| ()).unwrap(),
+        SIZE as u64
+    );
+    assert!(out == case.input);
+
+    let mut written = 0;
+    let error = decrypt_member(
+        File::open(&case.archive).unwrap(),
+        &member(&case, SIZE as u64 + 1),
+        Counting(&mut written),
+        |_| (),
+    )
+    .unwrap_err();
+    assert!(matches!(error, Error::RawSize { .. }), "{error}");
+    assert_eq!(written, 0, "refused before any segment is written");
+
+    let mut plain = pins.clone();
+    plain.aea = None;
+    let error = decrypt_member(File::open(&case.archive).unwrap(), &plain, io::sink(), |_| ()).unwrap_err();
+    assert!(matches!(error, Error::NotEncrypted(_)), "{error}");
+}
+
+struct Counting<'a>(&'a mut usize);
+
+impl Write for Counting<'_> {
+    fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+        *self.0 += data.len();
+        Ok(data.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }

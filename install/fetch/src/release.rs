@@ -4,16 +4,12 @@ use std::path::Path;
 use reqwest::header::RANGE;
 use reqwest::{Client, Url};
 
+use switch_catalog::Asset;
+
 use crate::error::{Error, Result, http, io_at};
 use crate::range;
 use crate::span::{Span, fetch_span};
 use crate::sums::parse_sums;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Asset {
-    pub name: String,
-    pub sha256: [u8; 32],
-}
 
 /// The length of `url`, from the Content-Range of a one-byte range.
 pub async fn content_length(client: &Client, url: &Url) -> Result<u64> {
@@ -26,8 +22,8 @@ pub async fn content_length(client: &Client, url: &Url) -> Result<u64> {
     range::check_total(url, response.status(), response.headers())
 }
 
-/// Each asset at `base` (ending in `/`) into `dir/<name>`. The catalog's hashes are what the files are checked
-/// against; the release's SHA256SUMS must list the same ones, which catches a release that was replaced.
+/// Each asset at `base` (ending in `/`) into `dir/<name>`. The catalog's sizes and hashes are what the files are checked
+/// against; the release's SHA256SUMS must list the same hashes, which catches a release that was replaced.
 pub async fn fetch_release(
     client: &Client,
     base: &Url,
@@ -50,11 +46,11 @@ pub async fn fetch_release(
     )?;
     for asset in assets {
         let listed = sums.get(&asset.name);
-        if listed != Some(&asset.sha256) {
+        if listed != Some(&asset.sha256.0) {
             return Err(Error::Release {
                 name: asset.name.clone(),
                 listed: listed.map(hex::encode),
-                pinned: hex::encode(asset.sha256),
+                pinned: asset.sha256.to_string(),
             });
         }
         let url = join(base, &asset.name)?;
@@ -62,12 +58,11 @@ pub async fn fetch_release(
         if tokio::fs::try_exists(&dest).await.map_err(io_at(&dest))? {
             continue;
         }
-        let len = content_length(client, &url).await?;
         let span = Span {
             url,
             offset: 0,
-            len,
-            sha256: asset.sha256,
+            len: asset.size,
+            sha256: asset.sha256.0,
         };
         fetch_span(client, &span, &dest, |done| progress(&asset.name, done)).await?;
     }

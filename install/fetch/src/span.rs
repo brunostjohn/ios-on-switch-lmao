@@ -22,6 +22,18 @@ pub struct Span {
     pub sha256: [u8; 32],
 }
 
+impl Span {
+    /// A member's stored bytes in the IPSW at `url`.
+    pub fn member(url: &Url, member: &switch_catalog::Member) -> Span {
+        Span {
+            url: url.clone(),
+            offset: member.offset,
+            len: member.stored_size,
+            sha256: member.sha256.0,
+        }
+    }
+}
+
 /// Downloads `span` into `dest`, resuming from `dest.part` and `dest.state` when an earlier call left them. A present
 /// `dest` counts as done: only a download whose SHA-256 matched is ever renamed to it. `progress` gets the bytes held.
 pub async fn fetch_span(client: &Client, span: &Span, dest: &Path, progress: impl FnMut(u64)) -> Result<()> {

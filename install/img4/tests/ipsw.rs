@@ -55,3 +55,17 @@ fn the_trust_caches_are_ipsws() {
         same(role, &got, &read(&format!("SWITCH_IMG4_{role}")));
     }
 }
+
+/// Each IM4P member decoded against its catalog pins alone, which must accept //ipsw's payload and nothing else.
+#[test]
+fn the_catalog_pins_are_ipsws_payloads() {
+    let catalog = switch_catalog::Catalog::parse(&read("SWITCH_RECORDS")).unwrap();
+    let record = catalog.record(&env("SWITCH_IMG4_BUILD")).unwrap();
+    let roles = ["KERNELCACHE", "DEVICE_TREE"].into_iter().chain(TRUST_CACHES);
+    for role in roles {
+        let member = &record.members[&role.to_lowercase()];
+        let got = switch_img4::member_payload(&read(&format!("SWITCH_IMG4_{role}_IM4P")), member)
+            .unwrap_or_else(|e| panic!("{role}: {e}"));
+        same(role, &got, &read(&format!("SWITCH_IMG4_{role}")));
+    }
+}

@@ -8,7 +8,8 @@ use std::time::Instant;
 
 use case::{Case, read};
 use sha2::{Digest, Sha256};
-use switch_boot::{Record, boot_files};
+use switch_boot::boot_files;
+use switch_catalog::Build;
 
 const INSTALLD: &str = "overlay/usr/libexec/installd";
 const CATALOGUE: [&str; 2] = [
@@ -18,8 +19,8 @@ const CATALOGUE: [&str; 2] = [
 
 /// What the release's other assets put in the tree: the overlay but the files made from Apple's, and the bootstrap
 /// archive.
-fn from_other_assets(path: &str, record: &Record) -> bool {
-    let ours = path == INSTALLD || (record.launchd_catalog.is_some() && CATALOGUE.contains(&path));
+fn from_other_assets(path: &str, build: &Build) -> bool {
+    let ours = path == INSTALLD || (build.steps.launchd_catalog && CATALOGUE.contains(&path));
     !ours && (path.starts_with("overlay/") || path == "bootstrap/payload.tar")
 }
 
@@ -40,18 +41,18 @@ const MIB: f64 = (1 << 20) as f64;
 fn from_the_ipsw_and_the_boot_assets_to_the_package() {
     let case = Case::load();
     let kind = &case.kind;
-    let record = case.record(kind);
+    let build = case.build();
     let start = Instant::now();
     let assets = case.assets();
     let files = case.member_files();
     let read_in = start.elapsed();
     let rss_inputs = max_rss();
-    let package = boot_files(&record, &assets, &files.members()).unwrap();
+    let package = boot_files(&build, &assets, &files.members()).unwrap();
     let made_in = start.elapsed() - read_in;
     let rss_peak = max_rss();
     println!(
-        "{kind}: read the assets and members {:.2} s, boot_files {:.2} s; peak RSS {:.0} MiB with the inputs read, \
-         {:.0} MiB at the end",
+        "{kind}: read the assets (checked against the catalog) and members {:.2} s, boot_files {:.2} s; peak RSS \
+         {:.0} MiB with the inputs read, {:.0} MiB at the end",
         read_in.as_secs_f64(),
         made_in.as_secs_f64(),
         rss_inputs as f64 / MIB,
@@ -70,7 +71,7 @@ fn from_the_ipsw_and_the_boot_assets_to_the_package() {
         assert!(*data == expected, "{kind}: {path} differs from //boot:package's");
     }
     let others: Vec<&String> = paths.iter().filter(|p| !package.files.contains_key(*p)).collect();
-    let unmade: Vec<&&String> = others.iter().filter(|p| !from_other_assets(p, &record)).collect();
+    let unmade: Vec<&&String> = others.iter().filter(|p| !from_other_assets(p, &build)).collect();
     assert!(
         unmade.is_empty(),
         "{kind}: //boot:package has files switch_boot does not make: {unmade:?}"

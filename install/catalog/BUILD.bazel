@@ -1,0 +1,162 @@
+# switch_catalog: the release's catalog.json (one record per pinned IPSW kind), its parser and capability check, and
+# the rule that writes it from ipsw/pins.bzl and the CI outputs it lists.
+#
+#   bazel test //install/catalog:all                       the parser, the round trip against IPSWS and STAGED, and a
+#                                                         synthetic iOS 18 record
+#   bazel build //install/catalog:catalog_json             catalog.json and the boot assets it lists, every kind's
+#   bazel test //install/catalog:published_test            manual: those, checked against each other (builds every kind)
+#   bazel build --config=release --nobuild //install/catalog:catalog_ipsw_free
+load("@bazel_skylib//rules:write_file.bzl", "write_file")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("//bazel/desktop:defs.bzl", "desktop_binaries")
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//install:release.bzl", "REPO")
+load("//ipsw:pins.bzl", "IPSWS")
+load("//release:ipsw_free.bzl", "ipsw_free")
+load(":catalog.bzl", "catalog", "catalog_kinds", "catalog_records", "selected_catalog")
+load(":staged.bzl", "STAGED")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+_RELEASE = module_version()
+
+rust_library(
+    name = "switch_catalog",
+    srcs = [
+        "asset.rs",
+        "digest.rs",
+        "lib.rs",
+        "plan.rs",
+        "record.rs",
+        "tests.rs",
+    ],
+    crate_root = "lib.rs",
+    rustc_env = {"SWITCH_RELEASE_REPO": REPO},
+    deps = [
+        "@installer_crates//:hex",
+        "@installer_crates//:serde",
+        "@installer_crates//:serde_json",
+        "@installer_crates//:sha2",
+        "@installer_crates//:thiserror",
+    ],
+)
+
+rust_test(
+    name = "switch_catalog_test",
+    crate = ":switch_catalog",
+)
+
+rust_binary(
+    name = "switch_catalog_tool",
+    srcs = ["tool/main.rs"],
+    deps = [
+        ":switch_catalog",
+        "@installer_crates//:clap",
+        "@installer_crates//:hex",
+        "@installer_crates//:serde_json",
+        "@installer_crates//:sha2",
+    ],
+)
+
+desktop_binaries(
+    name = "desktop",
+    binary = ":switch_catalog_tool",
+)
+
+# The catalog with no assets, which builds no kind: what the IPSW crates' tests read their members' pins from.
+write_file(
+    name = "records_json",
+    out = "records.json",
+    content = [json.encode_indent(
+        catalog_records(_RELEASE),
+        indent = "  ",
+    )],
+)
+
+write_file(
+    name = "ipsws_json",
+    out = "ipsws.json",
+    content = [json.encode(IPSWS)],
+)
+
+write_file(
+    name = "staged_json",
+    out = "staged.json",
+    content = [json.encode(STAGED)],
+)
+
+# What the release publishes: catalog.json and each kind's boot assets, each kind's built for it, under their release
+# names.
+catalog(
+    name = "catalog_json",
+    boot_assets = "//boot:boot_assets",
+    kinds = catalog_kinds(),
+    release = _RELEASE,
+    tags = ["manual"],
+)
+
+# The selected kind's record and boot assets alone, from this configuration: switch_boot's tests.
+selected_catalog(
+    name = "selected_catalog",
+    boot_assets = "//boot:boot_assets",
+    release = _RELEASE,
+    tags = ["manual"],
+)
+
+ipsw_free(
+    name = "catalog_ipsw_free",
+    src = ":catalog_json",
+    tags = ["manual"],
+)
+
+_RECORDS_ENV = {"SWITCH_RECORDS": "$(rootpath :records.json)"}
+
+rust_test(
+    name = "roundtrip_test",
+    srcs = ["tests/roundtrip.rs"],
+    crate_root = "tests/roundtrip.rs",
+    data = [
+        ":ipsws.json",
+        ":records.json",
+        ":staged.json",
+    ],
+    env = _RECORDS_ENV | {
+        "SWITCH_IPSWS": "$(rootpath :ipsws.json)",
+        "SWITCH_STAGED": "$(rootpath :staged.json)",
+    },
+    deps = [
+        ":switch_catalog",
+        "@installer_crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "synthetic_test",
+    srcs = ["tests/synthetic.rs"],
+    crate_root = "tests/synthetic.rs",
+    data = [":records.json"],
+    env = _RECORDS_ENV,
+    deps = [
+        ":switch_catalog",
+        "@installer_crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "published_test",
+    size = "medium",
+    srcs = ["tests/published.rs"],
+    crate_root = "tests/published.rs",
+    data = [
+        ":catalog_json",
+        ":records.json",
+    ],
+    env = _RECORDS_ENV | {"SWITCH_PUBLISHED": "$(rootpaths :catalog_json)"},
+    tags = ["manual"],
+    deps = [
+        ":switch_catalog",
+        "@installer_crates//:serde_json",
+    ],
+)

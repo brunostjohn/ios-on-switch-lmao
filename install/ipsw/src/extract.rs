@@ -2,9 +2,9 @@
 use std::io::{self, ErrorKind, Read, Write};
 
 use flate2::{Decompress, FlushDecompress, Status};
+use switch_catalog::Member;
 
 use crate::error::{Error, Result};
-use crate::pins::Member;
 use crate::pipe::{Sink, Written, hashed};
 
 const INPUT: usize = 1 << 20;
@@ -12,7 +12,7 @@ const INPUT: usize = 1 << 20;
 /// A member's content, from exactly its `stored_size` stored bytes (inflated when the pins say `deflated`), written to
 /// `out` as it is made. Refused unless the content's size and SHA-256 are the pinned ones.
 pub fn extract<R: Read, W: Write + Send>(stored: R, member: &Member, out: &mut W) -> Result<Written> {
-    if member.aea_key.is_some() {
+    if member.aea.is_some() {
         return Err(Error::Encrypted(member.member.clone()));
     }
     let mut stored = stored.take(member.stored_size);
@@ -30,13 +30,13 @@ pub fn extract<R: Read, W: Write + Send>(stored: R, member: &Member, out: &mut W
             expected: member.stored_size,
         });
     }
-    if written.len != member.size || written.sha256 != member.content_sha256 {
+    if written.len != member.size || written.sha256 != member.content_sha256.0 {
         return Err(Error::Content {
             member: member.member.clone(),
             got_len: written.len,
             got: hex::encode(written.sha256),
             expected_len: member.size,
-            expected: hex::encode(member.content_sha256),
+            expected: member.content_sha256.to_string(),
         });
     }
     Ok(written)

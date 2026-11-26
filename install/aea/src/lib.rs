@@ -10,7 +10,7 @@ mod tests;
 
 pub use index::{Index, Segment};
 pub use key::key_value;
-pub use pipeline::decrypt;
+pub use pipeline::{decrypt, decrypt_member};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -28,6 +28,10 @@ pub enum Error {
     Authentication(String),
     #[error("segment {cluster}/{index}: {reason}")]
     Segment { cluster: u32, index: u32, reason: String },
+    #[error("{0} is no encrypted archive")]
+    NotEncrypted(String),
+    #[error("the archive decrypts to {archive} bytes, and the catalog pins {pinned}")]
+    RawSize { archive: u64, pinned: u64 },
     #[error("the output is {got} bytes, not the archive's {expected}")]
     Length { got: u64, expected: u64 },
     #[error("the output's SHA-256 is {got}, not the pinned {expected}")]

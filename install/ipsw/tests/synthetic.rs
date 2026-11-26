@@ -5,7 +5,8 @@ use std::io::{self, Cursor, Seek, SeekFrom, Write};
 use flate2::Compression;
 use flate2::write::DeflateEncoder;
 use sha2::{Digest, Sha256};
-use switch_ipsw::{Container, Error, Member, extract, os_container, sniff, udif_disk};
+use switch_catalog::{Aea, ContainerPins, Digest as Pin};
+use switch_ipsw::{Container, Error, Member, extract, member_container, os_container, sniff, udif_disk};
 use udif::{CompressionMethod, DmgWriter};
 
 /// Compressible but not trivially so, and longer than the extractor's chunks.
@@ -34,14 +35,28 @@ fn deflate(data: &[u8]) -> Vec<u8> {
 fn member(stored: &[u8], data: &[u8], deflated: bool) -> Member {
     Member {
         member: "Firmware/test.im4p".into(),
+        component: "Test".into(),
         offset: 0,
         stored_size: stored.len() as u64,
         size: data.len() as u64,
-        sha256: sha256(stored),
-        content_sha256: sha256(data),
+        sha256: Pin(sha256(stored)),
+        content_sha256: Pin(sha256(data)),
         deflated,
-        aea_key: None,
+        manifest_digest: Pin([0; 48]),
+        aea: None,
+        container: None,
+        im4p: None,
     }
+}
+
+fn disk_image(image: &[u8], format: &str, container: &[u8]) -> Member {
+    let mut pin = member(image, image, false);
+    pin.container = Some(ContainerPins {
+        format: format.into(),
+        size: container.len() as u64,
+        sha256: Pin(sha256(container)),
+    });
+    pin
 }
 
 #[test]
@@ -94,7 +109,7 @@ fn other_content_is_refused() {
     let data = content(1 << 20);
     let stored = deflate(&data);
     let mut pin = member(&stored, &data, true);
-    pin.content_sha256[5] ^= 1;
+    pin.content_sha256.0[5] ^= 1;
     let error = extract(&stored[..], &pin, &mut io::sink()).unwrap_err();
     assert!(matches!(error, Error::Content { .. }), "{error}");
 }
@@ -102,7 +117,10 @@ fn other_content_is_refused() {
 #[test]
 fn an_encrypted_member_is_refused() {
     let mut pin = member(b"", b"", false);
-    pin.aea_key = Some("base64:".into());
+    pin.aea = Some(Aea {
+        key: "base64:".into(),
+        raw_size: 0,
+    });
     assert!(matches!(
         extract(&b""[..], &pin, &mut io::sink()),
         Err(Error::Encrypted(_))
@@ -181,6 +199,31 @@ fn unwraps_a_udif_image() {
     let written = os_container(udif(&dir, &head, &apfs), &mut container, Container::Udif).unwrap();
     assert_eq!(container, apfs);
     assert_eq!(written.sha256, sha256(&apfs));
+}
+
+#[test]
+fn a_member_s_container_is_checked_against_its_pins() {
+    let dir = tempfile::tempdir().unwrap();
+    let (head, apfs) = (content(1000), apfs_image(1 << 20));
+    let mut image = Vec::new();
+    std::io::Read::read_to_end(&mut udif(&dir, &head, &apfs), &mut image).unwrap();
+    let written = member_container(Cursor::new(&image), &disk_image(&image, "udif", &apfs), &mut io::sink()).unwrap();
+    assert_eq!(written.sha256, sha256(&apfs));
+    member_container(Cursor::new(&apfs), &disk_image(&apfs, "raw", &apfs), &mut io::sink()).unwrap();
+
+    let mut other = apfs.clone();
+    other[100] ^= 1;
+    let error = member_container(
+        Cursor::new(&image),
+        &disk_image(&image, "udif", &other),
+        &mut io::sink(),
+    )
+    .unwrap_err();
+    assert!(matches!(error, Error::ContainerContent { .. }), "{error}");
+    let error = member_container(Cursor::new(&apfs), &disk_image(&apfs, "sparse", &apfs), &mut io::sink()).unwrap_err();
+    assert!(matches!(error, Error::NoContainer(_)), "{error}");
+    let error = member_container(Cursor::new(&apfs), &member(&apfs, &apfs, false), &mut io::sink()).unwrap_err();
+    assert!(matches!(error, Error::NoContainer(_)), "{error}");
 }
 
 #[test]

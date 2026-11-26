@@ -7,8 +7,10 @@ use std::thread::{self, ScopedJoinHandle};
 use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 
+use switch_catalog::Member;
+
 use crate::index::Index;
-use crate::{Error, Result};
+use crate::{Error, Result, key_value};
 
 const BATCH_BYTES: u64 = 32 << 20;
 
@@ -18,9 +20,42 @@ type Batch = Vec<Vec<u8>>;
 ///
 /// One thread reads the stored segments in order, rayon decrypts and decompresses each batch of them, and another
 /// thread writes and hashes the output in order. `progress` gets the output bytes written so far.
-pub fn decrypt<R, W, P>(
+pub fn decrypt<R, W, P>(archive: R, key: &[u8; 32], out: W, content_sha256: &[u8; 32], progress: P) -> Result<u64>
+where
+    R: Read + Seek + Send,
+    W: Write + Send,
+    P: Fn(u64) + Sync,
+{
+    run(archive, key, None, out, content_sha256, progress)
+}
+
+/// A member's archive decrypted with the key its catalog pins give, refused before any segment is read unless it
+/// decrypts to the pinned size, and at the end unless the output is the pinned content.
+pub fn decrypt_member<R, W, P>(archive: R, member: &Member, out: W, progress: P) -> Result<u64>
+where
+    R: Read + Seek + Send,
+    W: Write + Send,
+    P: Fn(u64) + Sync,
+{
+    let aea = member
+        .aea
+        .as_ref()
+        .ok_or_else(|| Error::NotEncrypted(member.member.clone()))?;
+    let key = key_value(&aea.key)?;
+    run(
+        archive,
+        &key,
+        Some(aea.raw_size),
+        out,
+        &member.content_sha256.0,
+        progress,
+    )
+}
+
+fn run<R, W, P>(
     mut archive: R,
     key: &[u8; 32],
+    raw_size: Option<u64>,
     mut out: W,
     content_sha256: &[u8; 32],
     progress: P,
@@ -31,6 +66,14 @@ where
     P: Fn(u64) + Sync,
 {
     let index = Index::read(&mut archive, key)?;
+    if let Some(pinned) = raw_size
+        && pinned != index.raw_size()
+    {
+        return Err(Error::RawSize {
+            archive: index.raw_size(),
+            pinned,
+        });
+    }
     let batches = batches(&index, 2 * rayon::current_num_threads());
     let (stored_tx, stored_rx) = sync_channel(1);
     let (plain_tx, plain_rx) = sync_channel(1);

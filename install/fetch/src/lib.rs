@@ -9,7 +9,8 @@ mod sums;
 
 pub use error::{Error, Result};
 pub use http_file::HttpFile;
-pub use release::{Asset, content_length, fetch_release};
+pub use release::{content_length, fetch_release};
 pub use reqwest::Url;
 pub use span::{CHECKPOINT, Span, checkpointed, fetch_span, fetch_span_with};
 pub use sums::{parse_sums, verify_file};
+pub use switch_catalog::Asset;

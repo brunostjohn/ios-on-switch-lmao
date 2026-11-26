@@ -1,7 +1,8 @@
 # switch_img4: the payloads of an IPSW's IM4P members (kernelcache, device tree, trust caches) as //ipsw makes them.
 #
 #   bazel test //install/img4:all       unit tests, and each kind's members against //ipsw's <target>_<kind>, for the kinds
-#                                       whose pins carry what the payloads are checked against (im4p_pinned_kinds)
+#                                       whose pins carry what the payloads are checked against (im4p_pinned_kinds), by
+#                                       the pins alone and by the catalog's
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 load("//bazel/lint:defs.bzl", "lint_files")
 load("//ipsw:defs.bzl", "APPLE_TRUST", "im4p_pinned_kinds")
@@ -15,6 +16,7 @@ rust_library(
     name = "switch_img4",
     srcs = glob(["src/*.rs"]),
     deps = [
+        "//install/catalog:switch_catalog",
         "@installer_crates//:hex",
         "@installer_crates//:image4",
         "@installer_crates//:lzfse_rust",
@@ -34,6 +36,7 @@ rust_test(
         name = "ipsw_test_" + kind,
         srcs = ["tests/ipsw.rs"],
         data = [
+            "//install/catalog:records.json",
             "//ipsw:{}_device_tree".format(kind),
             "//ipsw:{}_kernelcache".format(kind),
             "//ipsw:device_tree_" + kind,
@@ -46,11 +49,13 @@ rust_test(
             for name, _ in APPLE_TRUST.values()
         ],
         env = {
+            "SWITCH_IMG4_BUILD": IPSWS[kind]["build"],
             "SWITCH_IMG4_DEVICE_TREE": "$(rootpath //ipsw:device_tree_{})".format(kind),
             "SWITCH_IMG4_DEVICE_TREE_IM4P": "$(rootpath //ipsw:{}_device_tree)".format(kind),
             "SWITCH_IMG4_KERNELCACHE": "$(rootpath //ipsw:kernelcache_{})".format(kind),
             "SWITCH_IMG4_KERNELCACHE_IM4P": "$(rootpath //ipsw:{}_kernelcache)".format(kind),
             "SWITCH_IMG4_KERNELCACHE_SHA256": IPSWS[kind]["derived"]["kernelcache_sha256"],
+            "SWITCH_RECORDS": "$(rootpath //install/catalog:records.json)",
         } | {
             "SWITCH_IMG4_{}{}".format(
                 role.upper(),
@@ -75,6 +80,7 @@ rust_test(
         },
         deps = [
             ":switch_img4",
+            "//install/catalog:switch_catalog",
             "@installer_crates//:hex",
         ],
     )

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! The selected kind's boot case (install/boot/defs.bzl boot_case): the records, the boot assets, the IPSW's members
-//! and //boot:package's tree.
+//! The selected kind's boot case (install/boot/defs.bzl boot_case): its catalog, every pinned kind's records, the
+//! boot assets, the IPSW's members and //boot:package's tree.
 #![allow(dead_code)]
 
 use std::collections::BTreeMap;
@@ -9,7 +9,8 @@ use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
-use switch_boot::{Assets, LaunchdCatalog, Members, Record};
+use switch_boot::{Assets, LaunchdCatalog, Members};
+use switch_catalog::{Build, Catalog};
 
 pub fn read(path: &Path) -> Vec<u8> {
     std::fs::read(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
@@ -76,19 +77,40 @@ impl Case {
         )
     }
 
-    pub fn record(&self, kind: &str) -> Record {
-        let json = serde_json::to_vec(&self.json["records"][kind]).unwrap();
-        Record::from_json(&json).unwrap()
+    fn catalog(&self, key: &str) -> Catalog {
+        Catalog::parse(&read(&self.path(key))).unwrap()
+    }
+
+    /// The selected kind's build, from the catalog its boot assets were hashed into.
+    pub fn build(&self) -> Build {
+        let catalog = self.catalog("catalog");
+        assert_eq!(catalog.builds.len(), 1, "the case's catalog is the selected kind's");
+        catalog.record(&self.kind).unwrap().plan().unwrap()
+    }
+
+    /// Another pinned kind's build, from the records, which hold no assets.
+    pub fn other_build(&self, kind: &str) -> Build {
+        self.catalog("records").record(kind).unwrap().plan().unwrap()
     }
 
     pub fn other_kinds(&self) -> Vec<String> {
-        let records = self.json["records"].as_object().unwrap();
-        records.keys().filter(|k| **k != self.kind).cloned().collect()
+        let records = self.catalog("records");
+        records
+            .builds
+            .into_iter()
+            .map(|r| r.build)
+            .filter(|b| *b != self.kind)
+            .collect()
     }
 
+    pub fn tar(&self) -> Vec<u8> {
+        read(&self.path("assets"))
+    }
+
+    /// The boot assets, checked against the selected kind's catalog as they are read.
     pub fn assets(&self) -> Assets {
         let tar = File::open(self.path("assets")).unwrap();
-        Assets::from_tar(BufReader::new(tar)).unwrap()
+        Assets::from_tar_checked(BufReader::new(tar), self.build().asset("boot").unwrap()).unwrap()
     }
 
     pub fn member_files(&self) -> MemberFiles {

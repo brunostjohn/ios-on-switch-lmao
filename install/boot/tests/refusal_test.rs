@@ -1,15 +1,41 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! What switch_boot refuses for the selected kind: another build's record or bundle, a bundle or IPSW member that
-//! differs from the one CI built from, another build's OS volume, and a launchd catalogue the record doesn't pin.
+//! What switch_boot refuses for the selected kind: a bundle that isn't the catalog's, another build's record or
+//! bundle, a bundle or IPSW member that differs from the one CI built from, another build's OS volume, and a launchd
+//! catalogue the build doesn't pin.
 
 mod case;
 
+use std::io::Cursor;
+
 use case::Case;
-use switch_boot::{Error, boot_files};
+use switch_boot::{Assets, Error, boot_files};
 
 fn refused(case: &Case, error: Error) -> Error {
     println!("{}: {error}", case.kind);
     error
+}
+
+/// One byte of the tar changed where no step would see it: the catalog's SHA-256 of the asset refuses it.
+#[test]
+fn a_boot_tar_that_isnt_the_catalogs_is_refused() {
+    let case = Case::load();
+    let build = case.build();
+    let asset = build.asset("boot").unwrap();
+    let mut tar = case.tar();
+    let last = tar.len() - 1;
+    tar[last] ^= 0x01;
+    let error = Assets::from_tar_checked(Cursor::new(&tar), asset)
+        .err()
+        .expect("refused");
+    let error = refused(&case, error);
+    assert!(matches!(
+        error,
+        Error::Catalog(switch_catalog::Error::AssetMismatch { .. })
+    ));
+    assert!(
+        Assets::from_tar(Cursor::new(&tar)).is_ok(),
+        "the tar itself still reads"
+    );
 }
 
 #[test]
@@ -17,7 +43,7 @@ fn another_builds_record_is_refused() {
     let case = Case::load();
     let (assets, files) = (case.assets(), case.member_files());
     for other in case.other_kinds() {
-        let error = boot_files(&case.record(&other), &assets, &files.members())
+        let error = boot_files(&case.other_build(&other), &assets, &files.members())
             .err()
             .expect("refused");
         assert!(matches!(refused(&case, error), Error::AssetsForAnotherBuild { .. }));
@@ -29,12 +55,12 @@ fn another_builds_bundle_is_refused() {
     let case = Case::load();
     let (mut assets, files) = (case.assets(), case.member_files());
     for other in case.other_kinds() {
-        let build = case.record(&other).build;
+        let build = other;
         assets.insert(
             "boot.json",
             format!("{{\"build\": \"{build}\", \"format\": 1}}\n").into_bytes(),
         );
-        let error = boot_files(&case.record(&case.kind), &assets, &files.members())
+        let error = boot_files(&case.build(), &assets, &files.members())
             .err()
             .expect("refused");
         assert!(matches!(refused(&case, error), Error::AssetsForAnotherBuild { .. }));
@@ -44,15 +70,15 @@ fn another_builds_bundle_is_refused() {
 #[test]
 fn a_bundle_short_of_a_member_or_with_an_unknown_one_is_refused() {
     let case = Case::load();
-    let (record, files) = (case.record(&case.kind), case.member_files());
+    let (build, files) = (case.build(), case.member_files());
     let mut assets = case.assets();
     assets.remove("bl33/u-boot.bin").expect("the bundle has U-Boot");
-    let error = boot_files(&record, &assets, &files.members()).err().expect("refused");
+    let error = boot_files(&build, &assets, &files.members()).err().expect("refused");
     assert!(matches!(refused(&case, error), Error::Assets(ref m) if m.contains("bl33/u-boot.bin")));
 
     let mut assets = case.assets();
     assets.insert("kernel/kernel.macho.orig", Vec::new());
-    let error = boot_files(&record, &assets, &files.members()).err().expect("refused");
+    let error = boot_files(&build, &assets, &files.members()).err().expect("refused");
     assert!(matches!(refused(&case, error), Error::Assets(ref m) if m.contains("kernel.macho.orig")));
 }
 
@@ -60,12 +86,12 @@ fn a_bundle_short_of_a_member_or_with_an_unknown_one_is_refused() {
 #[test]
 fn a_changed_bundle_member_is_refused_by_the_loaders_constants() {
     let case = Case::load();
-    let (record, files) = (case.record(&case.kind), case.member_files());
+    let (build, files) = (case.build(), case.member_files());
     let mut assets = case.assets();
     let mut module = assets.get("trust/overlay-base.trustcache").unwrap().to_vec();
     module[24] ^= 0x01;
     assets.insert("trust/overlay-base.trustcache", module);
-    let error = boot_files(&record, &assets, &files.members()).err().expect("refused");
+    let error = boot_files(&build, &assets, &files.members()).err().expect("refused");
     let error = refused(&case, error);
     assert!(matches!(
         error,
@@ -76,11 +102,11 @@ fn a_changed_bundle_member_is_refused_by_the_loaders_constants() {
 #[test]
 fn a_changed_device_tree_is_refused_by_its_manifest_digest() {
     let case = Case::load();
-    let (record, assets, mut files) = (case.record(&case.kind), case.assets(), case.member_files());
+    let (build, assets, mut files) = (case.build(), case.assets(), case.member_files());
     let im4p = files.get_mut("device_tree");
     let at = im4p.len() / 2;
     im4p[at] ^= 0x01;
-    let error = boot_files(&record, &assets, &files.members()).err().expect("refused");
+    let error = boot_files(&build, &assets, &files.members()).err().expect("refused");
     assert!(matches!(
         refused(&case, error),
         Error::Img4(switch_img4::Error::ManifestDigest)
@@ -113,11 +139,11 @@ fn text_section(installd: &[u8]) -> std::ops::Range<usize> {
 #[test]
 fn a_changed_installd_is_refused_by_the_loaders_constants() {
     let case = Case::load();
-    let (record, assets, mut files) = (case.record(&case.kind), case.assets(), case.member_files());
+    let (build, assets, mut files) = (case.build(), case.assets(), case.member_files());
     let installd = files.get_mut("installd");
     let text = text_section(installd);
     installd[text.start + text.len() / 2] ^= 0x01;
-    let error = boot_files(&record, &assets, &files.members()).err().expect("refused");
+    let error = boot_files(&build, &assets, &files.members()).err().expect("refused");
     let error = refused(&case, error);
     assert!(matches!(
         error,
@@ -128,13 +154,13 @@ fn a_changed_installd_is_refused_by_the_loaders_constants() {
 #[test]
 fn another_builds_os_volume_is_refused_before_installd_is_signed() {
     let case = Case::load();
-    let (record, assets, mut files) = (case.record(&case.kind), case.assets(), case.member_files());
+    let (build, assets, mut files) = (case.build(), case.assets(), case.member_files());
     let version = files.get_mut("system_version");
     let mut plist: plist::Dictionary = plist::from_bytes(version).unwrap();
     plist.insert("ProductBuildVersion".into(), "99Z999".into());
     version.clear();
     plist::to_writer_xml(&mut *version, &plist).unwrap();
-    let error = boot_files(&record, &assets, &files.members()).err().expect("refused");
+    let error = boot_files(&build, &assets, &files.members()).err().expect("refused");
     assert!(matches!(
         refused(&case, error),
         Error::Installd(switch_installd::Error::Build { .. })
@@ -142,15 +168,15 @@ fn another_builds_os_volume_is_refused_before_installd_is_signed() {
 }
 
 #[test]
-fn a_launchd_catalogue_other_than_the_records_is_refused() {
+fn a_launchd_catalogue_other_than_the_builds_is_refused() {
     let case = Case::load();
-    let (record, assets, mut files) = (case.record(&case.kind), case.assets(), case.member_files());
-    if record.launchd_catalog.is_some() {
+    let (build, assets, mut files) = (case.build(), case.assets(), case.member_files());
+    if build.steps.launchd_catalog {
         files.remove("launchd_catalog");
     } else {
         files.insert("launchd_catalog", b"bplist00".to_vec());
         files.insert("launchd_catalog_signature", Vec::new());
     }
-    let error = boot_files(&record, &assets, &files.members()).err().expect("refused");
+    let error = boot_files(&build, &assets, &files.members()).err().expect("refused");
     assert!(matches!(refused(&case, error), Error::Members(_)));
 }

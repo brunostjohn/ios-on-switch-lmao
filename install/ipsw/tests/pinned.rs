@@ -15,8 +15,8 @@ fn large() -> u64 {
 #[test]
 fn small_members_match_the_build() {
     let cases = cases("SWITCH_SMALL_MEMBERS");
-    let want = expected(&cases::pins(), |m| {
-        m.deflated && m.aea_key.is_none() && m.stored_size <= large()
+    let want = expected(&cases::catalog(), |m| {
+        m.deflated && m.aea.is_none() && m.stored_size <= large()
     });
     assert_eq!(listed(&cases), want);
     for case in cases {
@@ -26,7 +26,7 @@ fn small_members_match_the_build() {
         let mut out = Vec::new();
         let written = extract(File::open(stored).unwrap(), &case.member, &mut out)
             .unwrap_or_else(|e| panic!("{} {}: {e}", case.kind, case.role));
-        assert_eq!(written.sha256, case.member.content_sha256);
+        assert_eq!(written.sha256, case.member.content_sha256.0);
         assert!(
             out == std::fs::read(built).unwrap(),
             "{} {}: differs from {}",

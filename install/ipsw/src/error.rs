@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 use std::io;
 
-use crate::container::Container;
+use switch_catalog::Container;
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
@@ -25,6 +25,18 @@ pub enum Error {
     Container {
         declared: Container,
         found: Option<Container>,
+    },
+    #[error("{0} has no container pins this reads")]
+    NoContainer(String),
+    #[error(
+        "{member}: the container is {got_len} bytes with SHA-256 {got}, pinned {expected_len} bytes with {expected}"
+    )]
+    ContainerContent {
+        member: String,
+        got_len: u64,
+        got: String,
+        expected_len: u64,
+        expected: String,
     },
     #[error("UDIF: {0}")]
     Udif(#[from] udif::DppError),

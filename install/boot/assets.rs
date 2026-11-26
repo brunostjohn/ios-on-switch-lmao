@@ -7,9 +7,9 @@ use std::io::Read;
 use std::path::{Component, Path};
 
 use serde::Deserialize;
+use switch_catalog::{Asset, Build, Prelink};
 
 use crate::Error;
-use crate::record::{Prelink, Record};
 
 pub const STAMP: &str = "boot.json";
 const FORMAT: u32 = 1;
@@ -55,8 +55,8 @@ const ALWAYS: [&str; 12] = [
     EXPORTER,
     DTB,
 ];
-const OPTIONAL: [&str; 5] = [
-    GPU_TRUST,
+const OPTIONAL: [&str; 1] = [GPU_TRUST];
+const PRETRANSLATE: [&str; 4] = [
     PRETRANSLATED_OS,
     PRETRANSLATED_SYSTEM_CRYPTEX,
     PRETRANSLATED_APP_CRYPTEX,
@@ -121,6 +121,14 @@ impl Assets {
         Ok(Self { files })
     }
 
+    /// The tar, refused unless its every byte is the catalog's asset: hashed as it is read, so once.
+    pub fn from_tar_checked(reader: impl Read, asset: &Asset) -> Result<Self, Error> {
+        let mut checked = asset.checked(reader);
+        let assets = Self::from_tar(&mut checked)?;
+        checked.finish()?;
+        Ok(assets)
+    }
+
     pub fn get(&self, name: &str) -> Option<&[u8]> {
         self.files.get(name).map(Vec::as_slice)
     }
@@ -145,8 +153,8 @@ impl Assets {
             .map(move |(name, data)| (&name[prefix.len()..], data.as_slice()))
     }
 
-    /// The bundle is this build's, in the format this reads, and holds exactly what the record's steps take.
-    pub(crate) fn check(&self, record: &Record) -> Result<(), Error> {
+    /// The bundle is this build's, in the format this reads, and holds exactly what the build's steps take.
+    pub(crate) fn check(&self, build: &Build) -> Result<(), Error> {
         let stamp: Stamp =
             serde_json::from_slice(self.file(STAMP)?).map_err(|e| Error::Assets(format!("{STAMP}: {e}")))?;
         if stamp.format != FORMAT {
@@ -155,22 +163,25 @@ impl Assets {
                 stamp.format
             )));
         }
-        if stamp.build != record.build {
+        if stamp.build != build.build() {
             return Err(Error::AssetsForAnotherBuild {
                 assets: stamp.build,
-                record: record.build.clone(),
+                record: build.build().to_owned(),
             });
         }
-        let prelink: &[&str] = match record.prelink {
+        let prelink: &[&str] = match build.steps.prelink {
             Prelink::Native => &NATIVE,
             Prelink::Fileset => &FILESET,
         };
-        let launchd: &[&str] = if record.launchd_catalog.is_some() {
-            &LAUNCHD
-        } else {
-            &[]
-        };
-        let required: Vec<&str> = ALWAYS.iter().chain(prelink).chain(launchd).copied().collect();
+        let launchd: &[&str] = if build.steps.launchd_catalog { &LAUNCHD } else { &[] };
+        let pretranslate: &[&str] = if build.steps.pretranslate { &PRETRANSLATE } else { &[] };
+        let required: Vec<&str> = ALWAYS
+            .iter()
+            .chain(prelink)
+            .chain(launchd)
+            .chain(pretranslate)
+            .copied()
+            .collect();
         if let Some(missing) = required.iter().find(|name| !self.files.contains_key(**name)) {
             return Err(Error::Assets(format!("no {missing}")));
         }
@@ -180,7 +191,7 @@ impl Assets {
         match self.files.keys().find(|name| !known(name)) {
             Some(unknown) => Err(Error::Assets(format!(
                 "{unknown} is no member of a {} bundle",
-                record.build
+                build.build()
             ))),
             None => Ok(()),
         }

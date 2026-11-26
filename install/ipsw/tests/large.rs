@@ -13,8 +13,8 @@ use switch_ipsw::extract;
 fn large_members_match_their_pins() {
     let large: u64 = std::env::var("SWITCH_LARGE").unwrap().parse().unwrap();
     let cases = cases("SWITCH_LARGE_MEMBERS");
-    let want = expected(&cases::pins(), |m| {
-        m.aea_key.is_none() && (!m.deflated || m.stored_size > large)
+    let want = expected(&cases::catalog(), |m| {
+        m.aea.is_none() && (!m.deflated || m.stored_size > large)
     });
     assert_eq!(listed(&cases), want);
     for case in cases {

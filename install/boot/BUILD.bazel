@@ -24,19 +24,18 @@ rust_library(
     srcs = [
         "assets.rs",
         "lib.rs",
-        "record.rs",
         "steps.rs",
         "tests.rs",
     ],
     crate_root = "lib.rs",
     deps = [
         "//install/adt:switch_adt",
+        "//install/catalog:switch_catalog",
         "//install/img4:switch_img4",
         "//install/installd:switch_installd",
         "//install/launchd:switch_launchd",
         "//install/prelink:switch_prelink",
         "//install/window:switch_window",
-        "@installer_crates//:hex",
         "@installer_crates//:rayon",
         "@installer_crates//:serde",
         "@installer_crates//:serde_json",
@@ -55,6 +54,7 @@ rust_binary(
     srcs = ["main.rs"],
     deps = [
         ":switch_boot",
+        "//install/catalog:switch_catalog",
         "@installer_crates//:clap",
         "@installer_crates//:hex",
     ],
@@ -70,6 +70,7 @@ _CATALOG_KINDS = [kind for kind, ipsw in IPSWS.items() if ipsw.get("derived", {}
 boot_case(
     name = "case",
     assets = "//boot:boot_assets",
+    catalog = "//install/catalog:selected_catalog",
     members = {
         "kernelcache": "@ipsw//:kernelcache",
         "device_tree": "@ipsw//:device_tree",
@@ -86,12 +87,14 @@ boot_case(
         for kind in _CATALOG_KINDS
     } | {"//conditions:default": {}}),
     package = "//boot:package",
+    records = "//install/catalog:records.json",
 )
 
 _CASE_ENV = {"SWITCH_BOOT_CASE": "$(rootpath :case)"}
 
 _CHAIN_DEPS = [
     ":switch_boot",
+    "//install/catalog:switch_catalog",
     "@installer_crates//:hex",
     "@installer_crates//:libc",
     "@installer_crates//:serde_json",
@@ -145,6 +148,7 @@ rust_test(
     env = _CASE_ENV,
     deps = [
         ":switch_boot",
+        "//install/catalog:switch_catalog",
         "//install/img4:switch_img4",
         "//install/installd:switch_installd",
         "//install/window:switch_window",

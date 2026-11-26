@@ -15,6 +15,7 @@ rust_library(
     srcs = glob(["src/*.rs"]),
     crate_root = "src/lib.rs",
     deps = [
+        "//install/catalog:switch_catalog",
         "@installer_crates//:hex",
         "@installer_crates//:reqwest",
         "@installer_crates//:serde",
@@ -37,6 +38,7 @@ rust_test(
     crate_root = "tests/main.rs",
     deps = [
         ":switch_fetch",
+        "//install/catalog:switch_catalog",
         "@installer_crates//:hex",
         "@installer_crates//:reqwest",
         "@installer_crates//:sha2",
@@ -48,20 +50,18 @@ rust_test(
 rust_test(
     name = "apple_test",
     srcs = ["tests/apple.rs"],
-    data = ["//install/ipsw:pins.json"],
-    env = {"SWITCH_PINS": "$(rlocationpath //install/ipsw:pins.json)"},
+    data = ["//install/catalog:records.json"],
+    env = {"SWITCH_RECORDS": "$(rootpath //install/catalog:records.json)"},
     tags = [
         "manual",
         "requires-network",
     ],
     deps = [
         ":switch_fetch",
-        "@installer_crates//:hex",
+        "//install/catalog:switch_catalog",
         "@installer_crates//:reqwest",
-        "@installer_crates//:serde_json",
         "@installer_crates//:sha2",
         "@installer_crates//:tempfile",
         "@installer_crates//:tokio",
-        "@rules_rust//rust/runfiles",
     ],
 )

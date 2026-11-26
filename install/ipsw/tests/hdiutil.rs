@@ -8,7 +8,7 @@ use std::time::Instant;
 mod cases;
 
 use cases::{cases, expected, listed};
-use switch_ipsw::{Container, os_container, sniff, udif_disk};
+use switch_ipsw::{Container, member_container, os_container, sniff, udif_disk};
 
 /// Compares what is written with a file, byte for byte, and remembers where they first differ.
 struct Compare {
@@ -67,13 +67,14 @@ fn apfs_slice(image: &Path) -> (u64, u64) {
 }
 
 /// Every stored, unencrypted member that is a UDIF image (21H461's OS today), unwrapped by `udif` and by
-/// `hdiutil convert -format UDTO`, compared byte for byte: the whole disk, then the APFS container alone.
+/// `hdiutil convert -format UDTO`, compared byte for byte: the whole disk, then the APFS container alone, which must
+/// also be the one the catalog pins.
 #[test]
 fn udif_images_match_hdiutil() {
     let cases = cases("SWITCH_STORED_IMAGES");
     assert_eq!(
         listed(&cases),
-        expected(&cases::pins(), |m| !m.deflated && m.aea_key.is_none())
+        expected(&cases::catalog(), |m| !m.deflated && m.aea.is_none())
     );
     let tmp = PathBuf::from(std::env::var("TEST_TMPDIR").unwrap());
     let mut udif_images = 0;
@@ -119,6 +120,13 @@ fn udif_images_match_hdiutil() {
             "{name}: the container differs from hdiutil's"
         );
         assert_eq!(container.len, len, "{name}: container length");
+        let pinned = member_container(File::open(image).unwrap(), &case.member, &mut io::sink()).unwrap();
+        assert_eq!(pinned, container, "{name}: the catalog's container pins");
+        println!(
+            "{name}: the container is the catalog's, {} B, sha256 {}",
+            pinned.len,
+            hex::encode(pinned.sha256)
+        );
     }
     assert!(udif_images > 0, "no pinned member is a UDIF image");
 }

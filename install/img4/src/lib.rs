@@ -9,6 +9,7 @@ use image4::{PayloadRef, Tag};
 use object::macho::CPU_TYPE_ARM64;
 use object::read::macho::{FatArch, MachOFatFile32};
 use sha2::{Digest, Sha256, Sha384};
+use switch_catalog::Member;
 
 const LZFSE_BLOCKS: [&[u8; 4]; 4] = [b"bvx2", b"bvx1", b"bvxn", b"bvx-"];
 const FAT_MAGIC: &[u8; 4] = b"\xca\xfe\xba\xbe";
@@ -33,6 +34,16 @@ pub enum Error {
     Fat(String),
     #[error("the kernelcache's SHA-256 is {got}, not the pinned {expected}")]
     Pin { got: String, expected: String },
+    #[error("{0} has no IM4P pins this reads")]
+    NoPins(String),
+    #[error("{member}: the payload is {got_len} bytes with SHA-256 {got}, pinned {expected_len} bytes with {expected}")]
+    Payload {
+        member: String,
+        got_len: u64,
+        got: String,
+        expected_len: u64,
+        expected: String,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -51,6 +62,39 @@ pub fn payload(im4p: &[u8], fourcc: [u8; 4], manifest_digest: Option<&[u8; 48]>)
     } else {
         Ok(payload.data().to_vec())
     }
+}
+
+/// A member's decoded payload, for a kernelcache its arm64 slice, refused unless the IM4P is the build manifest's and
+/// the payload is the one the member's catalog pins give.
+pub fn member_payload(im4p: &[u8], member: &Member) -> Result<Vec<u8>> {
+    let pins = member
+        .im4p
+        .as_ref()
+        .ok_or_else(|| Error::NoPins(member.member.clone()))?;
+    let fourcc: [u8; 4] = pins
+        .fourcc
+        .as_bytes()
+        .try_into()
+        .map_err(|_| Error::NoPins(member.member.clone()))?;
+    let payload = if &fourcc == b"krnl" {
+        if Sha384::digest(im4p).as_slice() != member.manifest_digest.0.as_slice() {
+            return Err(Error::ManifestDigest);
+        }
+        arm64(lzfse(&open(im4p, fourcc)?)?)?
+    } else {
+        payload(im4p, fourcc, Some(&member.manifest_digest.0))?
+    };
+    let got = Sha256::digest(&payload);
+    if payload.len() as u64 != pins.payload_size || got.as_slice() != pins.payload_sha256.0.as_slice() {
+        return Err(Error::Payload {
+            member: member.member.clone(),
+            got_len: payload.len() as u64,
+            got: hex::encode(got),
+            expected_len: pins.payload_size,
+            expected: pins.payload_sha256.to_string(),
+        });
+    }
+    Ok(payload)
 }
 
 /// The kernelcache's LZFSE-decoded payload, reduced to its arm64 slice if it is fat, once it hashes to `pin`.

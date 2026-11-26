@@ -5,10 +5,10 @@
 //! the kernel window.
 //!
 //! The steps, as boot/defs.bzl orders them: prelink, the launchd catalogue, `installd`, the ADT's finish, the trust
-//! bundle, the kernel window, `bl33.bin`. Which of them run, and on what, is the record's data and the bundle's files.
+//! bundle, the kernel window, `bl33.bin`. Which of them run, and on what, is the build's catalog record and the
+//! bundle's files.
 
 mod assets;
-mod record;
 mod steps;
 
 #[cfg(test)]
@@ -18,19 +18,19 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 pub use assets::Assets;
-pub use record::{LaunchdPins, ManifestDigests, Prelink, Record};
+use switch_catalog::Build;
 
 /// Where Apple's launchd catalogue is on the OS volume, and where the overlay puts ours.
 pub const LAUNCHD_CATALOG: &str = "/System/Library/xpc/launchd.plist";
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("the build's record: {0}")]
-    Record(String),
     #[error("the boot assets are {assets}'s, not {record}'s")]
     AssetsForAnotherBuild { assets: String, record: String },
     #[error("the boot assets: {0}")]
     Assets(String),
+    #[error(transparent)]
+    Catalog(#[from] switch_catalog::Error),
     #[error("the IPSW's files: {0}")]
     Members(&'static str),
     #[error("IM4P: {0}")]
@@ -64,7 +64,7 @@ pub struct Members<'a> {
     pub installd: &'a [u8],
     /// `/System/Library/CoreServices/SystemVersion.plist`.
     pub system_version: &'a [u8],
-    /// Given exactly when the record pins it.
+    /// Given exactly when the build runs the launchd_catalog step.
     pub launchd_catalog: Option<LaunchdCatalog<'a>>,
 }
 
@@ -91,23 +91,23 @@ fn overlay(path: &str) -> String {
     format!("overlay{path}")
 }
 
-/// The boot entry for `record`'s build. The prelink, the longest step, runs beside the others until the window
-/// needs the kernel.
-pub fn boot_files(record: &Record, assets: &Assets, members: &Members) -> Result<Package, Error> {
-    assets.check(record)?;
+/// The boot entry for `build`. The prelink, the longest step, runs beside the others until the window needs the
+/// kernel.
+pub fn boot_files(build: &Build, assets: &Assets, members: &Members) -> Result<Package, Error> {
+    assets.check(build)?;
     let (kernel, rest) = rayon::join(
-        || steps::prelink(record, assets, members.kernelcache),
+        || steps::prelink(build, assets, members.kernelcache),
         || -> Result<_, Error> {
-            let apple = steps::apple(record, members)?;
-            let launchd = steps::launchd(record, assets, members.launchd_catalog.as_ref())?;
-            let installd = switch_installd::prepare(members.installd, members.system_version, &record.build)?;
-            let adt = steps::adt(record, assets, &apple, launchd.as_ref())?;
+            let apple = steps::apple(build, members)?;
+            let launchd = steps::launchd(build, assets, members.launchd_catalog.as_ref())?;
+            let installd = switch_installd::prepare(members.installd, members.system_version, build.build())?;
+            let adt = steps::adt(build, assets, &apple, launchd.as_ref())?;
             let trust = steps::trust(assets, &apple, launchd.as_ref(), installd.cdhash)?;
             Ok((launchd, installd, adt, trust))
         },
     );
     let (launchd, installd, adt, trust) = rest?;
-    let bl33 = steps::bl33(record, assets, &kernel?, &adt, &trust)?;
+    let bl33 = steps::bl33(build, assets, &kernel?, &adt, &trust)?;
 
     let mut files: BTreeMap<String, Vec<u8>> = assets
         .under(assets::TREE)

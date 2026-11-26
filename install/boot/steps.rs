@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Each of `//boot:package`'s steps that the installer runs, on the record's data, the bundle's files and the IPSW's.
+//! Each of `//boot:package`'s steps that the installer runs, on the build's catalog record, the bundle's files and the
+//! IPSW's.
 
 use switch_adt::{Finish, TrustModules};
+use switch_catalog::{Build, Prelink, Role};
 use switch_prelink::{FilesetInputs, Inputs17, load_sites, prelink_17, prelink_fileset};
 use switch_window::{Boot, Bundle, Inputs, Kind};
 
 use crate::assets::{self as member, Assets};
-use crate::record::{Prelink, Record, digest};
 use crate::{Error, LaunchdCatalog, Members};
 
-/// The IPSW's IM4P payloads but the kernelcache, each checked against the build manifest's digest of its IM4P.
+/// The IPSW's IM4P payloads but the kernelcache, each checked against its catalog pins.
 pub struct Apple {
     pub device_tree: Vec<u8>,
     pub static_trust: Vec<u8>,
@@ -17,47 +18,28 @@ pub struct Apple {
     pub app_trust: Vec<u8>,
 }
 
-pub fn apple(record: &Record, members: &Members) -> Result<Apple, Error> {
-    let digests = &record.manifest_digests;
-    let payload = |im4p: &[u8], fourcc: &[u8; 4], what: &str, hex: &str| -> Result<Vec<u8>, Error> {
-        Ok(switch_img4::payload(im4p, *fourcc, Some(&digest::<48>(what, hex)?))?)
-    };
+pub fn apple(build: &Build, members: &Members) -> Result<Apple, Error> {
+    let payload = |im4p: &[u8], role: Role| switch_img4::member_payload(im4p, build.member(role));
     Ok(Apple {
-        device_tree: payload(members.device_tree, b"dtre", "device_tree", &digests.device_tree)?,
-        static_trust: payload(
-            members.static_trust_cache,
-            b"trst",
-            "static_trust_cache",
-            &digests.static_trust_cache,
-        )?,
-        system_trust: payload(
-            members.system_cryptex_trust_cache,
-            b"trcs",
-            "system_cryptex_trust_cache",
-            &digests.system_cryptex_trust_cache,
-        )?,
-        app_trust: payload(
-            members.app_cryptex_trust_cache,
-            b"trca",
-            "app_cryptex_trust_cache",
-            &digests.app_cryptex_trust_cache,
-        )?,
+        device_tree: payload(members.device_tree, Role::DeviceTree)?,
+        static_trust: payload(members.static_trust_cache, Role::StaticTrustCache)?,
+        system_trust: payload(members.system_cryptex_trust_cache, Role::SystemCryptexTrustCache)?,
+        app_trust: payload(members.app_cryptex_trust_cache, Role::AppCryptexTrustCache)?,
     })
 }
 
-/// The kernelcache's kexts prelinked into the release's kernel, the way the record names.
-pub fn prelink(record: &Record, assets: &Assets, kernelcache_im4p: &[u8]) -> Result<Vec<u8>, Error> {
-    let pin = digest::<32>("kernelcache_sha256", &record.kernelcache_sha256)?;
-    let kernelcache = switch_img4::kernelcache(kernelcache_im4p, &pin)?;
+/// The kernelcache's kexts prelinked into the release's kernel, the way the build's prelink step names.
+pub fn prelink(build: &Build, assets: &Assets, kernelcache_im4p: &[u8]) -> Result<Vec<u8>, Error> {
+    let kernelcache = switch_img4::member_payload(kernelcache_im4p, build.member(Role::Kernelcache))?;
     let kernel = assets.file(member::KERNEL)?;
     let sites: Vec<&[u8]> = assets.under(member::SITES).map(|(_, table)| table).collect();
-    Ok(match record.prelink {
+    Ok(match build.steps.prelink {
         Prelink::Native => {
             let inputs = Inputs17::new(
                 assets.file(member::PRELINK_OPTIONS)?,
                 assets.file(member::PRELINK_PREVIOUS)?,
                 assets.file(member::PRELINK_INHERITED)?,
-                load_sites(&sites, &record.build)?,
+                load_sites(&sites, build.build())?,
             )?;
             prelink_17(kernel, &kernelcache, &inputs)?
         }
@@ -72,13 +54,13 @@ pub fn prelink(record: &Record, assets: &Assets, kernelcache_im4p: &[u8]) -> Res
     })
 }
 
-/// Apple's launchd catalogue with the project's jobs, for a build whose record pins the catalogue.
+/// Apple's launchd catalogue with the project's jobs, for a build that runs the launchd_catalog step.
 pub fn launchd(
-    record: &Record,
+    build: &Build,
     assets: &Assets,
     given: Option<&LaunchdCatalog>,
 ) -> Result<Option<switch_launchd::Catalog>, Error> {
-    match (&record.launchd_catalog, given) {
+    match (build.launchd_catalog(), given) {
         (None, None) => Ok(None),
         (Some(pins), Some(given)) => {
             let jobs = switch_launchd::Jobs::parse(
@@ -86,14 +68,15 @@ pub fn launchd(
                 assets.file(member::APPS_JOB)?,
                 assets.file(member::SDWAKE_JOB)?,
             )?;
+            let (catalog_sha256, signature_sha256) = (pins.sha256.to_string(), pins.signature_sha256.to_string());
             let pins = switch_launchd::Pins {
-                catalog_sha256: &pins.sha256,
-                signature_sha256: &pins.signature_sha256,
+                catalog_sha256: &catalog_sha256,
+                signature_sha256: &signature_sha256,
             };
             Ok(Some(switch_launchd::build(given.plist, given.signature, &pins, &jobs)?))
         }
         (Some(_), None) => Err(Error::Members(
-            "the record pins Apple's launchd catalogue, and none is given",
+            "the build pins Apple's launchd catalogue, and none is given",
         )),
         (None, Some(_)) => Err(Error::Members(
             "a launchd catalogue is given for a build that pins none",
@@ -103,7 +86,7 @@ pub fn launchd(
 
 /// The release's base ADT given the IPSW's iPad identity and the build's /chosen entries (adt_edit.py finish).
 pub fn adt(
-    record: &Record,
+    build: &Build,
     assets: &Assets,
     apple: &Apple,
     launchd: Option<&switch_launchd::Catalog>,
@@ -116,8 +99,8 @@ pub fn adt(
         .collect();
     let pretranslated: Vec<&[u8]> = assets.get(member::PRETRANSLATED_OS).into_iter().collect();
     let finish = Finish {
-        root_volume_uuid: &record.os_volume_uuid,
-        boot_manifest_hash: record.boot_manifest_hash,
+        root_volume_uuid: &build.record.volumes.os_volume_uuid,
+        boot_manifest_hash: build.steps.boot_manifest_hash,
         launchd_catalog_sha256: launchd.map(|c| &c.digest),
         a64x_cache_pretranslated: assets.get(member::PRETRANSLATED_CACHE_LIST),
         trust_modules: TrustModules {
@@ -164,7 +147,7 @@ pub fn trust(
 }
 
 /// The kernel window, staged into bl33.bin past the release's U-Boot, script, loader, exporter and DTB.
-pub fn bl33(record: &Record, assets: &Assets, kernel: &[u8], adt: &[u8], trust: &[u8]) -> Result<Vec<u8>, Error> {
+pub fn bl33(build: &Build, assets: &Assets, kernel: &[u8], adt: &[u8], trust: &[u8]) -> Result<Vec<u8>, Error> {
     let boot_args = std::str::from_utf8(assets.file(member::BOOT_ARGS)?)
         .map_err(|_| Error::Assets(format!("{} is not UTF-8", member::BOOT_ARGS)))?;
     let inputs = Inputs {
@@ -174,10 +157,10 @@ pub fn bl33(record: &Record, assets: &Assets, kernel: &[u8], adt: &[u8], trust: 
         data_seed: assets.file(member::DATA_SEED)?,
         command_line: boot_args.trim_end_matches('\n'),
         kind: Kind {
-            name: &record.build,
-            virt_base: record.virt_base()?,
-            root_volume_uuid: &record.os_volume_uuid,
-            boot_manifest_hash: record.boot_manifest_hash,
+            name: build.build(),
+            virt_base: build.record.derived.kernel_virt_base,
+            root_volume_uuid: &build.record.volumes.os_volume_uuid,
+            boot_manifest_hash: build.steps.boot_manifest_hash,
         },
     };
     let window = switch_window::window(&switch_window::layout(&inputs)?)?;

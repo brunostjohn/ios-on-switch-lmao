@@ -4,7 +4,9 @@ use image4::payload::ComprInfo;
 use image4::{PayloadRef, Tag};
 use sha2::{Digest, Sha256, Sha384};
 
-use crate::{Error, device_tree, kernelcache, payload};
+use switch_catalog::{Digest as Pin, Im4p, Member};
+
+use crate::{Error, device_tree, kernelcache, member_payload, payload};
 
 const ARM64: u32 = 0x0100_000c;
 const X86_64: u32 = 0x0100_0007;
@@ -140,4 +142,57 @@ fn a_thin_kernelcache_is_kept_whole_and_checked_against_its_pin() {
     let im4p = im4p(b"krnl", &lzfse(&image), lzfse_info(image.len()));
     assert!(kernelcache(&im4p, &sha256(&image)).unwrap() == image);
     assert!(matches!(kernelcache(&im4p, &[0; 32]), Err(Error::Pin { .. })));
+}
+
+fn pins(im4p: &[u8], fourcc: &str, payload: &[u8]) -> Member {
+    let mut digest = [0u8; 48];
+    digest.copy_from_slice(&Sha384::digest(im4p));
+    Member {
+        member: "Firmware/test.im4p".into(),
+        component: "Test".into(),
+        offset: 0,
+        stored_size: 0,
+        size: im4p.len() as u64,
+        sha256: Pin([0; 32]),
+        content_sha256: Pin(sha256(im4p)),
+        deflated: true,
+        manifest_digest: Pin(digest),
+        aea: None,
+        container: None,
+        im4p: Some(Im4p {
+            fourcc: fourcc.into(),
+            payload_size: payload.len() as u64,
+            payload_sha256: Pin(sha256(payload)),
+        }),
+    }
+}
+
+#[test]
+fn a_member_s_payload_is_checked_against_its_catalog_pins() {
+    let data = sample();
+    let im4p = im4p(b"dtre", &lzfse(&data), lzfse_info(data.len()));
+    assert!(member_payload(&im4p, &pins(&im4p, "dtre", &data)).unwrap() == data);
+
+    let mut other = data.clone();
+    other[7] ^= 1;
+    let error = member_payload(&im4p, &pins(&im4p, "dtre", &other)).unwrap_err();
+    assert!(matches!(error, Error::Payload { .. }), "{error}");
+    let error = member_payload(&im4p, &pins(&im4p, "trst", &data)).unwrap_err();
+    assert!(matches!(error, Error::Fourcc { .. }), "{error}");
+    let mut wrong = pins(&im4p, "dtre", &data);
+    wrong.manifest_digest.0[0] ^= 1;
+    assert!(matches!(member_payload(&im4p, &wrong), Err(Error::ManifestDigest)));
+    wrong.im4p = None;
+    assert!(matches!(member_payload(&im4p, &wrong), Err(Error::NoPins(_))));
+}
+
+#[test]
+fn a_kernelcache_member_gives_its_arm64_slice_against_its_digest() {
+    let slice = b"\xcf\xfa\xed\xfe the arm64 kernel";
+    let image = fat(&[(X86_64, b"\xcf\xfa\xed\xfe x86_64"), (ARM64, slice)]);
+    let im4p = im4p(b"krnl", &lzfse(&image), lzfse_info(image.len()));
+    assert_eq!(member_payload(&im4p, &pins(&im4p, "krnl", slice)).unwrap(), slice);
+    let mut wrong = pins(&im4p, "krnl", slice);
+    wrong.manifest_digest.0[47] ^= 1;
+    assert!(matches!(member_payload(&im4p, &wrong), Err(Error::ManifestDigest)));
 }
