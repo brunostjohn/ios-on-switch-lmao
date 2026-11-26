@@ -16,5 +16,24 @@ class KernelLogTest(unittest.TestCase):
         self.assertEqual(report.kernel_log(ring), [f'[    16.873000] {text}'])
 
 
+    def test_text_after_a_message_that_starts_with_a_newline_takes_the_stamp_before_it(self):
+        ring = (
+            b'[    10.000000]: tcp listen: x\nso_gencnt: 62 SwitchBootPrefetch: 0 MiB paged in ahead\n'
+            b'[    10.500000]: next\n'
+        )
+        self.assertEqual(
+            report.kernel_log(ring),
+            [
+                '[    10.000000] so_gencnt: 62 SwitchBootPrefetch: 0 MiB paged in ahead',
+                '[    10.000000] tcp listen: x',
+                '[    10.500000] next',
+            ],
+        )
+
+    def test_a_wrapped_ring_drops_the_partial_line_before_its_first_stamp(self):
+        ring = b'half a line\n[     3.000000]: whole\n'
+        self.assertEqual(report.kernel_log(ring), ['[     3.000000] whole'])
+
+
 if __name__ == '__main__':
     unittest.main()

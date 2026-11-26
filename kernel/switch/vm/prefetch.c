@@ -136,8 +136,6 @@ static void switch_prefetch_diag_tick(thread_call_param_t p0 __unused, thread_ca
         r_mib, u_mib, x_mib, l_mib, b_mib, d_cx + d_root + d_data, d_cx, d_root, d_data, replay_ms, demand_ms,
         replay_gt64k, replay_reqs, demand_gt64k, demand_reqs);
 #if CONFIG_IOSCHED
-    /* Its own line: as three more fields of the line above (about 270 formatted characters) the message never reached
-     * the kernel log, with no error. */
     os_log(OS_LOG_DEFAULT, "SwitchBootPrefetch: busy-page raises requested %llu delivered %llu refused %llu",
            (unsigned long long)__atomic_load_n(&switch_reprio_requested, __ATOMIC_RELAXED),
            (unsigned long long)__atomic_load_n(&switch_reprio_delivered, __ATOMIC_RELAXED),
