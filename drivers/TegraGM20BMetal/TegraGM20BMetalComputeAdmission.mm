@@ -113,24 +113,24 @@ bool readsStandIn(const gm20b::PackKernelEntry &x, SwitchMetalTexture *t, bool w
            entryView(x, *t->_raw.standIn) == gm20b::SlotView::Own;
 }
 
-// `standIn`: the dispatch reads the texture through its stand-in, drawn from texels a write leaves stale
-gm20b::KernelUse textureUse(SwitchMetalTexture *t, bool writes, bool standIn)
+// `standIn`: the dispatch reads the texture through its stand-in, drawn from texels a write leaves stale. A two-plane
+// texture over pools (xr_pools.h) is a use a plane: its kernels read and store both pools, which need not lie side by side
+void addTextureUses(SwitchMetalTexture *t, bool writes, bool standIn, std::vector<gm20b::KernelUse> &uses)
 {
+    const void *object = (__bridge const void *)t;
     if (gm20b::xrPlanesPooled(t->_raw)) {
-        gm20b::ByteSpan span = gm20b::kernelTextureSpan(*t->_raw.luma);
-        if (t->_raw.chroma && !t->_raw.chroma->memoryless) {
-            const gm20b::ByteSpan alpha = gm20b::kernelTextureSpan(*t->_raw.chroma);
-            const uint64_t lo = std::min(span.va, alpha.va);
-            const uint64_t hi = std::max(span.va + span.bytes, alpha.va + alpha.bytes);
-            span = {lo, hi - lo};
-        }
-        return {(__bridge const void *)t, span, true, writes, standIn};
+        uses.push_back({object, gm20b::kernelTextureSpan(*t->_raw.luma), true, writes, standIn});
+        if (t->_raw.chroma && !t->_raw.chroma->memoryless)
+            uses.push_back({object, gm20b::kernelTextureSpan(*t->_raw.chroma), true, writes, standIn});
+        return;
     }
-    if (const gm20b::TexelRows *rows = t->_raw.texelRows)  // its texels lie in its surface's image (texel_rows.h)
-        return {(__bridge const void *)t, {rows->import->bo.va, rows->import->layout.bytes}, true, writes, standIn};
+    if (const gm20b::TexelRows *rows = t->_raw.texelRows) {  // its texels lie in its surface's image (texel_rows.h)
+        uses.push_back({object, {rows->import->bo.va, rows->import->layout.bytes}, true, writes, standIn});
+        return;
+    }
     const gm20b::KernelTextureForm form = gm20b::kernelTextureForm(t->_raw, standIn);
-    return {(__bridge const void *)t, gm20b::kernelTextureSpan(t->_raw), form == gm20b::KernelTextureForm::Shadow,
-            writes, standIn};
+    uses.push_back(
+        {object, gm20b::kernelTextureSpan(t->_raw), form == gm20b::KernelTextureForm::Shadow, writes, standIn});
 }
 
 gm20b::KernelUse bufferUse(SwitchMetalBuffer *b, uint64_t offset, bool writes)
@@ -161,7 +161,7 @@ void kernelUses(SwitchMetalCommandBuffer *cb, size_t at, std::vector<gm20b::Kern
             if ((e.kind == gm20b::KernelTexture || e.kind == gm20b::KernelTexturePlane) &&
                 gm20b::kernelTextureSlot(e) < 31 && textures[gm20b::kernelTextureSlot(e)]) {
                 SwitchMetalTexture *t = (__bridge SwitchMetalTexture *)textures[gm20b::kernelTextureSlot(e)];
-                uses.push_back(textureUse(t, writes, readsStandIn(e, t, writes)));
+                addTextureUses(t, writes, readsStandIn(e, t, writes), uses);
             } else if (e.kind == gm20b::KernelBuffer && e.slot < 31 &&
                        bindings[e.slot].source == gm20b::BufferBinding::Source::Buffer && bindings[e.slot].object)
                 uses.push_back(
@@ -176,7 +176,7 @@ void kernelUses(SwitchMetalCommandBuffer *cb, size_t at, std::vector<gm20b::Kern
         const bool writes = control.value & MTLResourceUsageWrite;
         if ([resource isKindOfClass:[SwitchMetalTexture class]]) {
             SwitchMetalTexture *t = (SwitchMetalTexture *)resource;
-            uses.push_back(textureUse(t, writes, !writes && t->_raw.standIn));
+            addTextureUses(t, writes, !writes && t->_raw.standIn, uses);
         } else if (SwitchMetalBuffer *buffer = cpuBufferOfResource(resource))
             uses.push_back(bufferUse(buffer, 0, writes));
     }

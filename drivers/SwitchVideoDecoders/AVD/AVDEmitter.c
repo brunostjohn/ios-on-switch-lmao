@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // See AVDEmitter.h.
 #include "AVDEmitter.h"
+#include "AVDDecoder.h"
 #include <mach/mach_time.h>
 #include <pthread.h>
 #include <stdatomic.h>
@@ -40,7 +41,7 @@ struct AVDEmitter {
     uint64_t frameBegan, pushed, emittedThrough;
     Output *live, *head, *tail;
     pthread_t drainer;
-    uint32_t draining, errors;
+    uint32_t draining, errors, errorsLogged;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     uint32_t waits[AVD_ROUTE_ROOM_WAITS + 1], inFlight, inFlightMax;
     uint64_t latencyTicks, latencyCount;
@@ -194,6 +195,13 @@ void avd_emitter_completed(void *emitter, uint32_t fence, int result, uint32_t e
     AVDEmitter *e = emitter;
     const OSStatus status = statusOf(result, error_status, mbs_correct);
     pthread_mutex_lock(&e->lock);
+    // NVDEC's own reading of a picture it could not decode: its error bits and how many macroblocks (CTBs for HEVC) it
+    // decoded before them, which places a bitstream fault in the picture; the first few of a session
+    if (error_status && e->errorsLogged < 3) {
+        e->errorsLogged++;
+        os_log_error(gAVDLog, "AVD: picture of fence %u: NVDEC error %#x, %u macroblocks decoded correctly", fence,
+                     error_status, mbs_correct);
+    }
     Job *job = findJob(e, fence);
     if (job && !job->done) {
         markDone(e, job, status);

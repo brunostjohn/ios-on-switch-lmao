@@ -233,7 +233,7 @@ TEST(Host1xSubmitShape, EveryEngineBuildsItsJobsInTheArena)
         {"../../TegraNVENC/TegraNVENC.cpp", "int run(",
          "switch_host1x_job_begin(TEGRA_HOST1X_CHANNEL_NVENC, kWords, &words)",
          "switch_host1x_job_submit(TEGRA_HOST1X_CHANNEL_NVENC, words + first, n - first, gSyncpt, gBase + job)"},
-        {"../../TegraNVJPG/TegraNVJPG.cpp", "int tegra_nvjpg_run(",
+        {"../../TegraNVJPG/TegraNVJPGFlight.cpp", "int tegra_nvjpg_start(",
          "switch_host1x_job_begin(TEGRA_HOST1X_CHANNEL_NVJPG, 1 + 3 * 11 + 1, &words)",
          "switch_host1x_job_submit(TEGRA_HOST1X_CHANNEL_NVJPG, words, n, gSyncpt, fence)"},
     };
@@ -247,7 +247,8 @@ TEST(Host1xSubmitShape, EveryEngineBuildsItsJobsInTheArena)
     }
     for (const char *source :
          {"../../TegraNVDEC/SwitchNVDECJobs.cpp", "../../TegraNVDEC/TegraNVDEC.cpp", "../../TegraVIC/SwitchVICJobs.cpp",
-          "../../TegraVIC/TegraVIC.cpp", "../../TegraNVENC/TegraNVENC.cpp", "../../TegraNVJPG/TegraNVJPG.cpp"})
+          "../../TegraVIC/TegraVIC.cpp", "../../TegraNVENC/TegraNVENC.cpp", "../../TegraNVJPG/TegraNVJPG.cpp",
+          "../../TegraNVJPG/TegraNVJPGFlight.cpp"})
         EXPECT_THAT(SourceText(source), testing::Not(testing::HasSubstr("tegra_host1x_submit")))
             << source << ": every stream has its fence";
 }

@@ -16,10 +16,10 @@ import Metal
 /// as a one-sample draw of its value reads, tolerance 0, through a compute kernel (GPU.texels; an M4 Max: every sample
 /// of every case) and through a fragment pass (texel_read), and the two reads of each one-sample texture must agree:
 /// where they differ, a readback is broken, so no format is excused. Per case f<format>_x<n>_off texels not Apple's,
-/// _far past one code, _max the largest difference, _samples_off samples off through the kernel,
-/// _samples_off_fragment through the pass, _routes_differ texels the two read differently, _compute_refused=1 where
-/// the kernel could not read the format (SampleRouteReadings); their totals, compute_refused_total and far_total;
-/// every command buffer raw, failed_cbs=0.
+/// _far past one code, _max the largest difference, _samples_off samples off through the kernel, _samples_off_fragment
+/// through the pass, _routes_differ texels the two read differently, _first_differ the first of them (its bytes, both
+/// reads, the stored sample's read), _compute_refused=1 where the kernel could not read the format
+/// (SampleRouteReadings); their totals, compute_refused_total and far_total; every command buffer raw, failed_cbs=0.
 struct StandInResolveTest: HWTest {
     let id = "gpu.gm20b.standin_ms_resolve"
     let name =
@@ -81,7 +81,8 @@ struct StandInResolveTest: HWTest {
         checks.append(FailedCounts.judged(before: before, after: counted, own: gpu.paths, &metrics))
         let kept: Set = [
             "far_total", "samples_off_total", "samples_off_fragment_total", "routes_differ_total",
-            "compute_refused_total", "paths", "failed_cbs",
+            "compute_refused_total", "paths", "failed_cbs", "f11_x2_first_differ", "f553_x2_first_differ",
+            "f555_x2_first_differ",
         ]
         metrics.fitLog(within: 720, keeping: kept)
         return .judged(checks, metrics, proof: gpu.proof)

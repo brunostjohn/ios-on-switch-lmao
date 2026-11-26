@@ -328,6 +328,8 @@ TESTS: dict[str, bool] = {
             'gpu.heap.border_table_full',
             'gpu.gm20b.xr_srgb',
             'gpu.gm20b.xr_srgb_alpha',
+            'gpu.gm20b.xr_beside_native',
+            'gpu.gm20b.argb8_srgb_forms',
             'gpu.gm20b.compute_invalid',
             'gpu.gm20b.fill_shapes',
             'gpu.gm20b.word_mipmaps',
@@ -552,6 +554,8 @@ TESTS: dict[str, bool] = {
     'gpu.x1.vic_luma': False,
     'gpu.x1.vic_gamut': False,
     'gpu.x1.vic_tags': False,
+    'image.nvjpg_copy_guard': False,
+    'image.nvjpg_tile_probe': False,
     'audio.playback_16k': False,
     'audio.playback_44k': False,
     'audio.playback_48k': False,
@@ -780,6 +784,11 @@ OPEN: dict[str, str] = {
     'gpu.frame.record_cost': (
         "the frame CPU plan's targets (about 1.2 ms a home-screen frame across both threads) are met only once the "
         'encode ahead per pass and the per-draw constant buffer slots are built'
+    ),
+    'gpu.gm20b.storage_forms': (
+        "accepted 26 Nov (no frame time traded for a code): GM20B has no tile memory, so a fetching pass reads its "
+        "target's codes where an M4 Max holds halves; 19:18: BGR5A1 blue 1 code off at 1 triangle and 3 at 2 (the "
+        "case triples what it reads), 4x BGRA8Unorm_sRGB 1 code at 2 triangles, every other case exact"
     ),
     'gpu.gm20b.plain_rows_quarter_turns': (
         "an M4 Max stores a quarter-turned pass's frame tiles concurrently: no fixed order fits the rows it keeps "

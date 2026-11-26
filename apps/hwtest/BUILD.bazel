@@ -147,6 +147,7 @@ swift_test(
     deps = [
         ":core",
         ":gpu",
+        ":gpu_forms",
         ":gpu_models",
         ":gpu_scenes",
         ":gpu_x1",

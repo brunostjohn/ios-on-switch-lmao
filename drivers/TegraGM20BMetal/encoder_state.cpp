@@ -142,7 +142,7 @@ bool RenderEncoder::writeClipControl(Push &p, const Pipeline &pl, const Raster &
     }
     // Metal's draws store each depth within its bounds (depth_bounds.h) through the pixel clamp, which a float
     // zeta's clip control (MIN_Z_ZERO_MAX_Z_ONE clear, emit.cpp) and a clamping one leave to the range
-    if (pass_.metalDepth) {
+    if (pass_.metalDraws) {
         const float unit = raster.units == Raster::Units::Unorm24 ? 0x1p-24f : 0x1p-23f;
         const DepthBounds bounds =
             metalDepthBounds(depthClamp_, depthRange_, pl.fragmentDepth,

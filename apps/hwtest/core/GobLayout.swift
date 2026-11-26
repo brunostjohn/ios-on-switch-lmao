@@ -19,6 +19,16 @@ public enum GobLayout {
         return block * (512 << yLog2) + ((y % blockRows) / 8) * 512 + inGob
     }
 
+    /// NIL's Fermi GOB (two 32-byte halves of 8 lines, its 16-byte line order) in blocks of 2^yLog2 GOBs, which a
+    /// decode that took the Fermi layout writes instead of GM20B's Tegra GOBs
+    public static func fermiOffset(_ rowBytes: Int, _ yLog2: Int, _ xB: Int, _ y: Int) -> Int {
+        let lines = [[0x20, 0x30, 0x00, 0x10, 0xe0, 0xf0, 0xc0, 0xd0], [0x40, 0x50, 0x60, 0x70, 0x80, 0x90, 0xa0, 0xb0]]
+        let blockRows = 8 << yLog2
+        let block = (y / blockRows) * (rowBytes / 64) + xB / 64
+        let inGob = ((xB % 64) / 32) * 256 + lines[(xB % 32) / 16][y % 8] + xB % 16
+        return block * (512 << yLog2) + ((y % blockRows) / 8) * 512 + inGob
+    }
+
     public static func blockRows(_ height: Int, _ yLog2: Int) -> Int {
         let block = 8 << yLog2
         return (height + block - 1) / block * block
@@ -28,8 +38,9 @@ public enum GobLayout {
 /// Which arrangement an engine's writes into a surface match, for a read that came out wrong (NVJPG's decode into a
 /// block-linear destination: HW Test gpu.iosurface.cross_process `*_explained`): the picture written each candidate
 /// way, read back through the blocks GM20B decided, against what the read got. Candidates: rows at the surface's
-/// 64-byte pitch, at the bare width and at a 256-byte pitch; GOB blocks of 2^0 to 2^5 GOBs; 16-byte by 16-row tiles.
-/// The answer is `<candidate>:<bytes off>` for the closest, so a near miss is told from no match.
+/// 64-byte pitch, at the bare width and at a 256-byte pitch; GOB blocks of 2^0 to 2^5 GOBs, as GM20B's Tegra GOBs and
+/// as NIL's Fermi GOBs; 16-byte by 16-row tiles. The answer is `<candidate>:<bytes off>` for the closest, so a near
+/// miss is told from no match.
 public enum JpegLayoutGuess {
     /// A 4-byte-texel surface's size and allocation, which bounds the block height GM20B can give it
     public struct Surface {
@@ -58,6 +69,11 @@ public enum JpegLayoutGuess {
         ]
         for yLog2 in 0 ... 5 {
             list.append(Candidate(name: "y\(yLog2)") { xB, y in GobLayout.offset(rowBytes, yLog2, xB, y) })
+        }
+        for yLog2 in 0 ... 5 {
+            list.append(
+                Candidate(name: "fermi_y\(yLog2)") { xB, y in GobLayout.fermiOffset(rowBytes, yLog2, xB, y) }
+            )
         }
         list.append(
             Candidate(name: "tiled16") { xB, y in

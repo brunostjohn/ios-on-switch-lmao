@@ -292,6 +292,9 @@ struct Texture {
     uint64_t imagePitchVa = 0;
     bool surfaceView = false;
     uint32_t surfaceX = 0, surfaceY = 0;
+    // A texture over a surface the kernel laid out block-linear: the stride of the surface's rows as the CPU's lock view
+    // holds them (the pitch it was made at), along which Metal's plane copies run (blit_planes.h planeRunPieces)
+    uint32_t rowsPitch = 0;
     // A texel buffer over a surface the kernel laid out block-linear (texel_rows.h): this texture is a pitch pool of its
     // bytes, which the copy engine fills from the surface's rows and copies back into them
     TexelRows *texelRows = nullptr;

@@ -21,6 +21,11 @@ struct tegra_gm20b_ce_plane {
 struct tegra_gm20b_ce_wait {
 	uint32_t syncpt; /* TEGRA_GM20B_CE_NO_SYNCPT: none */
 	uint32_t threshold;
+	/* `predicated`: the copy runs only while the 64-bit word at the source backing's offset `when` (8-byte aligned,
+	 * pitch-linear source) is not zero when the copy engine reaches it. A producer that is cancelled zeroes it before
+	 * its syncpoint passes, so the copy writes nothing and still completes. */
+	uint32_t predicated;
+	uint64_t when;
 };
 
 struct tegra_gm20b_ce_done {

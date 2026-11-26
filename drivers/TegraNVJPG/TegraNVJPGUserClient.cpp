@@ -53,355 +53,45 @@
 #include "TegraNVJPGRequest.h"
 #include "TegraNVJPGRoute.h"
 #include "TegraNVJPGStats.h"
+#include "TegraNVJPGJobs.h"
 #include "../TegraVIC/SwitchVICDecodeOutput.h"
 #include "../TegraGM20B/TegraGM20BLayout.h"
 
 // TegraGM20B: a surface the GPU left block-linear after its last import (TegraGM20BRecord.h) has its texels moved back
 // to rows first, as that import's release did before the move was deferred: NVJPG reads and writes the pages as rows
 extern "C" void tegra_gm20b_surface_engine_rows(OSObject *surface) __attribute__((weak));
-extern "C" void *tegra_gm20b_surface_hold(uint64_t pa, int *tiled) __attribute__((weak));
-extern "C" void tegra_gm20b_surface_unhold(void *hold) __attribute__((weak));
-extern "C" int tegra_gm20b_surface_layout(uint64_t pa, struct tgm_layout *out) __attribute__((weak));
-extern "C" int tegra_gm20b_surface_compressed(uint64_t pa) __attribute__((weak));
 
-extern "C" {
-vm_offset_t phystokv(uint64_t pa);
-}
-
-class AppleJPEGDriverUserClient;
+using namespace tegra_nvjpg;
 
 namespace {
 constexpr uint32_t kMaxConnections = 1000;    // Apple's limit (newUserClient: opens minus closes >= 1001 refused)
-constexpr uint32_t kQueueMax = 16;            // decodes in flight: each holds a scan slot from its copy to its run
 constexpr uint64_t kSinkBytes = 1ULL << 20;   // MCU padding a plan may write past a destination (15 rows of 64 KiB)
 constexpr uint32_t kHeaderChunk = 128 << 10;  // headers read first (APP segments: EXIF, ICC, XMP)
 constexpr uint32_t kHeaderMax = 4 << 20;      // ... and at most this far, if the first chunk ends before SOS
 constexpr uint64_t kScanMax = 64ULL << 20;    // the longest scan a slot takes: its buffer stays wired for the boot
 
 volatile uint32_t gConnections;
-IOLock *gQueueLock;
-SwitchNVJPGScan gScans[kQueueMax];
-uint32_t gScansFree = (1u << kQueueMax) - 1;  // bit n: gScans[n]; gQueueLock
-
-IOReturn ioreturn(int err)
-{
-    switch (err) {
-    case 0:
-        return kIOReturnSuccess;
-    case -12:
-        return kIOReturnNoMemory;
-    case -22:
-        return kIOReturnBadArgument;
-    case -60:
-        return kIOReturnTimeout;
-    case -19:
-        return kIOReturnNotReady;
-    default:
-        return kIOReturnIOError;
-    }
-}
 
 #if TEGRA_NVJPG_STATS
 // HW Test's image.jpeg_* route: a selector 7 call with kRouteMagic at +0xcac and no source surface answers the
 // caller's TegraNVJPGRouteCounts, through the selector CMPhoto's own decodes use, which the app's sandbox admits where
 // it may deny a registry or sysctl read.
 constexpr uint32_t kRouteMagic = 0x5050;  // 'PP', as TegraGM20BMethodPaths
+// A selector 7 decode with this at +0xcac, the tile mode at +0xcb0 and the block height code at +0xcb4: HW Test's
+// image.nvjpg_tile_probe (TegraNVJPGRoute.h tegra_nvjpg_route_tile_probe)
+constexpr uint32_t kTileProbeMagic = 0x5054;
+// A selector 7 decode with this at +0xcac: HW Test's image.nvjpg_copy_guard, whose copy-engine re-pack launches with its
+// guard 0 (TegraNVJPGRepack.cpp), as a cancelled decode's does: the destination must stay as it was
+constexpr uint32_t kGuardProbeMagic = 0x5047;
+static_assert(sizeof(TegraNVJPGRouteCounts::routes) / sizeof(uint64_t) == TEGRA_NVJPG_ROUTE_COUNT,
+              "a route count for every route");
 #endif
-
-uint32_t gFirstLogged;  // bit n: a decode into TEGRA_NVJPG_OUT_n has been logged (engine thread)
-
-// `why` is a literal: it is the refusal's key as well as its text. `format`: the TEGRA_NVJPG_OUT_* asked for, or
-// TEGRA_NVJPG_OUT_COUNT.
-void refused(const char *why, uint32_t format)
-{
-#if TEGRA_NVJPG_STATS
-    tegra_nvjpg_count_refused(proc_selfpid(), format);
-#else
-    (void)format;
-#endif
-    switch_refusal("TegraNVJPG", why, "decode refused, the caller decodes on the CPU: %s", why);
-}
-
-struct Job {
-    Job *next;
-    AppleJPEGDriverUserClient *client;  // retained by async jobs until their completion is sent
-    TegraVICSurface dst;
-    switch_gpu_backing *backing;
-    SwitchNVJPGScan *scan;  // the scan's copy, the job's alone until the engine has read it
-    TegraNVJPGPlan plan;
-    TegraNVJPGJob engine;
-    uint64_t cpuUs;
-    bool async;
-    OSAsyncReference64 ref;
-    uint64_t context;
-    IOReturn status;
-    uint32_t bytesUsed, cycles;
-    uint64_t engineUs;
-    int pid;
-    bool done;
-
-    union {
-        TegraNVJPGDecodeRequest base;
-        TegraNVJPGDecodeRequestExt ext;
-        TegraNVJPGDecodeRequest2024 v2024;
-    } request;  // the caller's copy, in the job's one allocation
-};
 
 enum RequestKind {
     kSelector1,
     kSelector5,
     kSelector7
 };
-
-Job *gHead, *gTail;
-
-SwitchNVJPGScan *takeScan(uint64_t bytes)
-{
-    IOLockLock(gQueueLock);
-    while (!gScansFree)
-        IOLockSleep(gQueueLock, &gScansFree, THREAD_UNINT);
-    const uint32_t slot = switch_nvjpg_scan_pick(gScans, gScansFree, bytes);
-    gScansFree &= ~(1u << slot);
-    IOLockUnlock(gQueueLock);
-    return &gScans[slot];
-}
-
-void giveScan(Job *job)
-{
-    if (!job->scan)
-        return;
-    IOLockLock(gQueueLock);
-    gScansFree |= 1u << (job->scan - gScans);
-    IOLockWakeup(gQueueLock, &gScansFree, false);
-    IOLockUnlock(gQueueLock);
-    job->scan = nullptr;
-}
-
-void dropJob(Job *job)
-{
-    giveScan(job);
-    if (job->backing)
-        switch_gpu_backing_release(job->backing);
-    tegra_vic_surface_release(&job->dst);
-    IODelete(job, Job, 1);
-}
-
-// The CPU's part of a grey picture into '420f': neutral chroma over the picture's rows, written through the physical
-// aperture of the destination's wired pages, cleaned to DRAM for readers that do not snoop.
-void fillChroma(const TegraNVJPGPlan &p, const uint64_t *addresses, uint32_t pages)
-{
-    const auto fill = [&] {
-        for (uint64_t row = 0; row < p.fillRows; row++) {
-            for (uint64_t at = p.fillStart + row * p.fillPitch, end = at + p.fillRowBytes; at < end;) {
-                const uint32_t page = static_cast<uint32_t>(at >> SWITCH_HW_PAGE_SHIFT);
-                const uint64_t stop = SWITCH_MIN(switch_align_down(at, SWITCH_HW_PAGE_SIZE) + SWITCH_HW_PAGE_SIZE, end);
-                if (page >= pages || !switch_dma_pa_managed(addresses[page]))
-                    return;  // the plan bounded it
-                uint8_t *va = reinterpret_cast<uint8_t *>(phystokv(addresses[page])) + (at & SWITCH_HW_PAGE_MASK);
-                memset(va, 0x80, stop - at);
-                switch_dcache_clean_lines(va, stop - at);
-                at = stop;
-            }
-        }
-    };
-    fill();
-    switch_dcache_sync();
-}
-
-TegraNVJPGSurface surfaceDesc(const TegraVICSurfaceDesc &v)
-{
-    TegraNVJPGSurface d = {};
-    d.fourcc = v.fourcc, d.width = v.width, d.height = v.height, d.planes = v.planes;
-    for (uint32_t i = 0; i < 2; i++) {
-        d.planeOffset[i] = v.planeOffset[i];
-        d.planeBytesPerRow[i] = v.planeBytesPerRow[i];
-        d.planeHeight[i] = v.planeHeight[i];
-    }
-    d.length = v.length;
-    d.protection = v.protection;
-    return d;
-}
-
-// The destination as GM20B laid it out (TegraGM20BTiled.cpp decides once per surface), held until the decode and any
-// re-pack have ended so that no import moves its texels meanwhile. The caller has moved the surface's seed first: a GPU
-// sampler whose first ask comes after this read then finds a written surface and keeps it pitch, instead of tiling in
-// place the rows this decode is writing. NULL with the plan moved onto that layout (TegraNVJPGRoute.h), or why it
-// cannot be written.
-const char *routeJob(Job *job, const SwitchNVJPGBacking &target, void **hold, uint32_t *route)
-{
-    *hold = nullptr;
-    TegraNVJPGDestinationLayout layout = {};
-    if (tegra_gm20b_surface_hold && tegra_gm20b_surface_unhold && tegra_gm20b_surface_layout) {
-        int tiled = 0;
-        *hold = tegra_gm20b_surface_hold(target.pages[0], &tiled);
-        layout.held = tiled != 0;
-        layout.described = layout.held && tegra_gm20b_surface_layout(target.pages[0], &layout.layout) == 1;
-        layout.compressed =
-            layout.described && tegra_gm20b_surface_compressed && tegra_gm20b_surface_compressed(target.pages[0]);
-    }
-    const TegraNVJPGSurface d = surfaceDesc(job->dst.desc);
-    const uint64_t backingBytes =
-        SWITCH_MAX(job->dst.desc.length, static_cast<uint64_t>(target.count) << SWITCH_HW_PAGE_SHIFT);
-    const char *why = tegra_nvjpg_route(&job->request.base, &d, backingBytes, kSinkBytes, kTegraNVJPGOutputBytes,
-                                        job->dst.memory != nullptr, &layout, &job->plan, &job->engine.setup, route);
-#if TEGRA_NVJPG_STATS
-    if (!why)
-        tegra_nvjpg_note_route(*route, layout.held, layout.layout.row_bytes, layout.layout.y_log2, target.count,
-                               &job->engine.setup, job->plan.extent.width, job->plan.extent.height);
-#endif
-    return why;
-}
-
-IOReturn ended(Job *job, int error, const nvjpg_dec_status &status, uint64_t busy)
-{
-    IOReturn ret = ioreturn(error);
-    if (!ret && (status.error_status || !status.bytes_offset))
-        ret = kIOReturnIOError;
-    // AppleJPEGDriver ends its destination's write with IOSurface's device write end, as VIC does: the seed moves, so a
-    // surface a decode wrote never reads as one nothing wrote (TegraGM20BRecord.h) and seed-keyed caches see the picture
-    if (!ret)
-        tegra_vic_surface_written(&job->dst);
-    job->engineUs = busy;
-    job->bytesUsed = status.bytes_offset;
-    job->cycles = status.reserved0;  // the cycle count (DUMP_CYCLE_COUNT)
-    if (ret == kIOReturnIOError && status.error_status) {
-        IOLog("TegraNVJPG: decode error %#x after %u bytes (MCU %u,%u) of a %ux%u picture\n", status.error_status,
-              status.bytes_offset, status.mcu_x, status.mcu_y, static_cast<unsigned>(job->engine.setup.frame_width),
-              static_cast<unsigned>(job->engine.setup.frame_height));
-    }
-    return ret;
-}
-
-// Engine thread: a VIC ('422f'/'444f') or Copy Engine (layout-staged) re-packed decode (TegraNVJPGRepack.h).
-IOReturn runRepack(Job *job)
-{
-    nvjpg_dec_status status = {};
-    uint64_t busy = 0;
-    const char *why = nullptr;
-    const int error = tegra_nvjpg_repack(&job->engine, &job->plan, &job->request.base, &job->dst, job->backing,
-                                         job->scan->address, &status, &busy, &why);
-    if (why) {
-        refused(why, job->plan.target.format);
-        return kIOReturnUnsupported;
-    }
-    if (!error && job->plan.fillChroma && !status.error_status && status.bytes_offset && job->backing) {
-        const SwitchNVJPGBacking target = switch_nvjpg_backing(job->backing);
-        fillChroma(job->plan, target.pages, target.count);
-    }
-    return ended(job, error, status, busy);
-}
-
-// Engine thread: NVJPG straight into the destination's pages.
-IOReturn runDirect(Job *job, const SwitchNVJPGBacking &target, uint32_t extent)
-{
-    const TegraNVJPGPlan &p = job->plan;
-    if (p.target.blockLinear)
-        extent = target.count;
-    const char *why = nullptr;
-    const SwitchNVJPGMapping *mapping = switch_nvjpg_mapping(target, extent, p.writeEnd, &why, job->pid);
-    if (!mapping) {
-        refused(why, p.target.format);
-        return kIOReturnUnsupported;
-    }
-    const uint64_t *addresses = mapping->pages;
-    const uint32_t pages = mapping->count;
-    // NVJPG does not snoop the CPU's caches: no dirty line of the destination may be written back over the picture.
-    switch_dcache_hw_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, addresses, pages);
-    switch_dcache_sync();
-    nvjpg_dec_status status = {};
-    uint64_t busy = 0;
-    job->engine.bitstream = job->scan->address;
-    for (uint32_t i = 0; i < p.planes; i++)
-        job->engine.plane[i] = mapping->address + p.planeStart[i];
-    tegra_nvjpg_lock();
-    const int error = tegra_nvjpg_run(&job->engine, &status, &busy);
-    tegra_nvjpg_unlock();
-    // The CPU may have pulled destination lines in while NVJPG wrote: readers must see DRAM.
-    switch_dcache_hw_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, addresses, pages);
-    switch_dcache_sync();
-    if (!error && p.fillChroma && !status.error_status && status.bytes_offset)
-        fillChroma(p, addresses, pages);
-    return ended(job, error, status, busy);
-}
-
-// Engine thread: one decode. VIC's re-pack writes planar YUV, which GM20B never lays out block-linear, through VIC's
-// own view of the destination.
-IOReturn runJob(Job *job)
-{
-    if (job->plan.repack == TEGRA_NVJPG_REPACK_VIC)
-        return runRepack(job);
-    uint32_t extent = static_cast<uint32_t>(switch_div_round_up(job->dst.desc.length, SWITCH_HW_PAGE_SIZE));
-    const SwitchNVJPGBacking target = switch_nvjpg_backing(job->backing);
-    if (target.count < extent) {
-        refused("destination longer than its backing", job->plan.target.format);
-        return kIOReturnUnsupported;
-    }
-    tegra_vic_surface_written(&job->dst);
-    void *hold = nullptr;
-    uint32_t route = TEGRA_NVJPG_ROUTE_ROWS;
-    const char *why = routeJob(job, target, &hold, &route);
-    IOReturn ret = kIOReturnUnsupported;
-    if (why)
-        refused(why, job->plan.target.format);
-    else
-        ret = job->plan.repack ? runRepack(job) : runDirect(job, target, extent);
-    if (hold)
-        tegra_gm20b_surface_unhold(hold);
-    return ret;
-}
-
-void finish(Job *job);
-
-void engineThread(void *, wait_result_t)
-{
-    for (;;) {
-        IOLockLock(gQueueLock);
-        while (!gHead)
-            IOLockSleep(gQueueLock, &gHead, THREAD_UNINT);
-        Job *job = gHead;
-        gHead = job->next;
-        if (!gHead)
-            gTail = nullptr;
-        IOLockUnlock(gQueueLock);
-        job->status = runJob(job);
-        giveScan(job);
-#if TEGRA_NVJPG_STATS
-        tegra_nvjpg_count_job(job->pid, job->plan.target.format, job->status != 0, job->engineUs, job->cpuUs,
-                              static_cast<uint64_t>(job->plan.extent.width) * job->plan.extent.height,
-                              static_cast<uint64_t>(job->engine.setup.bitstream_size));
-#endif
-        const uint32_t format = 1u << job->plan.target.format;
-        const bool first = (job->status == 0) && (gFirstLogged & format) == 0u;
-        if (first)
-            gFirstLogged |= format;
-        if (first) {
-            IOLog("TegraNVJPG: first hardware decode done: %ux%u to %ux%u (format %u, 1/%u) in %llu us engine (%u "
-                  "cycles), %llu us CPU\n",
-                  static_cast<unsigned>(job->engine.setup.frame_width),
-                  static_cast<unsigned>(job->engine.setup.frame_height), job->plan.extent.width,
-                  job->plan.extent.height, job->plan.target.format, 1u << job->plan.target.scale, job->engineUs,
-                  job->cycles, job->cpuUs);
-        }
-#if TEGRA_NVJPG_STATS
-        tegra_nvjpg_stats_line();
-#endif
-        finish(job);
-    }
-}
-
-void queueJob(Job *job)
-{
-    IOLockLock(gQueueLock);
-    job->next = nullptr;
-    if (gTail) {
-        gTail->next = job;
-    } else {
-        gHead = job;
-    }
-    gTail = job;
-    IOLockWakeup(gQueueLock, &gHead, false);
-    IOLockUnlock(gQueueLock);
-}
 
 // The source: wired for the copy, its headers parsed from a first chunk, the scan copied into a queue slot's buffer
 // (EOI appended when the file has none). The scan runs from the SOS header to EOI or the data's end (the source's size
@@ -517,13 +207,13 @@ public:
 
 OSDefineMetaClassAndStructors(AppleJPEGDriverUserClient, IOUserClient)
 
-    namespace
+    namespace tegra_nvjpg
 {
     void finish(Job * job)
     {
         job->client->finished(job);
     }
-}  // namespace
+}  // namespace tegra_nvjpg
 
 bool AppleJPEGDriverUserClient::setUp(task_t task)
 {
@@ -565,6 +255,14 @@ IOReturn AppleJPEGDriverUserClient::decode(const void *in, uint32_t inSize, void
         return kIOReturnNoMemory;
     memcpy(&job->request, in, inSize);
     const auto *req = &job->request;
+#if TEGRA_NVJPG_STATS
+    if (kind == kSelector7 && req->v2024.rsvdcac == kTileProbeMagic) {
+        job->tileProbe = true;
+        memcpy(&job->tileMode, req->v2024.rsvd, sizeof(job->tileMode));
+        memcpy(&job->tileGob, req->v2024.rsvd + 4, sizeof(job->tileGob));
+    }
+    job->guardProbe = kind == kSelector7 && req->v2024.rsvdcac == kGuardProbeMagic;
+#endif
     const TegraNVJPGDecodeRequest &r = req->base;
     IOReturn ret = kIOReturnSuccess;
     const char *why = nullptr;

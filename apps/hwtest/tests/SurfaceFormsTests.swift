@@ -27,6 +27,7 @@ struct XrTiledSurfaceTest: HWTest {
                 ("xr_tiled_blit_off", r.blitOff),
             ]
             for (key, value) in counts { metrics.set(key, value) }
+            metrics.set("xr_tiled_first", r.first)
             return counts.map { ("\($0.0)=\($0.1)", $0.1 == 0) }
         }
     }

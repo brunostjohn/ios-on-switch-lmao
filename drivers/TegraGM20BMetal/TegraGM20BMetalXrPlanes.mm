@@ -8,7 +8,8 @@
 #include <algorithm>
 #include <cstring>
 
-static_assert(kXrPlanesOverflowTag >= gm20b::kFormatStandInTag + 2 * 8,
+static_assert(kXrPlanesOverflowTag >= gm20b::kFormatStandInTag + 2 * 8 &&
+                  kXrPlanesImageTag + 8 <= gm20b::kFormatStandInTag,
               "an overflow image's tag shares a fixed tag's memory");
 
 bool xrPlanesStorable(MTLTextureDescriptor *d)

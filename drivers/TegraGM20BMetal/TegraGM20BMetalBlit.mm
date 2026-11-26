@@ -52,9 +52,12 @@ const char *planesCopyForm(SwitchMetalTexture *a, NSUInteger sl, MTLOrigin so, M
         (!blitImage(a, uint32_t(sl), image) || !gm20b::imageInUnits(image, unit, from) ||
          !gm20b::unitRegionReadable(from, imageBytes(image), so.x, so.y, size.width, size.height)))
         return "into a texture held through planes, read in its unit past its source's memory";
-    if (fromPlanes &&
-        (!gm20b::planeBytes(s, unit, from) || !gm20b::planeRegionReadable(from, so.x, so.y, size.width, size.height)))
+    if (fromPlanes && !gm20b::planeBytes(s, unit, from))
         return "of a region that reads past the end of its surface's last page";
+    if (fromPlanes && !gm20b::planeRegionReadable(from, so.x, so.y, size.width, size.height))
+        return from.blockLinear ? "of a region whose rows run into bytes a block-linear surface does not lay out (a "
+                                  "row's padding, or past its plane's rows)"
+                                : "of a region that reads past the end of its surface's last page";
     if (intoPlanes &&
         (!gm20b::planeBytes(d, unit, to, true) || dorg.x + size.width > to.width || dorg.y + size.height > to.height))
         return "of a region past a plane's rows";

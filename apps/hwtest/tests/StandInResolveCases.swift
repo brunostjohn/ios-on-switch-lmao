@@ -75,6 +75,14 @@ enum StandInResolveCases {
                 let compute = try await gpu.texels(alone)
                 readings.computeOff += texels.filter { stored[$0 * samples + sample] != compute[$0] }.count
                 readings.routesDiffer += texels.filter { compute[$0] != fragment[$0] }.count
+                if readings.firstDiffer == "-", let at = texels.first(where: { compute[$0] != fragment[$0] }) {
+                    let bytes = try await gpu.read(alone, bytesPerPixel: f.bytes)
+                    let code = bytes[at * f.bytes ..< (at + 1) * f.bytes].map { String(format: "%02x", $0) }.joined()
+                    let sampleRead = stored[at * samples + sample]
+                    readings.firstDiffer =
+                        "t\(at) s\(sample) bytes \(code) compute \(compute[at].x),\(compute[at].w) fragment "
+                            + "\(fragment[at].x),\(fragment[at].w) stored \(sampleRead.x)"
+                }
             } catch {
                 readings.computeRefusal = GPU.describe(error)
             }

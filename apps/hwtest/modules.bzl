@@ -1,6 +1,7 @@
 # Source lists for split Swift modules in //apps/hwtest.
 
 GPU_SRCS = [
+    "gpu/Argb8SrgbForms.swift",
     "gpu/CACorpus.swift",
     "gpu/CAState.swift",
     "gpu/CAStateSweep.swift",
@@ -418,6 +419,8 @@ TESTS_FORMS_SRCS = [
     "tests/XrBlendRoutesGoldens.swift",
     "tests/XrBlendRoutesTest.swift",
     "tests/XrCopyClampTest.swift",
+    "tests/XrBesideNativeTest.swift",
+    "tests/Argb8SrgbFormsTest.swift",
     "tests/XrDescriptorCopiesTests.swift",
     "tests/XrImagesManyTest.swift",
     "tests/XrOverlapRowsTest.swift",
@@ -726,6 +729,8 @@ TESTS_VIDEO_SRCS = [
     "tests/JPEGMappingLifetimeTest.swift",
     "tests/MediaMapCounters.swift",
     "tests/NVENCInputLayoutTest.swift",
+    "tests/NVJPGTileProbeTest.swift",
+    "tests/NVJPGCopyGuardTest.swift",
     "tests/NativeExportTest.swift",
     "tests/PixelTransfer422Test.swift",
     "tests/PixelTransferRouteTest.swift",

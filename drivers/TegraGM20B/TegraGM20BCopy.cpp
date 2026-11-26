@@ -420,7 +420,8 @@ extern "C" int tegra_gm20b_ce_copy_plane_checked(
 	if (!result)
 		result = layout(destination, destinationOffset, rowBytes, rows, to);
 	if (!result && ((from.tiled && to.tiled) || (!from.tiled && src->pitch < rowBytes) ||
-			(!to.tiled && dst->pitch < rowBytes)))
+			(!to.tiled && dst->pitch < rowBytes) ||
+			(wait && wait->predicated && (from.tiled || (wait->when & 7)))))
 		result = -22;
 	const uint64_t sourceBytes =
 		from.tiled ? from.value.bytes : uint64_t(src->pitch) * (rows - 1) + rowBytes;
@@ -448,7 +449,8 @@ extern "C" int tegra_gm20b_ce_copy_plane_checked(
 					   to.tiled ? &to.value : nullptr,
 					   wait ? wait->syncpt : TEGRA_GM20B_CE_NO_SYNCPT,
 					   wait ? wait->threshold : 0,
-					   done ? done->syncpt : TEGRA_GM20B_CE_NO_SYNCPT};
+					   done ? done->syncpt : TEGRA_GM20B_CE_NO_SYNCPT,
+					   wait && wait->predicated ? a->pitch + wait->when : 0};
 		const tgm_push push = {
 			PushVa + slot * Page,
 			tgm_copy_push(queue.space.words + slot * (Page / 4), &copy, nullptr, 0),

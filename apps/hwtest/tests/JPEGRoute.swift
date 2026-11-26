@@ -14,6 +14,22 @@ public enum JPEGRoute {
         /// Requests per TEGRA_NVJPG_OUT_* (formatNames' order), refused and failed ones too.
         public let asked: [UInt64]
         public let outputMaps: UInt64
+        /// Decodes per TEGRA_NVJPG_ROUTE_* (routeNames' order)
+        public let routes: [UInt64]
+        /// Jobs the kernel cancelled at their bound or on a falcon error (TegraNVJPG.cpp cancelled())
+        public let cancelled: UInt64
+    }
+
+    /// TegraNVJPGRoute.h's TEGRA_NVJPG_ROUTE_* order.
+    public static let routeNames = ["rows", "copy_rows", "copy_blocks", "tile_probe"]
+
+    /// The routes taken between two reads, with their counts: "copy_blocks:1"; "-" for none.
+    public static func routes(from first: Counts, to last: Counts) -> String {
+        let named = routeNames.indices.compactMap { index -> String? in
+            let count = Int(truncatingIfNeeded: last.routes[index] &- first.routes[index])
+            return count > 0 ? "\(routeNames[index]):\(count)" : nil
+        }
+        return named.isEmpty ? "-" : named.joined(separator: ",")
     }
 
     /// TegraNVJPGJpeg.h's TEGRA_NVJPG_OUT_* order.
@@ -89,7 +105,13 @@ public enum JPEGRoute {
                     failed: words.load(fromByteOffset: 16, as: UInt64.self),
                     refused: words.load(fromByteOffset: 24, as: UInt64.self),
                     asked: formatNames.indices.map { words.load(fromByteOffset: 32 + 8 * $0, as: UInt64.self) },
-                    outputMaps: words.load(fromByteOffset: 32 + 8 * formatNames.count, as: UInt64.self)
+                    outputMaps: words.load(fromByteOffset: 32 + 8 * formatNames.count, as: UInt64.self),
+                    routes: routeNames.indices.map {
+                        words.load(fromByteOffset: 40 + 8 * formatNames.count + 8 * $0, as: UInt64.self)
+                    },
+                    cancelled: words.load(
+                        fromByteOffset: 40 + 8 * formatNames.count + 8 * routeNames.count, as: UInt64.self
+                    )
                 )
             }
         )

@@ -3962,6 +3962,16 @@ host_test(
     cxx_std = "c++17",
 )
 
+# pack/resolve_srgb.h's one-read sRGB encode against Metal's threshold count, every 12-bit value
+host_test(
+    name = "resolve_srgb_encode_test",
+    srcs = [
+        "resolve_srgb_encode_test.cpp",
+        "//drivers/TegraGM20BMetal:pack/resolve_srgb.h",
+    ],
+    cxx_std = "c++17",
+)
+
 host_test(
     name = "key_test",
     srcs = [
@@ -5939,6 +5949,37 @@ host_test(
         "request_store_key.h",
         "job_methods.h",
         "facade_planar_targets_test.cpp",
+        "translate_absent.cpp",
+        "kernel_model.h",
+        ":librecord_count.dylib",
+    ] + METAL_HOST_HEADERS,
+    copts = [
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+    ] + METAL_HOST_COPTS,
+    cxx_std = "c++17",
+    linkopts = FACADE_LINKOPTS,
+    sanitize = False,
+    deps = [
+        ":facade_plugin_host",
+        ":runtime_plugin_host",
+        "//kits/SwitchRefusal:switch_refusal",
+        "//kits/SwitchGM20BEmit/test:method_checks",
+    ] + METAL_HOST_DEPS,
+)
+
+# A YCbCr target's store passes render a plane's pool image outside the stand-in they read
+host_test(
+    name = "facade_ycbcr_store_backing_test",
+    srcs = [
+        "empty_pack.h",
+        "made_metallib.h",
+        "facade_harness.h",
+        "facade_pass_scene.h",
+        "facade_variant_compiler.h",
+        "job_methods.h",
+        "facade_ycbcr_store_backing_test.cpp",
         "translate_absent.cpp",
         "kernel_model.h",
         ":librecord_count.dylib",

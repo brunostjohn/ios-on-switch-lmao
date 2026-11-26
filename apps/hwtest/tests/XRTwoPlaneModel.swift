@@ -89,19 +89,26 @@ enum XRTwoPlaneModel {
     /// their bits, and the largest such distance in steps
     static func linearApart(
         _ halves: [UInt16], exact: [SIMD4<Double>], fixed: [SIMD4<Double>]
-    ) -> (apart: Int, steps: Int) {
+    ) -> (apart: Int, steps: Int, first: String) {
         let order = { (h: UInt16) in h & 0x8000 != 0 ? -Int(h & 0x7fff) : Int(h) }
         var apart = 0, steps = 0
+        var first = "-"
         for pixel in exact.indices {
             for c in 0 ..< 4 {
                 let a = order(Float16(exact[pixel][c]).bitPattern)
                 let b = order(Float16(fixed[pixel][c]).bitPattern)
                 let got = order(halves[pixel * 4 + c])
                 let distance = max(min(a, b) - got, got - max(a, b), 0)
-                if distance > 1 { apart += 1 }
+                if distance > 1 {
+                    apart += 1
+                    if first == "-" {
+                        first = "p\(pixel) c\(c) got \(Float(Float16(bitPattern: halves[pixel * 4 + c]))) "
+                            + "between \(Float(exact[pixel][c])) and \(Float(fixed[pixel][c]))"
+                    }
+                }
                 steps = max(steps, distance)
             }
         }
-        return (apart, steps)
+        return (apart, steps, first)
     }
 }

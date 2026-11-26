@@ -74,6 +74,26 @@ filegroup(
     ] + glob(["src/**"]),
 )
 
+# The pixel-format tables (metal::format, metal::texel_format): every format's representation, raw twin and conversion.
+# Three tests read upstream profiles this import leaves out (translation_test_inputs holds five), so they are skipped.
+rust_test(
+    name = "format_tables_test",
+    args = [
+        "metal::format::",
+        "metal::texel_format::",
+        "--skip",
+        "bgr10a2_storage_takes_the_rgb10a2_view_where_its_own_format_is_not_stored",
+        "--skip",
+        "mandatory_formats_map_on_every_committed_profile",
+        "--skip",
+        "refused_formats_are_exactly_the_documented_set",
+    ],
+    compile_data = glob(["tests/**"]),
+    crate = ":metal2vulkan",
+    data = ["//third_party/m2v:translation_test_inputs"],
+    deps = ["//third_party/m2v/crates/metal2vulkan-devtools"],
+)
+
 rust_test(
     name = "bound_alignment_test",
     args = [

@@ -738,6 +738,32 @@ TEST_F(SwitchVICJobsTest, ABatchIsGatheredFromWhereItWasWrittenWithItsLastJobsFe
     EXPECT_EQ(publishedWords.size(), 3u * (2 + 3));
 }
 
+// A cancelled producer's queued job renders its background alone (NVJPG's cancelled re-pack): slot 0 goes off in that
+// job's staged configuration, cleaned for VIC, and no other job's changes
+TEST_F(SwitchVICJobsTest, AQueuedJobOfACancelledProducerRendersItsBackgroundAlone)
+{
+    for (auto &job : jobs)
+        TEGRA_VIC_SET(job.config, TEGRA_VIC_SLOTS, SLOT_ENABLE, 1);
+    const SwitchVICOwnership ownership = {uses, 1, nullptr, 0, nullptr, 0};
+    uint32_t first = 0, second = 0;
+    ASSERT_EQ(switch_vic_submit_checked(jobs, 1, nullptr, ownership, nullptr, nullptr, &first), 0);
+    ASSERT_EQ(switch_vic_submit_checked(jobs + 1, 1, nullptr, ownership, nullptr, nullptr, &second), 0);
+    const auto enabled = [&](uint32_t fence) {
+        for (uint32_t i = 0; i < gQueue.count; ++i) {
+            const uint32_t slot = (gQueue.head + i) % SwitchVICQueue::kSlots;
+            if (static_cast<uint32_t>(gQueue.jobs[slot].fence) == fence)
+                return TEGRA_VIC_GET(configurations + uint64_t(slot) * kSwitchVICConfigStride, TEGRA_VIC_SLOTS,
+                                     SLOT_ENABLE);
+        }
+        return uint64_t(~0ull);
+    };
+    ASSERT_EQ(enabled(second), 1u);
+    EXPECT_TRUE(switch_vic_job_background(second));
+    EXPECT_EQ(enabled(second), 0u) << "the cancelled producer's job writes none of its source";
+    EXPECT_EQ(enabled(first), 1u) << "another job keeps its source";
+    EXPECT_FALSE(switch_vic_job_background(second + 7)) << "no job of that fence";
+}
+
 TEST_F(SwitchVICJobsTest, NoArenaRoomSleepsOutsideTheQueueAndOwnershipLocks)
 {
     arenaShort = 1;

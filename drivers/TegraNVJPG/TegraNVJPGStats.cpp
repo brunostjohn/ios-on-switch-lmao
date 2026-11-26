@@ -53,6 +53,22 @@ bool tegra_nvjpg_stats_start(void)
     return gLock != nullptr;
 }
 
+void tegra_nvjpg_count_route(int pid, uint32_t route)
+{
+    IOLockLock(gLock);
+    TegraNVJPGRouteCounts &c = slotOf(pid);
+    if (route < sizeof(c.routes) / sizeof(c.routes[0]))
+        c.routes[route]++;
+    IOLockUnlock(gLock);
+}
+
+void tegra_nvjpg_count_cancelled(int pid)
+{
+    IOLockLock(gLock);
+    slotOf(pid).cancelled++;
+    IOLockUnlock(gLock);
+}
+
 void switch_nvjpg_count_mapping(int pid)
 {
     IOLockLock(gLock);
@@ -133,7 +149,7 @@ void tegra_nvjpg_note_route(uint32_t route, bool held, uint32_t rowBytes, uint32
                             const nvjpg_dec_drv_pic_setup_s *setup, uint32_t width, uint32_t height)
 {
     static uint32_t noted;
-    static const char *const kRoutes[] = {"rows", "blocks", "copy engine into rows", "copy engine into blocks"};
+    static const char *const kRoutes[] = {"rows", "copy engine into rows", "copy engine into blocks", "tile probe"};
     const uint32_t bit = 1u << (route & 31);
     if (!held && (noted & bit))
         return;
@@ -141,7 +157,7 @@ void tegra_nvjpg_note_route(uint32_t route, bool held, uint32_t rowBytes, uint32
     char line[280];
     snprintf(line, sizeof(line),
              "TegraNVJPG: decode by %s: %ux%u into a destination GM20B %s (row bytes %u, y_log2 %u), %u backing pages; "
-             "NVJPG told tile_mode %d block height %d stride %d",
+             "NVJPG told tile mode %d block height %d, its rows %d bytes apart",
              route < sizeof(kRoutes) / sizeof(kRoutes[0]) ? kRoutes[route] : "?", width, height,
              held ? "decided block-linear" : "did not lay out block-linear", rowBytes, yLog2, pages, setup->tile_mode,
              setup->block_linear_height, setup->output_stride_luma);

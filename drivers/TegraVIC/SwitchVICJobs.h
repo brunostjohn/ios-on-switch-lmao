@@ -28,6 +28,10 @@ uint32_t switch_vic_jobs_cancel(uint32_t reached);
 void switch_vic_jobs_recovered(bool ready);
 // Sleep: returns once no cancellation is under way.
 void switch_vic_jobs_settle();
+// The queued job of `fence` (switch_vic_submit_checked's) renders its background alone: slot 0 off in its staged
+// configuration. For a producer cancelled before the syncpoint the job waits on is released: VIC has not read the
+// configuration yet, and then writes no pixel of its source. False: no such job is queued.
+bool switch_vic_job_background(uint32_t fence);
 
 extern "C" int switch_vic_wait(uint32_t fence);
 // switch_gpu_backing_token_filter_status for VIC's tokens (SwitchGpuBacking.h).

@@ -75,7 +75,14 @@ public enum JPEGSurfaceDecode {
     }
 
     /// NVJPG's decode of `file` into `surface` (BGRA, the file's size), or why there is none
-    public static func decode(_ file: Data, into surface: IOSurface) -> TestFailure? {
+    /// `tile`: a debug kernel's tile probe (TegraNVJPGRoute.h tegra_nvjpg_route_tile_probe): NVJPG writes the
+    /// destination's blocks told this tile_mode and block height code
+    /// `magic`: a debug kernel's probe word at +0xcac (TegraNVJPGUserClient.cpp), 0 for none
+    public static func decode(
+        _ file: Data, into surface: IOSurface, tile: (mode: UInt32, gob: UInt32)? = nil, magic: UInt32 = 0
+    )
+        -> TestFailure?
+    {
         guard let sub = subsampling(file) else { return TestFailure("no baseline frame header in the JPEG") }
         let rowBytes = 4096
         let rows = (file.count + rowBytes - 1) / rowBytes
@@ -114,7 +121,8 @@ public enum JPEGSurfaceDecode {
             (0x08, IOSurfaceGetID(unsafeBitCast(surface, to: IOSurfaceRef.self))),
             (0x0c, UInt32(surface.allocationSize)), (0x14, UInt32(surface.width)), (0x18, UInt32(surface.height)),
             (0x2c, sub), (0x4c, UInt32(surface.width)), (0x50, UInt32(surface.height)),
-        ]
+        ] + (tile.map { [(0xcac, UInt32(0x5054)), (0xcb0, $0.mode), (0xcb4, $0.gob)] } ?? [])
+            + (magic != 0 ? [(0xcac, magic)] : [])
         request.withUnsafeMutableBytes { raw in
             for (offset, value) in fields {
                 raw.storeBytes(of: value.littleEndian, toByteOffset: offset, as: UInt32.self)

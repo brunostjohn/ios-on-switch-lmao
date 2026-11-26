@@ -84,8 +84,10 @@ public enum Registry {
     static let gm20bRoutes: [any HWTest] =
         FetchShapeTest.all + [
             DepthFormatMismatchTest.attached, DepthFormatMismatchTest.unattached, HiddenDepthTest(),
-            BorderTableFullTest(), XrSrgbTest.bgr, XrSrgbTest.bgra, ComputeInvalidTest(), FillShapesTest(),
-            WordMipmapsTest(), StencilByteCopiesTest(), KernelYcbcrOnePlaneTest(), KernelConvertedWriteTest(),
+            BorderTableFullTest(), XrSrgbTest.bgr, XrSrgbTest.bgra, XrBesideNativeTest(), Argb8SrgbFormsTest(),
+            ComputeInvalidTest(),
+            FillShapesTest(), WordMipmapsTest(), StencilByteCopiesTest(), KernelYcbcrOnePlaneTest(),
+            KernelConvertedWriteTest(),
             DynamicStridesTest(), ReachShapesTest(), ResolveCodesTest(), ResolveOneSampleSwapTest(),
             SeparateStencilResolveTest(), P3YcbcrStoreTest(), Depth16ShaderTestsTest(), PlanesBlitsTest(),
             IcbComputeFormsTest(), StandInResolveTest(), StandInLayeredTest(), ResolveOtherCountTest(),
@@ -139,13 +141,15 @@ public enum Registry {
         + PlaybackTest.all + VideoEncodeTest.all + VideoEncodeIdleTest.all
         + [VideoEncodeBFramesTest(), NVENCInputLayoutTest(), VideoTranscodeTest(), VideoGPUSourceTest()]
 
+    /// The NVJPG tile probe last: it tells NVJPG tilings no driver uses, and a job the kernel cancels resets the engine
     static let images: [any HWTest] =
         ImageDecodeTest.all + [
-            JPEGAfterIdleTest(), JPEGMappingLifetimeTest(), HEICEncodeTest(), CoreImageTest(), PixelTransferTest(),
+            JPEGAfterIdleTest(), JPEGMappingLifetimeTest(), HEICEncodeTest(), CoreImageTest(),
+            PixelTransferTest(),
             PixelTransfer422Test(),
             PixelTransferRouteTest(),
             VICLumaTest(),
-            VICGamutTest(), VICTagsTest(),
+            VICGamutTest(), VICTagsTest(), NVJPGCopyGuardTest(), NVJPGTileProbeTest(),
         ]
 
     static let audio: [any HWTest] = [
