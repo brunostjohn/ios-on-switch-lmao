@@ -35,7 +35,7 @@ vm_offset_t phystokv(uint64_t pa);
 }
 
 namespace tegra_nvjpg {
-constexpr uint32_t kQueueMax = 16;            // decodes in flight: each holds a scan slot from its copy to its run
+constexpr uint32_t kQueueMax = 16;  // decodes in flight: each holds a scan slot from its copy to its run
 
 IOLock *gQueueLock;
 SwitchNVJPGScan gScans[kQueueMax];
@@ -159,13 +159,12 @@ const char *routeJob(Job *job, const SwitchNVJPGBacking &target, void **hold, ui
     }
     const TegraNVJPGSurface d = surfaceDesc(job->dst.desc);
 #if TEGRA_NVJPG_STATS
-    const char *why = job->tileProbe
-                          ? tegra_nvjpg_route_tile_probe(&job->request.base, job->dst.desc.length,
-                                                         kTegraNVJPGOutputBytes, &layout, job->tileMode, job->tileGob,
-                                                         &job->plan, &job->engine.setup, route)
-                          : tegra_nvjpg_route(&job->request.base, &d, kTegraNVJPGOutputBytes,
-                                              job->dst.memory != nullptr, &layout, &job->plan, &job->engine.setup,
-                                              route);
+    const char *why =
+        job->tileProbe
+            ? tegra_nvjpg_route_tile_probe(&job->request.base, job->dst.desc.length, kTegraNVJPGOutputBytes, &layout,
+                                           job->tileMode, job->tileGob, &job->plan, &job->engine.setup, route)
+            : tegra_nvjpg_route(&job->request.base, &d, kTegraNVJPGOutputBytes, job->dst.memory != nullptr, &layout,
+                                &job->plan, &job->engine.setup, route);
     if (!why) {
         tegra_nvjpg_note_route(*route, layout.held, layout.layout.row_bytes, layout.layout.y_log2, target.count,
                                &job->engine.setup, job->plan.extent.width, job->plan.extent.height);

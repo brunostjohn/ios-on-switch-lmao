@@ -184,6 +184,7 @@ struct Flight {
     int result;
     bool active;
 };
+
 Flight gFlight;
 IOLock *gFlightLock;
 #if TEGRA_NVJPG_STATS

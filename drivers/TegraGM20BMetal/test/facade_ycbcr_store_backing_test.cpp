@@ -120,10 +120,8 @@ IOSurfaceRef fourFourFourOffRows()
 
 SwitchMetalTexture *target(id<MTLDevice> device, MTLPixelFormat format, IOSurfaceRef s)
 {
-    MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:format
-                                                                                 width:kWidth
-                                                                                height:kHeight
-                                                                             mipmapped:NO];
+    MTLTextureDescriptor *d =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:format width:kWidth height:kHeight mipmapped:NO];
     d.usage = MTLTextureUsageShaderRead | MTLTextureUsageRenderTarget;
     SwitchMetalTexture *t = (SwitchMetalTexture *)[device newTextureWithDescriptor:d iosurface:s plane:0];
     CFRelease(s);
@@ -144,7 +142,8 @@ void aPlanarStoreBeforeAYcbcrStoreLeavesItsStandInAlone()
     SwitchMetalTexture *planar = target(device, MTLPixelFormat(542), fourFourFourOffRows());
     SwitchMetalTexture *packed = target(device, MTLPixelFormat(588), packed420());
     ASSERT_TRUE(planar != nil && planar->_gm20bOk && planar->_raw.planar && planar->_raw.planarStandIn);
-    ASSERT_TRUE(planar->_raw.luma && planar->_raw.luma->shadowTarget) << "rows 144 bytes apart render through a pool image";
+    ASSERT_TRUE(planar->_raw.luma && planar->_raw.luma->shadowTarget)
+        << "rows 144 bytes apart render through a pool image";
     ASSERT_TRUE(packed != nil && packed->_gm20bOk && packed->_raw.planarStandIn);
     MTLRenderPassDescriptor *p = [MTLRenderPassDescriptor renderPassDescriptor];
     for (NSUInteger j : {0u, 1u}) {

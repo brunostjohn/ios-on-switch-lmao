@@ -33,7 +33,10 @@ struct Job {
     // The engine thread's decode of it (engineThread). NVJPG's part runs from its start (OnEngine) until its signal; a
     // re-pack queued behind it (Repacking) until the re-pack's. `woken`, `engineEnded` and `repacked` are the signals',
     // set and read under gQueueLock; the rest is the engine thread's alone.
-    enum class Phase : uint8_t { OnEngine, Repacking } phase;
+    enum class Phase : uint8_t {
+        OnEngine,
+        Repacking
+    } phase;
     bool woken, engineEnded, repacked;
     void *hold;                         // the destination's layout, held until the decode has ended (routeJob)
     const SwitchNVJPGMapping *mapping;  // a direct decode's destination pages, as NVJPG writes them

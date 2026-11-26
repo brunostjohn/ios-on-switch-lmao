@@ -114,7 +114,7 @@ enum StandInResolveCases {
                     let sampleRead = stored[at * samples + sample]
                     readings.firstDiffer =
                         "t\(at) s\(sample) bytes \(code) compute \(compute[at].x),\(compute[at].w) fragment "
-                        + "\(fragment[at].x),\(fragment[at].w) stored \(sampleRead.x)"
+                            + "\(fragment[at].x),\(fragment[at].w) stored \(sampleRead.x)"
                 }
             } catch {
                 readings.computeError = error

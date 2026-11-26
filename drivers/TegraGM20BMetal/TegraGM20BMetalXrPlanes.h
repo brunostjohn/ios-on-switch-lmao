@@ -55,6 +55,7 @@ constexpr uint32_t xrPlanesImageTag(uint32_t k)
 {
     return k < 8 ? kXrPlanesImageTag + k : k < 24 ? 32 + (k - 8) : kXrPlanesOverflowTag + (k - 24);
 }
+
 // The images live until their split, after the pass's resolves and YCbCr stores, which read earlier passes' backings
 static_assert(kXrPlanesImageTag >= gm20b::kDriverPassColorTag + 8 &&
                   (xrPlanesImageTag(8) >= gm20b::kDriverPassColorTag + 8 ||

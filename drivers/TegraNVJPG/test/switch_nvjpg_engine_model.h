@@ -35,8 +35,8 @@ struct Engine {
     bool clampStuck = false;                 // REMOVE_CLAMPING_CMD never clears
     bool removeSticksWhenUnclamped = false;  // a command to a partition with no clamp leaves its bit set
     bool removePending = false;
-    bool falconErrorInDecode = false;  // the falcon raises MSDECOS_ERROR_APPLICATION and parks during a decode
-    std::string decodeEndedBy;         // "falcon": the error line took the job's fence back; "fence": its callback
+    bool falconErrorInDecode = false;      // the falcon raises MSDECOS_ERROR_APPLICATION and parks during a decode
+    std::string decodeEndedBy;             // "falcon": the error line took the job's fence back; "fence": its callback
     switch_host1x_fence *armed = nullptr;  // the job's fence, until deliver() or the line takes it
     int armError = 0;                      // what the next fence's arming answers
     int releaseError = 0;                  // what a cancelled job's fence release answers
@@ -481,15 +481,17 @@ namespace {
         return;
     gEngine.decodeEndedBy = "fence";
     fence->state = SWITCH_HOST1X_FENCE_IDLE;
-    fence->signaled(fence,
-                    static_cast<int32_t>(gEngine.syncpt - fence->threshold) >= 0 ? 0 : TEGRA_HOST1X_ETIMEDOUT);
+    fence->signaled(fence, static_cast<int32_t>(gEngine.syncpt - fence->threshold) >= 0 ? 0 : TEGRA_HOST1X_ETIMEDOUT);
 }
 
 // One decode as the engine thread runs it: started under the job lock, ended by deliver(), finished.
 [[maybe_unused]] int runDecode(const TegraNVJPGJob *job, nvjpg_dec_status *status)
 {
     int ends = 0;
-    const TegraNVJPGSignal signal = {[](void *count) { ++*static_cast<int *>(count); }, &ends};
+    const TegraNVJPGSignal signal = {[](void *count) {
+                                         ++*static_cast<int *>(count);
+                                     },
+                                     &ends};
     tegra_nvjpg_lock();
     int ret = tegra_nvjpg_start(job, &signal);
     if (!ret) {

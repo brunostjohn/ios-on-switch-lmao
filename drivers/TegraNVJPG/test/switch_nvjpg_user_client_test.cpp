@@ -313,6 +313,7 @@ void runRepacks()
     for (const HeldRepack &repack : due)
         repack.completion(repack.context, 0);
 }
+
 int gSurfaceTiled = 0;
 int gSurfaceUndescribed = 0;
 int gHolds = 0;
@@ -881,7 +882,9 @@ TEST_F(NVJPGUserClient, AHungTileProbeIsCancelledOnceAndTheNextDecodeRuns)
     EXPECT_TRUE(logged("engine reset: running again"));
     EXPECT_EQ(gCancelled, std::vector<int>{77});
     EXPECT_EQ(std::count_if(gEngine.streams.begin() + long(streams), gEngine.streams.end(),
-                            [](const std::vector<uint32_t> &s) { return s.size() > 3; }),
+                            [](const std::vector<uint32_t> &s) {
+                                return s.size() > 3;
+                            }),
               1)
         << "the probe's decode is sent once";
     EXPECT_EQ(gRoutes, std::vector<uint32_t>{TEGRA_NVJPG_ROUTE_TILE_PROBE});
@@ -892,7 +895,8 @@ TEST_F(NVJPGUserClient, AHungTileProbeIsCancelledOnceAndTheNextDecodeRuns)
     Destination next(4, 0x9e000000);
     gSurfaceTiled = 0;
     const size_t before = gEngine.streams.size();
-    EXPECT_EQ(engineRuns(decodeInto(next, 4 * 4096, 4 * 4096)), kIOReturnIOError) << "the model's engine writes no status";
+    EXPECT_EQ(engineRuns(decodeInto(next, 4 * 4096, 4 * 4096)), kIOReturnIOError)
+        << "the model's engine writes no status";
     EXPECT_EQ(gEngine.streams.size(), before + 1);
     EXPECT_EQ(gCancelled.size(), 1u);
     retire(&d.backing);

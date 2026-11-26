@@ -56,9 +56,10 @@ TEST(NVJPGLayoutWiring, TheDestinationIsMappedForThePlanTheRouteLeavesAndOnlyThe
     ASSERT_NE(lock, std::string::npos);
     ASSERT_NE(unlock, std::string::npos);
     EXPECT_LT(map, lock);
-    EXPECT_EQ(direct.substr(lock, unlock - lock), "tegra_nvjpg_lock();\n    const int error = tegra_nvjpg_start(&job->engine, "
-                                                  "&ended);\n    if (!error) {\n        job->phase = "
-                                                  "Job::Phase::OnEngine;\n        return true;\n    }\n    ");
+    EXPECT_EQ(direct.substr(lock, unlock - lock),
+              "tegra_nvjpg_lock();\n    const int error = tegra_nvjpg_start(&job->engine, "
+              "&ended);\n    if (!error) {\n        job->phase = "
+              "Job::Phase::OnEngine;\n        return true;\n    }\n    ");
     EXPECT_THAT(Body(source, "bool advanceJob(Job *job)\n{"),
                 HasSubstr("job->engineResult = tegra_nvjpg_finish(&job->engine, &job->engineStatus, "
                           "&job->engineBusy);\n        tegra_nvjpg_unlock();"));

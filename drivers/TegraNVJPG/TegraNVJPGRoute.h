@@ -61,8 +61,8 @@ static inline const char *tegra_nvjpg_route(const TegraNVJPGDecodeRequest *r, co
         return tegra_nvjpg_copy_covers_blocks(p, &l->layout)
                    ? NULL
                    : "copy-engine re-pack into part of a block-linear destination";
-    return tegra_nvjpg_plan_fallback_ce(r, d, maxRepack, true, l->layout.width, l->layout.height, l->layout.bpp,
-                                        false, p, s)
+    return tegra_nvjpg_plan_fallback_ce(r, d, maxRepack, true, l->layout.width, l->layout.height, l->layout.bpp, false,
+                                        p, s)
                ? NULL
                : "a picture that is not the whole of its block-linear destination, or past the copy engine's scratch";
 }
@@ -78,9 +78,8 @@ static inline const char *tegra_nvjpg_route(const TegraNVJPGDecodeRequest *r, co
 // mapping may span. NULL with *route, or why not.
 static inline const char *tegra_nvjpg_route_tile_probe(const TegraNVJPGDecodeRequest *r, uint64_t length,
                                                        uint64_t window, const TegraNVJPGDestinationLayout *l,
-                                                       uint32_t tileMode,
-                                                       uint32_t gob, TegraNVJPGPlan *p, nvjpg_dec_drv_pic_setup_s *s,
-                                                       uint32_t *route)
+                                                       uint32_t tileMode, uint32_t gob, TegraNVJPGPlan *p,
+                                                       nvjpg_dec_drv_pic_setup_s *s, uint32_t *route)
 {
     if (!l->held || !l->described || l->compressed)
         return "a tile probe into a destination GM20B did not lay out block-linear, uncompressed";
