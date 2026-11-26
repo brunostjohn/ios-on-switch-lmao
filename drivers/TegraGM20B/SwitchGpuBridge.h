@@ -22,6 +22,8 @@ void switch_gpu_bridge_syncpoint(const struct switch_gpu_bridge *bridge, uint32_
 int switch_gpu_bridge_covers(const struct switch_gpu_bridge *bridge,
 			     const struct switch_gpu_backing_token *token);
 void switch_gpu_bridge_completed(void);
+/* 1 complete, 0 not yet, <0 failed. Before the slot retires, 1 waits for its syncpoint to reach the threshold too.
+ * After, the stored 1 means the producers' writes are in DRAM, and an increment may still be on its way to host1x. */
 int switch_gpu_bridge_status(const struct switch_gpu_bridge *bridge);
 /* Exceptional inspection of retained original GM20B/promise producers; no bridge queue lock or retirement. */
 int switch_gpu_bridge_source_failure(const struct switch_gpu_bridge *bridge);

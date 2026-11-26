@@ -20,20 +20,21 @@ static IOReturn zbcAdd(const TegraGM20BAbiZbc *in, TegraGM20BAbiZbcReply *out)
 }
 
 #if TGM_STATS
-// HW Test probes' syncpoints (TegraGM20BPathsOpProbeSyncpts). Two first asks at once can each take one for a slot; the
-// loser's stays unused.
+// HW Test probes' syncpoints (TegraGM20BPathsOpProbeSyncpts), taken from host1x's own once: the first ask takes all three,
+// and an ask while it does answers ids of 0 rather than take more
 static void probeSyncptsLine(char *line, size_t size)
 {
 	static uint32_t ids[3];
-	for (uint32_t &id : ids) {
-		uint32_t made = 0;
-		uint32_t none = 0;
-		if (!__atomic_load_n(&id, __ATOMIC_ACQUIRE) &&
-		    tegra_host1x_start() == TEGRA_HOST1X_OK &&
-		    tegra_host1x_syncpt_alloc(&made) == TEGRA_HOST1X_OK)
-			__atomic_compare_exchange_n(&id, &none, made, false, __ATOMIC_ACQ_REL,
-						    __ATOMIC_ACQUIRE);
-	}
+	static uint32_t taking;
+	uint32_t none = 0;
+	if (__atomic_compare_exchange_n(&taking, &none, 1u, false, __ATOMIC_ACQ_REL,
+					__ATOMIC_ACQUIRE) &&
+	    tegra_host1x_start() == TEGRA_HOST1X_OK)
+		for (uint32_t &id : ids) {
+			uint32_t made = 0;
+			if (tegra_host1x_syncpt_alloc(&made) == TEGRA_HOST1X_OK)
+				__atomic_store_n(&id, made, __ATOMIC_RELEASE);
+		}
 	snprintf(line, size, "ids=%u,%u,%u values=%u,%u,%u", ids[0], ids[1], ids[2],
 		 ids[0] ? tegra_host1x_syncpt_read(ids[0]) : 0,
 		 ids[1] ? tegra_host1x_syncpt_read(ids[1]) : 0,

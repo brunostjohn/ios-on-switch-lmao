@@ -64,7 +64,7 @@ struct X1BridgeJoblessTest: HWTest {
             totals.unwritten += reading.unwritten
             totals.torn += reading.torn
         }
-        let jobless = max(0, (Self.jobless(connection) ?? before) - before)
+        let jobless = (Self.jobless(connection) ?? before) - before
         metrics.set("rounds", Self.rounds)
         metrics.set("jobless", jobless)
         metrics.set("stale", totals.stale)

@@ -395,6 +395,10 @@ unsigned tgm_chans_completed(void);
 /* gpu_nonstall.c, M1: the job interrupts' tree 1 (SwitchGpuNonstall.h) */
 int tgm_nonstall_init(struct nvkm_device *device);
 extern struct mutex tgm_live_lock;
+#if TGM_STATS
+/* tgm_live_lock held: the jobless bridges closed channels of processes named `owner` counted (tgm_chan_jobless) */
+u64 tgm_chan_jobless_gone_locked(const char *owner);
+#endif
 extern u64 tgm_live_ids;
 void tgm_chan_describe(struct tgm_chan *chan, char *buf, unsigned int len);
 #if DEVELOPMENT || DEBUG

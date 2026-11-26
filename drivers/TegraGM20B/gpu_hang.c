@@ -93,6 +93,7 @@ uint64_t tgm_chan_jobless(const char *owner)
 	list_for_each_entry(chan, &tgm_live_chans,
 			    live) if (!strncmp(chan->owner, owner, sizeof(chan->owner) - 1))
 		jobless += chan->stat_jobless;
+	jobless += tgm_chan_jobless_gone_locked(owner);
 	mutex_unlock(&tgm_live_lock);
 	return jobless;
 }

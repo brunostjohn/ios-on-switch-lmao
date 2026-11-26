@@ -219,8 +219,9 @@ void tgm_uc::tgm_target_peaks_line(char *line, size_t size)
 // every kProfileEvery-th of those profiled, whose profile the kick stamps. An app connection's first kScanFirst are read
 // here, once a connection: a process that submits a few times (a lock screen poster, whose first is an upload and whose
 // draws follow) may finish before a thread call reads them or drops them, and its pushes may lie outside the pool. The
-// render server's are not: it waits for this thread. Channels of one connection submit at once with no connection lock:
-// the counts are atomic.
+// render server's are not: it waits for this thread. Those reads (write-combined, up to kScanMaxBytes each) are a debug
+// kernel's launch-time cost; a release kernel returns at its first line. Channels of one connection submit at once with
+// no connection lock: the counts are atomic.
 const tgm_prof *AGXDeviceUserClient::scanSubmission(uint32_t slot, uint32_t fences,
 						    const tgm_push *pushes, uint32_t count,
 						    tgm_prof &prof, bool metalMacros)

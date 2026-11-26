@@ -382,14 +382,12 @@ TEST(GM20BPresentSource, FenceOnlyPresentHasNoCopy)
 			    .has("if (dst_va) tgm_present_push_copy(push);"));
 }
 
-// gpu.poster_targets reads each process's largest colour target, which the stats' push scan records (debug kernels).
-// SubmitJob takes the scan before its kick and hands its profile to the kick; the scan's counts are atomic, as SubmitJob
-// runs without the connection lock.
 // A jobless bridge (SwitchGpuBridgeRetire.cpp settleJobless) reads its tokens before its producer's channel, and the
 // channel's status before its end (`stopped`): a kill stores the end before any status reads failed, so a failure seen
 // comes with `stopped`, and the CPU makes the increments a channel that stopped short owes, after every slot of the pass
-// stored its result. A covering fence that landed owes none (gpu_exec.c pushes the increments ahead of it). gpu.x1.bridge_jobless counts only a host1x consumer's
-// jobless bridges, on the producing channel, after the queue's lock (never tgm_live_lock under it).
+// stored its result. A covering fence that landed owes none (gpu_exec.c pushes the increments ahead of it).
+// gpu.x1.bridge_jobless counts only a host1x consumer's jobless bridges, on the producing channel, after the queue's lock
+// (never tgm_live_lock under it).
 TEST(GM20BBridgeSource, AJoblessSlotReadsItsTokensThenItsChannelThenItsEnd)
 {
 	const CodeText covered = Block(SourceText("../SwitchGpuTimelineSyncpt.cpp"),
@@ -419,6 +417,9 @@ TEST(GM20BBridgeSource, AJoblessSlotReadsItsTokensThenItsChannelThenItsEnd)
 			    .has("tgm_chan_jobless(owner_)"));
 }
 
+// gpu.poster_targets reads each process's largest colour target, which the stats' push scan records (debug kernels).
+// SubmitJob takes the scan before its kick and hands its profile to the kick; the scan's counts are atomic, as SubmitJob
+// runs without the connection lock.
 TEST(GM20BPushScanSource, EverySubmissionPathScansItsPushes)
 {
 	const CodeText job =

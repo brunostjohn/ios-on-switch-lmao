@@ -577,8 +577,8 @@ void tgm_writer_wait(uint32_t uid, uint32_t seqno);
  * context; takes tgm_live_lock. Returns when the next check is due, 0 when the job is done or the channel gone. */
 uint64_t tgm_writer_check_progress(uint32_t uid, uint32_t seqno, const char *who);
 /* Debug kernels (TGM_STATS, defined below) alone: a host1x consumer's bridge waits on the syncpoint of channel `uid` with
- * no GPU job of its own (SwitchGpuBridge.cpp); and those bridges summed over the live channels of processes named
- * `owner`. Take tgm_live_lock. */
+ * no GPU job of its own (SwitchGpuBridge.cpp); and those bridges summed over the channels, live or closed, of
+ * processes named `owner`, a count that never goes down. Take tgm_live_lock. */
 void tgm_chan_note_jobless(uint32_t uid);
 uint64_t tgm_chan_jobless(const char *owner);
 int tgm_writers_all_done(void);

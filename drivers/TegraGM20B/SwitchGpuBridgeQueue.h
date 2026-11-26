@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 // The host1x bridge's slots and queue (SwitchGpuBridge.cpp: submission and the consumer calls; SwitchGpuBridgeRetire.cpp:
-// retirement and the hang check). Every field is the queue lock's.
+// retirement and the hang check). Every field is the queue lock's, except three read with no lock while the caller holds
+// the bridge: `result` (an atomic store and load, switch_gpu_bridge_failed) and `producer` and `threshold`, fixed for
+// the slot's life (switch_gpu_bridge_jobless, switch_gpu_bridge_syncpoint).
 #pragma once
 #include <IOKit/IOLocks.h>
 #include <kern/thread_call.h>
