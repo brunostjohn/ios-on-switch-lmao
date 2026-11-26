@@ -3,6 +3,11 @@
 
 namespace {
 
+TEST_F(Host1xSubmit, BringUpMakesTheEnginesAndTheDisplaysChannelsAlone)
+{
+    EXPECT_EQ(gAllocated, 2u * (TEGRA_HOST1X_CHANNEL_DISPLAY + 1));
+}
+
 TEST_F(Host1xSubmit, EveryEngineRaisesTheMemoryClockBeforeItsDoorbell)
 {
     const uint32_t words[] = {tegra_host1x_op_setclass(TEGRA_HOST1X_CLASS_NVDEC, 0, 0),
@@ -65,12 +70,12 @@ TEST_F(Host1xSubmit, ThePushBufferHoldsOnlyGatherPairsOfTheWordsTheEngineWrote)
 
 TEST_F(Host1xSubmit, TheGatherFilterIsClearedOnEveryChannel)
 {
-    for (uint32_t channel = 0; channel < TEGRA_HOST1X_CHANNELS; ++channel)
+    for (uint32_t channel = 0; channel <= TEGRA_HOST1X_CHANNEL_DISPLAY; ++channel)
         switch_mmio_write32(gHostRegisters, channel * kChannelStride + CH_CHANNELCTRL, 0x5);
     IOLockLock(gSubmitLock);
     switch_host1x_channels_program();
     IOLockUnlock(gSubmitLock);
-    for (uint32_t channel = 0; channel < TEGRA_HOST1X_CHANNELS; ++channel)
+    for (uint32_t channel = 0; channel <= TEGRA_HOST1X_CHANNEL_DISPLAY; ++channel)
         EXPECT_EQ(switch_mmio_read32(gHostRegisters, channel * kChannelStride + CH_CHANNELCTRL), 0x1u) << channel;
     EXPECT_EQ(switch_host1x_channels_filter_stuck(), 0u);
 }

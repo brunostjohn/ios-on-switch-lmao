@@ -13,8 +13,8 @@
 #if SWITCH_FRAME_TIMELINE
 struct Host1xFlipState {
     switch_host1x_flip::Run run;
-    uint32_t syncpts[4] = {};  // producer, display, window A's REG_WR_SAFE and LINE_FLIPPED
-    bool syncptsReady = false, holding = false;
+    uint32_t syncpts[SWITCH_HOST1X_PROBE_SYNCPTS] = {};  // producer, display, window A's REG_WR_SAFE and LINE_FLIPPED
+    bool holding = false;
     int aliasSlot = -1;
     char line[480] = "host1x_flip=not_run";
 };
@@ -90,8 +90,8 @@ void host1xFlipLine(char *line, size_t size)
     });
 }
 
-// From the sysctl's thread: the channel claimed (the class probe's flag), host1x up, the syncpoints taken once, then
-// the run begun under the gate.
+// From the sysctl's thread: the channel claimed (the class probe's flag), host1x up, the probes' syncpoints claimed,
+// then the run begun under the gate. host1xFlipFinished lets both go.
 int host1xFlipStart(uint32_t request)
 {
     const uint32_t flips = request & 0xffff;
@@ -103,14 +103,13 @@ int host1xFlipStart(uint32_t request)
     if (__atomic_exchange_n(&dcClassBusy, true, __ATOMIC_ACQUIRE))
         return EBUSY;
     const char *why = nullptr;
-    if (tegra_host1x_start() != TEGRA_HOST1X_OK) {
+    bool claimed = false;
+    if (tegra_host1x_start() != TEGRA_HOST1X_OK)
         why = "host1x";
-    } else if (!host1xFlip.syncptsReady) {
-        for (uint32_t &id : host1xFlip.syncpts)
-            if (!why && tegra_host1x_syncpt_alloc(&id) != TEGRA_HOST1X_OK)
-                why = "no_syncpoint";
-        host1xFlip.syncptsReady = !why;
-    }
+    else if (switch_host1x_probe_syncpts_claim(host1xFlip.syncpts) != TEGRA_HOST1X_OK)
+        why = "syncpoints";
+    else
+        claimed = true;
     host1xFlipOnLoop([&] {
         if (!why)
             why = host1xFlipRefusal();
@@ -123,6 +122,8 @@ int host1xFlipStart(uint32_t request)
         native_legacy_frame_end_hold();
     });
     if (why) {
+        if (claimed)
+            switch_host1x_probe_syncpts_release();
         __atomic_store_n(&dcClassBusy, false, __ATOMIC_RELEASE);
         return EAGAIN;
     }
@@ -407,6 +408,7 @@ void host1xFlipFinished()
         s.holding = false;
         native_legacy_frame_end_release();
     }
+    switch_host1x_probe_syncpts_release();
     __atomic_store_n(&dcClassBusy, false, __ATOMIC_RELEASE);
 }
 

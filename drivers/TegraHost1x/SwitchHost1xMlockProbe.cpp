@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// The module lock probe's run (SwitchHost1xMlockProbe.h), debug kernels only. It sleeps on syncpoint thresholds and
-// never polls. A stream left waiting is torn down, and its syncpoints released, before it returns.
+// The module lock probe's run (SwitchHost1xMlockProbe.h), debug kernels only, on VIC's second and third channels and
+// the probes' shared syncpoints. It sleeps on syncpoint thresholds and never polls. A stream left waiting is torn down,
+// and its syncpoints released, before it lets the set go.
 #include "SwitchHost1xMlockProbe.h"
 
 #if DEVELOPMENT || DEBUG
@@ -19,7 +20,8 @@ enum Syncpt : uint32_t {
     kSyncpts
 };
 
-uint32_t gIds[kSyncpts];
+static_assert(static_cast<uint32_t>(kSyncpts) <= SWITCH_HOST1X_PROBE_SYNCPTS);
+uint32_t gIds[SWITCH_HOST1X_PROBE_SYNCPTS];
 
 struct Case {
     int status;
@@ -99,13 +101,14 @@ extern "C" int switch_host1x_mlock_probe_run(void *out)
         reply->status = started;
         return 0;
     }
-    for (uint32_t &id : gIds)
-        if (!id)
-            if (const int error = tegra_host1x_syncpt_alloc(&id)) {
-                id = 0;
-                reply->status = error;
-                return 0;
-            }
+    if (const int error = switch_host1x_probe_channels_take()) {
+        reply->status = error;
+        return 0;
+    }
+    if (const int error = switch_host1x_probe_syncpts_claim(gIds)) {
+        reply->status = error;
+        return 0;
+    }
     const Case control = runCase(false);
     const Case locked = control.status || !control.settled ? Case{} : runCase(true);
     reply->status = control.status ? control.status : locked.status;
@@ -115,6 +118,7 @@ extern "C" int switch_host1x_mlock_probe_run(void *out)
     reply->afterRelease = locked.after && !locked.early;
     reply->heldUs = locked.watchedUs;
     reply->settled = control.settled && locked.settled;
+    switch_host1x_probe_syncpts_release();
     IOLog("TegraHost1x: module lock probe: status %d, control side by side %u, lock taken %u, second channel held "
           "%u for %u us, ran after the release %u, settled %u\n",
           reply->status, reply->controlSideBySide, reply->heldTaken, reply->heldOff, reply->heldUs, reply->afterRelease,

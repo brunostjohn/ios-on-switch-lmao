@@ -56,12 +56,12 @@ uint32_t &syncpoint(uint32_t id)
     return *reinterpret_cast<uint32_t *>(gHostRegisters + kSyncOffset + SYNC_SYNCPT + 4 * id);
 }
 
-const uint32_t *push(uint32_t channel)
+[[maybe_unused]] const uint32_t *push(uint32_t channel)
 {
     return reinterpret_cast<const uint32_t *>(gPushBuffers[channel]);
 }
 
-uint32_t arenaAddress(uint32_t channel, const uint32_t *words)
+[[maybe_unused]] uint32_t arenaAddress(uint32_t channel, const uint32_t *words)
 {
     return static_cast<uint32_t>(kArenaPA + channel * 0x100000u +
                                  (reinterpret_cast<const uint8_t *>(words) - gArenas[channel]));

@@ -27,7 +27,7 @@ TEST(DcHost1xClassProbe, ItIsDebugOnlyAndUsesTheJobApi)
               std::string::npos);
     EXPECT_NE(probe.find("kDcClassChannel = TEGRA_HOST1X_CHANNEL_DISPLAY"), std::string::npos)
         << "a torn-down NVJPG channel drops NVJPG's queued jobs";
-    const std::string run = Between(probe, "void dcClassProbe()", "\n}\n");
+    const std::string run = Between(probe, "void dcClassRun()", "\n}\n");
     EXPECT_LT(run.find("dcClassScratchHolds(before, marker)"), run.find("dcClassSubmit(nullptr, 0, control)"));
     EXPECT_LT(run.find("dcClassSubmit(nullptr, 0, control)"), run.find("dcClassSubmit(body,"));
     EXPECT_LT(run.find("reason=control"), run.find("dcClassSubmit(body,"));
@@ -37,6 +37,16 @@ TEST(DcHost1xClassProbe, ItIsDebugOnlyAndUsesTheJobApi)
     EXPECT_NE(display.find("#include \"NativeColumnScanDisplay.h\"\n#include \"SwitchDcHost1xClassProbe.h\""),
               std::string::npos);
     EXPECT_NE(display.find("            columnScanRegister();\n            dcClassRegister();"), std::string::npos);
+}
+
+TEST(DcHost1xClassProbe, ItRunsOnTheProbesSharedSyncpointsAndLetsThemGo)
+{
+    const std::string probe = SourceText("../SwitchDcHost1xClassProbe.h");
+    EXPECT_EQ(CodeText(probe).count("tegra_host1x_syncpt_alloc"), 0u);
+    const CodeText start = Block(probe, "void dcClassProbe()");
+    EXPECT_TRUE(start.before("tegra_host1x_start()", "switch_host1x_probe_syncpts_claim(dcClassSyncpts)"));
+    EXPECT_TRUE(start.before("switch_host1x_probe_syncpts_claim(dcClassSyncpts)", "dcClassRun();"));
+    EXPECT_TRUE(start.has("dcClassRun(); switch_host1x_probe_syncpts_release();"));
 }
 
 TEST(DcHost1xClassProbe, OnlyTheProbesEntitlementRunsIt)

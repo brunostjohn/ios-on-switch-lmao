@@ -43,6 +43,22 @@ TEST(Host1xFlipDisplay, ItIsDebugOnlyOnTheDisplaysOwnChannel)
     EXPECT_NE(probe.find("kDcClassChannel = TEGRA_HOST1X_CHANNEL_DISPLAY"), std::string::npos);
 }
 
+// The run holds the probes' shared syncpoints from its start to its end, and lets them go on a start it refuses.
+TEST(Host1xFlipDisplay, ItHoldsTheProbesSharedSyncpointsForItsRunAlone)
+{
+    const std::string trial = SourceText("../SwitchHost1xFlipDisplay.h");
+    EXPECT_EQ(CodeText(trial).count("tegra_host1x_syncpt_alloc"), 0u);
+    const CodeText start = Block(trial, "int host1xFlipStart(uint32_t request)");
+    EXPECT_TRUE(start.has("else if (switch_host1x_probe_syncpts_claim(host1xFlip.syncpts) != TEGRA_HOST1X_OK) why = "
+                          "\"syncpoints\"; else claimed = true;"));
+    EXPECT_TRUE(start.has("if (why) { if (claimed) switch_host1x_probe_syncpts_release(); "
+                          "__atomic_store_n(&dcClassBusy, false, __ATOMIC_RELEASE); return EAGAIN; }"));
+    EXPECT_EQ(start.count("switch_host1x_probe_syncpts_release()"), 1u);
+    const CodeText finished = Block(trial, "void host1xFlipFinished()");
+    EXPECT_TRUE(finished.before("switch_host1x_probe_syncpts_release();",
+                                "__atomic_store_n(&dcClassBusy, false, __ATOMIC_RELEASE);"));
+}
+
 TEST(Host1xFlipDisplay, OnlyTheProbesEntitlementStartsARun)
 {
     const CodeText write = Block(SourceText("../SwitchHost1xFlipDisplay.h"),

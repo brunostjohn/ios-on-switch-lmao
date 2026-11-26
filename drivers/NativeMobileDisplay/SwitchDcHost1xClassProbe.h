@@ -6,11 +6,11 @@
 // opcodes T210's host1x lacks; this stream has SETCLASS, INCR and IMM only, and DC A is head 0.
 //
 // Writing debug.switch_display_dc_host1x_class (HW Test's SWITCH_GPU_PROBES_ENTITLEMENT alone) runs it on the sysctl's
-// thread, on the display's own host1x channel, with three syncpoints of its own (gate, DC, channel); reading it gives
-// the verdict line. Every stream is host1x's WAIT_SYNCPT on the gate, its body, then host1x's INCR_SYNCPT on the
-// channel syncpoint, the job's fence. The setup is proven first: the CPU's write of DC_COM_SCRATCH_REGISTER_A (0x325)
-// must read back, and a control stream with no body must wait for the CPU's increment of the gate and then run past.
-// The probe's body is class 0x70's INCR of the scratch word with the complement of its value and IMM of
+// thread, on the display's own host1x channel, with three of the probes' shared syncpoints (gate, DC, channel); reading
+// it gives the verdict line. Every stream is host1x's WAIT_SYNCPT on the gate, its body, then host1x's INCR_SYNCPT on
+// the channel syncpoint, the job's fence. The setup is proven first: the CPU's write of DC_COM_SCRATCH_REGISTER_A
+// (0x325) must read back, and a control stream with no body must wait for the CPU's increment of the gate and then run
+// past. The probe's body is class 0x70's INCR of the scratch word with the complement of its value and IMM of
 // DC_CMD_GENERAL_INCR_SYNCPT (0x000, IMMEDIATE) on the DC syncpoint. Nothing of it may land before the gate (held);
 // after, the channel syncpoint says host1x ran past the class 0x70 words, the DC syncpoint and the scratch word say DC
 // A took them. A channel that stopped is torn down and restarted, which drops its jobs; the scratch word gets its value
@@ -20,8 +20,8 @@
 #if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
 static constexpr uint32_t kDcScratchA = 0x325, kDcGeneralIncrSyncpt = 0x000, kDcHost1xClass = TEGRA_HOST1X_CLASS_DC;
 static constexpr uint32_t kDcClassChannel = TEGRA_HOST1X_CHANNEL_DISPLAY, kDcClassHeldUs = 2000, kDcClassRunUs = 50000;
-static inline uint32_t dcClassSyncpts[3] = {};  // gate, DC, channel
-static inline bool dcClassSyncptsReady = false, dcClassBusy = false;
+static inline uint32_t dcClassSyncpts[SWITCH_HOST1X_PROBE_SYNCPTS] = {};  // gate, DC, channel; the fourth unused
+static inline bool dcClassBusy = false;
 static inline char dcClassLine[320] = "class70=not_run";
 static inline struct sysctl_oid dcClassOid = {};
 
@@ -90,16 +90,6 @@ bool dcClassScratchHolds(uint32_t before, uint32_t marker)
     return holds;
 }
 
-bool dcClassSyncptsTaken()
-{
-    if (dcClassSyncptsReady)
-        return true;
-    for (uint32_t &id : dcClassSyncpts)
-        if (tegra_host1x_syncpt_alloc(&id) != TEGRA_HOST1X_OK)
-            return false;
-    dcClassSyncptsReady = true;
-    return true;
-}
 
 struct DcClassStream {
     uint32_t gateAt = 0, channelAt = 0;
@@ -137,11 +127,23 @@ void dcClassRelease(DcClassStream &s)
 
 void dcClassProbe()
 {
+    if (!getWorkLoop() || tegra_host1x_start() != TEGRA_HOST1X_OK) {
+        snprintf(dcClassLine, sizeof(dcClassLine), "class70=not_run reason=host1x");
+        return;
+    }
+    if (const int error = switch_host1x_probe_syncpts_claim(dcClassSyncpts)) {
+        snprintf(dcClassLine, sizeof(dcClassLine), "class70=not_run reason=syncpoints_%d", error);
+        return;
+    }
+    dcClassRun();
+    switch_host1x_probe_syncpts_release();
+}
+
+void dcClassRun()
+{
     uint32_t before = 0;
-    if (!getWorkLoop() || tegra_host1x_start() != TEGRA_HOST1X_OK || !dcClassSyncptsTaken() ||
-        !dcClassScratch(before, false)) {
-        snprintf(dcClassLine, sizeof(dcClassLine), "class70=not_run reason=%s",
-                 getWorkLoop() && hwSuspended ? "suspended" : "host1x");
+    if (!dcClassScratch(before, false)) {
+        snprintf(dcClassLine, sizeof(dcClassLine), "class70=not_run reason=%s", hwSuspended ? "suspended" : "host1x");
         return;
     }
     const uint32_t marker = ~before;

@@ -131,6 +131,60 @@ host_test(
 )
 
 host_test(
+    name = "switch_host1x_release_shape_test",
+    srcs = [
+        "switch_host1x_release_shape_test.cpp",
+        "//drivers/TegraHost1x:TegraHost1x.h",
+    ],
+    # apple_support's host compiles add -DDEBUG outside --config=release.
+    copts = [
+        "-UDEBUG",
+        "-UDEVELOPMENT",
+    ],
+)
+
+# The same harness built as a debug kernel (DEVELOPMENT=1): VIC's probe channels made at the module lock probe's first
+# ask, and the probes' one shared set of syncpoints.
+host_test(
+    name = "switch_host1x_probe_resources_test",
+    srcs = [
+        "switch_host1x_submit_harness.h",
+        "switch_host1x_probe_resources_test.cpp",
+        "//drivers/ArmGIC:SwitchInterrupts.h",
+        "//drivers/TegraHost1x:SwitchHost1xArena.h",
+        "//drivers/TegraHost1x:SwitchHost1xChannels.h",
+        "//drivers/TegraHost1x:SwitchHost1xDisplay.h",
+        "//drivers/TegraHost1x:SwitchHost1xDisplayChannel.h",
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
+        "//drivers/TegraGM20B:SwitchGpuBridge.h",
+        "//drivers/TegraHost1x:SwitchHost1xGatherStats.h",
+        "//drivers/TegraHost1x:SwitchHost1xCpuIncrement.h",
+        "//drivers/TegraHost1x:SwitchHost1xFailureRelease.h",
+        "//drivers/TegraHost1x:SwitchHost1xFence.h",
+        "//drivers/TegraHost1x:SwitchHost1xIntr.h",
+        "//drivers/TegraHost1x:TegraHost1x.h",
+        "//drivers/TegraSMMU:TegraSMMU.h",
+        "//kits/SwitchCAR:SwitchCAR.h",
+        "//kits/SwitchDMA:SwitchDMABuffer.h",
+        "//kits/SwitchDMA:SwitchDcache.h",
+        "//kits/SwitchIdle:switch_idle.h",
+        "//kits/SwitchMMIO:SwitchMMIO.h",
+        "//kits/SwitchMMIO:SwitchMMIOKernel.h",
+        "//kits/SwitchTime:SwitchTime.h",
+    ],
+    additional_compiler_inputs = [
+        "//drivers/TegraHost1x:SwitchHost1xChannels.cpp",
+        "//drivers/TegraHost1x:TegraHost1x.cpp",
+    ],
+    data = [
+        "//drivers/TegraHost1x:SwitchHost1xChannels.cpp",
+        "//drivers/TegraHost1x:SwitchHost1xMlockProbe.cpp",
+    ],
+    defines = ["DEVELOPMENT=1"],
+    deps = [":submit_kernel"],
+)
+
+host_test(
     name = "switch_host1x_fence_list_test",
     srcs = [
         "switch_host1x_fence_list_test.cpp",
