@@ -194,8 +194,8 @@ bool reached_locked(switch_gpu_backing *backing)
 }
 
 // A retired backing's GPU side, its memory included. Its owner (the pinned pages) goes in release_pages, only after the
-// batch's L2 flush and SMMU unmaps (switch_gpu_memory_retire_end): neither may write back into or map a page that went
-// back to the VM.
+// batch's L2 flush and SMMU unmaps (switch_gpu_backing_release_retired): neither may write back into or map a page that
+// went back to the VM.
 void release_gpu_side(switch_gpu_backing *backing)
 {
 	switch_gpu_backing_forget_mapped(backing);
@@ -450,7 +450,8 @@ extern "C" void switch_gpu_events_completed(void) __attribute__((weak));
 extern "C" void switch_gpu_copy_completed(void) __attribute__((weak));
 extern "C" void switch_gpu_copy_retire(void) __attribute__((weak));
 extern "C" void switch_gpu_memory_retire_begin(void) __attribute__((weak));
-extern "C" void switch_gpu_memory_retire_end(void) __attribute__((weak));
+extern "C" bool switch_gpu_memory_retire_end(switch_gpu_backing *retired) __attribute__((weak));
+extern "C" void switch_gpu_memory_retire_parked(void) __attribute__((weak));
 
 extern "C" void switch_gpu_backing_completed(void)
 {
@@ -466,10 +467,21 @@ extern "C" void switch_gpu_backing_completed(void)
 	}
 }
 
+extern "C" void switch_gpu_backing_release_retired(switch_gpu_backing *retired)
+{
+	while (retired) {
+		auto *next = retired->retiring_next;
+		release_pages(retired);
+		retired = next;
+	}
+}
+
 extern "C" void switch_gpu_backing_retire(void)
 {
 	if (switch_gpu_copy_retire)
 		switch_gpu_copy_retire();
+	if (switch_gpu_memory_retire_parked)
+		switch_gpu_memory_retire_parked();
 	if (!registry)
 		return;
 	switch_gpu_backing *ready = nullptr;
@@ -518,13 +530,8 @@ extern "C" void switch_gpu_backing_retire(void)
 		switch_gpu_memory_retire_begin();
 	for (auto *backing = ready; backing; backing = backing->retiring_next)
 		release_gpu_side(backing);
-	if (batch)
-		switch_gpu_memory_retire_end();
-	while (ready) {
-		auto *next = ready->retiring_next;
-		release_pages(ready);
-		ready = next;
-	}
+	if (!batch || !switch_gpu_memory_retire_end(ready))
+		switch_gpu_backing_release_retired(ready);
 	if (again)
 		switch_gpu_backing_schedule_retirement();
 }
