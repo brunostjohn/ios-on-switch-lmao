@@ -1011,6 +1011,7 @@ TEST(SwitchPrefetchSource, RootAndDataVolumesWiredAcrossBothXnuTrees)
 
     const std::string prefetch = SourceText("../switch/vm/prefetch.c");
     const std::string prefetchSave = SourceText("../switch/vm/prefetch_save.c");
+    const std::string prefetchVnode = SourceText("../switch/vm/prefetch_vnode.c");
 
     const std::string volsMounted = bodyOf(prefetch, "switch_prefetch_volumes_mounted(");
     EXPECT_THAT(volsMounted, HasSubstr("SWITCH_PREFETCH_VOL_ROOT"));
@@ -1038,7 +1039,7 @@ TEST(SwitchPrefetchSource, RootAndDataVolumesWiredAcrossBothXnuTrees)
     EXPECT_THAT(threadBody, Not(HasSubstr("SWITCH_PREFETCH_CRYPTEX_COUNT")));
 
     // SB-1: all mount busy calls validate mount liveness through mount_list_lookupby_fsid + mount_iterdrop.
-    const std::string busyMount = bodyOf(prefetchSave, "switch_prefetch_busy_mount(");
+    const std::string busyMount = bodyOf(prefetchVnode, "switch_prefetch_busy_mount(");
     const size_t lookupPos = busyMount.find("mount_list_lookupby_fsid(&fsid, 0, 1)");
     const size_t busyCallPos = busyMount.find("vfs_busy(mp, LK_NOWAIT)");
     const size_t dropPos = busyMount.find("mount_iterdrop(mp);");
@@ -1048,7 +1049,7 @@ TEST(SwitchPrefetchSource, RootAndDataVolumesWiredAcrossBothXnuTrees)
     EXPECT_LT(lookupPos, busyCallPos);
     EXPECT_LT(busyCallPos, dropPos);
 
-    const std::string vgetReg = bodyOf(prefetchSave, "switch_prefetch_vget_regular(");
+    const std::string vgetReg = bodyOf(prefetchVnode, "switch_prefetch_vget_regular(");
     const size_t busyPos = vgetReg.find("switch_prefetch_busy_mount(mp, fsid)");
     const size_t vgetPos = vgetReg.find("VFS_VGET(");
     const size_t unbusyPos = vgetReg.find("vfs_unbusy(busy_mp);");

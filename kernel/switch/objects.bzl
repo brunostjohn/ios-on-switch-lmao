@@ -50,6 +50,7 @@ SWITCH_OBJECTS = {
         ("bsd/vfs/vfs_lookup.c", "vfs/pretranslated.c", []),
         ("bsd/vfs/vfs_cluster.c", "vm/prefetch.c", ["-include", "{owner_header}"]),
         ("bsd/vfs/vfs_cluster.c", "vm/prefetch_save.c", []),
+        ("bsd/vfs/vfs_cluster.c", "vm/prefetch_vnode.c", []),
         ("bsd/vfs/kpi_vfs.c", "vfs/auth_fs.c", []),
         ("bsd/vfs/vfs_syscalls.c", "vfs/identity.c", []),
         ("bsd/vfs/vfs_syscalls.c", "vfs/fsctl_diag.c", []),

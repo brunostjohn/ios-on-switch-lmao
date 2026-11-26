@@ -1279,6 +1279,7 @@ host_test(
         "//kernel/switch:shutdown/shutdown.c",
         "//kernel/switch:vm/prefetch.c",
         "//kernel/switch:vm/prefetch_save.c",
+        "//kernel/switch:vm/prefetch_vnode.c",
         "//kernel/switch:vm/prefetch_vm.c",
         "//kernel/xnu-10063.141.1/bsd:kern/kern_exec.c",
         "//kernel/xnu-10063.141.1/bsd:kern/kern_shutdown.c",
