@@ -350,7 +350,12 @@ int tgm_deadline_kicked(int compositor, int app)
 	if (compositor) {
 		later = READ_ONCE(dl.kick_last) > READ_ONCE(dl.presented_at);
 		if (!later) {
-			WRITE_ONCE(dl.frame_target, READ_ONCE(dl.next_target));
+			const u64 target = READ_ONCE(dl.next_target);
+
+			/* No vsync comes while nothing draws (the frame end is masked): a target over an interval old is
+			 * the last frame's before that, and this frame has none to miss */
+			WRITE_ONCE(dl.frame_target,
+				   now > target + READ_ONCE(dl.interval) ? 0 : target);
 			WRITE_ONCE(dl.kick_first, now);
 		}
 		WRITE_ONCE(dl.kick_last, now);
