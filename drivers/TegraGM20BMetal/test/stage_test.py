@@ -38,6 +38,7 @@ class Card:
             SEED + '/packs/001': b'pack one',
             stage.RAW + '/pack.bin': b'raw',
         }
+        self.kext = ''
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -53,11 +54,13 @@ class Card:
             lines.append(f'{path}\t{digest}\t{len(data)}\t{mode}\t_main/out/{path}')
         manifest = self.runfiles / SELF
         manifest.parent.mkdir(parents=True, exist_ok=True)
-        manifest.write_text(stage.MANIFEST_HEADER + SELF + '\n' + ''.join(line + '\n' for line in lines))
+        kext = stage.MANIFEST_KEXT + self.kext + '\n' if self.kext else ''
+        manifest.write_text(stage.MANIFEST_HEADER + SELF + '\n' + kext + ''.join(line + '\n' for line in lines))
         return manifest
 
     def sync(self) -> str:
-        return stage.sync(self.data, stage.from_manifest(self.manifest()), lambda _: None)
+        manifest = self.manifest()
+        return stage.sync(self.data, stage.from_manifest(manifest), lambda _: None, stage.manifest_kext(manifest))
 
     def card(self) -> dict[str, bytes]:
         top = self.data / 'ngpu/addons'
@@ -150,6 +153,23 @@ class IconCacheRecordTest(Card, unittest.TestCase):
         self.files[stage.BUNDLE + '/Info.plist'] = b'another plist'
         self.sync()
         self.assertNotEqual(self.record(), first)
+
+    def test_a_kext_only_change_renames_the_build_and_copies_nothing(self):
+        self.kext = 'a' * 64
+        self.sync()
+        first = self.record()
+        with gzip.open(self.data / stage.STATE, 'rt') as handle:
+            self.assertNotEqual(first, handle.readline().strip()[2:] + '\n')
+        self.kext = 'b' * 64
+        self.assertTrue(self.sync().startswith('unchanged'))
+        self.assertNotEqual(self.record(), first)
+        self.assertNotEqual(self.record()[:12], first[:12])  # the kernel keys its keep on the first 12 characters
+
+    def test_a_manifest_without_a_kext_line_names_the_list_alone(self):
+        self.sync()
+        with gzip.open(self.data / stage.STATE, 'rt') as handle:
+            self.assertEqual(self.record(), handle.readline().strip()[2:] + '\n')
+        self.assertEqual(stage.manifest_kext(self.manifest()), '')
 
     def test_a_removed_build_is_named_as_none(self):
         self.sync()

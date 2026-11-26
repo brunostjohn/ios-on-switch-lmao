@@ -91,6 +91,22 @@ class StageManifestTest(unittest.TestCase):
             self.assertEqual((root / 'joined.stage').read_text(), (root / 'once.stage').read_text())
             self.assertEqual(len((root / 'once.stage').read_text().splitlines()), 1 + 5)
 
+    def test_the_kext_identity_follows_the_header(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'base/ngpu/addons/TegraGM20BMetal.bundle').mkdir(parents=True)
+            (root / 'base/ngpu/addons/TegraGM20BMetal.bundle/TegraGM20BMetal').write_bytes(b'plugin')
+            (root / 'seed.part').write_text('')
+            (root / 'kext.txt').write_text('f00d\n')
+            args = ['--self', 'bundle.stage', '--base', str(root / 'base'), '--base-rlocation', 'base']
+            args += ['--from-part', str(root / 'seed.part'), '--kext-digest', str(root / 'kext.txt')]
+            with mock.patch.object(sys, 'argv', ['stage_manifest.py', *args, '--out', str(root / 'out.stage')]):
+                stage_manifest.main()
+            lines = (root / 'out.stage').read_text().splitlines()
+            self.assertEqual(lines[0], stage_manifest.HEADER + 'bundle.stage')
+            self.assertEqual(lines[1], '# kext f00d')
+            self.assertEqual(len(lines), 3)
+
     def test_a_packed_directory_without_a_seed_pack_index_is_refused(self):
         with tempfile.TemporaryDirectory() as directory:
             native = Path(directory)

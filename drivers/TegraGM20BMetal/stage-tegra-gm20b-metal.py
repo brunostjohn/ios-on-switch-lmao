@@ -25,7 +25,8 @@ Only files whose sha256 differs from what the card holds are copied, and files t
 <Data>/ngpu/stage.tsv.gz lists what is staged (its first line the whole list's digest, so an unchanged build reads
 nothing else), and <Data>/ngpu/stage.pending the files a stage was writing, which the next one copies again if it was
 cut short. A card without the list has the three directories replaced whole.
-<Data>/Switch/icon-cache-gpu names the staged build (the list's digest, empty once removed), on every path that stages:
+<Data>/Switch/icon-cache-gpu names the staged build (the list's digest with the manifest's `# kext` identity of the
+kernel's GPU kext folded in, empty once removed), on every path that stages:
 iconservicesagent keeps the icons it drew while __cache_info__ names the system's ProductBuildVersion, which a GPU build
 does not change, so the next boot's kernel lets them go once per build it names (kernel/switch/boot/icon_cache.c).
 --remove deletes the three directories and the list (the preferences stay; without a Metal device they change nothing).
@@ -58,6 +59,7 @@ STATE = 'ngpu/stage.tsv.gz'
 PENDING = 'ngpu/stage.pending'
 ICON_CACHE_RECORD = 'Switch/icon-cache-gpu'
 MANIFEST_HEADER = '# gpu stage 1 '
+MANIFEST_KEXT = '# kext '
 EXECUTABLES = ('TegraGM20BMetal',)
 PREFS = {
     'CAEnableDeepFramebuffer': False,
@@ -104,6 +106,8 @@ def from_manifest(manifest: Path) -> Wanted:
     root = Path(str(manifest)[: -len(own)])
     wanted = {}
     for line in lines[1:]:
+        if line.startswith(MANIFEST_KEXT):
+            continue
         path, digest, size, mode, source = line.split('\t')
         wanted[path] = (root / source, digest, int(size), int(mode, 8))
     return wanted
@@ -210,6 +214,19 @@ def _data_folder(data: Path) -> Path:
     return older[0] if len(older) == 1 else folder
 
 
+def manifest_kext(manifest: Path) -> str:
+    """Return the GPU kext's build identity a //gpu:bundle manifest names, '' where it names none."""
+    for line in manifest.read_text().splitlines()[1:3]:
+        if line.startswith(MANIFEST_KEXT):
+            return line[len(MANIFEST_KEXT) :]
+    return ''
+
+
+def icon_build(whole: str, kext: str) -> str:
+    """Name what draws icons: the staged list and, where known, the kernel's GPU kext, which draws through them too."""
+    return hashlib.sha256(f'{whole}\n{kext}'.encode()).hexdigest() if kext else whole
+
+
 def name_for_icon_cache(data: Path, build: str) -> None:
     """Name the staged build in ICON_CACHE_RECORD, writing nothing when it already does."""
     record = _data_folder(data) / ICON_CACHE_RECORD.split('/', 1)[1]
@@ -219,7 +236,7 @@ def name_for_icon_cache(data: Path, build: str) -> None:
     _write_atomically(record, lambda f: f.write_text(build + '\n'))
 
 
-def sync(data: Path, wanted: Wanted, report: Callable[[str], None]) -> str:
+def sync(data: Path, wanted: Wanted, report: Callable[[str], None], kext: str = '') -> str:
     """Make the card hold `wanted` under the three staged directories; return what was done."""
     for directory in (data / 'ngpu', data / ADDONS):
         directory.mkdir(exist_ok=True)
@@ -228,7 +245,7 @@ def sync(data: Path, wanted: Wanted, report: Callable[[str], None]) -> str:
     known = read_state(data, whole)
     renamed = ''.join(f'; removed {old}, which the rename replaced' for old in _remove_renamed(data))
     if known is True:
-        name_for_icon_cache(data, whole)
+        name_for_icon_cache(data, icon_build(whole, kext))
         return f'unchanged ({len(wanted)} files){renamed}'
     if known is None:
         for top in OWNED:
@@ -251,7 +268,7 @@ def sync(data: Path, wanted: Wanted, report: Callable[[str], None]) -> str:
 
     _write_atomically(data / STATE, write_state)
     (data / PENDING).unlink()
-    name_for_icon_cache(data, whole)
+    name_for_icon_cache(data, icon_build(whole, kext))
     copied = sum(wanted[p][2] for p in changed)
     return (
         f'{len(changed)} copied ({copied >> 20} MiB), {len(stale)} removed, {len(wanted) - len(changed)} unchanged'
@@ -304,7 +321,7 @@ def main() -> None:
     wanted = from_manifest(build) if build.is_file() else from_directory(build)
     if BUNDLE + '/TegraGM20BMetal' not in wanted:
         sys.exit(f'stage-tegra-gm20b-metal: no plugin build in {build} (bazel build //gpu:bundle)')
-    done = sync(data, wanted, report)
+    done = sync(data, wanted, report, manifest_kext(build) if build.is_file() else '')
     _merge_preferences(data)
     report('flushing to the card')
     subprocess.run(['/bin/sync'], check=True)
