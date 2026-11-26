@@ -263,8 +263,12 @@ API_AVAILABLE(ios(18.0), macos(15.0))
 
 void gm20bUseResidencySet(SwitchMetalCommandBuffer *cb, id set)
 {
-    if (![set isKindOfClass:[SwitchMetalResidencySet class]])
+    if (@available(iOS 18.0, macOS 15.0, *)) {
+        if (![set isKindOfClass:[SwitchMetalResidencySet class]])
+            return;
+    } else {
         return;
+    }
     SWITCH_METAL_DIAGNOSTIC(gRM->raw->stats.residencySetUses++);
     if (!cb->_residencySets)
         cb->_residencySets = [NSMutableArray array];
@@ -272,30 +276,36 @@ void gm20bUseResidencySet(SwitchMetalCommandBuffer *cb, id set)
         [cb->_residencySets addObject:set];
 }
 
+static void nameResident(gm20b::CommandBuffer *rc, id allocation)
+{
+    SWITCH_METAL_DIAGNOSTIC(gRM->raw->stats.residencyNamed++);
+    if ([allocation isKindOfClass:[SwitchMetalBuffer class]]) {
+        SwitchMetalBuffer *b = allocation;
+        if (b->_raw.hostVisible && !b->_raw.wc)
+            rc->clean(b->_raw.cpu, b->_raw.length, true);
+        useBuffer(rc, b, true);
+    } else if ([allocation isKindOfClass:[SwitchMetalTexture class]]) {
+        useTexture(rc, (SwitchMetalTexture *)allocation, true);
+    } else if ([allocation isKindOfClass:[SwitchMetalHeap class]]) {
+        if (const auto &members = ((SwitchMetalHeap *)allocation)->_members)
+            rc->useHeap(*members);
+    }
+}
+
 // A program reaches a set's allocations by GPU address alone, with no use the encoder could name, so a job that uses the
 // set names each one the CPU reaches as written: a CPU write before it is then dropped from the L2 at its start, and its
 // GPU writes reach DRAM at its fence (CommandBuffer::use)
 void gm20bNameResidencySets(SwitchMetalCommandBuffer *cb, gm20b::CommandBuffer *rc)
 {
-    NSArray *queued = nil;
-    if (SwitchMetalQueue *queue = cb->_queue) {
-        std::lock_guard<gm20b::Mutex> hold(queue->_residencyLock);
-        queued = [queue->_residencySets copy];
+    if (@available(iOS 18.0, macOS 15.0, *)) {
+        NSArray *queued = nil;
+        if (SwitchMetalQueue *queue = cb->_queue) {
+            std::lock_guard<gm20b::Mutex> hold(queue->_residencyLock);
+            queued = [queue->_residencySets copy];
+        }
+        for (NSArray *sets in @[ cb->_residencySets ?: @[], queued ?: @[] ])
+            for (SwitchMetalResidencySet *set in sets)
+                for (id allocation in [set gm20bHostVisible])
+                    nameResident(rc, allocation);
     }
-    for (NSArray *sets in @[ cb->_residencySets ?: @[], queued ?: @[] ])
-        for (SwitchMetalResidencySet *set in sets)
-            for (id allocation in [set gm20bHostVisible]) {
-                SWITCH_METAL_DIAGNOSTIC(gRM->raw->stats.residencyNamed++);
-                if ([allocation isKindOfClass:[SwitchMetalBuffer class]]) {
-                    SwitchMetalBuffer *b = allocation;
-                    if (b->_raw.hostVisible && !b->_raw.wc)
-                        rc->clean(b->_raw.cpu, b->_raw.length, true);
-                    useBuffer(rc, b, true);
-                } else if ([allocation isKindOfClass:[SwitchMetalTexture class]]) {
-                    useTexture(rc, (SwitchMetalTexture *)allocation, true);
-                } else if ([allocation isKindOfClass:[SwitchMetalHeap class]]) {
-                    if (const auto &members = ((SwitchMetalHeap *)allocation)->_members)
-                        rc->useHeap(*members);
-                }
-            }
 }

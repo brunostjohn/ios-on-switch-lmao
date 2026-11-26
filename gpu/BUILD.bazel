@@ -222,6 +222,7 @@ PLUGIN_CC_SRCS = [
     GM20B_METAL + ":pass_begin.cpp",
     GM20B_METAL + ":pass_clears.cpp",
     GM20B_METAL + ":pass_end.cpp",
+    GM20B_METAL + ":nvn_probes.cpp",
     GM20B_METAL + ":pipelines.cpp",
     GM20B_METAL + ":samplers.cpp",
     GM20B_METAL + ":sparse_window.cpp",
