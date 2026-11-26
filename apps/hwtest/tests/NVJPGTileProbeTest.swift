@@ -53,7 +53,7 @@ struct NVJPGTileProbeTest: HWTest {
             ("the decode goes through the copy engine into the blocks (\(taken))", taken == "copy_blocks:1")
         )
         checks.append(("the CPU reads the picture (\(wrong) bytes differ)", failure == nil && wrong == 0))
-        withExtendedLifetime(sampler) {}
+        withExtendedLifetime(sampler) { _ = $0 }
 
         var cancelled = 0
         for probe in Self.probes {
@@ -72,7 +72,7 @@ struct NVJPGTileProbeTest: HWTest {
                 metrics.set(key, JPEGSurfaceDecode.explained(got, target))
                 metrics.set(key + "_wrong", JPEGSurfaceDecode.wrong(got, target).0)
             }
-            withExtendedLifetime(held) {}
+            withExtendedLifetime(held) { _ = $0 }
             let next = try Self.rowsDecode(file)
             checks.append(("after \(key) NVJPG decodes the picture by rows (\(next))", next.right))
             if !next.right {
