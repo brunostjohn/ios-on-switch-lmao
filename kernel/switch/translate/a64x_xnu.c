@@ -196,16 +196,21 @@ static int a64x_stub_page(const void *src, void *dst, unsigned long long off, vo
 #define A64X_MAX_SECTIONS 64
 
 /* load commands -> executable segment and instruction sections (over 1 KB: allocated, never on the stack) */
+struct a64x_cand {
+    uint64_t va, size, off;
+};
+
 struct a64x_layout {
     uint64_t exec_fileoff, exec_filesize, exec_vmaddr;
     uint64_t vm_end;
-    uint32_t nsect;
+    uint32_t nsect, ncand;
     bool marked;                               /* has the __TEXT,__a64x_target section: built for this core */
     uint64_t text_vmaddr;                      /* __TEXT (function starts count from it) */
     uint32_t fs_off, fs_size;                  /* LC_FUNCTION_STARTS, slice-relative */
     uint32_t dic_off, dic_size;                /* LC_DATA_IN_CODE, slice-relative */
     uint32_t cs_off, cs_size;                  /* LC_CODE_SIGNATURE, slice-relative */
     struct a64x_range sect[A64X_MAX_SECTIONS]; /* instruction sections, absolute file offsets, file order */
+    struct a64x_cand cand[A64X_MAX_SECTIONS];  /* flagless S_REGULAR sections, promoted via LC_FUNCTION_STARTS */
 };
 
 static int a64x_parse(const void *lcmds, size_t size, off_t slice_off, struct a64x_layout *lay)
@@ -264,13 +269,27 @@ static int a64x_parse(const void *lcmds, size_t size, off_t slice_off, struct a6
                 lay->exec_vmaddr = sg->vmaddr;
                 const struct section_64 *sc = (const void *)(sg + 1);
                 for (uint32_t s = 0; s < sg->nsects; s++) {
-                    if ((sc[s].flags & (S_ATTR_PURE_INSTRUCTIONS | S_ATTR_SOME_INSTRUCTIONS)) && sc[s].size) {
+                    enum a64x_sect_kind sk =
+                        a64x_classify_exec_section(sc[s].sectname, sc[s].addr, sc[s].size, sc[s].flags);
+                    if (sk == A64X_SECT_DATA) {
+                        continue;
+                    }
+                    if (sk == A64X_SECT_CODE) {
+                        if (!(sc[s].flags & (S_ATTR_PURE_INSTRUCTIONS | S_ATTR_SOME_INSTRUCTIONS)) &&
+                            (sc[s].offset & 3u) != 0u) {
+                            continue;
+                        }
                         if (lay->nsect >= A64X_MAX_SECTIONS) {
                             return ENOTSUP;
                         }
                         lay->sect[lay->nsect].lo = (uint64_t)slice_off + sc[s].offset;
                         lay->sect[lay->nsect].hi = (uint64_t)slice_off + sc[s].offset + sc[s].size;
                         lay->nsect++;
+                    } else if ((sc[s].offset & 3u) == 0u && lay->ncand < A64X_MAX_SECTIONS) {
+                        lay->cand[lay->ncand].va = sc[s].addr;
+                        lay->cand[lay->ncand].size = sc[s].size;
+                        lay->cand[lay->ncand].off = (uint64_t)slice_off + sc[s].offset;
+                        lay->ncand++;
                     }
                 }
             }
@@ -285,20 +304,22 @@ static int a64x_parse(const void *lcmds, size_t size, off_t slice_off, struct a6
  * over the segment. Words found to be data leave the code map (img_is_code), so neither the scan nor the pager
  * touches them. Without LC_FUNCTION_STARTS the runs are cut at padding and terminators only.
  */
-static void a64x_find_islands(struct a64x_image *im, const struct a64x_layout *lay, off_t slice_off)
+static int a64x_find_islands(struct a64x_image *im, const struct a64x_layout *lay, off_t slice_off)
 {
+    _Static_assert(A64X_MAX_SECTIONS <= 64, "cand_hit bitmask");
     size_t nbits = (size_t)im->npages * A64X_WORDS, nbytes = nbits / 8;
     uint8_t *fs = NULL;
+    uint64_t cand_hit = 0;
+    int error = 0;
     uint32_t *page = kalloc_data(A64X_PAGE, Z_WAITOK);
     im->data = kalloc_data(nbytes, Z_WAITOK | Z_ZERO);
-    if (!page || !im->data) {
-        goto out;
-    }
     int resid = 0;
     if (lay->fs_size && lay->fs_size <= (1u << 24)) {
         uint8_t *buf = kalloc_data(lay->fs_size, Z_WAITOK);
-        fs = kalloc_data(nbytes, Z_WAITOK | Z_ZERO);
-        if (buf && fs &&
+        if (nbytes) {
+            fs = kalloc_data(nbytes, Z_WAITOK | Z_ZERO);
+        }
+        if (buf &&
             !vn_rdwr(UIO_READ, im->vp, (caddr_t)buf, (int)lay->fs_size, slice_off + lay->fs_off, UIO_SYSSPACE,
                      IO_NODELOCKED, vfs_context_ucred(vfs_context_kernel()), &resid, current_proc()) &&
             !resid) {
@@ -314,14 +335,22 @@ static void a64x_find_islands(struct a64x_image *im, const struct a64x_layout *l
                         break;
                     }
                 }
-                if (!v) {
+                if (!v || v > UINT64_MAX - addr) {
                     break;
                 }
                 addr += v;
-                if (addr >= lay->exec_vmaddr) {
+                if (fs && addr >= lay->exec_vmaddr) {
                     uint64_t k = (addr - lay->exec_vmaddr) / 4;
                     if (k < nbits) {
                         fs[k >> 3] |= (uint8_t)(1u << (k & 7));
+                    }
+                }
+                if ((addr & 3u) == 0u) {
+                    for (uint32_t c = 0; c < lay->ncand; c++) {
+                        if (!(cand_hit & (1ull << c)) && addr >= lay->cand[c].va &&
+                            addr - lay->cand[c].va < lay->cand[c].size) {
+                            cand_hit |= 1ull << c;
+                        }
                     }
                 }
             }
@@ -329,6 +358,45 @@ static void a64x_find_islands(struct a64x_image *im, const struct a64x_layout *l
         if (buf) {
             kfree_data(buf, lay->fs_size);
         }
+    }
+    uint32_t nrange = lay->nsect;
+    for (uint32_t c = 0; c < lay->ncand; c++) {
+        if (cand_hit & (1ull << c)) {
+            nrange++;
+        }
+    }
+    if (nrange > A64X_MAX_SECTIONS) {
+        error = ENOTSUP;
+        goto out;
+    }
+    if (nrange) {
+        im->ranges = kalloc_data(nrange * sizeof(struct a64x_range), Z_WAITOK);
+        if (!im->ranges) {
+            error = ENOMEM;
+            goto out;
+        }
+        if (lay->nsect) {
+            bcopy(lay->sect, im->ranges, lay->nsect * sizeof(struct a64x_range));
+        }
+        uint32_t nr = lay->nsect;
+        for (uint32_t c = 0; c < lay->ncand; c++) {
+            if (cand_hit & (1ull << c)) {
+                im->ranges[nr].lo = lay->cand[c].off;
+                im->ranges[nr].hi = lay->cand[c].off + lay->cand[c].size;
+                nr++;
+            }
+        }
+        im->nranges = nr;
+        for (uint32_t i = 1; i < im->nranges; i++) {
+            for (uint32_t j = i; j > 0 && im->ranges[j - 1].lo > im->ranges[j].lo; j--) {
+                struct a64x_range t = im->ranges[j];
+                im->ranges[j] = im->ranges[j - 1];
+                im->ranges[j - 1] = t;
+            }
+        }
+    }
+    if (!page || !im->data) {
+        goto out;
     }
     if (lay->dic_size && lay->dic_size <= (1u << 20)) {
         uint8_t *buf = kalloc_data(lay->dic_size, Z_WAITOK);
@@ -377,6 +445,7 @@ out:
     if (page) {
         kfree_data(page, A64X_PAGE);
     }
+    return error;
 }
 
 /* read the executable segment once and lay out its stubs; stub_delta must be fixed before */
@@ -481,17 +550,6 @@ static int a64x_map_image(vm_map_t map, struct vnode *vp, off_t slice_off, const
     im->text_size = lay->exec_filesize;
     im->npages = (uint32_t)((lay->exec_filesize + A64X_PAGE - 1) / A64X_PAGE);
     im->cursor = kalloc_data((im->npages + 1) * sizeof(uint32_t), Z_WAITOK | Z_ZERO);
-    im->nranges = lay->nsect;
-    im->ranges = kalloc_data(lay->nsect * sizeof(struct a64x_range), Z_WAITOK);
-    bcopy(lay->sect, im->ranges, lay->nsect * sizeof(struct a64x_range));
-    /* sections are in file order already; keep the table sorted for the binary search */
-    for (uint32_t i = 1; i < im->nranges; i++) {
-        for (uint32_t j = i; j > 0 && im->ranges[j - 1].lo > im->ranges[j].lo; j--) {
-            struct a64x_range t = im->ranges[j];
-            im->ranges[j] = im->ranges[j - 1];
-            im->ranges[j - 1] = t;
-        }
-    }
     if (vnode_ref(vp)) {
         im->refs = 1;
         a64x_image_release(im);
@@ -503,8 +561,16 @@ static int a64x_map_image(vm_map_t map, struct vnode *vp, off_t slice_off, const
     vm_map_offset_t image_end = exec_va + (lay->vm_end - lay->exec_vmaddr);
     vm_map_offset_t stub_va = vm_map_round_page(image_end, vm_map_page_mask(map));
     im->stub_delta = (int64_t)(stub_va - exec_va);
-    a64x_find_islands(im, lay, slice_off);
-    int error = a64x_scan(im);
+    int error = a64x_find_islands(im, lay, slice_off);
+    if (!error) {
+        error = a64x_scan(im);
+    }
+    if (error) {
+        im->refs = 1;
+        a64x_image_release(im);
+        printf("a64x: %s: translation failed (%d)\n", vp->v_name ? vp->v_name : "?", error);
+        return error;
+    }
     if (!error && kind == A64X_IMAGE_ARM64 && im->changed == 0) {
         /* plain arm64 with nothing the A57 lacks: keep the file's own mapping (byte-identical, no pager) */
         im->refs = 1;
@@ -980,7 +1046,8 @@ int a64x_emulate_user(arm_saved_state_t *state, uint32_t w)
         uint64_t val = 0;
         a64x_decode_ldra(w, &imm, &wb);
         user_addr_t ea = addr + (int64_t)imm;
-        error = copyin(ea, &val, sizeof(val));
+        /* Single-copy atomic 64-bit load on 8-byte-aligned addresses; LDRAA/LDRAB allows unaligned loads. */
+        error = (ea & 7) == 0 ? copyin_atomic64(ea, &val) : copyin(ea, &val, sizeof(val));
         if (!error) {
             if (wb) {
                 if (rn == 31) {
