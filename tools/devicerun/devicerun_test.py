@@ -34,6 +34,28 @@ def judged(records: list[dict], *check_list: Check) -> dict[str, rules.Result]:
     return {r.check.name: r for r in results}
 
 
+class ScreenClass(unittest.TestCase):
+    """mg.screen-class wants the pinned identity's class: J181's 21 on 27, J120's 11 on 17."""
+
+    @staticmethod
+    def verdicts(darwin: int, screen_class: int) -> dict[str, str]:
+        group = {c.name: c for c in checks.GROUPS['mobilegestalt']}
+        logo = record(2, f'PUIProgressWindow got screen class {screen_class}')
+        logo['processImagePath'] = '/usr/libexec/backboardd'
+        log = [record(1, f'Darwin Kernel Version {darwin}.0.0: debug'), logo]
+        found = judged(log, group['mg.kernel'], group['mg.screen-class'], group['mg.screen-class-17'])
+        return {name: found[name].verdict for name in ('mg.screen-class', 'mg.screen-class-17')}
+
+    def test_each_version_wants_its_identitys_class(self):
+        self.assertEqual(self.verdicts(25, 21), {'mg.screen-class': PASS, 'mg.screen-class-17': rules.NA})
+        self.assertEqual(self.verdicts(23, 11), {'mg.screen-class': rules.NA, 'mg.screen-class-17': PASS})
+
+    def test_the_other_identitys_class_or_none_fails(self):
+        self.assertEqual(self.verdicts(25, 11)['mg.screen-class'], FAIL)
+        self.assertEqual(self.verdicts(25, -1)['mg.screen-class'], FAIL)
+        self.assertEqual(self.verdicts(23, 21)['mg.screen-class-17'], FAIL)
+
+
 class Checks(unittest.TestCase):
     def test_every_check_is_well_formed(self):
         names = [c.name for group in checks.GROUPS.values() for c in group]
