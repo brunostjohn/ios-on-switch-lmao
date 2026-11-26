@@ -2,8 +2,9 @@
 `desktop_toolchains` module extension in MODULE.bazel.
 
 @desktop_rust_std  rust-std 1.98.0 for the targets the build's own Rust toolchain repositories don't carry.
-@desktop_musl      musl's headers, from Alpine's musl-dev. Only usr/include: the musl targets' rust-std brings its own
-                   libc.a and crt objects (self-contained linking), and those are what links.
+@desktop_musl      musl's headers and empty stub archives (libpthread/m/rt/dl), plus prebuilt static libc++ headers
+                   and archives (libc++.a, libc++abi.a) from Alpine v3.20. rust-std supplies libc.a, libunwind.a and
+                   the crt objects (self-contained linking).
 @desktop_msvc      the MSVC CRT and the Windows SDK for x86_64 and aarch64, which xwin fetches from Microsoft's
                    servers. Microsoft's Visual Studio and Windows SDK licences are accepted for every build machine.
 """
@@ -20,12 +21,34 @@ RUST_STD = {
 }
 
 # Alpine 3.20 is end of life, so its repository no longer changes. musl 1.2.5 is the musl the targets' rust-std
-# bundles.
+# bundles; libc++ 17.0.6 (Apache-2.0 WITH LLVM-exception) is built against it.
 MUSL_DEV = {
     "aarch64": "54c60103a486d0d54263289fd0bf89b490514e04b74d5228c346c78089d587e4",
     "x86_64": "e9cca1709f3a740976f22cc27b825261de062d97e7de2d08c41243017c389338",
 }
 _MUSL_DEV_URL = "https://dl-cdn.alpinelinux.org/alpine/v3.20/main/{arch}/musl-dev-1.2.5-r4.apk"
+
+LIBCXX_DEV = {
+    "aarch64": "bb10ca836332848b0e53ee5fa3c649a960865c00dd6f539140b0b17c1014cbd7",
+    "x86_64": "d2431d30c342361796825652cc89d627816d5f1f125829b885d8858bf22c5f80",
+}
+_LIBCXX_DEV_URL = "https://dl-cdn.alpinelinux.org/alpine/v3.20/main/{arch}/libc++-dev-17.0.6-r1.apk"
+
+LIBCXX_STATIC = {
+    "aarch64": "5b42cbd768fc4dfe86c595e7be471b4eed97cce1323d1a9f83f135acbdedac82",
+    "x86_64": "9b326f13d966d25d911fd8127aeb463175238bf0e372d3ef53301ca68a5aaa69",
+}
+_LIBCXX_STATIC_URL = "https://dl-cdn.alpinelinux.org/alpine/v3.20/main/{arch}/libc++-static-17.0.6-r1.apk"
+
+# musl puts pthread, m, rt and dl inside libc.a and ships 8-byte empty archives for them. libc++.a and libc++abi.a
+# record `pthread` in SHT_LLVM_DEPENDENT_LIBRARIES, so rust-lld looks for libpthread.a on -L; extracting only these
+# stubs satisfies that without shadowing rust-std's self-contained libc.a or crt objects.
+_MUSL_STUB_LIBS = [
+    "usr/lib/libdl.a",
+    "usr/lib/libm.a",
+    "usr/lib/libpthread.a",
+    "usr/lib/librt.a",
+]
 
 # xwin 0.10.0 as Homebrew builds it: xwin's own releases stopped shipping macOS binaries after 0.6.5.
 XWIN = struct(
@@ -77,18 +100,34 @@ _rust_std = repository_rule(implementation = _rust_std_impl)
 def _musl_impl(rctx):
     build = [_ALL_FILES]
     for arch, sha256 in MUSL_DEV.items():
-        apk = arch + ".apk"
-        rctx.download(url = _MUSL_DEV_URL.format(arch = arch), output = apk, sha256 = sha256)
         rctx.file(arch + "/SYSROOT", "")
-        result = rctx.execute(["/usr/bin/tar", "-xzf", apk, "-C", arch, "usr/include"])
-        if result.return_code:
-            fail("extracting musl headers: " + result.stderr)
-        rctx.delete(apk)
+        for name, url, digest, members in [
+            ("musl", _MUSL_DEV_URL, sha256, ["usr/include"] + _MUSL_STUB_LIBS),
+            ("libcxx-dev", _LIBCXX_DEV_URL, LIBCXX_DEV[arch], ["usr/include/c++/v1"]),
+            ("libcxx-static", _LIBCXX_STATIC_URL, LIBCXX_STATIC[arch], ["usr/lib/libc++.a", "usr/lib/libc++abi.a"]),
+        ]:
+            apk = "{}-{}.apk".format(arch, name)
+            rctx.download(url = url.format(arch = arch), output = apk, sha256 = digest)
+            result = rctx.execute(["/usr/bin/tar", "-xzf", apk, "-C", arch] + members)
+            if result.return_code:
+                fail("extracting {} ({}): {}".format(name, arch, result.stderr))
+            rctx.delete(apk)
         build.append("""exports_files(["{arch}/SYSROOT"])
 
 filegroup(
     name = "{arch}",
-    srcs = glob(["{arch}/usr/include/**"]),
+    srcs = glob([
+        "{arch}/usr/include/**",
+        "{arch}/usr/lib/*.a",
+    ]),
+)
+
+filegroup(
+    name = "{arch}_cxx_libs",
+    srcs = [
+        "{arch}/usr/lib/libc++.a",
+        "{arch}/usr/lib/libc++abi.a",
+    ],
 )
 """.format(arch = arch))
     rctx.file("BUILD.bazel", "\n".join(build))

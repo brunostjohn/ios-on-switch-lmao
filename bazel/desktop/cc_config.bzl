@@ -1,10 +1,12 @@
-"""C toolchains for the Linux (musl) and Windows (MSVC) desktop targets on @llvm's clang: what our cc_library targets
-and crates' build scripts (cc-rs, through rules_rust) compile with. Rust links these targets itself with rust-lld
-(bazel/desktop/BUILD.bazel), so the link actions here only carry what rules_rust reads from them: the Windows
-libraries' directories, as LIB.
+"""C and C++17 toolchains for the Linux (musl) and Windows (MSVC) desktop targets on @llvm's clang: what our cc_library
+targets and crates' build scripts (cc-rs, through rules_rust) compile with. Rust links these targets itself with
+rust-lld (bazel/desktop/BUILD.bazel), so the link actions here only carry what rules_rust reads from them: the Windows
+libraries' directories, as LIB, and on Linux the static C++ runtime (libc++.a, libc++abi.a) via static_runtime_lib.
 
-  linux    clang --target=<arch>-unknown-linux-musl --sysroot=@desktop_musl//<arch>, -fPIC (Rust links static-pie)
-  windows  clang-cl --target=<arch>-pc-windows-msvc /MT /Brepro, the CRT's and SDK's headers by /imsvc
+  linux    clang --target=<arch>-unknown-linux-musl --sysroot=@desktop_musl//<arch>, -fPIC (Rust links static-pie);
+           C++ adds -std=c++17 -nostdinc++ -isystem <sysroot>/usr/include/c++/v1
+  windows  clang-cl --target=<arch>-pc-windows-msvc /MT /Brepro, the CRT's and SDK's headers by /imsvc;
+           C++ adds /std:c++17 /EHsc
 
 No dependency file (no_dotd_file): Bazel checks a .d file's headers against the targets' declared ones, and the
 sysroots are neither those nor absolute paths it could exempt.
@@ -65,8 +67,28 @@ def _linux(ctx, triple, resource_dir):
         "-no-canonical-prefixes",
         "-fPIC",
     ]
+
+    # -isystem precedes --sysroot's usr/include so libc++ wrappers (#include_next) resolve into musl.
+    cxx_flags = [
+        "-std=c++17",
+        "-nostdinc++",
+        "-isystem",
+        ctx.file.sysroot.dirname + "/usr/include/c++/v1",
+    ]
     features = [
         feature(name = "linux_compile", enabled = True, flag_sets = [_flags(_COMPILE, compile_flags)]),
+        feature(name = "linux_cxx_compile", enabled = True, flag_sets = [_flags(_CXX, cxx_flags)]),
+        feature(name = "static_link_cpp_runtimes", enabled = True),
+        feature(name = "preprocessor_defines", enabled = True, flag_sets = [flag_set(actions = _COMPILE, flag_groups = [flag_group(
+            flags = ["-D%{preprocessor_defines}"],
+            iterate_over = "preprocessor_defines",
+            expand_if_available = "preprocessor_defines",
+        )])]),
+        feature(name = "include_paths", enabled = True, flag_sets = [flag_set(actions = _COMPILE, flag_groups = [
+            flag_group(flags = ["-iquote", "%{quote_include_paths}"], iterate_over = "quote_include_paths", expand_if_available = "quote_include_paths"),
+            flag_group(flags = ["-I%{include_paths}"], iterate_over = "include_paths", expand_if_available = "include_paths"),
+            flag_group(flags = ["-isystem", "%{system_include_paths}"], iterate_over = "system_include_paths", expand_if_available = "system_include_paths"),
+        ])]),
         feature(name = "user_compile_flags", enabled = True, flag_sets = [flag_set(actions = _COMPILE, flag_groups = [flag_group(
             flags = ["%{user_compile_flags}"],
             iterate_over = "user_compile_flags",
@@ -89,10 +111,22 @@ def _windows(ctx, triple, resource_dir):
     compile_flags = ["--target=" + triple, "-resource-dir=" + resource_dir, "/MT", "/Brepro"]
     for include in includes:
         compile_flags += ["/imsvc", root + "/" + include]
+    cxx_flags = ["/std:c++17", "/EHsc"]
     libs = ";".join([root + "/" + lib.format(arch) for lib in ("crt/lib/{}", "sdk/lib/um/{}", "sdk/lib/ucrt/{}")])
     features = [
         feature(name = "windows_compile", enabled = True, flag_sets = [_flags(_COMPILE, compile_flags)]),
+        feature(name = "windows_cxx_compile", enabled = True, flag_sets = [_flags(_CXX, cxx_flags)]),
         feature(name = "windows_libraries", enabled = True, env_sets = [env_set(actions = _LINK, env_entries = [env_entry("LIB", libs)])]),
+        feature(name = "preprocessor_defines", enabled = True, flag_sets = [flag_set(actions = _COMPILE, flag_groups = [flag_group(
+            flags = ["/D%{preprocessor_defines}"],
+            iterate_over = "preprocessor_defines",
+            expand_if_available = "preprocessor_defines",
+        )])]),
+        feature(name = "include_paths", enabled = True, flag_sets = [flag_set(actions = _COMPILE, flag_groups = [
+            flag_group(flags = ["/I%{quote_include_paths}"], iterate_over = "quote_include_paths", expand_if_available = "quote_include_paths"),
+            flag_group(flags = ["/I%{include_paths}"], iterate_over = "include_paths", expand_if_available = "include_paths"),
+            flag_group(flags = ["/imsvc", "%{system_include_paths}"], iterate_over = "system_include_paths", expand_if_available = "system_include_paths"),
+        ])]),
         feature(name = "user_compile_flags", enabled = True, flag_sets = [flag_set(actions = _COMPILE, flag_groups = [flag_group(
             flags = ["%{user_compile_flags}"],
             iterate_over = "user_compile_flags",

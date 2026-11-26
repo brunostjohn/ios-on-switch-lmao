@@ -2,10 +2,10 @@
 #
 #   Rust     rustc 1.98.0 from the build's own aarch64-apple-darwin tools repository, with each target's rust-std from
 #            @desktop_rust_std. aarch64-apple-darwin has no toolchain here: the build's existing one serves it.
-#   Linux    links with rust-lld, against the self-contained musl libc and crt objects rust-std ships; C from @llvm's
-#            clang against @desktop_musl's headers.
-#   Windows  links with rust-lld as lld-link, against the static CRT and the Windows SDK from @desktop_msvc; C from
-#            @llvm's clang-cl.
+#   Linux    links with rust-lld, against the self-contained musl libc, libunwind and crt objects rust-std ships, plus
+#            @desktop_musl's prebuilt static libc++ / libc++abi; C and C++17 from @llvm's clang.
+#   Windows  links with rust-lld as lld-link, against the static CRT, MSVC STL and Windows SDK from @desktop_msvc;
+#            C and C++17 from @llvm's clang-cl.
 #   macOS    Xcode, through apple_support's toolchain, as for the host.
 load("@bazel_skylib//rules:write_file.bzl", "write_file")
 load("@rules_cc//cc/toolchains:cc_toolchain.bzl", "cc_toolchain")
@@ -171,6 +171,11 @@ _CC_TARGETS = [
     ]),
 ) for triple, os, cpu, sysroot in _CC_TARGETS]
 
+filegroup(
+    name = "empty",
+    srcs = [],
+)
+
 [cc_toolchain(
     name = "cc_" + triple,
     all_files = ":cc_files_" + triple,
@@ -178,12 +183,14 @@ _CC_TARGETS = [
     as_files = ":cc_files_" + triple,
     compiler_files = ":cc_files_" + triple,
     dwp_files = ":cc_files_" + triple,
+    dynamic_runtime_lib = ":empty" if os == "linux" else None,
     linker_files = ":cc_files_" + triple,
     objcopy_files = ":cc_files_" + triple,
+    static_runtime_lib = "@desktop_musl//:{}_cxx_libs".format(cpu) if os == "linux" else None,
     strip_files = ":cc_files_" + triple,
     supports_param_files = False,
     toolchain_config = ":cc_config_" + triple,
-) for triple, _, _, _ in _CC_TARGETS]
+) for triple, os, cpu, _ in _CC_TARGETS]
 
 [toolchain(
     name = "cc-" + triple,

@@ -1,9 +1,9 @@
-# The installer's toolchain checks, built for the six desktop platforms (bazel/desktop): Rust calling one C file, and a
-# TLS fetch of the project's releases on the installer's crates.
+# The installer's toolchain checks, built for the six desktop platforms (bazel/desktop): Rust calling C and C++17,
+# and a TLS fetch of the project's releases on the installer's crates.
 #
-#   bazel build //install/hello:all_ffi //install/hello:all_tls
+#   bazel build //install/hello:all_ffi //install/hello:all_cpp //install/hello:all_tls
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
-load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 load("//bazel/desktop:defs.bzl", "desktop_binaries")
 load("//bazel/lint:defs.bzl", "lint_files")
 
@@ -31,6 +31,35 @@ rust_binary(
 desktop_binaries(
     name = "all_ffi",
     binary = ":switch_hello_ffi",
+)
+
+cc_library(
+    name = "switch_hello_cpp",
+    srcs = ["switch_hello.cpp"],
+)
+
+rust_library(
+    name = "switch_hello_cpp_core",
+    srcs = ["cpp_core.rs"],
+    link_deps = [":switch_hello_cpp"],
+)
+
+rust_binary(
+    name = "switch_hello_cpp_bin",
+    srcs = ["cpp_main.rs"],
+    deps = [":switch_hello_cpp_core"],
+)
+
+desktop_binaries(
+    name = "all_cpp",
+    binary = ":switch_hello_cpp_bin",
+)
+
+rust_test(
+    name = "switch_hello_cpp_test",
+    size = "small",
+    srcs = ["cpp_test.rs"],
+    deps = [":switch_hello_cpp_core"],
 )
 
 rust_binary(
