@@ -809,7 +809,8 @@ public:
     // The channel an encode began on (channelGeneration() then) is the one begin() would hand out now
     bool channelCurrent(uint64_t generation) const
     {
-        return channelGeneration() == generation && !contextless_ && !k_.lost(channel_.load(std::memory_order_acquire));
+        return channelGeneration() == generation && !contextless_.load(std::memory_order_relaxed) &&
+               !k_.lost(channel_.load(std::memory_order_acquire));
     }
 
     uint32_t completed() const
@@ -1574,7 +1575,7 @@ private:
     std::string channelError_;
     // The channel died and the one made since has no context yet (reopen gave up before the context's Exec): begin() makes it
     // again before it gives out a command buffer. channel_ is 0 while the kernel holds none of this device's.
-    bool contextless_ = false;
+    std::atomic<bool> contextless_{false};
     std::vector<uint32_t> freeTic_, freeTsc_, freeTicPairs_;
 
     struct SharedHeader {
