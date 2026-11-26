@@ -60,6 +60,7 @@
 #include <unordered_map>
 #include <map>
 #include <memory>
+#include "word_wait.h"
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -624,6 +625,8 @@ public:
     uint64_t wcChunkBytesHeld();
     // The free bytes of the block-linear chunks (test/poolcheck.cpp: a chunk's worth kept ahead)
     uint64_t blChunkFreeBytes();
+    // The thread importing surface `id` at `base` (its mach port name), 0 when none is (test/device_import_test.cpp)
+    uint32_t surfaceImporter(uint64_t id, void *base, uint64_t bytes);
 
     // the shader heap's bound bytes of host memory (the programs copied so far, in steps)
     uint64_t heapBytes() const
@@ -1143,8 +1146,8 @@ public:
         std::atomic<uint64_t> bandedDraws{0}, bands{0};  // draw_bands.h
         // mixed passes' draws of MixedDraw::Covering, and of MixedDraw::Split (samples 1-3 with the pixel stage off)
         std::atomic<uint64_t> mixedCovering{0}, mixedStageOff{0};
-        std::atomic<uint64_t> learnedDraws{0};           // band_rates.h
-        std::atomic<uint64_t> bandedDispatches{0};       // dispatch_bands.h
+        std::atomic<uint64_t> learnedDraws{0};      // band_rates.h
+        std::atomic<uint64_t> bandedDispatches{0};  // dispatch_bands.h
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
         // draws large enough to measure, priced by the static estimate or a learned rate, and those drawn whole
         // without a band decision (fetchDraw, wholeDraw)
@@ -1754,10 +1757,10 @@ private:
     DepthStencilRegs ds_;            // and its depth/stencil registers
     uint32_t tiledCacheSize_ = kTiledCacheDefaultSize;
     std::map<std::tuple<uint64_t, uint64_t, uint64_t>, Import *> surfaces_;
-    // The surfaces being imported with lock_ released (importSurface), each with the threads that wait for its import,
-    // which imported_ wakes once it is published or failed
-    std::map<std::tuple<uint64_t, uint64_t, uint64_t>, uint32_t> importing_;
-    gm20b::CondVar imported_;
+    // The surfaces being imported with lock_ released (importSurface), each owned by its importing thread until it is
+    // published or failed: a thread that waits for one sleeps on it with lock_ let go and lends the importer its priority
+    std::map<std::tuple<uint64_t, uint64_t, uint64_t>, std::shared_ptr<gm20b::OwnedWord>> importing_;
+    void waitImport(std::unique_lock<gm20b::Mutex> &l, std::shared_ptr<gm20b::OwnedWord> import);
     // Surface imports no texture holds, kept for the surface's next texture: Core Animation makes a texture over its
     // pooled surface every frame after it drops the last, and an import made again is bound, untiled, cleaned and laid
     // out again (boot 21: 3.4-4 ms of each app-close frame). Oldest first, at most kKeptImports and kKeptImportBytes;

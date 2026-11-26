@@ -364,15 +364,24 @@ Device::Trimmed Device::trim()
 // released, so the submit worker and other threads' creates do not wait for them; a thread asking for a surface another
 // is importing waits for that import and shares it (or makes its own where it failed), so a surface has one import and
 // one layout ask: the kernel decides the layout at the first ask and takes a second import of its pages as sharing.
+// lock_ held through `l`, and let go while another thread's import of a surface runs: its importer inherits this
+// thread's priority through the word's turnstile, as a held lock's owner would
+void Device::waitImport(std::unique_lock<gm20b::Mutex> &l, std::shared_ptr<gm20b::OwnedWord> import)
+{
+    l.unlock();
+    import->waitWhileOwned([&] {
+        return !import->hasOwner();
+    });
+    l.lock();
+}
+
 Import *Device::importSurface(std::unique_lock<gm20b::Mutex> &l, uint64_t id, void *base, uint64_t bytes,
                               const void *owner, const LayoutAsk *ask)
 {
     const auto key = std::make_tuple(id, uint64_t(uintptr_t(base)), bytes);
     if (id) {
-        for (auto at = importing_.find(key); at != importing_.end(); at = importing_.find(key)) {
-            at->second++;
-            imported_.wait(l);
-        }
+        for (auto at = importing_.find(key); at != importing_.end(); at = importing_.find(key))
+            waitImport(l, at->second);
         auto it = surfaces_.find(key);
         if (it != surfaces_.end()) {
             Import *kept = it->second;
@@ -383,16 +392,18 @@ Import *Device::importSurface(std::unique_lock<gm20b::Mutex> &l, uint64_t id, vo
             SWITCH_METAL_DIAGNOSTIC(stats.importHits++);
             return kept;
         }
-        importing_[key] = 0;
+        auto word = std::make_shared<gm20b::OwnedWord>();
+        word->setOwner(gm20b::OwnedWord::currentOwner());
+        importing_[key] = std::move(word);
     }
     l.unlock();
     Import *i = makeImport(id, base, bytes, owner, ask);
     l.lock();
     if (id) {
         const auto at = importing_.find(key);
-        if (at->second)
-            imported_.notify_all();
+        const std::shared_ptr<gm20b::OwnedWord> word = std::move(at->second);
         importing_.erase(at);
+        word->clear();
     }
     if (!i)
         return nullptr;
@@ -844,9 +855,8 @@ bool Device::wcPoolAlloc(std::unique_lock<gm20b::Mutex> &l, std::vector<Chunk> &
             }
             uint32_t unparked = ~0u;
             bool resident = false;
-            if (tryUnparkChunk(l, gpuVolatile ? ChunkVec::VolatileWc : ChunkVec::Wc, 0, bytes, false, 0,
-                               memberAccess, unparked, resident,
-                               chunkSize(pool, sizes_.wcChunk, bytes, pageSize())))
+            if (tryUnparkChunk(l, gpuVolatile ? ChunkVec::VolatileWc : ChunkVec::Wc, 0, bytes, false, 0, memberAccess,
+                               unparked, resident, chunkSize(pool, sizes_.wcChunk, bytes, pageSize())))
                 continue;
         }
         if (closing_ || pass++)
@@ -1094,6 +1104,13 @@ uint64_t Device::wcChunkBytesHeld()
     return n;
 }
 
+uint32_t Device::surfaceImporter(uint64_t id, void *base, uint64_t bytes)
+{
+    std::lock_guard<gm20b::Mutex> l(lock_);
+    const auto at = importing_.find(std::make_tuple(id, uint64_t(uintptr_t(base)), bytes));
+    return at == importing_.end() ? 0 : at->second->owner();
+}
+
 uint64_t Device::blChunkFreeBytes()
 {
     std::lock_guard<gm20b::Mutex> l(lock_);
@@ -1147,10 +1164,8 @@ bool Device::createBufferNoCopy(void *bytes, uint64_t length, Buffer &b, bool &t
             return surfaceBackingAliases(0, std::get<1>(at.first), std::get<2>(at.first), 0, uintptr_t(bytes), length);
         });
     };
-    for (auto at = importingOver(); at != importing_.end(); at = importingOver()) {
-        at->second++;
-        imported_.wait(l);
-    }
+    for (auto at = importingOver(); at != importing_.end(); at = importingOver())
+        waitImport(l, at->second);
     for (const auto &[key, i] : surfaces_)
         if (i->kernelTiled() && surfaceBackingAliases(0, i->base, i->bytes, 0, uintptr_t(bytes), length)) {
             tiled = true;
