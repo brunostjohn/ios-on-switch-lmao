@@ -46,7 +46,7 @@
     d[@"pipeline_handoff_wakes"] = @(s.handoffWakes.load());
     static const char *const vetoes[VetoKinds] = {"-",        "counters",   "shadows", "variant", "probes",
                                                   "parallel", "ops",        "refused", "planar",  "native",
-                                                  "failed",   "other_work", "device",  "zcull",   "channel"};
+                                                  "failed",   "other_work", "device",  "channel"};
     for (uint32_t k = 0; k < VetoKinds; ++k)
         if (const uint64_t n = s.pipelineAbandons[k].load())
             d[[NSString stringWithFormat:@"pipeline_abandons.%s", vetoes[k]]] = @(n);
@@ -76,6 +76,8 @@
     d[@"texture_readbacks"] = @(gRM->raw->stats.textureReadbacks.load());
     d[@"blend_kill_states"] = @(gRM->raw->stats.blendKillStates.load());
     d[@"blend_kill_binds"] = @(gRM->raw->stats.blendKillBinds.load());
+    d[@"blend_kill_pack_disagreements"] = @(gRM->raw->stats.blendKillPackDisagreements.load());
+    d[@"amplified_draws"] = @(gRM->raw->stats.amplifiedDraws.load());
     d[@"resolve_twod"] = @(gRM->raw->stats.resolveTwod.load());
     d[@"fill_twod"] = @(gRM->raw->stats.fillTwod.load());
     d[@"resolve_exact"] = @(gRM->raw->stats.resolveExact.load());
@@ -93,6 +95,10 @@
     d[@"zcull_rules_kept"] = @(gRM->raw->stats.zcullRulesKept.load());
     d[@"residency_set_uses"] = @(gRM->raw->stats.residencySetUses.load());
     d[@"residency_named"] = @(gRM->raw->stats.residencyNamed.load());
+    d[@"zcull_carried"] = @(gRM->raw->stats.zcullCarried.load());
+    d[@"zcull_stores"] = @(gRM->raw->stats.zcullStores.load());
+    d[@"zcull_unstored"] = @(gRM->raw->stats.zcullUnstored.load());
+    d[@"zcull_carries_lost"] = @(gRM->raw->stats.zcullCarriesLost.load());
     d[@"state_segment_binds"] = @(gRM->raw->stats.segmentBinds.load());
     d[@"state_segment_words"] = @(gRM->raw->stats.segmentWords.load());
     d[@"state_segment_skips"] = @(gRM->raw->stats.segmentSkips.load());

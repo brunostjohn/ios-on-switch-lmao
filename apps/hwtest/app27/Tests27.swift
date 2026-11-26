@@ -15,7 +15,7 @@ enum Tests27 {
     #endif
     static let all: [any HWTest] =
         [
-            GPUSceneTest(scene: Scenes.glass), CAGlassSplitTest(), GPUSceneTest(scene: CAFetchRouteScene()),
+            GPUSceneTest(scene: Scenes.glass), GPUSceneTest(scene: Scenes.glassAxes), CAGlassSplitTest(), GPUSceneTest(scene: CAFetchRouteScene()),
             Metal4Test(), BinaryArchiveTest(), UIGlassABTest(), UIGlassTest(), UIGlassMotionTest(),
             UIGlassFirstFrameTest(), UIGlassLiveTest(), UIGlassSidebarTest(), UIGlassSettingsTest(),
             PocketStripTest(), PocketKeylineTest(),

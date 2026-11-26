@@ -1,7 +1,9 @@
 # Source lists for split Swift modules in //apps/hwtest.
 
 GPU_SRCS = [
+    "gpu/AegirMoon.swift",
     "gpu/Argb8SrgbForms.swift",
+    "gpu/BytesAddress.swift",
     "gpu/CACorpus.swift",
     "gpu/CAState.swift",
     "gpu/CAStateSweep.swift",
@@ -20,6 +22,7 @@ GPU_SRCS = [
     "gpu/GPURatesNvnTargets.swift",
     "gpu/GPURatesProbes.swift",
     "gpu/GPURatesZcullRules.swift",
+    "gpu/PackedFetchRead.swift",
     "gpu/RasterImage.swift",
     "gpu/RegDump.swift",
     "gpu/SM53Reference.swift",
@@ -163,6 +166,7 @@ GPU_SCENES_SRCS = [
     "gpu/scenes/XRKernelReadScene.swift",
     "gpu/scenes/XRKernelStoreScene.swift",
     "gpu/scenes/XRKernelTable.swift",
+    "gpu/scenes27/CAGlassAxesScene.swift",
     "gpu/scenes27/CAGlassScene.swift",
     "gpu/scenes27/CAGlassSplitScene.swift",
 ]
@@ -246,10 +250,14 @@ KIT_COMMON_SRCS = [
 ]
 
 TESTS_DEPTH_SRCS = [
+    "tests/AegirMoonCA.swift",
+    "tests/AegirMoonTest.swift",
     "tests/AlphaToCoverageTest.swift",
     "tests/Bgra10XrResolveTest.swift",
+    "tests/BlendKillReachArms.swift",
     "tests/BlendKillTest.swift",
     "tests/BlendTwinTest.swift",
+    "tests/BytesAddressTest.swift",
     "tests/CoherenceBench.swift",
     "tests/CoherenceRewriteTest.swift",
     "tests/CompressedFloorTest.swift",
@@ -284,12 +292,14 @@ TESTS_DEPTH_SRCS = [
     "tests/LayersPastDepthCases.swift",
     "tests/LayersPastDepthTest.swift",
     "tests/LayersPastTest.swift",
+    "tests/MixedMergeProbeTest.swift",
     "tests/MixedSamplesCases.swift",
     "tests/MixedSamplesTest.swift",
     "tests/MsaaFirstUseTest.swift",
     "tests/NanClearDepthTest.swift",
     "tests/NonFiniteDepthBiasTest.swift",
     "tests/OpaqueBorderTest.swift",
+    "tests/PackedFetchReadTest.swift",
     "tests/PrivateCompressionMoveArms.swift",
     "tests/PrivateCompressionShapes.swift",
     "tests/PrivateCompressionTest.swift",
@@ -499,6 +509,7 @@ TESTS_NATIVE_SRCS = [
     "tests/NativeArgumentDraws.swift",
     "tests/NativeArgumentHeaps.swift",
     "tests/NativeArgumentKernels.swift",
+    "tests/NativeArgumentSampler.swift",
     "tests/NativeArgumentSpills.swift",
     "tests/NativeArgumentTests.swift",
     "tests/NativeArgumentTier2Test.swift",

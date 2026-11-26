@@ -2,6 +2,7 @@
 #import "TegraGM20BMetalInternal.h"
 #include "TegraGM20BGrPreemptABI.h"
 #include "TegraGM20BPathsABI.h"
+#include "probe_restores.h"
 #include "push.h"
 #include <libkern/OSCacheControl.h>
 #include <xpc/xpc.h>
@@ -29,7 +30,7 @@ static NSString *const kProbesUnentitled = @"raw methods need the " SWITCH_GPU_P
 // (method, value) uint32 pairs of the 3D class. Every draw of one instance this process encodes emits `before` after
 // its state and `after` once it ended, until a call with `before` nil disarms them and answers how many draws emitted
 // them. The probe's command buffers must complete before it disarms: their encoding may run after commit returns.
-static bool appendMethods(NSData *pairs, std::vector<uint32_t> &words)
+static bool appendMethods(NSData *pairs, std::vector<uint32_t> &words, gm20b::Device::ProbeWords &into)
 {
     if (!pairs)
         return true;
@@ -39,6 +40,7 @@ static bool appendMethods(NSData *pairs, std::vector<uint32_t> &words)
     for (NSUInteger i = 0; i < pairs.length / 4; i += 2) {
         if (v[i] >= 0x8000 || v[i] % 4)
             return false;
+        into.restores |= gm20b::probeRestoreBits(v[i]);
         words.push_back(gm20b::Push::hdr(1, gm20b::SUBC_3D, v[i], 1));
         words.push_back(v[i + 1]);
     }
@@ -87,7 +89,7 @@ static gm20b::ProbeSurface probeSurface(const gm20b::Texture &t, uint32_t fmt2d)
     if (!probesEntitled())
         return kProbesUnentitled;
     auto words = std::make_shared<gm20b::Device::ProbeWords>();
-    if (!appendMethods(before, words->before) || !appendMethods(after, words->after))
+    if (!appendMethods(before, words->before, *words) || !appendMethods(after, words->after, *words))
         return @"methods are (method, value) uint32 pairs of 3D-class methods below 0x8000";
     if (words->before.size() + words->after.size() > 1024)
         return @"more than 512 methods";
@@ -308,17 +310,20 @@ static gm20b::ProbeSurface probeSurface(const gm20b::Texture &t, uint32_t fmt2d)
 }
 
 // What a probe's line says of a texture and the device: "raw=1 comptags=1 block_linear=1 pitch=N tiled_cache=1
-// compression=1 kind=0xNN", raw=0 where the driver does not hold it; kind its compressed memory's (0: none)
+// compression=1 kind=0xNN block_rows=N" (kind its compressed memory's, 0: none; a block's rows, 0 for a pitch-linear
+// texture), raw=0 where the driver does not hold it
 - (NSString *)switchMetalProbeFacts:(id<MTLTexture>)texture
 {
     const uint32_t flags = gRM->raw->kernelInfo().flags;
     SwitchMetalTexture *t = gm20bTexture(texture);
     const gm20b::Texture now = t ? gRM->raw->lockedCopy(t->_raw) : gm20b::Texture();
+    const bool blockLinear = t && now.blockLinear;
     return [NSString
-        stringWithFormat:@"raw=%d comptags=%d block_linear=%d pitch=%u tiled_cache=%d compression=%d kind=0x%x",
-                         t != nil, t && now.comptags, t && now.blockLinear, t ? now.pitch : 0,
+        stringWithFormat:@"raw=%d comptags=%d block_linear=%d pitch=%u tiled_cache=%d compression=%d kind=0x%x "
+                         @"block_rows=%u",
+                         t != nil, t && now.comptags, blockLinear, t ? now.pitch : 0,
                          (flags & TegraGM20BInfoTiledCache) != 0, (flags & TegraGM20BInfoCompression) != 0,
-                         t ? gRM->raw->privateKind(t->_raw) : 0u];
+                         t ? gRM->raw->privateKind(t->_raw) : 0u, blockLinear ? 8u << now.blockHeight : 0u];
 }
 
 // A buffer's binding as a probe's line says it: "raw=1 wc=1 volatile=0", volatile where its PTEs bypass the GPU's L2

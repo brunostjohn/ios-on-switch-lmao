@@ -4,6 +4,7 @@
 // tier-1 / runtime-compiled fallback cleanup, and 8-thread TSan concurrency stress.
 #include "facade_harness.h"
 #include "bazel/testing/fresh_process.h"
+#include "../blend_kill.h"
 #include "../creation_cost.h"
 #include "../encode_profile.h"
 #include "../lock.h"
@@ -328,6 +329,70 @@ TEST(GM20BPackHitStage3, FirstAndRepeatTier0HitsAreLockFreeAndZeroKernelCalls)
     EXPECT_EQ(profile.calls[size_t(gm20b::EncodePart::Kernel)], 0u);
     EXPECT_EQ(afterRepeat.work.builds - beforeRepeat.work.builds, 0u);
     EXPECT_EQ(afterRepeat.work.lookups - beforeRepeat.work.lookups, 0u);
+}
+
+// The fixture with every segment's kill word made NOOP_NEVER (`words`) or every segment's kill flag cleared (`flag`),
+// written where a Device opens it, its image the kernel model's
+std::string patchedKillPack(bool words, bool flag)
+{
+    std::vector<uint8_t> bytes = readFileBytes(kFixturePath);
+    EXPECT_FALSE(bytes.empty());
+    gm20b::PackHeader h = {};
+    std::memcpy(&h, bytes.data(), sizeof h);
+    const gm20b::PackSection segments = h.section[gm20b::PackSegments];
+    gm20b::PackSegmentTable table = {};
+    std::memcpy(&table, bytes.data() + segments.offset, sizeof table);
+    constexpr uint32_t kKillWord =
+        gm20b::Push::hdr(4, gm20b::SUBC_3D, gm20b::kIteratedBlendOptimization, gm20b::kNoopSourceRgba0000);
+    uint32_t killing = 0;
+    for (uint32_t i = 0; i < table.pipelineCount; i++) {
+        uint8_t *at = bytes.data() + segments.offset + sizeof table + i * sizeof(gm20b::PackSegment);
+        gm20b::PackSegment segment = {};
+        std::memcpy(&segment, at, sizeof segment);
+        killing += (segment.flags & gm20b::kPackSegmentBlendKill) != 0;
+        if (flag) {
+            segment.flags &= uint16_t(~gm20b::kPackSegmentBlendKill);
+            std::memcpy(at, &segment, sizeof segment);
+        }
+        auto *w = reinterpret_cast<uint32_t *>(bytes.data() + h.section[gm20b::PackHeap].offset + segment.heapOffset);
+        for (uint32_t k = 0; words && k < segment.words; k++)
+            if (w[k] == kKillWord)
+                w[k] = gm20b::Push::hdr(4, gm20b::SUBC_3D, gm20b::kIteratedBlendOptimization, gm20b::kNoopNever);
+    }
+    EXPECT_GT(killing, 0u) << "no segment of the fixture is flagged to kill";
+    const std::string path = harness::dir() + (flag ? "/pack_v34_no_kill_flag.bin" : "/pack_v34_no_kill_words.bin");
+    std::ofstream(path, std::ios::binary).write(reinterpret_cast<const char *>(bytes.data()), std::streamsize(bytes.size()));
+    configurePackImageFromBytes(bytes, true);
+    return path;
+}
+
+// A prebuilt state's zero-source kill is its segment's flag (pack.h kPackSegmentBlendKill), in the segment table tier 0
+// wires: its creation reads none of the segment's words, heap pages no process keeps resident. A pack built before a
+// rule change may decide otherwise than the runtime's rule: the state is what the GPU gets, and the disagreement is
+// counted.
+TEST(GM20BPackHitStage3, APrebuiltStatesKillIsItsSegmentsFlagNotItsWords)
+{
+    const uint64_t key = hashKey(kBlendInterlockKey);
+    {
+        const std::string path = patchedKillPack(true, false);
+        gm20b::Device dev;
+        std::string err;
+        ASSERT_TRUE(dev.open(path.c_str(), 0, err, gm20b::Device::Role::Client)) << err;
+        gm20b::Pipeline *pl = dev.pipeline(dev.pack().fastRun(key), key, gm20b::PackForm::Default, false);
+        ASSERT_NE(pl, nullptr);
+        EXPECT_TRUE(pl->blendKill) << "the flag says kill; the words were never read";
+        EXPECT_EQ(dev.stats.blendKillPackDisagreements.load(), 0u);
+    }
+    const std::string path = patchedKillPack(false, true);
+    gm20b::Device dev;
+    std::string err;
+    ASSERT_TRUE(dev.open(path.c_str(), 0, err, gm20b::Device::Role::Client)) << err;
+    gm20b::Pipeline *pl = dev.pipeline(dev.pack().fastRun(key), key, gm20b::PackForm::Default, false);
+    ASSERT_NE(pl, nullptr);
+    ASSERT_NE(pl->prebuiltWords, nullptr);
+    EXPECT_FALSE(pl->blendKill) << "the flag says no kill";
+    EXPECT_EQ(dev.stats.blendKillStates.load(), 0u);
+    EXPECT_EQ(dev.stats.blendKillPackDisagreements.load(), 1u) << "the runtime's rule kills this state";
 }
 
 TEST(GM20BPackHitStage3, PrebuiltStateSegmentsMatchDynamicBuilderExactlyAndDrawFromPackWindow)

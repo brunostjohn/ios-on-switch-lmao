@@ -81,6 +81,7 @@
 #include "fetch_free.h"
 #include "fetch_order.h"
 #include "kernel.h"
+#include "zcull_slots.h"
 #include "channel_recovery.h"
 #include "fence.h"
 #include "host_access.h"
@@ -1149,8 +1150,12 @@ public:
         std::atomic<uint64_t> compCopies{0}, compZetaCopies{0};
         // compute launches encoded (compute.h)
         std::atomic<uint64_t> dispatches{0};
-        // states made with the zero-source pixel kill on (blend_kill.h), and their binds encoded
-        std::atomic<uint64_t> blendKillStates{0}, blendKillBinds{0};
+        // states made with the zero-source pixel kill on (blend_kill.h), and their binds encoded; prebuilt states whose
+        // pack segment pushes another kill than the runtime's rule gives
+        std::atomic<uint64_t> blendKillStates{0}, blendKillBinds{0}, blendKillPackDisagreements{0};
+        // draws of a vertex amplification count above 1 (each drawn once per amplification: amplification.cpp); draws
+        // that wrote a state's SlotGuestBase holes (a rebind, or a hole's slot bound again)
+        std::atomic<uint64_t> amplifiedDraws{0}, guestHoleWrites{0};
         std::atomic<uint64_t> fillTwod{0};               // fillTexture: regions by the 2D engine (twod_fill.h)
         std::atomic<uint64_t> resolveTwod{0};            // MSAA resolves by the 2D engine (resolve_twod.cpp)
         std::atomic<uint64_t> resolveExact{0};           // those through the grid's complement (the probe's)
@@ -1166,6 +1171,10 @@ public:
         // useResidencySet: calls, and the host-visible allocations of used sets a range's seal named
         // (gm20bNameResidencySets)
         std::atomic<uint64_t> residencySetUses{0}, residencyNamed{0};
+        // of those loads, the regions an earlier range of the command buffer stored; STORE_ZCULL words made stores and
+        // left NO_OPERATIONs (no pass loaded their region); regions parked for a range that found another job submitted
+        // first
+        std::atomic<uint64_t> zcullCarried{0}, zcullStores{0}, zcullUnstored{0}, zcullCarriesLost{0};
         // stencil plane draws encoded: the eight-draw route's (stencil_bits.h) and the one-draw route's
         // (zeta_colour.h)
         std::atomic<uint64_t> stencilBitDraws{0}, zetaColourDraws{0};
@@ -1213,6 +1222,9 @@ public:
     // BEGIN, and after its END the words that set back what those set, while armed
     struct ProbeWords {
         std::vector<uint32_t> before, after;
+        // the registers its words write that the draw sets back after it (probe_restores.h): kProbeRestores' entries.
+        // Whatever they write, the raster masks' held word is unknown after it, so the next draw writes them again.
+        uint32_t restores = 0;
     };
 
     std::atomic<bool> probeArmed{false};
@@ -2429,6 +2441,13 @@ private:
     // zcull's layout where the kernel reports one (zcull.h), from open
     TegraGM20BAbiZcullInfo zcullInfo_ = {};
     bool zcullOn_ = false;
+    // The zcull regions' storage, the regions parked for a command buffer's next range, and the last job's slot owner
+    // (zcull_slots.h, zcull_planes.h): the encoding thread's alone
+    ZcullSlots zcullSlots_;
+    ZcullCarry zcullCarry_;
+    uint64_t zcullOwners_ = 0;
+    // A slot's storage, cached and in the resource set (ControlUse::ZcullStorage); false: none
+    bool makeZcullSlot(Bo &bo, uint64_t bytes);
     // Whether a full clear to `e` writes comptags only; one this process never asked for is asked for
     bool zbcHeld(const TegraGM20BAbiZbc &e);
     // compThread_ asks the kernel for the ZBC entries wanted, `l` dropped around each call

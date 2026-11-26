@@ -59,6 +59,8 @@ void armKeylineProbe();
 // Whether a pack key is one of the driver's own states (own_states.h)
 bool isOwnState(uint64_t keyHash);
 
+constexpr uint32_t kGuestBases = 4;
+
 struct Pipeline {
     const PackPipeline *rec = nullptr;
     SetEntries entries;  // its record's, with its far block
@@ -85,6 +87,20 @@ struct Pipeline {
     bool namesViewportClipRange = false;   // it sets SET_VIEWPORT_CLIP_MIN_Z or MAX_Z
     StateSegment segment;                  // the same words in the device's segment heap; empty: they go inline
     uint32_t push[32] = {}, pushMask = 0;  // root table [0x700, 0x780): the words m2v's push ranges write, and which
+
+    // m2v's SlotGuestBase holes: a buffer slot whose Metal address its programs read (a pointer compare, ptrtoint or a
+    // stored pointer), as its stage (0 vertex, 1 fragment), Metal buffer index and push word + 1 (0: no more). Each draw
+    // writes the bound slot's address there, a set*Bytes binding's being its upload copy's (RenderEncoder::guestBaseWords),
+    // an indirect command buffer's draw too: its commands inherit the encoder's buffers (TegraGM20BMetalIndirect.mm
+    // refuses one that does not). The record's builder fills them for render states only, at most kGuestBases (a state
+    // with more is refused), in each record of the state: its variants and its stride twin are records of their own. A
+    // compute kernel has none: its SlotGuestBase fields count as other holes, which refuse its record
+    // (NativeMetalDirectComputeWords.rs guest_bases).
+    struct GuestBase {
+        uint8_t stage = 0, slot = 0, word = 0;
+    };
+
+    GuestBase guestBases[kGuestBases];
     // the constant buffer slot the vertex, pixel, tessellation init and tessellation program read set 0 at (0: none), whose
     // bind groups are kSetGroups'
     uint8_t setSlot[4] = {};

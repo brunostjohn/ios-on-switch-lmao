@@ -92,7 +92,7 @@ struct Stats {
     std::atomic<uint64_t> scheduledWaits{0}, scheduledWaitUs{0}, completedWaits{0}, completedWaitUs{0};
     // encoders the worker encoded before their command buffer's commit (TegraGM20BMetalPipeline.mm), of the encoders of the raw
     // command buffers it sealed; encodes ahead given back, by the first reason (SwitchMetalPipelineVeto's bit)
-    std::atomic<uint64_t> pipelinedEncoders{0}, sealedEncoders{0}, pipelineAbandons[15]{};
+    std::atomic<uint64_t> pipelinedEncoders{0}, sealedEncoders{0}, pipelineAbandons[VetoKinds]{};
     // command buffers handed to the worker as encoders ended, and those hand-offs that found it asleep (woken by them)
     std::atomic<uint64_t> handoffs{0}, handoffWakes{0};
 #if SWITCH_FRAME_TIMELINE

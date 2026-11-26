@@ -236,8 +236,12 @@ public:
     // a multisampled attachment's resolve by the 2D engine (probe_ops.h); false: none for its format or grid
     bool probeResolve(const Texture &multisampled, const Texture &into);
 #endif
-    // Nothing of it is on the GPU any more: the rings get back what it took, the root table's shadow what it was.
+    // Nothing of it is on the GPU any more: the rings get back what it took, the root table's shadow what it was. A carry
+    // it resumed is lost (counted in zcull_carries_lost) and ends.
     void abandon();
+    // abandon() of a range that is encoded again (its commit's admission waits for a resource): a carry it resumed stays
+    // parked for that encode, its slots held for it
+    void abandonForRetry();
 
     // A host import the submission reads or writes (a surface's, a no-copy buffer's), for the kernel's order with other
     // processes' GPU work on it (kernel.h exec)
@@ -263,6 +267,33 @@ public:
     // memory but no program of the draw does
     void use(const Buffer &buffer, bool write, bool noted = true);
     void use(const Texture &texture, bool write);
+
+    // The range encode naming a range's resources ahead of its commands (the whole range at once, or an encoder as an
+    // encode ahead enters it): no write in command order, so no depth's stored zcull region goes stale by it. The
+    // commands' own uses, a pass's attachments at its begin among them, mark the regions their writes reach.
+    void namingResources(bool on)
+    {
+        namingResources_ = on;
+    }
+
+    // The depths' regions its passes stored so far (zcull_planes.h)
+    const std::vector<ZcullStored> &zcullRegions() const
+    {
+        return zcullPlanes_.regions();
+    }
+
+    // At its commit, the regions bit i of `kept` names (zcullRegions()' order) are stored and parked for the range of the
+    // Metal command buffer `to` that begins at `from` (nullptr: none); the rest are left unstored
+    void carryZcull(const void *to, uint64_t from, uint32_t kept)
+    {
+        zcullTo_ = to;
+        zcullFrom_ = from;
+        zcullKept_ = kept;
+    }
+
+    // After begin(): the regions parked for the range of `cb` that begins at `from`, where no job was submitted since. The
+    // carry stays parked until this job submits or is abandoned, so a retried encode of the range resumes it again.
+    void resumeZcull(const void *cb, uint64_t from);
 
     uint32_t draws = 0, passes = 0, blits = 0, bands = 0;
     uint32_t stamp = 0;               // its GPU time's slot (stamps.h), for Device::gpuNanoseconds once it completed
@@ -290,6 +321,17 @@ private:
     void nameHeaps(std::unique_lock<gm20b::Mutex> &l);  // lock_ held
     SurfaceList surfaces_;
     ZcullPlanes zcullPlanes_;  // the depths' regions this command buffer's passes stored (zcull_planes.h)
+    uint64_t zcullOwner_ = 0;  // the slots' owner (zcull_slots.h): its begin()'s, or the job whose regions it resumed
+    const void *zcullTo_ = nullptr;
+    uint64_t zcullFrom_ = 0;
+    uint32_t zcullKept_ = 0;
+    bool zcullResumed_ = false;  // resumeZcull took the parked carry
+    // A slot for the region of the depth at `zetaVa`, `bytes` long; 0: none
+    uint64_t zcullSlot(uint64_t zetaVa, uint64_t bytes, int &slot);
+    void settleZcull();
+    void parkZcull();
+    void endResumedCarry(bool retried);
+    bool namingResources_ = false;
     std::vector<SetUse> memberUses_;
     uint32_t memberRemovals_ = 0;
     bool memberHostWritten_ = false;
@@ -347,7 +389,7 @@ private:
     struct DrawCounts {
         uint64_t uploadBytes = 0, segmentBinds = 0, segmentWords = 0, segmentSkips = 0, segmentCopies = 0,
                  blendKillBinds = 0, interlockDraws = 0, interlocked = 0, interlockedBlends = 0, twinRule = 0,
-                 rasterOrderedDraws = 0;
+                 rasterOrderedDraws = 0, amplifiedDraws = 0, guestHoleWrites = 0;
         uint64_t splitTwins = 0, splitWhole[size_t(SplitWhole::Count)] = {};
     } counts_;
 
@@ -357,6 +399,11 @@ private:
     // passes it opened with PIXEL_SHADER_BARRIER, added to Stats::passPixelOpenings at its commit (an abandoned encode
     // ahead counts none)
     uint64_t pixelOpenings_ = 0;
+
+    // its passes with a zcull region, those that loaded one, and those whose region an earlier job stored, likewise
+    struct ZcullCounts {
+        uint64_t passes = 0, loads = 0, carried = 0;
+    } zcullCounts_;
 #endif
 #if SWITCH_METAL_DIAGNOSTICS
     Texture glassMemImages_[kGlassMemItems];               // the image each of the probe's rows is read from

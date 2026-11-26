@@ -393,4 +393,39 @@ TEST_F(DevicePassForms, EveryDrawPathSplitsAFourSampleStateWritingDepth)
     }
 }
 
+// HW Test gpu.gm20b.mixed_merge_probe's rows (Device::probeTir kTirProbeWhole): a state the driver would split is drawn
+// once, under the whole mask prepare chose for it (written where the held mask was another), so the control row
+// measures one draw
+TEST_F(DevicePassForms, AProbeRowAskingWholeDrawsASplitStateOnceUnderTheWholeMask)
+{
+    if (!SWITCH_METAL_DIAGNOSTICS)
+        GTEST_SKIP() << "the probe rows are debug builds'";
+    gm20b::Pipeline *four = state(0xb4, "samples=4 c0=70 ds=252/0 ");
+    gm20b::Pipeline *kills = recordState(dev, 0xb8, "samples=4 c0=70 ds=252/0 ", 0x1111, false, true);
+    ASSERT_NE(four, nullptr);
+    ASSERT_NE(kills, nullptr);
+    gm20b::Buffer arguments;
+    ASSERT_TRUE(dev.createBuffer(256, arguments));
+    const uint32_t direct[4] = {4, 1, 0, 0};
+    memcpy(arguments.cpu, direct, sizeof direct);
+    const gm20b::DepthStencilState writes(depthWrites());
+    dev.probeTir.store(1u | gm20b::kTirProbeWhole);
+    for (gm20b::Pipeline *pl : {four, kills}) {
+        for (const bool indirect : {false, true}) {
+            SCOPED_TRACE(std::string(pl == four ? "split" : "split shaded") + (indirect ? ", indirect" : ""));
+            MixedPass m(dev);
+            const auto ms = m.run([&](gm20b::RenderEncoder &e, const char **refused) {
+                e.setPipeline(pl);
+                e.setDepthStencil(&writes);
+                return indirect ? e.drawIndirect(kTriangleStrip, &arguments, 0, refused)
+                                : e.draw(kTriangleStrip, 0, 4, 1, 0, refused);
+            });
+            ASSERT_FALSE(ms.empty()) << m.why;
+            const std::string drawn = masksAndDraws(modeSteps(ms));
+            EXPECT_TRUE(drawn == "D" || drawn == "Mffff D") << drawn;
+        }
+    }
+    dev.probeTir.store(0);
+}
+
 }  // namespace

@@ -145,8 +145,9 @@ protected:
 TEST(GM20BControlMemory, MemoryTheGpuAloneTouchesPerPixelOrDrawIsCached)
 {
     using gm20b::ControlUse;
-    for (ControlUse use : {ControlUse::InterlockTickets, ControlUse::RootTable, ControlUse::ZeroPage,
-                           ControlUse::ColorTable, ControlUse::ArgumentRoots, ControlUse::HandleTables})
+    for (ControlUse use :
+         {ControlUse::InterlockTickets, ControlUse::RootTable, ControlUse::ZeroPage, ControlUse::ColorTable,
+          ControlUse::ArgumentRoots, ControlUse::HandleTables, ControlUse::ZcullStorage})
         EXPECT_EQ(gm20b::controlMapping(use), gm20b::ControlMapping::Cached) << int(use);
     for (ControlUse use : {ControlUse::TextureHeaders, ControlUse::SamplerHeaders, ControlUse::Stamps, ControlUse::Ring,
                            ControlUse::Bytes, ControlUse::TransferSlot, ControlUse::StateSegments})

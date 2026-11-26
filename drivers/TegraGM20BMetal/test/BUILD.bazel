@@ -697,6 +697,22 @@ device_test(
     ],
 )
 
+# A zcull region kept for a command buffer's next range: stored only where loaded, loaded by that range's job, lost to
+# a job submitted in between (zcull_planes.h ZcullCarry)
+device_test(
+    name = "device_zcull_carry_test",
+    srcs = [
+        "device_forms.h",
+        "device_zcull_carry_test.cpp",
+        "//drivers/TegraGM20BMetal:area_load.cpp",
+        "//drivers/TegraGM20BMetal:reach.cpp",
+        "//drivers/TegraGM20BMetal:stencil_bits.cpp",
+        "//drivers/TegraGM20BMetal:turn_copy.cpp",
+        "//drivers/TegraGM20BMetal:turned_pass.cpp",
+        "//drivers/TegraGM20BMetal:zeta_colour.cpp",
+    ],
+)
+
 device_test(
     name = "device_pass_layers_test",
     srcs = [
@@ -2163,6 +2179,18 @@ py_test(
     deps = ["//drivers/TegraGM20BMetal:pack"],
 )
 
+# A pre-built segment's blend-kill flag is its own last SET_ITERATED_BLEND_OPTIMIZATION (pack/segments.py)
+py_test(
+    name = "segment_blend_kill_test",
+    srcs = ["segment_blend_kill_test.py"],
+    data = [
+        "//drivers/TegraGM20BMetal:chip_facts.h",  # packfile.py stamps its chip facts
+        "//drivers/TegraGM20BMetal:own_states.h",
+        "//drivers/TegraGM20BMetal:owned.h",
+    ],
+    deps = ["//drivers/TegraGM20BMetal:pack"],
+)
+
 # The pack's link step stays linear in programs and states (packfile.place_graphics, mkpack.lay_out_programs)
 py_test(
     name = "link_cost_test",
@@ -2274,6 +2302,22 @@ py_test(
         "//drivers/TegraGM20BMetal:owned.h",  # mkpack.py reads it at import
         "//gpu/seed:pack",
     ],
+    tags = ["pack"],
+    deps = ["//drivers/TegraGM20BMetal:pack"],
+)
+
+py_test(
+    name = "blend_kill_pack_test",
+    srcs = [
+        "blend_kill_pack_test.py",
+        "make_pack_targets_test.py",
+    ],
+    args = ["$(rootpath //gpu/seed:pack)/pack.bin"],
+    data = [
+        "//drivers/TegraGM20BMetal:owned.h",  # mkpack.py reads it at import
+        "//gpu/seed:pack",
+    ],
+    main = "blend_kill_pack_test.py",
     tags = ["pack"],
     deps = ["//drivers/TegraGM20BMetal:pack"],
 )
@@ -3198,7 +3242,40 @@ host_test(
         "//drivers/TegraGM20BMetal:shared_events.h",
         "//drivers/TegraGM20BMetal:surfaces.h",
         "//drivers/TegraGM20BMetal:zcull.h",
+        "//drivers/TegraGM20BMetal:stats.h",
         "//drivers/TegraGM20BMetal:zcull_planes.h",
+        "//drivers/TegraGM20BMetal:zeta.h",
+    ],
+    copts = [
+        "-iquote",
+        "drivers/TegraGM20B",
+    ],
+    cxx_std = "c++17",
+    deps = ["//kits/SwitchGM20B:classes"],
+)
+
+# zcull_planes.h and zcull_slots.h: when a pass's STORE_ZCULL is a store, what a range carries to the next, and which
+# slot a job may take
+host_test(
+    name = "zcull_planes_test",
+    srcs = [
+        "zcull_planes_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
+        "//drivers/TegraGM20B:TegraGM20BFencePageABI.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BZcullABI.h",
+        "//drivers/TegraGM20BMetal:control_memory.h",
+        "//drivers/TegraGM20BMetal:cpu_completion.h",
+        "//drivers/TegraGM20BMetal:kernel.h",
+        "//drivers/TegraGM20BMetal:lock.h",
+        "//drivers/TegraGM20BMetal:push.h",
+        "//drivers/TegraGM20BMetal:shared_events.h",
+        "//drivers/TegraGM20BMetal:stats.h",
+        "//drivers/TegraGM20BMetal:surfaces.h",
+        "//drivers/TegraGM20BMetal:zcull.h",
+        "//drivers/TegraGM20BMetal:zcull_planes.h",
+        "//drivers/TegraGM20BMetal:zcull_slots.h",
         "//drivers/TegraGM20BMetal:zeta.h",
     ],
     copts = [
@@ -3639,6 +3716,52 @@ device_test(
 
 # A private target made plain for want of compressed memory moves onto it once some is made (private_comp.h
 # Device::compressedFromPlain)
+# A state's written colour targets are the ones its key names, whatever SET_CT_WRITE the pack's baseline leaves the others
+# (device_write_bits_test.cpp)
+# Every pre-built state of the built pack pushes its rule's zero-source kill, both ways (Device::build, S7)
+device_test(
+    name = "device_kill_pack_test",
+    size = "medium",  # about a minute: every tier-0 record of the pack is placed
+    srcs = ["device_kill_pack_test.cpp"],
+    data = ["//gpu/seed:pack"],
+    env = {"SWITCH_METAL_KILL_PACK": "$(rootpath //gpu/seed:pack)/pack.bin"},
+    tags = ["pack"],
+)
+
+# A probe draw sets back what the channel's init context writes (probe_restores.h against context.tsv)
+host_test(
+    name = "probe_restores_test",
+    srcs = [
+        "probe_restores_test.cpp",
+        "//drivers/TegraGM20BMetal:probe_restores.h",
+    ],
+    cxx_std = "c++17",
+    deps = [
+        "//kits/SwitchGM20B:classes",
+        "//kits/SwitchGM20BEmit:context_h",
+    ],
+)
+
+# A probe draw that writes the sample-mask registers sets the golden context's values back after it
+device_test(
+    name = "device_probe_masks_test",
+    srcs = [
+        "device_forms.h",
+        "device_probe_masks_test.cpp",
+    ],
+)
+
+# A state's SlotGuestBase holes filled at each draw: a set*Bytes slot's upload copy, a buffer's address and offset
+device_test(
+    name = "device_guest_base_test",
+    srcs = ["device_guest_base_test.cpp"],
+)
+
+device_test(
+    name = "device_write_bits_test",
+    srcs = ["device_write_bits_test.cpp"],
+)
+
 device_test(
     name = "device_private_move_test",
     srcs = [
@@ -5337,6 +5460,14 @@ facade_test(
     env = {"TSAN_OPTIONS": "halt_on_error=1:report_signal_unsafe=0"},
     linkopts = ["-fsanitize=thread"],
     plugin = "_tsan",
+)
+
+facade_test(
+    name = "facade_zcull_ahead_test",
+    srcs = [
+        "facade_zcull_ahead_test.cpp",
+        "scale_frames.h",
+    ],
 )
 
 # A raw command buffer's scheduled and completed stages as its caller sees them (facade_handlers_test.cpp), plain and

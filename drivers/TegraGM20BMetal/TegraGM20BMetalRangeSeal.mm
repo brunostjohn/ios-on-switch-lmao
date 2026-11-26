@@ -208,6 +208,7 @@ bool SwitchMetalRangeEncode::seal(size_t to)
         cb->_promisesTaken = true;
         rc->promises = cb->_promises;
     }
+    carryZcull(to);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     splitCaptureCommitted(*rc);
 #endif
@@ -231,7 +232,10 @@ bool SwitchMetalRangeEncode::seal(size_t to)
                                NSLocalizedDescriptionKey : @"Resource readiness notification could not be armed"
                            }];
             }
-            rc->abandon();
+            if (cb->_resourceReady)
+                rc->abandonForRetry();
+            else
+                rc->abandon();
             return false;
         }
         // its promises were given up at the holder's bound before this keep: it fails as one held past it

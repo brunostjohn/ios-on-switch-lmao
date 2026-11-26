@@ -501,8 +501,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         }
         compatible_ = pl;
     }
-    const MixedDraw mixed =
-        mixedDraw(*pl, ds_, pass_.depthStencil, samples_, rasterSamples_, (alphaWanted_ & kAlphaToCoverage) != 0);
+    const MixedDraw mixed = mixedForm(*pl);
     SWITCH_METAL_DIAGNOSTIC(if (mixed == MixedDraw::Covering) dev_->stats.mixedCovering++;
                             if (mixed == MixedDraw::Split) dev_->stats.mixedStageOff++);
     if (!prepareShaderTests(*pl, why))
@@ -643,6 +642,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     SWITCH_METAL_ENCODE_END(descriptorSpan);
     if (!set)
         return false;
+    const bool holesMoved = pl->guestBases[0].word && guestSlotMoved(*pl);
     moved_ = MovedBindings{{}, {}, {}, false};
     spillDirty_ = false;
     const auto &residuals = built->residuals;
@@ -662,7 +662,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     const bool rebinds = pl != emitted_;
     if (pl != emitted_ || residualMask || residualsPushed_ || (dynamicBlend && blendColorDirty_) ||
         r.shaderTests.flags || shadowStencil(r.shaderTests) || slotRoots || (patches && tessWordsDirty_) ||
-        drawnWordsDirty) {
+        drawnWordsDirty || holesMoved) {
         if (pl != emitted_) {
             blendColorDirty_ |= pl->constantBlend || dynamicBlend;
             if (cb_->extrasLive_ && cb_->extrasLive_ != pl) {
@@ -709,13 +709,14 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                 want[word - 1] = uint32_t(table);
                 want[word] = uint32_t(table >> 32);
             }
+        const uint32_t pushMask = pl->pushMask | (pl->guestBases[0].word ? guestBaseWords(*pl, want) : 0u);
         for (int i = 0; i < 32;) {
-            if (!(pl->pushMask >> i & 1) || root[i] == want[i]) {
+            if (!(pushMask >> i & 1) || root[i] == want[i]) {
                 i++;
                 continue;
             }
             int j = i;
-            while (j < 32 && (pl->pushMask >> j & 1) && root[j] != want[j])
+            while (j < 32 && (pushMask >> j & 1) && root[j] != want[j])
                 j++;
             p.m(LOAD_CB_OFFSET, 0x700 + 4 * i);
             p.nonInc(LOAD_CB, want + i, j - i);

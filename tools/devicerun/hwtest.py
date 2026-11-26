@@ -707,12 +707,17 @@ TESTS: dict[str, bool] = {
     'gpu.perf.knobs': False,
     'gpu.perf.nvn': False,
     'gpu.perf.first_touch': False,
+    'gpu.gm20b.aegir_moon': False,
+    'gpu.gm20b.mixed_merge_probe': False,
+    'gpu.gm20b.bytes_address': False,
+    'gpu.gm20b.packed_fetch_read': False,
 }
 
 # The tests only one iOS version's app runs (apps/hwtest/app<version>), by that version.
 BY_IOS: dict[str, dict[str, bool]] = {
     '27': {
         'gpu.ca.glass': False,
+        'gpu.ca.glass_axes': False,
         'gpu.ca.glass_split': False,
         'gpu.ca.fetch_routes': False,
         'metal4.device': False,

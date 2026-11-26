@@ -218,6 +218,7 @@ struct ZcullPass {
     bool load = false;   // LOAD_ZCULL from `storage` in the prologue, in place of the depth clear's region
     bool store = false;  // STORE_ZCULL into `storage` at the end
     uint64_t storage = 0, storageBytes = 0;
+    int slot = -1;  // the ZcullSlots slot `storage` is
 };
 
 inline uint8_t zcullDirection(uint8_t compare)
