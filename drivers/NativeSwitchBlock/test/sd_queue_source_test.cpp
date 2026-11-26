@@ -68,7 +68,7 @@ TEST(SdQueueSource, MergeChains)
         HasSubstr("self->pickLocked(&cand->batch.sectors, &cand->batch.count, &activeRange, hwActive ? 1u : 0u)"));
     // Every request starts unchained.
     EXPECT_TRUE(
-        Search(source, R"(static_cast<uint8_t>\(priority >> 6\),\s*direction == kIODirectionOut,\s*false,\s*false,)"));
+        Search(source, R"(klass,\s*direction == kIODirectionOut,\s*false,\s*false,)"));
 }
 
 // The chain's first request comes from SwitchSdPick.h (sd_pick_test.cpp), with a synchronize's writes ranked as reads;
@@ -88,6 +88,16 @@ TEST(SdQueueSource, PickAndRaise)
                 HasSubstr("return raise(extents, count, priority, false);"));
     EXPECT_THAT(body("extern \"C\" IOReturn switch_block_raise("),
                 HasSubstr("gOwner->device->raise(extents, count, priority, true)"));
+}
+
+// The boot replay's reads are known by the kernel's replay thread and queue one class below tier-0 demand reads.
+TEST(SdQueueSource, ReplayReadsAreKnownByTheKernelsReplayThread)
+{
+    const std::string io = body("IOReturn NativeSwitchBlockDevice::doAsyncReadWrite(");
+    EXPECT_THAT(io, HasSubstr("switch_vm_prefetch_is_replay_thread(current_thread())"));
+    EXPECT_THAT(io, HasSubstr("switchSdClassOf(static_cast<uint8_t>(priority >> 6), replay)"));
+    EXPECT_LT(Index(io, "switchSdClassOf("), Index(io, "owner->submit(spec)"));
+    EXPECT_THAT(driver(), Not(HasSubstr("gPrefetchThread")));
 }
 
 // r14-sdcq: a read chain's gaps go to the sink and nowhere else; a write chain never has one.

@@ -106,6 +106,16 @@ inline SwitchSdPicked<Request> switchSdPick(Request *head, const uint64_t awaite
     return {first, prev, true, false};
 }
 
+// The boot replay's reads (the kernel's prefetch thread, kernel/switch/vm/prefetch.c) are tier 0 by policy but read
+// ahead of use: they queue one class below the UI's demand reads. A demand fault on a page a queued replay read holds
+// busy raises that read back (XNU's busy-page raise, doSetPriority), and the share turn keeps the replay moving.
+constexpr uint8_t kSwitchSdReplayClass = 1;
+
+inline uint8_t switchSdClassOf(uint8_t asked, bool replay)
+{
+    return replay && asked < kSwitchSdReplayClass ? kSwitchSdReplayClass : asked;
+}
+
 // Raises every queued request overlapping [lba, lba + sectors) to `klass` (never lowers one), keeping queuedReads in
 // step. Returns how many it raised. Requests already taken into a chain are not in the queue and keep their class.
 template <typename Request>

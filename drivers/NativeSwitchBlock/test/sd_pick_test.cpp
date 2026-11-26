@@ -103,6 +103,34 @@ TEST(SdPick, BackgroundIsNeverStarved)
     EXPECT_LT(after.worstByClass[3], 400 * kMs);  // 224 ms; the 50 ms share alone, without 8 passes, gave 1,010 ms
 }
 
+// The boot replay keeps up to 1.5 MiB of 512 KiB reads queued for as long as it runs (SWITCH_PREFETCH_INFLIGHT_LIMIT:
+// three queued at once, then one as each completes). In tier 0's class the UI's page-ins wait behind all of them; one
+// class lower they pass the queued ones and wait for the chain on the card and the one prepared behind it. Runs of
+// different files (the replay list's usual order) stay 512 KiB chains; one file's consecutive runs merge into 1 MiB
+// chains, which the pipeline holds either way.
+TEST(SdPick, BootReplayRanksBelowTierZeroDemand)
+{
+    const auto replay = [](uint8_t klass, uint64_t stride) {
+        std::vector<Arrival> out;
+        for (int i = 0; i < 300; ++i)
+            out.push_back({i < 3 ? 0 : static_cast<uint64_t>(i - 2) * 5700 * kUs,
+                           80000000 + static_cast<uint64_t>(i) * stride, 1024, klass, false});
+        return out;
+    };
+    EXPECT_EQ(switchSdClassOf(0, false), 0u);
+    EXPECT_EQ(switchSdClassOf(2, true), 2u);
+    const Result before = run(Rule::kNew, replay(0, 8192));
+    const Result after = run(Rule::kNew, replay(switchSdClassOf(0, true), 8192));
+    report("boot replay of separate files, below tier 0", before, after);
+    EXPECT_LT(after.uiTotalNs * 3, before.uiTotalNs * 2);  // 439.1 -> 239.6 ms
+    EXPECT_LT(after.uiWorstNs, 15 * kMs);                  // 28.9 -> 11.8 ms
+    EXPECT_LE(after.endNs, before.endNs + 20 * kMs);       // the replay's last read: 1,723.6 ms both
+    const Result mergedBefore = run(Rule::kNew, replay(0, 1024));
+    const Result mergedAfter = run(Rule::kNew, replay(switchSdClassOf(0, true), 1024));
+    report("boot replay of one file, below tier 0", mergedBefore, mergedAfter);
+    EXPECT_LE(mergedAfter.uiTotalNs, mergedBefore.uiTotalNs);  // 342.6 -> 336.9 ms
+}
+
 // A synchronize waiting for writes makes them rank with tier-0 reads: its writes are not passed, at tier 0 or at
 // IOSCHED's tier 1.
 TEST(SdPick, WritesASynchronizeWaitsForAreNotPassed)

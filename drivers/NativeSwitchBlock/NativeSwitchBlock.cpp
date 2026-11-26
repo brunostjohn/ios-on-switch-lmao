@@ -916,18 +916,12 @@ OSDefineMetaClassAndStructors(NativeSwitchBlockDevice, IOBlockStorageDevice)
 {
     NativeSwitchBlock *gOwner = nullptr;
     int gPublishStatus = -1;
-    // r8-sdboot: the boot prefetch thread (SwitchCryptex.cpp). Its reads, issued from that thread down to here
-    // (cluster_io -> spec_strategy -> IOMediaBSDClient -> IOBlockStorageDriver -> doAsyncReadWrite), take the high class,
-    // first come first served with the foreground's reads: in the background class they waited out the 100 ms aging
-    // behind a saturated foreground (11-04 r7h: 965 MiB took 7.5 s to 68.3 s uptime, ~2.5 MB/s after the first 10 s),
-    // while the foreground page-faulted the same blocks one 4 KiB read at a time.
-    thread_t gPrefetchThread = THREAD_NULL;
 }
 
-extern "C" void switch_block_prefetch_thread(thread_t thread)
-{
-    __atomic_store_n(&gPrefetchThread, thread, __ATOMIC_RELEASE);
-}
+// The kernel's boot replay thread (kernel/switch/vm/prefetch_vm.c), set for the length of the replay. Its reads reach
+// doAsyncReadWrite on that thread: vnode_pagein -> cluster_io -> spec_strategy -> IOMediaBSDClient ->
+// IOBlockStorageDriver, and SwitchCryptex's window fills, which it issues on the requesting thread.
+extern "C" bool switch_vm_prefetch_is_replay_thread(void *thread) __attribute__((weak));
 
 extern "C" bool switch_sd_trim_stats(uint64_t *erases, uint64_t *sectors, uint64_t *busy_ns)
 {
@@ -1030,23 +1024,20 @@ IOReturn NativeSwitchBlockDevice::doAsyncReadWrite(IOMemoryDescriptor *buffer, U
         return kIOReturnBadArgument;
     if (direction == kIODirectionOut && count > owner->maxWriteSectors)
         return kIOReturnBadArgument;
-    // No attributes: the default class, as IOStorage's own default priority. The boot prefetch: high.
-    IOStoragePriority priority = attributes ? attributes->priority : kIOStoragePriorityDefault;
+    // No attributes: the default class, as IOStorage's own default priority.
+    const IOStoragePriority priority = attributes ? attributes->priority : kIOStoragePriorityDefault;
+    const bool replay = &switch_vm_prefetch_is_replay_thread && switch_vm_prefetch_is_replay_thread(current_thread());
+    const uint8_t klass = switchSdClassOf(static_cast<uint8_t>(priority >> 6), replay);
 #if DEVELOPMENT || DEBUG
     switchSdAdd(&gIo.asked[priority >> 6], 1);
+    if (klass != priority >> 6)
+        switchSdAdd(&gIo.chosen, 1);
 #endif
-    if (current_thread() == __atomic_load_n(&gPrefetchThread, __ATOMIC_ACQUIRE)) {
-#if DEVELOPMENT || DEBUG
-        if (priority >> 6)
-            switchSdAdd(&gIo.chosen, 1);
-#endif
-        priority = kIOStoragePriorityHigh;
-    }
     const Request spec = {nullptr,
                           buffer,
                           window->first + block,
                           static_cast<uint32_t>(count),
-                          static_cast<uint8_t>(priority >> 6),
+                          klass,
                           direction == kIODirectionOut,
                           false,
                           false,

@@ -13,10 +13,10 @@ extern "C" {
 #define SWITCH_PREFETCH_MAX_RUN_PAGES 128u
 #define SWITCH_PREFETCH_MAX_GAP_PAGES 8u
 
-/* Until sd-io adds a lower card class, replay runs in tier 0 beside the foreground with no priority override.
- * At boot 2's measured 87.8 MB/s replay throughput (278 KiB commands), 3 x 512 KiB (1.5 MiB) bounds the worst
- * foreground wait behind queued replay I/O to ~17 ms (~33 ms at 45 MB/s storm throughput) while keeping the card
- * fed across APFS hash-check completions. */
+/* The replay's I/O is tier 0 (passive), and the SD driver queues it one class below tier-0 demand reads
+ * (NativeSwitchBlock SwitchSdPick.h switchSdClassOf), so a foreground read waits only for the replay chains already on
+ * the card or prepared behind it. 3 x 512 KiB (1.5 MiB) keeps the card fed across APFS hash-check completions at boot
+ * 2's measured 87.8 MB/s replay throughput (278 KiB commands). */
 #define SWITCH_PREFETCH_INFLIGHT_LIMIT (3u * (uint64_t)SWITCH_PREFETCH_MAX_RUN_PAGES * SWITCH_PREFETCH_LIST_PAGE)
 
 /* The replay reads a run once this boot is within this many seconds of the run's first use in the boot that recorded
