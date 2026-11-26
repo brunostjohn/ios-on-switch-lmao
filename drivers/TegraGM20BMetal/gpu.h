@@ -970,6 +970,13 @@ public:
     {
         return k_.exactJobs();
     }
+
+    // HW Test's gpu.x1.interlock_affinity: what bounds the affinity bytes the interlock's ticket words reach
+    // (nak_nir_lower_fs_interlock.c interlock_ticket_word)
+    uint64_t interlockTicketBytes() const
+    {
+        return tickets_.bytes;
+    }
 #endif
 
     // A job of no pushes that carries event waits and signals (at most TegraGM20BMaxJobEvents together): the kernel makes the
