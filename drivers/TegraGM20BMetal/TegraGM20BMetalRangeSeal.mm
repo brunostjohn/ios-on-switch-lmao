@@ -200,6 +200,7 @@ bool SwitchMetalRangeEncode::seal(size_t to)
     encoder_ = SIZE_MAX;
     uint32_t seq = 0;
     prepareSharedEvents(cb, rc);
+    gm20bNameResidencySets(cb, rc);
     rc->quietEnd = cb->_rangeQuiet;
     const bool lastRange = cb->_segNext + 1 == cb->_segs.size() && cb->_promised.load(std::memory_order_acquire);
     if (lastRange) {

@@ -191,12 +191,20 @@ bool Kernel::alloc(uint64_t bytes, bool coherent, Bo &bo, uint32_t kind, uint64_
         a.flags |= TegraGM20BBoControl;
     if (systemOnly && coherent && !control)
         a.flags |= TegraGM20BBoSystem;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    if (!coherent && probeDirect.load(std::memory_order_relaxed))
+        a.flags |= TegraGM20BBoProbeDirect;
+#endif
     TegraGM20BAbiBoAllocReply r = {};
     bo = {};
     if (call(TegraGM20BMethodBoAlloc, &a, sizeof a, &r, sizeof r) != KERN_SUCCESS) {
         setError("BoAlloc failed");
         return false;
     }
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    probeDirectBos += (a.flags & TegraGM20BBoProbeDirect) != 0;
+    smmuBos += (r.reserved & TegraGM20BBoReplySmmu) != 0;
+#endif
     bo.handle = r.handle;
     bo.token = r.map_token;
     bo.bytes = bytes;

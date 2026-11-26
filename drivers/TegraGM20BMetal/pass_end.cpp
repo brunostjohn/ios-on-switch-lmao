@@ -191,6 +191,9 @@ void RenderEncoder::end()
     if (drew_ && !flush && tiledCache(d.k_.info()))
         cb_->taken_.flushes++;
 #endif
+#if SWITCH_METAL_DIAGNOSTICS
+    nvnPassEnd();
+#endif
     const bool measured = measurePass(drew_ && flush);
     if (drew_ && flush)
         tiledCacheDrain(p_, d.k_.info());
@@ -360,6 +363,9 @@ void RenderEncoder::end()
         }
         kit(p, switch_gm20b_pass_drain, false);
     }
+#if SWITCH_METAL_DIAGNOSTICS
+    nvnKnob(p);
+#endif
     uint32_t count = 0;
     for (uint32_t j = 0; j < pass_.count && j < 8; j++)
         if (pass_.color[j].texture)
@@ -388,13 +394,14 @@ void RenderEncoder::end()
     zcullAfterTir = zcull_.candidate && (tirProbe_ & kTirProbeZcullAfter);
 #endif
     const auto zcullWords = [&] {
-        uint32_t criterion = 0;
+        uint32_t criterion = 0, regionFormat = 0, zFormat = ~0u;
 #if SWITCH_METAL_DIAGNOSTICS
         if (const uint32_t c = d.probeZcullCriterion.load(std::memory_order_relaxed))
             criterion = zcullCriterion(c & 0xff, c >> 8 & 0xff, c >> 16 & 0xff);
+        nvnZcullFormats(p, zs, regionFormat, zFormat);
 #endif
         zcullRegionWords(p, zcull_.region, zs.texture->format, zcull_.dir, zcull_.storage, zcull_.storageBytes,
-                         criterion);
+                         criterion, regionFormat, zFormat);
         if (zcull_.load)
             p.m(kLoadZcull, 0);
         SWITCH_METAL_DIAGNOSTIC(d.stats.zcullPasses++; d.stats.zcullLoads += zcull_.load);

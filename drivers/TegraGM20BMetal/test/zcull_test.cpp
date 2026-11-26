@@ -172,6 +172,24 @@ TEST(Zcull, UntrackableStatesInvalidateOnce)
     EXPECT_FALSE(invalidates(zfail, false, false, false));  // no stencil aspect: never tested
 }
 
+// gpu.perf.nvn's zcull rule probes: each bit keeps the region past its own rule alone
+TEST(Zcull, AProbeKeepsTheRegionPastTheRuleItNamesAlone)
+{
+    const auto invalidates = [](const gm20b::DepthStencilDesc &d, bool fragmentDepth, uint32_t keep) {
+        gm20b::ZcullPass z;
+        z.candidate = true;
+        gm20b::zcullInvalidates(z, depth(kLess, true), true, false, false, false, false);
+        return gm20b::zcullInvalidates(z, d, true, false, fragmentDepth, false, false, false, keep);
+    };
+    EXPECT_FALSE(invalidates(depth(kAlways, true), false, gm20b::kZcullKeepAlways));
+    EXPECT_TRUE(invalidates(depth(kNotEqual, true), false, gm20b::kZcullKeepAlways));
+    EXPECT_FALSE(invalidates(depth(kNotEqual, true), false, gm20b::kZcullKeepNotEqual));
+    EXPECT_TRUE(invalidates(depth(kAlways, true), false, gm20b::kZcullKeepNotEqual));
+    EXPECT_FALSE(invalidates(depth(kLess, true), true, gm20b::kZcullKeepFragmentDepth));
+    EXPECT_TRUE(invalidates(depth(kLess, true), true, gm20b::kZcullKeepAlways | gm20b::kZcullKeepNotEqual));
+    EXPECT_TRUE(invalidates(depth(kGreater, false), false, ~0u)) << "no probe keeps a flipped direction";
+}
+
 gm20b::ZcullAsk clearedDepth()
 {
     gm20b::ZcullAsk a;

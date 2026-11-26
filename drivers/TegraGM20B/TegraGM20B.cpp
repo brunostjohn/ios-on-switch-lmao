@@ -26,6 +26,7 @@
 #include "SwitchGpuShaderCompiler.h"
 #include "TegraGM20BRail.h"
 #include "TegraGM20BSleep.h"
+#include "shim/include/switch_nvn_golden.h"
 #include "shim/include/switch_tiled_cache.h"
 
 extern "C" {
@@ -300,6 +301,16 @@ extern "C" int switch_tiled_cache_on(void)
 	return static_cast<int>(
 		(PE_parse_boot_argn("switch-no-tiled-cache", &off, sizeof(off)) == 0) ||
 		(off == 0u));
+}
+
+extern "C" uint32_t switch_nvn_golden_skipped(void)
+{
+	unsigned skipped = 0;
+#if DEVELOPMENT || DEBUG
+	if (!PE_parse_boot_argn("switch-no-nvn-golden", &skipped, sizeof(skipped)))
+		skipped = 0;
+#endif
+	return skipped;
 }
 
 extern "C" int switch_gpu_compression_on(void)

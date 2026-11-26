@@ -326,6 +326,7 @@ ios_binary(
         "pass_begin.cpp",
         "pass_clears.cpp",
         "pass_end.cpp",
+        "nvn_probes.cpp",
         "pipelines.cpp",
         "samplers.cpp",
         "sparse_window.cpp",

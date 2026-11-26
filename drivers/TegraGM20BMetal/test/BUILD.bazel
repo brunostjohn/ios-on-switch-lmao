@@ -244,6 +244,7 @@ host_library(
         "pass_begin",
         "pass_clears",
         "pass_end",
+        "nvn_probes",
         "pipelines",
         "predicate_loops",
         "predication",
@@ -4842,6 +4843,7 @@ METAL_HOST_UNITS = ["//drivers/TegraGM20BMetal:fx/" + f for f in [
     "pass_begin",
     "pass_clears",
     "pass_end",
+    "nvn_probes",
     "pipelines",
     "predicate_loops",
     "predication",
@@ -5510,6 +5512,23 @@ facade_test(
 facade_test(
     name = "facade_private_buffer_test",
     srcs = ["facade_private_buffer_test.cpp"],
+)
+
+# Residency sets: a job of a command buffer (or queue) that uses a set holding a host-visible allocation is host-written and
+# External; a set of Private allocations names nothing at a seal
+facade_test(
+    name = "facade_residency_test",
+    srcs = ["facade_residency_test.cpp"],
+)
+
+# What gpu.perf.knobs' and gpu.perf.nvn's arms read to prove their probes fired: the knob and discard counters, the
+# header's promotion field, the facts' kind and the forms' taken flushes
+facade_test(
+    name = "facade_nvn_probes_test",
+    srcs = [
+        "facade_nvn_probes_test.cpp",
+        "scale_frames.h",
+    ],
 )
 
 # Render passes the facade fails instead of drawing, nothing of them on m2v: attachments Metal's validation layer stops, a

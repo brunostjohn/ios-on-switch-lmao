@@ -203,6 +203,58 @@ static gm20b::ProbeSurface probeSurface(const gm20b::Texture &t, uint32_t fmt2d)
     return [NSString stringWithFormat:@"old=%u readback=%u", reply.old_mode, reply.readback];
 }
 
+// Shared buffers made while `on` is true are bound L2-bypassing (VOL=1); answers whether they were before, or
+// "unsupported" where the kernel takes no volatile writes and such a buffer would be L2-cached anyway
+- (NSString *)switchMetalSharedBypassesL2:(NSNumber *)on
+{
+    if (!gRM->raw->kernel().volatileWrites() || !gRM->raw->kernel().exactJobs())
+        return @"unsupported";
+    return gRM->raw->probeSharedBypassesL2.exchange(on.boolValue, std::memory_order_acq_rel) ? @"1" : @"0";
+}
+
+// Render passes encoded from now on write `knob` to SET_SUBTILING_PERF_KNOB_A in their prologue; 0 stops. Answers the
+// knob it replaced, in hexadecimal.
+- (NSString *)switchMetalProbeSubtilingKnob:(NSNumber *)knob
+{
+    return [NSString stringWithFormat:@"%x", gRM->raw->probeSubtilingKnob.exchange(knob.unsignedIntValue)];
+}
+
+// Block-linear texture headers written from now on take SECTOR_PROMOTION `mode` (0 none, 1 to 2V, 2 to 2H, 3 to 4).
+// Answers the mode it replaced.
+- (NSString *)switchMetalProbeSectorPromotion:(NSNumber *)mode
+{
+    return [NSString
+        stringWithFormat:@"%u", unsigned(gm20b::fx::probeSectorPromotion.exchange(mode.unsignedCharValue & 3))];
+}
+
+// nvn_probes.h's bits for render passes encoded from now on (0 off); answers the bits it replaced, in hexadecimal
+- (NSString *)switchMetalProbeNvn:(NSNumber *)bits
+{
+    return [NSString stringWithFormat:@"%x", gRM->raw->probeNvn.exchange(bits.unsignedIntValue)];
+}
+
+// The zcull invalidation rules draws skip from now on (zcull.h kZcullKeep*); answers the bits it replaced
+- (NSString *)switchMetalProbeZcullKeep:(NSNumber *)bits
+{
+    return [NSString stringWithFormat:@"%x", gRM->raw->probeZcullKeep.exchange(bits.unsignedIntValue)];
+}
+
+// Uncompressed BOs allocated while `on` ask the kernel for direct physical addresses, never the SMMU's 64 KiB big pages
+// (TegraGM20BBoProbeDirect, HW Test gpu.perf.fill); answers whether they did
+- (NSString *)switchMetalProbeDirectPa:(NSNumber *)on
+{
+    return gRM->raw->kernel().probeDirect.exchange(on.boolValue) ? @"1" : @"0";
+}
+
+// 4x colour textures made while `on` take the 2CBR compression kinds (comp.h probeMs4Cbr); answers whether they did
+- (NSString *)switchMetalProbeMs4Cbr:(NSNumber *)on
+{
+    const bool was = gm20b::probeMs4Cbr.exchange(on.boolValue);
+    if (was && !on.boolValue)
+        gRM->raw->dropProbeCompressedKinds();
+    return was ? @"1" : @"0";
+}
+
 - (NSString *)switchMetalProbeMacroBands:(NSNumber *)on
 {
     gRM->raw->probeMacroBands.store(on.boolValue, std::memory_order_release);
@@ -256,16 +308,25 @@ static gm20b::ProbeSurface probeSurface(const gm20b::Texture &t, uint32_t fmt2d)
 }
 
 // What a probe's line says of a texture and the device: "raw=1 comptags=1 block_linear=1 pitch=N tiled_cache=1
-// compression=1", raw=0 where the driver does not hold it
+// compression=1 kind=0xNN", raw=0 where the driver does not hold it; kind its compressed memory's (0: none)
 - (NSString *)switchMetalProbeFacts:(id<MTLTexture>)texture
 {
     const uint32_t flags = gRM->raw->kernelInfo().flags;
     SwitchMetalTexture *t = gm20bTexture(texture);
     const gm20b::Texture now = t ? gRM->raw->lockedCopy(t->_raw) : gm20b::Texture();
-    return
-        [NSString stringWithFormat:@"raw=%d comptags=%d block_linear=%d pitch=%u tiled_cache=%d compression=%d",
-                                   t != nil, t && now.comptags, t && now.blockLinear, t ? now.pitch : 0,
-                                   (flags & TegraGM20BInfoTiledCache) != 0, (flags & TegraGM20BInfoCompression) != 0];
+    return [NSString
+        stringWithFormat:@"raw=%d comptags=%d block_linear=%d pitch=%u tiled_cache=%d compression=%d kind=0x%x",
+                         t != nil, t && now.comptags, t && now.blockLinear, t ? now.pitch : 0,
+                         (flags & TegraGM20BInfoTiledCache) != 0, (flags & TegraGM20BInfoCompression) != 0,
+                         t ? gRM->raw->privateKind(t->_raw) : 0u];
+}
+
+// A buffer's binding as a probe's line says it: "raw=1 wc=1 volatile=0", volatile where its PTEs bypass the GPU's L2
+// (gpu.perf.ca_binding's proof of each arm's route); raw=0 where the driver does not hold it
+- (NSString *)switchMetalProbeBufferFacts:(id<MTLBuffer>)buffer
+{
+    SwitchMetalBuffer *b = [(id)buffer isKindOfClass:[SwitchMetalBuffer class]] ? (SwitchMetalBuffer *)buffer : nil;
+    return [NSString stringWithFormat:@"raw=%d wc=%d volatile=%d", b != nil, b && b->_raw.wc, b && b->_raw.gpuVolatile];
 }
 
 // gpu.x1.clean_l2_syncpoint's read: a buffer's bytes as the CPU sees them in its own mapping, with none of the driver's

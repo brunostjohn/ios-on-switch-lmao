@@ -784,6 +784,9 @@ bool Device::createBuffer(uint64_t length, Buffer &b, bool wc, bool hostVisible,
             SWITCH_METAL_DIAGNOSTIC(stats.wcBytes += b.span.bytes);
         } else if (wc && wcAlloc(l, length, b.span, &dirty)) {
             b.wc = true;
+            // write-combined pages hold no CPU line to clean, and a reused span's last writer ended External: its GPU
+            // lines are in DRAM. A lease would sleep this thread on its chunk's GPU work and take the chunk out of the set
+            cleaned = false;
             SWITCH_METAL_DIAGNOSTIC(stats.wcBytes += b.span.bytes);
         } else {
             if (wc)
@@ -869,9 +872,9 @@ bool Device::wcPoolAlloc(std::unique_lock<gm20b::Mutex> &l, std::vector<Chunk> &
     if (dirty)
         *dirty = false;
     const bool dedicated = bytes > sizes_.wcChunk / 2;
-    // A VOL=1 chunk is never CPU-leased (createBuffer, a write-combined buffer's invalidateForCpu), the only reason a
+    // The CPU never leases a write-combined chunk (createBuffer, Device::hostAccess, invalidateForCpu), the only reason a
     // member starts read: written from the start, the first GPU write to one of its buffers does not make the set again
-    const uint32_t memberAccess = gpuVolatile ? TegraGM20BSurfaceWrite : TegraGM20BSurfaceRead;
+    constexpr uint32_t memberAccess = TegraGM20BSurfaceWrite;
     for (int pass = 0; pass < 2;) {
         if (closing_)
             return false;

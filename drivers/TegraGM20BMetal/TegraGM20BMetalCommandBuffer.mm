@@ -327,10 +327,11 @@ static const gm20b::Pipeline *recordedPipeline(const gm20b::RasterState &raster)
     return _traceId;
 }
 
-// Every allocation is mapped in the one GPU VM and stays resident: a residency set asks nothing of the driver
+// Every allocation is mapped in the one GPU VM and stays resident; what the set's host-visible allocations ask of the
+// command buffer's jobs is gm20bNameResidencySets'
 - (void)useResidencySet:(id)set
 {
-    (void)set;
+    gm20bUseResidencySet(self, set);
 }
 
 // (QuartzCore 27, per command buffer: the kernel charges GPU time to the task that submits it, this one)
@@ -342,8 +343,8 @@ static const gm20b::Pipeline *recordedPipeline(const gm20b::RasterState &raster)
 
 - (void)useResidencySets:(const __unsafe_unretained id *)sets count:(NSUInteger)count
 {
-    (void)sets;
-    (void)count;
+    for (NSUInteger k = 0; k < count; k++)
+        gm20bUseResidencySet(self, sets[k]);
 }
 
 - (MTLCommandBufferStatus)status
@@ -852,27 +853,34 @@ static void deferPresent(SwitchMetalCommandBuffer *cb, id<MTLDrawable> drawable,
 - (void)insertDebugCaptureBoundary
 {}
 
-// (as the command buffer's: everything is resident)
+// Every command buffer of the queue uses these sets (gm20bNameResidencySets)
 - (void)addResidencySet:(id)set
 {
-    (void)set;
+    if (!set)
+        return;
+    std::lock_guard<gm20b::Mutex> hold(_residencyLock);
+    if (!_residencySets)
+        _residencySets = [NSMutableArray array];
+    if (![_residencySets containsObject:set])
+        [_residencySets addObject:set];
 }
 
 - (void)addResidencySets:(const __unsafe_unretained id *)sets count:(NSUInteger)count
 {
-    (void)sets;
-    (void)count;
+    for (NSUInteger k = 0; k < count; k++)
+        [self addResidencySet:sets[k]];
 }
 
 - (void)removeResidencySet:(id)set
 {
-    (void)set;
+    std::lock_guard<gm20b::Mutex> hold(_residencyLock);
+    [_residencySets removeObject:set];
 }
 
 - (void)removeResidencySets:(const __unsafe_unretained id *)sets count:(NSUInteger)count
 {
-    (void)sets;
-    (void)count;
+    for (NSUInteger k = 0; k < count; k++)
+        [self removeResidencySet:sets[k]];
 }
 
 - (void)setCompletionQueue:(dispatch_queue_t)queue

@@ -81,11 +81,14 @@ bool SwitchMetalRangeEncode::beginPass(size_t at)
     renderBegin_ = at;
     if (continuing_) {
         continuing_ = false;
-        uint8_t stores = 0;
-        for (uint32_t i = 0; i < 8; ++i)
+        uint8_t stores = 0, discards = 0;
+        for (uint32_t i = 0; i < 8; ++i) {
             if (pass.color[i].texture && pass.color[i].store == MTLStoreActionStore)
                 stores |= uint8_t(1u << i);
-        re_->continuePass(stores);
+            if (pass.color[i].texture && pass.color[i].store == MTLStoreActionDontCare)
+                discards |= uint8_t(1u << i);
+        }
+        re_->continuePass(stores, discards);
         planSplitPrograms(cb, at, *re_);
         planPassUses(cb, at, planned_);
         return true;
@@ -194,6 +197,7 @@ bool SwitchMetalRangeEncode::beginPass(size_t at)
         const bool copied = a.resolve && t->_raw.samples <= 1 && a.store == MTLStoreActionMultisampleResolve;
         p.color[j].store =
             a.store == MTLStoreActionStore || a.store == MTLStoreActionStoreAndMultisampleResolve || copied;
+        p.color[j].discard = !p.color[j].store && !a.resolve;
         if (a.store == MTLStoreActionMultisampleResolve || a.store == MTLStoreActionStoreAndMultisampleResolve)
             if (__unsafe_unretained SwitchMetalTexture *r = (SwitchMetalTexture *)a.resolve)
                 resolves_.push_back({j, r, a.store == MTLStoreActionStoreAndMultisampleResolve,

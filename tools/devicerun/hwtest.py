@@ -200,6 +200,9 @@ TESTS: dict[str, bool] = {
             'gpu.compile.answer_latency',
             'gpu.compile.shared_stages',
             'gpu.sched.long_draw_bands',
+            'gpu.perf.rates',
+            'gpu.perf.fill',
+            'gpu.perf.ca_binding',
             'gpu.sched.band_planar_instanced',
             'gpu.sched.long_dispatch_pieces',
             'gpu.sched.probe_cta',
@@ -701,6 +704,9 @@ TESTS: dict[str, bool] = {
     'gpu.gm20b.fetch_rung3': False,
     'gpu.x1.interlock_affinity': False,
     'gpu.x1.l2_flush_writeback': False,
+    'gpu.perf.knobs': False,
+    'gpu.perf.nvn': False,
+    'gpu.perf.first_touch': False,
 }
 
 # The tests only one iOS version's app runs (apps/hwtest/app<version>), by that version.

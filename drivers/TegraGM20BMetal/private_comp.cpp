@@ -123,6 +123,13 @@ bool Device::privateCompressed(const Texture &t)
     return it != privateComp_.end() && t.comptags;
 }
 
+uint32_t Device::privateKind(const Texture &t)
+{
+    std::lock_guard<gm20b::Mutex> l(lock_);
+    const auto it = privateComp_.find(&t);
+    return it != privateComp_.end() && t.comptags ? it->second.kind : 0;
+}
+
 void Device::noteView(const Texture &of, Texture &view)
 {
     if (of.comptags)

@@ -9,6 +9,8 @@
 #                            pointing FECS at it (nvgpu's separate buffer mode), released at teardown
 #   gm20b_tiled_cache_test   TegraGM20BTiledCache.h: the tile coalescer's table in the golden context is deko3d's masked
 #                            writes folded over sw_ctx's zero
+#   gm20b_nvn_golden_test    TegraGM20BNvnGolden.h: NVN's three golden-context bits over the netlist's values, written
+#                            after sw_ctx; only a debug kernel's boot-arg leaves one out
 #   gm20b_coherency_test     TegraGM20BCoherency.cpp: which IOSurface lock/unlock traps clean or invalidate an import,
 #                            across imports of one surface and their release, and traps racing a release; each surface's
 #                            layout decision (TegraGM20BTiled.cpp) and its contents tiled in place; CPU locks of a
@@ -362,6 +364,19 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BTiledCache.h",
     ],
     cxx_std = "c++17",
+)
+
+host_test(
+    name = "gm20b_nvn_golden_test",
+    srcs = [
+        "gm20b_nvn_golden_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BNvnGolden.h",
+    ],
+    cxx_std = "c++17",
+    data = [
+        "//drivers/TegraGM20B:TegraGM20B.cpp",
+        "//drivers/TegraGM20B:nouveau/nvkm/engine/gr/ctxgm20b.c",
+    ],
 )
 
 host_test(

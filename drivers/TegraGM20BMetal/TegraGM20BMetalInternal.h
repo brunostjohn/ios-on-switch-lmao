@@ -300,6 +300,10 @@ void traceSurfaceImage(SwitchMetalTexture *t, const char *what, uint32_t seed);
 // TegraGM20BMetalEncode.mm: the imports a texture's or buffer's memory lies in, named to the submission
 void useTexture(gm20b::CommandBuffer *rc, SwitchMetalTexture *t, bool write);
 void useBuffer(gm20b::CommandBuffer *rc, SwitchMetalBuffer *b, bool write);
+// TegraGM20BMetalDeviceBase.mm: `set` (an MTLResidencySet) used by `cb` or one of its encoders; and every host-visible
+// allocation of the sets `cb` and its queue use, named to the range `rc` about to commit
+void gm20bUseResidencySet(SwitchMetalCommandBuffer *cb, id set);
+void gm20bNameResidencySets(SwitchMetalCommandBuffer *cb, gm20b::CommandBuffer *rc);
 // TegraGM20BMetalTessellation.mm: a patch draw on the raw encoder
 bool encodePatches(gm20b::RenderEncoder *re, gm20b::CommandBuffer *rc, const SwitchMetalPlanDraw &draw,
                    const SwitchMetalPlanPatches &patches, bool indirect, const char **why);

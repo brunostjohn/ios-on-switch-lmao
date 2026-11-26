@@ -80,9 +80,19 @@
     d[@"fill_twod"] = @(gRM->raw->stats.fillTwod.load());
     d[@"resolve_exact"] = @(gRM->raw->stats.resolveExact.load());
     d[@"resolve_twod_compressed"] = @(gRM->raw->stats.resolveTwodCompressed.load());
+    d[@"bos_probe_direct"] = @(gRM->raw->kernel().probeDirectBos.load());
+    d[@"bos_smmu"] = @(gRM->raw->kernel().smmuBos.load());
     d[@"zcull_passes"] = @(gRM->raw->stats.zcullPasses.load());
     d[@"zcull_invalidations"] = @(gRM->raw->stats.zcullInvalidations.load());
     d[@"zcull_loads"] = @(gRM->raw->stats.zcullLoads.load());
+    d[@"nvn_bounds_opened"] = @(gRM->raw->stats.nvnBoundsOpened.load());
+    d[@"nvn_stencil_passes"] = @(gRM->raw->stats.nvnStencilPasses.load());
+    d[@"nvn_format_passes"] = @(gRM->raw->stats.nvnFormatPasses.load());
+    d[@"nvn_discards"] = @(gRM->raw->stats.nvnDiscards.load());
+    d[@"subtile_writes"] = @(gRM->raw->stats.subtileWrites.load());
+    d[@"zcull_rules_kept"] = @(gRM->raw->stats.zcullRulesKept.load());
+    d[@"residency_set_uses"] = @(gRM->raw->stats.residencySetUses.load());
+    d[@"residency_named"] = @(gRM->raw->stats.residencyNamed.load());
     d[@"state_segment_binds"] = @(gRM->raw->stats.segmentBinds.load());
     d[@"state_segment_words"] = @(gRM->raw->stats.segmentWords.load());
     d[@"state_segment_skips"] = @(gRM->raw->stats.segmentSkips.load());
@@ -298,10 +308,18 @@
     b->_options = o;
     // a shared buffer: write-combined (gm20b::Buffer::wc), as every one Core Animation makes is written by the CPU and read by the
     // GPU (its buffer pool, its gamma and weight tables: QuartzCore MetalBufferPool::allocate_buffer, options 0): nothing to clean
-    // before a draw reads it, nothing to scan for the vertices an indexed draw reads (r16: 600-1300 KB cleaned a command buffer)
+    // before a draw reads it, nothing to scan for the vertices an indexed draw reads (r16: 600-1300 KB cleaned a command buffer).
+    // An app's is L2-cached: each job that uses it drops the L2's lines first (TegraGM20BSurfaceHostWritten) and one that
+    // writes it flushes them before its fence (External). Bound L2-bypassing (VOL=1), every GPU access was a DRAM round trip:
+    // a fragment's atomic took 414 ns, metal.compute went from 1.6 ms to 440 ms. The render server's stay VOL=1 until a
+    // measurement says which binding its frames want: its hot states moved both ways across that change.
     const bool wc = (o & MTLResourceStorageModeMask) == MTLResourceStorageModeShared;
     const bool hostVisible = (o & MTLResourceStorageModeMask) != MTLResourceStorageModePrivate;
-    if (!gRM->raw->createBuffer(n ? n : 16, b->_raw, wc, hostVisible, wc, zero)) {
+    bool bypassL2 = wc && gRM->raw->role() == gm20b::Device::Role::RenderServer;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    bypassL2 |= wc && gRM->raw->probeSharedBypassesL2.load(std::memory_order_relaxed);
+#endif
+    if (!gRM->raw->createBuffer(n ? n : 16, b->_raw, wc, hostVisible, bypassL2, zero)) {
         os_log_error(gm20bLog(), "SwitchMetal: %{public}s: no memory for a %lu-byte buffer: none made", getprogname(),
                      (unsigned long)n);
         return nil;
