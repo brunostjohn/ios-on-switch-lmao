@@ -68,6 +68,9 @@ constexpr unsigned kDpdDsiPad = 2, kDpdDsibPad = 32 + 7;  // Linux tegra210 io_p
 constexpr uint32_t kGpDsiPadControl = 0xAC0, kPinmuxLcdRst = 0x3000 + 0x204, kPinmuxPullDown = 1u << 2;
 constexpr unsigned kPanelReset = TEGRA_GPIO(V, 2);
 
+// DC_CMD_<client>_INCR_SYNCPT_CNTRL's NO_STALL (TRM 24.6.2).
+constexpr uint32_t kSyncptNoStall = 1u << 8;
+
 // Display controller A (words).
 enum : uint32_t {
     DC_CMD_GENERAL_INCR_SYNCPT_CNTRL = 0x001,
@@ -162,10 +165,11 @@ enum : uint32_t {
 };
 
 // _di_dc_init_config: assembly access, line-counter latching, pipeline power, syncpoints, all windows off, YUV CSC defaults,
-// 24-bit DSI output, black background, display stopped. Unlike hekate and L4T (NO_STALL), each syncpoint client stalls the
-// stream writing it when its condition FIFO is full: NO_STALL drops the increment (TRM 24.6.2), which a host1x fence
-// would only see as a lost interrupt. The clients are soft-reset together first, as the TRM orders, and their sticky
-// overflow bits cleared.
+// 24-bit DSI output, black background, display stopped. The general syncpoint client, which the display's host1x stream
+// raises (SwitchHost1xDisplayChannel.h), stalls that stream when its condition FIFO is full: NO_STALL would drop the
+// increment (TRM 24.6.2), which the stream's fence would only see as a lost interrupt. The window clients keep NO_STALL,
+// as hekate and L4T set it: only debug probes raise their conditions, and one that never comes must not stall DC A's
+// host interface. All are soft-reset together first, as the TRM orders, and their sticky overflow bits cleared.
 constexpr Reg kDcInit[] = {
     {DC_CMD_STATE_ACCESS, 0},
     {DC_CMD_REG_ACT_CONTROL, 0x454},
@@ -180,9 +184,9 @@ constexpr Reg kDcInit[] = {
     {DC_CMD_WIN_B_INCR_SYNCPT_CNTRL, 1},
     {DC_CMD_WIN_C_INCR_SYNCPT_CNTRL, 1},
     {DC_CMD_GENERAL_INCR_SYNCPT_CNTRL, 0},
-    {DC_CMD_WIN_A_INCR_SYNCPT_CNTRL, 0},
-    {DC_CMD_WIN_B_INCR_SYNCPT_CNTRL, 0},
-    {DC_CMD_WIN_C_INCR_SYNCPT_CNTRL, 0},
+    {DC_CMD_WIN_A_INCR_SYNCPT_CNTRL, kSyncptNoStall},
+    {DC_CMD_WIN_B_INCR_SYNCPT_CNTRL, kSyncptNoStall},
+    {DC_CMD_WIN_C_INCR_SYNCPT_CNTRL, kSyncptNoStall},
     {DC_CMD_GENERAL_INCR_SYNCPT_ERROR, ~0u},
     {DC_CMD_WIN_A_INCR_SYNCPT_ERROR, ~0u},
     {DC_CMD_WIN_B_INCR_SYNCPT_ERROR, ~0u},

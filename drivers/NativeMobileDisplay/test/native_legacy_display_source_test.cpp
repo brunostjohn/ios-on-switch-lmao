@@ -303,14 +303,19 @@ TEST(Sc7Source, StatusReadsNotFixedSleeps)
     EXPECT_TRUE(up.before("tegra_mipi_cal::calibrate(gMipiCal", "write(gDc, kDcTimings);"));
 }
 
-// DC A's syncpoint clients stall a full condition FIFO's writer rather than drop the increment, reset together first.
-TEST(DisplayPowerSource, SyncpointClientsStallAndAreResetTogether)
+// DC A's general syncpoint client, the display stream's, stalls a full condition FIFO's writer rather than drop the
+// increment; the window clients, only debug probes', drop rather than stall DC A's host interface. All reset together.
+TEST(DisplayPowerSource, TheGeneralClientStallsTheWindowClientsDropAndAllAreResetTogether)
 {
     const CodeText power(SourceText("../TegraDisplayPower.cpp"));
     EXPECT_FALSE(power.has("{DC_CMD_GENERAL_INCR_SYNCPT_CNTRL, 1u << 8}"));
+    EXPECT_TRUE(power.has("{DC_CMD_WIN_A_INCR_SYNCPT_CNTRL, kSyncptNoStall},"));
+    EXPECT_TRUE(power.has("{DC_CMD_WIN_B_INCR_SYNCPT_CNTRL, kSyncptNoStall},"));
+    EXPECT_TRUE(power.has("{DC_CMD_WIN_C_INCR_SYNCPT_CNTRL, kSyncptNoStall},"));
     EXPECT_TRUE(power.before("{DC_CMD_WIN_C_INCR_SYNCPT_CNTRL, 1},", "{DC_CMD_GENERAL_INCR_SYNCPT_CNTRL, 0},"));
     EXPECT_TRUE(power.before("{DC_CMD_GENERAL_INCR_SYNCPT_CNTRL, 1},", "{DC_CMD_WIN_A_INCR_SYNCPT_CNTRL, 1},"));
-    EXPECT_TRUE(power.before("{DC_CMD_WIN_C_INCR_SYNCPT_CNTRL, 0},", "{DC_CMD_GENERAL_INCR_SYNCPT_ERROR, ~0u},"));
+    EXPECT_TRUE(
+        power.before("{DC_CMD_WIN_C_INCR_SYNCPT_CNTRL, kSyncptNoStall},", "{DC_CMD_GENERAL_INCR_SYNCPT_ERROR, ~0u},"));
     EXPECT_TRUE(power.before("{DC_CMD_WIN_C_INCR_SYNCPT_ERROR, ~0u},", "{DC_CMD_CONT_SYNCPT_VSYNC, (1u << 8) | 9},"));
     EXPECT_TRUE(method("void gpuDeadlineCheck()").has("dc[kDcSyncptErrors[3]]"));
 }
