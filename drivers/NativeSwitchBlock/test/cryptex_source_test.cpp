@@ -95,7 +95,7 @@ TEST(CryptexSource, JoinedFillsAreRaised)
     EXPECT_THAT(plan, HasSubstr("if (joined && priority == kIOStoragePriorityHigh) {"));
     EXPECT_LT(plan.find("raiseQueuedReads(block, count, priority);"), plan.find("pieceDone(this, p,"));
     const std::string raise = body("void SwitchCryptexDevice::raiseQueuedReads(");
-    EXPECT_THAT(raise, HasSubstr("sd->doSetPriority(pieces, n, priority);"));
+    EXPECT_THAT(raise, HasSubstr("switch_block_raise(pieces, n, priority);"));
     EXPECT_THAT(raise, Not(HasSubstr("gCache.lock")));
     const std::string set = body("IOReturn SwitchCryptexDevice::doSetPriority(");
     EXPECT_LT(set.find("return kIOReturnBadArgument;"), set.find("raiseQueuedReads("));

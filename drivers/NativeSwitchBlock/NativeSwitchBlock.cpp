@@ -506,6 +506,7 @@ public:
 
     IOReturn doUnmap(IOBlockStorageDeviceExtent *extents, UInt32 count, IOStorageUnmapOptions) override;
     IOReturn doSetPriority(IOBlockStorageDeviceExtent *extents, UInt32 count, IOStoragePriority priority) override;
+    IOReturn raise(const IOBlockStorageDeviceExtent *extents, UInt32 count, IOStoragePriority priority, bool cryptex);
 
     char *getVendorString() override
     {
@@ -622,7 +623,9 @@ class NativeSwitchBlock : public IOService {
     uint64_t passed = 0, passedTotal = 0;  // r6-lows: reads taken before older requests (this line, since boot)
     SwitchSdPickState pickState = {};      // under queueLock
 #if DEVELOPMENT || DEBUG
-    uint64_t promoteCalls = 0, promoteRaised = 0;  // doSetPriority since boot, under queueLock
+    // Raises since boot, under queueLock: XNU's (doSetPriority) and SwitchCryptex's (switch_block_raise), each as calls
+    // and the queued requests they raised.
+    uint64_t xnuRaiseCalls = 0, xnuRaised = 0, cryptexRaiseCalls = 0, cryptexRaised = 0;
 #endif
     uint64_t submitted = 0, serviced = 0;  // for the root-wait report
     uint64_t lastEnd = 0;                  // card LBA after the previous request (sequential count)
@@ -873,8 +876,8 @@ public:
     int transfer(uint64_t lba, uint32_t sectors, bool write, uint8_t *bytes, const SwitchSdWindow *window = nullptr);
     IOReturn submit(const Request &);
     IOReturn unmap(const IOBlockStorageDeviceExtent *extents, uint32_t count, uint64_t blocks);
-    void promote(const SwitchSdWindow *window, const IOBlockStorageDeviceExtent *extents, uint32_t count,
-                 uint8_t klass);
+    void promote(const SwitchSdWindow *window, const IOBlockStorageDeviceExtent *extents, uint32_t count, uint8_t klass,
+                 bool cryptex);
     IOReturn synchronize(const SwitchSdWindow *window);
 
     bool writeCacheEnabled() const
@@ -1629,9 +1632,16 @@ IOReturn NativeSwitchBlockDevice::doUnmap(IOBlockStorageDeviceExtent *extents, U
 }
 
 // XNU raises a page-in to the tier of a thread that waits on one of its busy pages (vm_page_handle_prio_inversion ->
-// DKIOCSETTIER -> IOMedia::setPriority -> here), and SwitchCryptex raises the window fills a foreground read joined.
+// DKIOCSETTIER -> IOMedia::setPriority -> here).
 IOReturn NativeSwitchBlockDevice::doSetPriority(IOBlockStorageDeviceExtent *extents, UInt32 count,
                                                 IOStoragePriority priority)
+{
+    return raise(extents, count, priority, false);
+}
+
+// `cryptex`: SwitchCryptex raising the window fills a foreground read joined (switch_block_raise), counted apart.
+IOReturn NativeSwitchBlockDevice::raise(const IOBlockStorageDeviceExtent *extents, UInt32 count,
+                                        IOStoragePriority priority, bool cryptex)
 {
     if (count && !extents)
         return kIOReturnBadArgument;
@@ -1639,13 +1649,13 @@ IOReturn NativeSwitchBlockDevice::doSetPriority(IOBlockStorageDeviceExtent *exte
         if (extents[i].blockStart >= window->count || extents[i].blockCount > window->count - extents[i].blockStart)
             return kIOReturnBadArgument;
     }
-    owner->promote(window, extents, count, static_cast<uint8_t>(priority >> 6));
+    owner->promote(window, extents, count, static_cast<uint8_t>(priority >> 6), cryptex);
     return kIOReturnSuccess;
 }
 
 // Requests already in a pipeline slot are past the queue and keep their class.
 void NativeSwitchBlock::promote(const SwitchSdWindow *window, const IOBlockStorageDeviceExtent *extents, uint32_t count,
-                                uint8_t klass)
+                                uint8_t klass, bool cryptex)
 {
     IOLockLock(queueLock);
     uint32_t raised = 0;
@@ -1653,10 +1663,11 @@ void NativeSwitchBlock::promote(const SwitchSdWindow *window, const IOBlockStora
         raised +=
             switchSdPromote(head, window->first + extents[i].blockStart, extents[i].blockCount, klass, queuedReads);
 #if DEVELOPMENT || DEBUG
-    ++promoteCalls;
-    promoteRaised += raised;
+    ++(cryptex ? cryptexRaiseCalls : xnuRaiseCalls);
+    (cryptex ? cryptexRaised : xnuRaised) += raised;
 #else
     (void)raised;
+    (void)cryptex;
 #endif
     IOLockUnlock(queueLock);
 }
@@ -3010,9 +3021,11 @@ void NativeSwitchBlock::logThroughput()
             at += static_cast<size_t>(
                 snprintf(classes + at, sizeof(classes) - at, " passed %llu/%llu", passed, passedTotal));
 #if DEVELOPMENT || DEBUG
-        // doSetPriority calls since boot / queued requests they raised.
-        if (at < sizeof(classes))
-            snprintf(classes + at, sizeof(classes) - at, " reprio %llu/%llu", promoteCalls, promoteRaised);
+        // Raise calls since boot / queued requests they raised: XNU's, then SwitchCryptex's.
+        if (at < sizeof(classes)) {
+            snprintf(classes + at, sizeof(classes) - at, " reprio xnu %llu/%llu cryptex %llu/%llu", xnuRaiseCalls,
+                     xnuRaised, cryptexRaiseCalls, cryptexRaised);
+        }
 #endif
         passed = 0;
         IOLockUnlock(queueLock);
@@ -4752,6 +4765,16 @@ switch_block_device(IOService **controller, dev_t *whole, uint64_t *sectors, uin
     *sectors = gOwner->rootWindow.count;
     *maxReadSectors = gOwner->maxSectors;
     return gOwner->device;
+}
+
+// SwitchCryptex's raise of the SD reads under a window fill a foreground read joined: the root window's doSetPriority,
+// counted apart from XNU's.
+extern "C" IOReturn switch_block_raise(const IOBlockStorageDeviceExtent *extents, uint32_t count,
+                                       IOStoragePriority priority)
+{
+    if (!gOwner || !gOwner->device)
+        return kIOReturnNotReady;
+    return gOwner->device->raise(extents, count, priority, true);
 }
 
 // ---- Volume lookup for the raw root/Preboot/cryptex boot path ----

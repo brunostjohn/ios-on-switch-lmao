@@ -45,6 +45,8 @@ void switch_diag_cryptex_cache(size_t (*counts)(char *out, size_t size));  // ke
 LIBKERN_RETURNS_NOT_RETAINED IOBlockStorageDevice *
 switch_block_device(IOService **controller, dev_t *whole, uint64_t *sectors,
                     uint32_t *maxReadSectors);  // NativeSwitchBlock.cpp
+IOReturn switch_block_raise(const IOBlockStorageDeviceExtent *extents, uint32_t count,
+                            IOStoragePriority priority);  // NativeSwitchBlock.cpp
 }
 
 namespace {
@@ -711,13 +713,13 @@ void SwitchCryptexDevice::raiseQueuedReads(uint64_t block, uint64_t count, IOSto
         if (piece.disk != kSwitchHole)
             pieces[n++] = {piece.disk / kSdSector, piece.length / kSdSector};
         if (n == kBatch) {
-            sd->doSetPriority(pieces, n, priority);
+            switch_block_raise(pieces, n, priority);
             n = 0;
         }
         done += piece.length;
     }
     if (n)
-        sd->doSetPriority(pieces, n, priority);
+        switch_block_raise(pieces, n, priority);
 }
 
 // The same contract as the SD device's (XNU's busy-page reprioritisation), in this image's blocks.

@@ -82,8 +82,12 @@ TEST(SdQueueSource, PickAndRaise)
     const std::string promote = body("void NativeSwitchBlock::promote(");
     EXPECT_LT(promote.find("IOLockLock(queueLock);"), promote.find("switchSdPromote("));
     EXPECT_LT(promote.find("switchSdPromote("), promote.find("IOLockUnlock(queueLock);"));
-    const std::string set = body("IOReturn NativeSwitchBlockDevice::doSetPriority(");
+    const std::string set = body("IOReturn NativeSwitchBlockDevice::raise(");
     EXPECT_LT(set.find("return kIOReturnBadArgument;"), set.find("owner->promote("));
+    EXPECT_THAT(body("IOReturn NativeSwitchBlockDevice::doSetPriority("),
+                HasSubstr("return raise(extents, count, priority, false);"));
+    EXPECT_THAT(body("extern \"C\" IOReturn switch_block_raise("),
+                HasSubstr("gOwner->device->raise(extents, count, priority, true)"));
 }
 
 // r14-sdcq: a read chain's gaps go to the sink and nowhere else; a write chain never has one.
