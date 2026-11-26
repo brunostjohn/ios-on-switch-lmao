@@ -406,6 +406,8 @@ static constexpr uint32_t kDcDisplayCommand = 0x032, kDcModeMask = 3u << 5, kDcM
 static constexpr uint64_t kDcMapBytes = 0x4000;
 static constexpr uint32_t kDcStateAccess = 0x040, kDcStateControl = 0x041, kDcWindowHeader = 0x042,
                           kDcRegActControl = 0x043;
+// DC_CMD_<client>_INCR_SYNCPT_ERROR: a condition FIFO's sticky overflow bits (TRM 24.6.3, .6, .9, .12).
+static constexpr uint32_t kDcSyncptErrors[] = {0x002, 0x00a, 0x012, 0x01a};
 static constexpr uint32_t kWinOptions = 0x700, kWinColorDepth = 0x703, kWinPosition = 0x704, kWinSize = 0x705,
                           kWinPrescaled = 0x706;
 static constexpr uint32_t kWinDdaIncrement = 0x709, kWinLineStride = 0x70a;
@@ -4431,8 +4433,12 @@ public:
                                ? "the GPU driver still holds it"
                                : "the GPU driver released it with no completion";
         if (planeFencePending) {
-            panic("SwitchDisplay: GPU present %llu (overlay fence, take %llu) not completed in %u ms: %s", gpuSequence,
-                  planeFencing.seq, kGpuCopyDeadlineMS, held);
+            panic(
+                "SwitchDisplay: GPU present %llu (overlay fence, take %llu) not completed in %u ms: %s; DC A syncpoint "
+                "overflows general %#x, A %#x, B %#x, C %#x",
+                gpuSequence, planeFencing.seq, kGpuCopyDeadlineMS, held, static_cast<uint32_t>(dc[kDcSyncptErrors[0]]),
+                static_cast<uint32_t>(dc[kDcSyncptErrors[1]]), static_cast<uint32_t>(dc[kDcSyncptErrors[2]]),
+                static_cast<uint32_t>(dc[kDcSyncptErrors[3]]));
         }
         if (gpuDirect != kNoBuffer) {
             panic("SwitchDisplay: GPU present %llu (fence only, direct slot %d) not completed in %u ms: %s",

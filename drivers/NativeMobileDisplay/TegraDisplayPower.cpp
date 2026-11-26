@@ -71,6 +71,13 @@ constexpr unsigned kPanelReset = TEGRA_GPIO(V, 2);
 // Display controller A (words).
 enum : uint32_t {
     DC_CMD_GENERAL_INCR_SYNCPT_CNTRL = 0x001,
+    DC_CMD_GENERAL_INCR_SYNCPT_ERROR = 0x002,
+    DC_CMD_WIN_A_INCR_SYNCPT_CNTRL = 0x009,
+    DC_CMD_WIN_A_INCR_SYNCPT_ERROR = 0x00a,
+    DC_CMD_WIN_B_INCR_SYNCPT_CNTRL = 0x011,
+    DC_CMD_WIN_B_INCR_SYNCPT_ERROR = 0x012,
+    DC_CMD_WIN_C_INCR_SYNCPT_CNTRL = 0x019,
+    DC_CMD_WIN_C_INCR_SYNCPT_ERROR = 0x01a,
     DC_CMD_CONT_SYNCPT_VSYNC = 0x028,
     DC_CMD_DISPLAY_COMMAND_OPTION0 = 0x031,
     DC_CMD_DISPLAY_COMMAND = 0x032,
@@ -155,7 +162,10 @@ enum : uint32_t {
 };
 
 // _di_dc_init_config: assembly access, line-counter latching, pipeline power, syncpoints, all windows off, YUV CSC defaults,
-// 24-bit DSI output, black background, display stopped.
+// 24-bit DSI output, black background, display stopped. Unlike hekate and L4T (NO_STALL), each syncpoint client stalls the
+// stream writing it when its condition FIFO is full: NO_STALL drops the increment (TRM 24.6.2), which a host1x fence
+// would only see as a lost interrupt. The clients are soft-reset together first, as the TRM orders, and their sticky
+// overflow bits cleared.
 constexpr Reg kDcInit[] = {
     {DC_CMD_STATE_ACCESS, 0},
     {DC_CMD_REG_ACT_CONTROL, 0x454},
@@ -165,7 +175,18 @@ constexpr Reg kDcInit[] = {
     {DC_DISP_DISP_MEM_HIGH_PRIORITY, SwitchDisplayPriority::kThresholds},
     {DC_DISP_DISP_MEM_HIGH_PRIORITY_TIMER, SwitchDisplayPriority::kDelays},
     {DC_CMD_DISPLAY_POWER_CONTROL, 0x50155},
-    {DC_CMD_GENERAL_INCR_SYNCPT_CNTRL, 1u << 8},
+    {DC_CMD_GENERAL_INCR_SYNCPT_CNTRL, 1},
+    {DC_CMD_WIN_A_INCR_SYNCPT_CNTRL, 1},
+    {DC_CMD_WIN_B_INCR_SYNCPT_CNTRL, 1},
+    {DC_CMD_WIN_C_INCR_SYNCPT_CNTRL, 1},
+    {DC_CMD_GENERAL_INCR_SYNCPT_CNTRL, 0},
+    {DC_CMD_WIN_A_INCR_SYNCPT_CNTRL, 0},
+    {DC_CMD_WIN_B_INCR_SYNCPT_CNTRL, 0},
+    {DC_CMD_WIN_C_INCR_SYNCPT_CNTRL, 0},
+    {DC_CMD_GENERAL_INCR_SYNCPT_ERROR, ~0u},
+    {DC_CMD_WIN_A_INCR_SYNCPT_ERROR, ~0u},
+    {DC_CMD_WIN_B_INCR_SYNCPT_ERROR, ~0u},
+    {DC_CMD_WIN_C_INCR_SYNCPT_ERROR, ~0u},
     {DC_CMD_CONT_SYNCPT_VSYNC, (1u << 8) | 9},
     {DC_CMD_STATE_CONTROL, kAllUpdate},
     {DC_CMD_STATE_CONTROL, kAllActReq},
