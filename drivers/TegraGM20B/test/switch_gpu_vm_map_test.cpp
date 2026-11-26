@@ -34,6 +34,10 @@ protected:
 		getCount = mapCount = invalidations = constructors = flushes = 0;
 		gateInside = gateWaiting = 0;
 		gateShut = false;
+		statsOn = 0;
+		mappedSmall = mappedBig = mappedCould = 0;
+		logged = 0;
+		ctorRefuses = 0;
 	}
 
 	void TearDown() override
@@ -85,6 +89,45 @@ TEST_F(VmMap, MissingBigViewFallsBackWithoutConstructorInMap)
 	EXPECT_EQ(mapping->entries[0].shift, 12);
 	EXPECT_EQ(constructors, 0);
 	switch_gpu_vm_unmap(&a, &mapping);
+}
+
+// Debug kernels: a 128 KiB run no big view covers goes to 4 KiB PTEs, and the maps line counts it as could-have-mapped
+// (25 Nov: every line read 0 there, which hid whether a 4 KiB window lacked aligned runs or only views)
+TEST_F(VmMap, ADemotedRunIsCountedAsCouldHaveMapped)
+{
+	statsOn = 1;
+	memory.big_views_ready = true;
+	switch_gpu_mapping *mapping = nullptr;
+	ASSERT_EQ(map(a, &mapping), 0);
+	EXPECT_EQ(mappedBig, 0u);
+	EXPECT_EQ(mappedSmall, memory.bytes);
+	EXPECT_EQ(mappedCould, 32 * PAGE_SIZE) << "the 128 KiB run its pages have";
+	EXPECT_EQ(logged, 1u);
+	switch_gpu_vm_unmap(&a, &mapping);
+	ASSERT_EQ(map(a, &mapping), 0);
+	EXPECT_EQ(logged, 1u) << "once per boot";
+	switch_gpu_vm_unmap(&a, &mapping);
+}
+
+TEST_F(VmMap, ARunWithItsViewIsNotCountedAsDemoted)
+{
+	statsOn = 1;
+	mem_prepare_big_views(&memory);
+	switch_gpu_mapping *mapping = nullptr;
+	ASSERT_EQ(map(a, &mapping), 0);
+	EXPECT_EQ(mappedBig, 32 * PAGE_SIZE);
+	EXPECT_EQ(mappedSmall, 3 * PAGE_SIZE);
+	EXPECT_EQ(mappedCould, 0u) << "the 3 pages past the run have no 128 KiB run";
+	switch_gpu_vm_unmap(&a, &mapping);
+}
+
+TEST_F(VmMap, ARefusedViewConstructorIsKeptForTheDemotionLine)
+{
+	statsOn = 1;
+	ctorRefuses = 12;
+	mem_prepare_big_views(&memory);
+	EXPECT_EQ(memory.big_views, nullptr);
+	EXPECT_EQ(__atomic_load_n(&big_view_refused, __ATOMIC_RELAXED), -12);
 }
 
 TEST_F(VmMap, FailedMapRollsBackEveryReservationOutsideDeferredScope)
