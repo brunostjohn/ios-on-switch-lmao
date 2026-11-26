@@ -43,6 +43,7 @@ py_library(
 py_library(
     name = "deploy",
     srcs = [
+        "data_owner.py",
         "deploy.py",
         "system_update.py",
     ],
@@ -125,6 +126,13 @@ py_test(
     size = "small",
     srcs = ["system_apps_test.py"],
     deps = [":lib"],
+)
+
+py_test(
+    name = "data_owner_test",
+    size = "small",
+    srcs = ["data_owner_test.py"],
+    deps = [":deploy"],
 )
 
 py_test(

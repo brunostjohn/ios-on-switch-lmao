@@ -8,13 +8,7 @@ Steps:
   1 pull logs      off unless --pull-logs (or --//deploy:logs): the last boots' logs and logarchive
                    (//deploy:pull_logs; --no-csstore/--no-launchd-log narrow it); --harvest (or --//deploy:harvest)
                    also merges the device's m2v journals into the checkout's corpus.log
-  2 boot entry     switchroot/ios/* and bootloader/ini/ios.ini on the FAT: only files that differ are
-                   copied, stale files in switchroot/ios/ removed (never the user's bootargs.txt or the install
-                   images' NAME.SII.NNN parts), AppleDouble files by name; nothing else on the FAT. Refused
-                   when the card's iOS is another kind than the build's (its System volume is not the IPSW's),
-                   and on iOS 27 when a translated System file on the card is not in this build's os.trustcache
-                   and the build carries no update for it (translated_tree.py)
-  3 overlay        <Data>/Switch/overlay := the package's overlay/; on iOS 27 <Data>/Switch/pretranslated-updates :=
+  2 overlay        <Data>/Switch/overlay := the package's overlay/; on iOS 27 <Data>/Switch/pretranslated-updates :=
                    the build's translations of the card's stale translated System files (translated_tree.py), which
                    the boot package's kernel serves in place of the tree's; <Data>/Switch/deployed.json := the
                    checkout's commit, which tools/hwtest joins HW Test's reports with (deployed.py); each app the
@@ -29,27 +23,37 @@ Steps:
                    if a card still has it; and stages hekate's "Dump Joy-Con BT" (the FAT's switchroot/joycon_mac.ini,
                    only read) as <Data>/Switch/bluetooth/{host-address, joycon-pairing.plist}, removed when the FAT has
                    none (joycon_pairing.py; --no-joycon-pairing skips it)
-  3a cryptex       iOS 27: the System cryptex on Preboot := this build's translation (system_update.py, as
-                   //deploy:system), after the boot entry whose trust modules cover it; written only when the card's
-                   differs, which <image>.sha256 beside it says without reading the image back
-  4 GPU bundle     <Data>/ngpu/addons/TegraGM20BMetal.{bundle,seed,pack} from --//deploy:gpu_bundle, via the
+  3 GPU bundle     <Data>/ngpu/addons/TegraGM20BMetal.{bundle,seed,pack} from --//deploy:gpu_bundle, via the
                    plugin's stager, which copies only the files whose sha256 the card does not already hold and
                    reads nothing more when the card's list matches the build (its CDHashes must be in the same
                    build's kernel window: deploy the boot package built with that bundle); --remove-gpu removes it
-  4a icon cache    names the staged GPU build (the stager's list digest) in <Data>/Switch/icon-cache-gpu; at the next
+  3a icon cache    names the staged GPU build (the stager's list digest) in <Data>/Switch/icon-cache-gpu; at the next
                    boot the kernel removes IconServices' __cache_info__ when it last did so for another build, and
                    iconservicesagent empties its rendered icons at launch as after an OS update (icon_cache.py)
-  4b AWDL          --awdl on|off: creates or removes <Data>/Switch/awdl-enable, the empty file SwitchWLAN's AWDL
+  3b AWDL          --awdl on|off: creates or removes <Data>/Switch/awdl-enable, the empty file SwitchWLAN's AWDL
                    (AirDrop's Wi-Fi link) is off without (read once per boot, after Data mounts)
-  4c gallery tiles --reset-gallery-snapshots BUNDLE...: removes those poster extensions' gallery tiles from
+  3c gallery tiles --reset-gallery-snapshots BUNDLE...: removes those poster extensions' gallery tiles from
                    PosterBoard's data store (poster_snapshots.py), so the next "Add New Wallpaper" renders them again
-  5 launchd check  --launchd-check LABEL...: read-only, the jobs Data's launchd database disables (exit 1 if a label
+  4 launchd check  --launchd-check LABEL...: read-only, the jobs Data's launchd database disables (exit 1 if a label
                    is not among them; the kernel rewrites that database at every boot)
-  6 eject          unmount the iPad volumes, eject the card (--no-eject keeps it)
+  5 Switch/ owner  iOS 27: <Data>/Switch root:wheel without group or other write, which the kernel requires before it
+                   takes the pretranslated updates (data_owner.py; set under sudo only when it is not)
+  5a cryptex       iOS 27: the System cryptex on Preboot := this build's translation (system_update.py, as
+                   //deploy:system), written only when its record (tools/install/cryptex_record.py) does not name
+                   this build's image; planned in the check, so a card without the room or the image refuses before
+                   anything is written
+  6 boot entry     last: switchroot/ios/* and bootloader/ini/ios.ini on the FAT: only files that differ are copied,
+                   stale files in switchroot/ios/ removed (never the user's bootargs.txt or the install images'
+                   NAME.SII.NNN parts), AppleDouble files by name; nothing else on the FAT. Until it is written the
+                   card boots its last build, whose trust modules cover what it had; a stopped deploy leaves that
+  7 eject          unmount the iPad volumes, eject the card (--no-eject keeps it)
 
-A step besides the boot entry, the overlay and the GPU bundle that fails logs one line saying so and the deploy goes on
-to the eject; it then ends FAILED, naming what was not done, with exit status 1. Those three stop the deploy with one
-FAILED line, unmounted and not ejected.
+The check refuses a card whose iOS is another kind than the build's (its System volume is not the IPSW's), and on iOS
+27 one whose translated System files the build neither trusts nor carries an update for (translated_tree.py).
+
+A step besides the overlay, the GPU bundle, Switch/'s owner, the cryptex and the boot entry that fails logs one line
+saying so and the deploy goes on to the boot entry and the eject; it then ends FAILED, naming what was not done, with
+exit status 1. Those five stop the deploy with one FAILED line, unmounted and not ejected.
 """
 
 import argparse
@@ -68,6 +72,7 @@ if __package__ in (None, ''):
 from tools.common import paths
 from tools.deploy import (
     app_journal,
+    data_owner,
     deployed,
     icon_cache,
     joycon_pairing,
@@ -206,11 +211,17 @@ def _checked(args: argparse.Namespace, log: host.Log) -> tuple[cards.Card, dict,
         pins = json.loads(Path(args.pretranslated_pins).read_text())
         system_update.check_translation([Path(path) for path in args.system_trusted], pins)
     args.pretranslated_wanted = None
+    args.data_owner = None
     if args.pretranslated_trust:
         with cards.mounted(data, log, read_only=True) as data_root:
             args.pretranslated_wanted = translated_tree.plan(
                 data_root, Path(args.pretranslated_trust), Path(args.pretranslated_updates)
             )
+        args.data_owner = data_owner.read(data, log)
+    args.cryptex = None
+    if args.system_image:
+        image = system_update.Image(Path(args.system_image), Path(args.system_image + '.sha256').read_text().strip())
+        args.cryptex = (image, system_update.planned_on_card(card, spec, image, target, log))
     gpu = Path(args.gpu_bundle) if args.gpu_bundle else None
     if not args.remove_gpu and not (gpu and (gpu.is_file() or (gpu / 'TegraGM20BMetal.trustcache').is_file())):
         raise host.HostError('no GPU bundle (--//deploy:gpu_bundle names //gpu:bundle or a directory like //gpu:base)')
@@ -221,7 +232,7 @@ def _plan(args: argparse.Namespace, changes: list, removed: list, pairing: dict 
     """Return the steps a deploy would take, for the log."""
     steps = ['pull logs'] if args.pull_logs else []
     steps += ['harvest the m2v journals'] if args.harvest else []
-    steps += [f'boot entry: {len(changes)} to copy, {len(removed)} stale', 'overlay']
+    steps += ['overlay']
     wanted = getattr(args, 'pretranslated_wanted', None)
     if wanted is not None:
         steps.append(
@@ -230,8 +241,6 @@ def _plan(args: argparse.Namespace, changes: list, removed: list, pairing: dict 
     if not args.no_joycon_pairing:
         controllers = f'stage {len(pairing["controllers"])} controller(s) for host {pairing["host"]}' if pairing else ''
         steps.append('Joy-Con pairing: ' + (controllers or 'remove any staged dump'))
-    if args.system_image:
-        steps.append("System cryptex: this build's, written only where the card's differs")
     steps.append('remove the GPU bundle' if args.remove_gpu else 'GPU bundle: stage what changed')
     steps.append('icon cache: name the GPU build, so the next boot lets IconServices re-render where it changed')
     steps += [f'AWDL {args.awdl} (<Data>/Switch/awdl-enable)'] if args.awdl else []
@@ -239,6 +248,12 @@ def _plan(args: argparse.Namespace, changes: list, removed: list, pairing: dict 
     gallery = args.reset_gallery_snapshots
     steps += ['reset gallery snapshots of {}'.format(' '.join(gallery))] if gallery else []
     steps += [f'launchd check {args.launchd_check}'] if args.launchd_check else []
+    if getattr(args, 'pretranslated_wanted', None) is not None:
+        steps.append(data_owner.planned(getattr(args, 'data_owner', None)))
+    cryptex = getattr(args, 'cryptex', None)
+    if cryptex:
+        steps.append('System cryptex: ' + ("the card's is this build's" if cryptex[1].same else "write this build's"))
+    steps.append(f'boot entry, last: {len(changes)} to copy, {len(removed)} stale')
     return steps + ([] if args.no_eject else ['unmount the iPad volumes and eject'])
 
 
@@ -290,10 +305,10 @@ def _stage_gpu(args: argparse.Namespace, data_root: Path, log: host.Log) -> None
 
 
 class Volumes(NamedTuple):
-    """The card's volumes a deploy writes or reads besides Data: the FAT and the System volume."""
+    """What a deploy's Data step reads elsewhere: the System volume, and the boot-args on the FAT."""
 
-    fat: str
     system: str | None
+    boot_args: str
 
 
 def _boot_args(fat_root: Path) -> str:
@@ -334,7 +349,7 @@ class _Steps:
 def _write(
     args: argparse.Namespace, data_root: Path, volumes: Volumes, pairing: dict | None, log: host.Log
 ) -> list[str]:
-    """Write the deploy to the mounted Data volume (and the FAT); return the steps not done (a failed launchd check)."""
+    """Write the deploy to the mounted Data volume; return the steps not done (a failed launchd check)."""
     renamed.migrate_data(data_root, log)
     out = Path(args.logs_out or paths.state_dir() / 'device-logs' / time.strftime('boot-%m%d-%H%M'))
     if args.pull_logs:
@@ -343,9 +358,6 @@ def _write(
     if args.harvest:
         harvest_dir = args.harvest_script and str(Path(args.harvest_script).parent)
         pull_logs.harvest(data_root, out, log, harvest_dir, args.corpus)
-    with cards.mounted(volumes.fat, log) as fat_root:
-        cards.sync_boot_entry(fat_root, args.boot_package, log)
-        boot_args = _boot_args(fat_root)
     steps = _Steps(log)
     apps = steps.run('system apps registration', system_apps.apps, data_root)
     cards.sync_overlay(data_root, args.boot_package, log)
@@ -365,7 +377,7 @@ def _write(
     )
     restaged = steps.run('system apps restage', _restage_system_apps, volumes.system, data_root, log)
     if apps is not None:
-        next_boot = app_journal.NextBoot(_ios_version(args.ipsw), boot_args)
+        next_boot = app_journal.NextBoot(_ios_version(args.ipsw), volumes.boot_args)
         force = args.rerun_migration or bool(restaged)
         steps.run('system apps registration', system_apps.register, data_root, apps, log, next_boot, force)
     steps.run('stale logging profiles', remove_stale_logging_profiles, data_root, log)
@@ -384,15 +396,17 @@ def _write(
     return steps.not_done
 
 
-def _update_system_cryptex(
-    args: argparse.Namespace, spec: dict, target: object, preboot: str | None, log: host.Log
-) -> None:
-    """After the boot entry: the card's System cryptex as this build translated it, or the deploy fails."""
+def _update_system_cryptex(args: argparse.Namespace, preboot: str | None, log: host.Log) -> None:
+    """Before the boot entry: the card's System cryptex as this build translated it, or the deploy fails."""
+    image, update = args.cryptex
     if not preboot:
         raise host.HostError("no Preboot volume: the card's System cryptex was not brought to this build")
-    image = system_update.Image(Path(args.system_image), Path(args.system_image + '.sha256').read_text().strip())
-    with cards.mounted(preboot, log) as preboot_root:
-        system_update.update(preboot_root, spec, image, system_update.free_bytes(target), log)
+    system_update.write_on_card(preboot, update, image, log)
+
+
+def _write_boot_entry(args: argparse.Namespace, fat: str, log: host.Log) -> None:
+    with cards.mounted(fat, log) as fat_root:
+        cards.sync_boot_entry(fat_root, args.boot_package, log)
 
 
 def _eject(card: cards.Card, target: object, log: host.Log) -> None:
@@ -430,6 +444,7 @@ def main(argv: list[str] | None = None) -> int:
             with cards.mounted(fat.identifier, log) as fat_root:
                 changes, removed = cards.sync_boot_entry(fat_root, args.boot_package, log, dry_run=True)
                 pairing = None if args.no_joycon_pairing else joycon_pairing.read(fat_root, log)
+                boot_args = _boot_args(fat_root)
         log(f'card {card.disk}: FAT {fat.identifier}, iPad Data {data}')
         for step in _plan(args, changes, removed, pairing):
             log('  plan:', step)
@@ -446,9 +461,12 @@ def main(argv: list[str] | None = None) -> int:
             if staged_apps.stage_on_card(data, Path(args.boot_package), log):
                 args.rerun_migration = True
             with cards.mounted(data, log) as data_root:
-                not_done = _write(args, data_root, Volumes(fat.identifier, system), pairing, log)
+                not_done = _write(args, data_root, Volumes(system, boot_args), pairing, log)
+            if args.pretranslated_trust:
+                data_owner.ensure(data, log)
             if args.system_image:
-                _update_system_cryptex(args, spec, target, preboot, log)
+                _update_system_cryptex(args, preboot, log)
+            _write_boot_entry(args, fat.identifier, log)
             if not args.no_eject:
                 _eject(card, target, log)
         if not_done:

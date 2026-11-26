@@ -416,9 +416,18 @@ class KindTest(unittest.TestCase):
 
     def test_a_stale_translated_file_the_build_carries_is_planned_before_anything_is_written(self):
         args, mounted = self.checked_with_a_translated_tree({'/usr/libexec/locationd'})
-        mounted.assert_called_once_with('disk9s5', mock.ANY, read_only=True)
+        self.assertEqual(
+            mounted.call_args_list,
+            [
+                mock.call('disk9s5', mock.ANY, read_only=True),
+                mock.call('disk9s5', mock.ANY, read_only=True, owners=True),
+            ],
+        )
         self.assertEqual(args.pretranslated_wanted, {'/usr/libexec/locationd': '02' * 20})
-        self.assertIn('pretranslated updates: /usr/libexec/locationd', deploy._plan(args, [], [], None))
+        plan = deploy._plan(args, ['switchroot/ios/bl33.bin'], [], None)
+        self.assertIn('pretranslated updates: /usr/libexec/locationd', plan)
+        self.assertTrue(any(step.startswith('Data Switch/: ') for step in plan), plan)
+        self.assertEqual(plan[-2:], ['boot entry, last: 1 to copy, 0 stale', 'unmount the iPad volumes and eject'])
 
     def test_a_stale_translated_file_the_build_does_not_carry_refuses_in_the_dry_run(self):
         with self.assertRaisesRegex(cards.RefusedError, '/usr/libexec/locationd.*--reinstall-container'):

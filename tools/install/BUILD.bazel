@@ -31,6 +31,7 @@ py_library(
         "card.py",
         "compose.py",
         "cryptex.py",
+        "cryptex_record.py",
         "delta.py",
         "direct.py",
         "direct_stream.py",
@@ -104,6 +105,13 @@ py_binary(
     name = "stage_image",
     srcs = ["stage_image.py"],
     deps = [":image_lib"],
+)
+
+py_test(
+    name = "cryptex_record_test",
+    size = "small",
+    srcs = ["cryptex_record_test.py"],
+    deps = [":lib"],
 )
 
 # Bazel runs it for iOS 27's deltas and translated cryptexes (install/translated.bzl).
