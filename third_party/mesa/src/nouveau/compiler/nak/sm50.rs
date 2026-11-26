@@ -1390,8 +1390,16 @@ impl SM50Op for OpIAdd2 {
             b.copy_alu_src_and_lower_ineg(src0, GPR, SrcType::I32);
         }
         b.copy_alu_src_if_not_reg(src0, GPR, SrcType::I32);
-        if !self.carry_out.is_none() {
-            b.copy_alu_src_if_ineg_imm(src1, GPR, SrcType::I32);
+        // The immediate forms have no negation bit for the immediate. Without
+        // a carry out its negation is exact in the value; with one, the carry
+        // of x + -k is not the carry of x - k, so it takes a register
+        match src1.src_ref {
+            SrcRef::Imm32(k)
+                if src1.src_mod.is_ineg() && self.carry_out.is_none() =>
+            {
+                *src1 = k.wrapping_neg().into();
+            }
+            _ => b.copy_alu_src_if_ineg_imm(src1, GPR, SrcType::I32),
         }
     }
 
@@ -1699,6 +1707,16 @@ impl SM50Op for OpISetP {
 impl SM50Op for OpLop2 {
     fn legalize(&mut self, b: &mut LegalizeBuilder) {
         use RegFile::GPR;
+        // LOP encodes only a source's inversion
+        for src in &mut self.srcs {
+            match src.src_mod {
+                SrcMod::None | SrcMod::BNot => {}
+                SrcMod::INeg => {
+                    b.copy_alu_src_and_lower_ineg(src, GPR, SrcType::I32)
+                }
+                _ => b.copy_alu_src_and_lower_fmod(src, GPR, SrcType::F32),
+            }
+        }
         let [src0, src1] = &mut self.srcs;
         match self.op {
             LogicOp2::PassB => {
