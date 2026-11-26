@@ -1,0 +1,65 @@
+# switch_installer: single desktop CLI + interactive TUI installer binary for all six desktop platforms.
+#
+#   bazel test //install/installer:all
+#   bazel build //install/installer:desktop
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("//bazel/desktop:defs.bzl", "desktop_binaries")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+_LIB_DEPS = [
+    "//install/catalog:switch_catalog",
+    "//install/disk:switch_disk",
+    "//install/engine:switch_engine",
+    "//install/partition:switch_partition",
+    "//install/tui:switch_tui",
+    "@installer_crates//:clap",
+    "@installer_crates//:thiserror",
+]
+
+rust_library(
+    name = "switch_installer_lib",
+    srcs = [
+        "src/cli.rs",
+        "src/convert.rs",
+        "src/discover.rs",
+        "src/lib.rs",
+        "src/runner.rs",
+    ],
+    crate_root = "src/lib.rs",
+    deps = _LIB_DEPS,
+)
+
+rust_binary(
+    name = "switch_installer",
+    srcs = ["src/main.rs"],
+    crate_root = "src/main.rs",
+    deps = [":switch_installer_lib"],
+)
+
+desktop_binaries(
+    name = "desktop",
+    binary = ":switch_installer",
+)
+
+rust_test(
+    name = "switch_installer_test",
+    size = "small",
+    srcs = ["tests/installer_test.rs"],
+    crate_root = "tests/installer_test.rs",
+    deps = [
+        ":switch_installer_lib",
+        "//install/card:switch_card",
+        "//install/catalog:switch_catalog",
+        "//install/disk:switch_disk",
+        "//install/engine:switch_engine",
+        "//install/tui:switch_tui",
+        "@installer_crates//:clap",
+        "@installer_crates//:crc32fast",
+        "@installer_crates//:serde_json",
+        "@installer_crates//:tempfile",
+    ],
+)
