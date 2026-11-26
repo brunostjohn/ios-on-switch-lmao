@@ -310,6 +310,24 @@ TEST(XnuUiScaleSites, MainScreenClassMissIsJ120s)
     EXPECT_EQ(Word(convert.patched + 12), 0x1e270260u);  // fmov s0, w19
 }
 
+// Each build answers its pinned identity's class (ipsw/pins.bzl device_class, the same panel's key in MobileGestalt's
+// table): an identity change must bring its class.
+TEST(XnuUiScaleSites, TheScreenClassIsThePinnedIdentitys)
+{
+    const std::string pins = switch_ios::test::SourceText("../../ipsw/pins.bzl");
+    const struct {
+        const switch_us_cache &cache;
+        const char *identity;
+        int screen_class;
+    } builds[] = {{switch_us_cache_21H461, "j120ap", 11}, {switch_us_cache_24B119, "j181ap", 21}};
+    for (const auto &build : builds) {
+        SCOPED_TRACE(build.cache.build);
+        const std::string kind = switch_ios::test::Between(pins, std::string("\"") + build.cache.build + "\": {", "\n    },");
+        EXPECT_EQ(switch_ios::test::Between(kind, "\"device_class\": \"", "\""), build.identity);
+        EXPECT_EQ(build.cache.main_screen_class, build.screen_class);
+    }
+}
+
 // MobileGestalt keeps main-screen-class in its build-keyed cache: the identity marker's digest takes the class, so a
 // cache made before the class changed is dropped once.
 TEST(XnuUiScaleSitesSource, TheIdentityDigestTakesTheScreenClass)

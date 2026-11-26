@@ -750,6 +750,7 @@ host_test(
             "vm_unix.c",
         ]
     ] + [
+        "//ipsw:pins.bzl",
         "//kernel/xnu-10063.141.1/bsd:kern/kern_exec.c",
         "//kernel/xnu-12377.121.6/bsd:kern/kern_exec.c",
     ],

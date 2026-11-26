@@ -101,7 +101,10 @@ py_binary(
     srcs = ["inflate.py"],
 )
 
-exports_files(["os_files.py"])
+exports_files([
+    "os_files.py",
+    "pins.bzl",
+])
 
 py_library(
     name = "os_files_lib",
