@@ -336,6 +336,56 @@ extern "C" void switch_gpu_copy_retire(void)
 	retire();
 }
 
+extern "C" int switch_gpu_copy_l2_flush(void (*fn)(void *arg, int status), void *arg)
+{
+	if (!fn)
+		return -22;
+	if (!initialize())
+		return -12;
+	// a holder's unlock brings the retirement work back (copyUnlocked), as switch_gpu_copy_retire asks it to
+	if (!IOLockTryLock(queue.lock)) {
+		__atomic_store_n(&queue.retireAsked, 1u, __ATOMIC_SEQ_CST);
+		__atomic_thread_fence(__ATOMIC_SEQ_CST);
+		if (!IOLockTryLock(queue.lock))
+			return -16;
+	}
+	// with the lock: a busy slot, channel or ring frees at a job's fence, which schedules the retirement work
+	uint32_t slot = 0;
+	while (slot < Jobs && queue.jobs[slot].busy)
+		++slot;
+	int result = queue.turn.waiting() || slot == Jobs ? -16 : channel();
+	if (!result) {
+		auto &job = queue.jobs[slot];
+		// counted before its submission: an interrupt for it can come before this returns
+		__atomic_store_n(&queue.busyJobs, queue.busyJobs + 1, __ATOMIC_RELEASE);
+		tgm_chan *const chan = queue.space.channel;
+		switch_gpu_chan_submit_enter(chan);
+		switch_gpu_chan_next_token(chan, &job.completion);
+		result = switch_gpu_backing_token_retain(&job.completion);
+		uint32_t sequence = 0;
+		if (!result) {
+			result = switch_gpu_chan_exec_visibility(
+				chan, nullptr, 0, nullptr, 0, &sequence, nullptr,
+				SWITCH_GPU_SUBMIT_VISIBILITY_EXPLICIT | SWITCH_GPU_SUBMIT_EXTERNAL_VISIBILITY |
+					SWITCH_GPU_SUBMIT_HOST_WRITTEN | SWITCH_GPU_SUBMIT_FORCE_FENCE);
+			if (result)
+				switch_gpu_backing_token_release(&job.completion);
+		}
+		switch_gpu_chan_submit_leave();
+		if (!result) {
+			job.busy = true;
+			job.order = queue.order;
+			job.done = {TEGRA_GM20B_CE_NO_SYNCPT, fn, arg};
+		} else {
+			job = {};
+			__atomic_store_n(&queue.busyJobs, queue.busyJobs - 1, __ATOMIC_RELEASE);
+		}
+	}
+	IOLockUnlock(queue.lock);
+	copyUnlocked();
+	return result;
+}
+
 extern "C" int tegra_gm20b_ce_copy_plane_checked(
 	const tegra_gm20b_ce_plane *src, const tegra_gm20b_ce_plane *dst, uint32_t rowBytes,
 	uint32_t rows, const tegra_gm20b_ce_wait *wait, const tegra_gm20b_ce_done *done,
