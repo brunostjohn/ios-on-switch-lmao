@@ -130,12 +130,15 @@ static void switch_prefetch_diag_tick(thread_call_param_t p0 __unused, thread_ca
         OS_LOG_DEFAULT,
         "SwitchBootPrefetch: %llu MiB paged in ahead (%llu used, %llu reclaimed unused, lead %llu of bound %llu), "
         "%llu MiB of demand reads by volume (%llu/%llu/%llu), card ms %llu/%llu, requests > 64 KiB replay %llu/%llu, "
-        "demand %llu/%llu, busy-page raises requested %llu delivered %llu refused %llu",
+        "demand %llu/%llu",
         r_mib, u_mib, x_mib, l_mib, b_mib, d_cx + d_root + d_data, d_cx, d_root, d_data, replay_ms, demand_ms,
-        replay_gt64k, replay_reqs, demand_gt64k, demand_reqs,
-        (unsigned long long)__atomic_load_n(&switch_reprio_requested, __ATOMIC_RELAXED),
-        (unsigned long long)__atomic_load_n(&switch_reprio_delivered, __ATOMIC_RELAXED),
-        (unsigned long long)__atomic_load_n(&switch_reprio_failed, __ATOMIC_RELAXED));
+        replay_gt64k, replay_reqs, demand_gt64k, demand_reqs);
+    /* Its own line: a kernel os_log message is at most OS_LOG_BUFFER_MAX_SIZE (256) bytes with its arguments, and one
+     * that does not fit is dropped whole. */
+    os_log(OS_LOG_DEFAULT, "SwitchBootPrefetch: busy-page raises requested %llu delivered %llu refused %llu",
+           (unsigned long long)__atomic_load_n(&switch_reprio_requested, __ATOMIC_RELAXED),
+           (unsigned long long)__atomic_load_n(&switch_reprio_delivered, __ATOMIC_RELAXED),
+           (unsigned long long)__atomic_load_n(&switch_reprio_failed, __ATOMIC_RELAXED));
 
     if (__atomic_load_n(&g_prefetch.diag_stop, __ATOMIC_SEQ_CST) == 0u) {
         uint64_t deadline = 0;
