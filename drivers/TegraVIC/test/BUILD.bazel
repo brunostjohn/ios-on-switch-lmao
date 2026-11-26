@@ -944,6 +944,15 @@ host_test(
 )
 
 host_test(
+    name = "switch_vic_probe_gate_test",
+    srcs = ["switch_vic_probe_gate_test.cpp"],
+    data = [
+        "//drivers/TegraVIC:TegraVICUserClient.cpp",
+        "//kits/SwitchEntitlement:SwitchEntitlement.h",
+    ],
+)
+
+host_test(
     name = "tegra_vic_recover_source_test",
     srcs = ["tegra_vic_recover_source_test.cpp"],
     data = [

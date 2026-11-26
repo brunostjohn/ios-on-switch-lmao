@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // HW Test display.x1.host1x_flip, debug kernels only: window A flipped by class 0x70 streams on the display's own
 // host1x channel, each held behind a producer's syncpoint (SwitchHost1xFlipRun.h has the run). Writing N to
-// debug.switch_display_host1x_flip starts N flips (N | kForcedFailure: the middle one's producer fails); reading it
-// gives the run's line. The swaps are held and the frame end routed while it runs, as for the column scan, and nothing
-// else may write window A or a request then (completionFlipMay, mediaFlipMay, landscapeBusy, the colour and palette
-// requests). The second surface is the front's own pages mapped into a plane slot, so the run is invisible.
-// kern.switch_flips_host1x counts the flips host1x wrote and window A latched as written. The channel is the class
-// probe's too: one of them claims it at a time. Its state is static: the instance is at the 16 KiB a kalloc_type class
-// may have. Included in the class body after SwitchDcHost1xClassProbe.h.
+// debug.switch_display_host1x_flip starts N flips (N | kForcedFailure: the middle one's producer fails), for a writer
+// holding SWITCH_GPU_PROBES_ENTITLEMENT (HW Test) alone; reading it gives the run's line. The swaps are held and the
+// frame end routed while it runs, as for the column scan, and nothing else may write window A or a request then
+// (completionFlipMay, mediaFlipMay, landscapeBusy, the colour and palette requests). The second surface is the front's
+// own pages mapped into a plane slot, so the run is invisible. kern.switch_flips_host1x counts the flips host1x wrote
+// and window A latched as written. The channel is the class probe's too: one of them claims it at a time. Its state is
+// static: the instance is at the 16 KiB a kalloc_type class may have. Included in the class body after
+// SwitchDcHost1xClassProbe.h.
 
 #if SWITCH_FRAME_TIMELINE
 struct Host1xFlipState {
@@ -34,6 +35,8 @@ static int host1xFlipSysctl(struct sysctl_oid *, void *, int, struct sysctl_req 
     if (!display)
         return ENODEV;
     if (req->newptr) {
+        if (!switch_task_entitled(current_task(), SWITCH_GPU_PROBES_ENTITLEMENT))
+            return EPERM;
         int value = 0;
         if (const int error = SYSCTL_IN(req, &value, sizeof(value)))
             return error;

@@ -25,6 +25,7 @@
 #include "../../kits/SwitchDMA/SwitchDcache.h"
 #include "../../kits/SwitchDMA/SwitchDMABuffer.h"
 #include "../../kits/SwitchDT/SwitchDTProperty.h"
+#include "../../kits/SwitchEntitlement/SwitchEntitlement.h"
 #include "../../kits/SwitchCAR/SwitchCAR.h"
 #include "../../kits/SwitchMMIO/SwitchMMIOWords.h"
 #include "../../kits/SwitchSysctl/SwitchSysctl.h"
@@ -65,6 +66,7 @@
 #include "../TegraVIC/TegraVICSurface.h"
 #include "../TegraVIC/SwitchNativeScanout.h"
 #include "../TegraGM20B/SwitchGpuBridge.h"
+#include "../TegraGM20B/TegraGM20BPathsABI.h"
 #include "../TegraGM20B/SwitchGpuReady.h"
 #if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
 #include "../TegraGM20B/SwitchGpuRefusalSites.h"

@@ -12,6 +12,8 @@
 namespace {
 
 using switch_ios::test::Between;
+using switch_ios::test::Block;
+using switch_ios::test::CodeText;
 using switch_ios::test::SourceText;
 
 TEST(DcHost1xClassProbe, ItIsDebugOnlyAndUsesTheJobApi)
@@ -35,6 +37,14 @@ TEST(DcHost1xClassProbe, ItIsDebugOnlyAndUsesTheJobApi)
     EXPECT_NE(display.find("#include \"NativeColumnScanDisplay.h\"\n#include \"SwitchDcHost1xClassProbe.h\""),
               std::string::npos);
     EXPECT_NE(display.find("            columnScanRegister();\n            dcClassRegister();"), std::string::npos);
+}
+
+TEST(DcHost1xClassProbe, OnlyTheProbesEntitlementRunsIt)
+{
+    const CodeText write = Block(SourceText("../SwitchDcHost1xClassProbe.h"),
+                                 "static int dcClassSysctl(struct sysctl_oid *, void *, int, struct sysctl_req *req)");
+    EXPECT_TRUE(write.startsWith("if (req->newptr) { if (!switch_task_entitled(current_task(), "
+                                 "SWITCH_GPU_PROBES_ENTITLEMENT)) return EPERM;"));
 }
 
 // DC A's word offsets in class 0x70 are its register indices (head 0); both fit the opcodes' 12-bit offset field.

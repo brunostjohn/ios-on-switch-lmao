@@ -5,17 +5,17 @@
 // NV_DISPLAY_CLASS_ID 0x70, T210's heads 0x10000 words apart (:39-41, :1043), with SETPAYLOAD and NONINCR_W (:58-63),
 // opcodes T210's host1x lacks; this stream has SETCLASS, INCR and IMM only, and DC A is head 0.
 //
-// Writing debug.switch_display_dc_host1x_class runs it on the sysctl's thread, on the display's own host1x channel,
-// with three syncpoints of its own (gate, DC, channel); reading it gives the verdict line. Every
-// stream is host1x's WAIT_SYNCPT on the gate, its body, then host1x's INCR_SYNCPT on the channel syncpoint, the job's
-// fence. The setup is proven first: the CPU's write of DC_COM_SCRATCH_REGISTER_A (0x325) must read back, and a control
-// stream with no body must wait for the CPU's increment of the gate and then run past. The probe's body is class
-// 0x70's INCR of the scratch word with the complement of its value and IMM of DC_CMD_GENERAL_INCR_SYNCPT (0x000,
-// IMMEDIATE) on the DC syncpoint. Nothing of it may land before the gate (held); after, the channel syncpoint says
-// host1x ran past the class 0x70 words, the DC syncpoint and the scratch word say DC A took them. A channel that
-// stopped is torn down and restarted, which drops its jobs; the scratch word gets its value back. The channel is the
-// host1x flip trial's too (SwitchHost1xFlipDisplay.h): one of them owns it at a time. Included in the class body after
-// NativeColumnScanDisplay.h.
+// Writing debug.switch_display_dc_host1x_class (HW Test's SWITCH_GPU_PROBES_ENTITLEMENT alone) runs it on the sysctl's
+// thread, on the display's own host1x channel, with three syncpoints of its own (gate, DC, channel); reading it gives
+// the verdict line. Every stream is host1x's WAIT_SYNCPT on the gate, its body, then host1x's INCR_SYNCPT on the
+// channel syncpoint, the job's fence. The setup is proven first: the CPU's write of DC_COM_SCRATCH_REGISTER_A (0x325)
+// must read back, and a control stream with no body must wait for the CPU's increment of the gate and then run past.
+// The probe's body is class 0x70's INCR of the scratch word with the complement of its value and IMM of
+// DC_CMD_GENERAL_INCR_SYNCPT (0x000, IMMEDIATE) on the DC syncpoint. Nothing of it may land before the gate (held);
+// after, the channel syncpoint says host1x ran past the class 0x70 words, the DC syncpoint and the scratch word say DC
+// A took them. A channel that stopped is torn down and restarted, which drops its jobs; the scratch word gets its value
+// back. The channel is the host1x flip trial's too (SwitchHost1xFlipDisplay.h): one of them owns it at a time. Included
+// in the class body after NativeColumnScanDisplay.h.
 
 #if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
 static constexpr uint32_t kDcScratchA = 0x325, kDcGeneralIncrSyncpt = 0x000, kDcHost1xClass = TEGRA_HOST1X_CLASS_DC;
@@ -28,6 +28,8 @@ static inline struct sysctl_oid dcClassOid = {};
 static int dcClassSysctl(struct sysctl_oid *, void *, int, struct sysctl_req *req)
 {
     if (req->newptr) {
+        if (!switch_task_entitled(current_task(), SWITCH_GPU_PROBES_ENTITLEMENT))
+            return EPERM;
         int value = 0;
         if (const int error = SYSCTL_IN(req, &value, sizeof(value)))
             return error;
