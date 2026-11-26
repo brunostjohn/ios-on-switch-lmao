@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* SHA-256 (FIPS 180-4), for code-directory page hashes and cdhashes on any host. */
 #ifndef A64X_SHA256_H
 #define A64X_SHA256_H

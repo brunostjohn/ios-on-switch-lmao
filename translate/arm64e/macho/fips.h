@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * corecrypto's FIPS integrity check (fipspost_post_integrity, through fipspost_get_hmac; the kext's and
  * libcorecrypto's are the same code): HMAC-SHA256, keyed with 32 zero bytes, over the first __text section (in segment

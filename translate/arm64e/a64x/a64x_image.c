@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * a64x_image.c: translate code in fixed-size chunks (one VM page), so that a page-in of any page can be redone
  * from that page alone plus one number (the stub cursor at the start of the page).

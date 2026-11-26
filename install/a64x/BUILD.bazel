@@ -1,0 +1,103 @@
+# The iOS 27 kext prelink's native steps (`arm64e kext`, `fips`, `fips-mac`) on buffers, over translate/arm64e's C.
+#
+#   bazel test //install/a64x:switch_a64x_test                  the library on synthetic code
+#   bazel test --config=ios27 //install/a64x:cli_test           switch_a64x_tool against every CLI call of 24B119's prelink
+#   bazel build //install/a64x:desktop                          switch_a64x_tool for the six desktop platforms
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("//bazel/desktop:defs.bzl", "desktop_binaries")
+load("//bazel/lint:defs.bzl", "lint_files")
+load(":record.bzl", "a64x_cli_record")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+# The desktop toolchains (bazel/desktop/cc_config.bzl) pass only these flags: no optimisation unless asked here.
+cc_library(
+    name = "translator",
+    srcs = [
+        "//translate/arm64e:a64x/a64x_classify.c",
+        "//translate/arm64e:a64x/a64x_image.c",
+        "//translate/arm64e:a64x/a64x_rewrite.c",
+        "//translate/arm64e:macho/fips.c",
+        "//translate/arm64e:macho/sha256.c",
+        "//translate/arm64e:macho/sha256.h",
+        "//translate/arm64e:tools/kext.c",
+    ],
+    hdrs = [
+        "//translate/arm64e:a64x/a64x.h",
+        "//translate/arm64e:macho/fips.h",
+        "//translate/arm64e:tools/kext.h",
+    ],
+    copts = select({
+        "@platforms//os:windows": [
+            "/std:c11",
+            "/O2",
+            "/W4",
+            "/WX",
+        ],
+        "//conditions:default": [
+            "-std=c11",
+            "-O2",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+        ],
+    }),
+    textual_hdrs = [
+        "//translate/arm64e:a64x/a64x_fp16.h",
+        "//translate/arm64e:a64x/a64x_vlive.h",
+    ],
+)
+
+rust_library(
+    name = "switch_a64x",
+    srcs = [
+        "ffi.rs",
+        "fips.rs",
+        "kext.rs",
+        "lib.rs",
+        "tests.rs",
+    ],
+    crate_root = "lib.rs",
+    link_deps = [":translator"],
+    deps = ["@installer_crates//:thiserror"],
+)
+
+rust_test(
+    name = "switch_a64x_test",
+    crate = ":switch_a64x",
+    deps = ["@installer_crates//:sha2"],
+)
+
+rust_binary(
+    name = "switch_a64x_tool",
+    srcs = ["main.rs"],
+    deps = [":switch_a64x"],
+)
+
+desktop_binaries(
+    name = "desktop",
+    binary = ":switch_a64x_tool",
+)
+
+a64x_cli_record(
+    name = "cli_record",
+    testonly = True,
+    prelinked = "//kernel:kernel_12377",
+)
+
+rust_test(
+    name = "cli_test",
+    srcs = ["tests/cli_test.rs"],
+    crate_root = "tests/cli_test.rs",
+    data = [
+        ":cli_record",
+        ":switch_a64x_tool",
+    ],
+    env = {
+        "A64X_RECORD": "$(rootpath :cli_record)",
+        "A64X_TOOL": "$(rootpath :switch_a64x_tool)",
+    },
+)

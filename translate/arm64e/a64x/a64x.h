@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * a64x: classify and rewrite AArch64 instructions that a Cortex-A57 (ARMv8.0 + CRC32 + AES/SHA1/SHA2/PMULL)
  * cannot execute but arm64e code built for Apple A12 (ARMv8.3) contains.
