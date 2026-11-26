@@ -4,7 +4,7 @@
 // and four halves measured on an M1, harness/resolveoracle.mm):
 //  - an 8-bit unorm channel: its codes summed with half the count, over the count;
 //  - an 8-bit sRGB channel: its code, read through the format's UNORM twin, as a 12-bit linear value (resolve_srgb.h), those
-//    averaged so and encoded by Metal's thresholds, written as the code through the target's UNORM twin;
+//    averaged so and encoded by Metal's thresholds (srgbCodeOfLinear), written as the code through the target's UNORM twin;
 //  - a half channel: the mean rounded to a half with a tie toward +infinity (halfMean);
 //  - an RG11B10Float channel: that half mean rounded to the channel's float, ties to even.
 //  - a wider or narrower unorm channel (8 to 16 bits, 10-bit colour and 2-bit alpha): its codes summed with half the count, over
@@ -38,16 +38,6 @@ vertex Out resolve_vert(uint vid [[vertex_id]])
 
 typedef texture2d_ms<float, access::read> Samples;
 
-// The code Metal encodes a 12-bit linear value as: the count of the 255 ascending thresholds it reaches, by eight steps of a
-// binary search. It reads the table by name, so m2v keeps it as the program's own constants.
-static uint codeOfLinear(uint x)
-{
-    uint lo = 0;
-    for (uint step = 128; step; step >>= 1)
-        lo = x >= kSrgbThresholds[lo + step - 1] ? lo + step : lo;
-    return lo;
-}
-
 static float4 unorm8(Samples s, uint n, uint2 at)
 {
     uint4 sum = uint4(n / 2);
@@ -78,6 +68,13 @@ static float4 snorm8(Samples s, uint n, uint2 at)
     return floor(sum / float(n)) * as_type<float>(0x3c010204u);  // 1 / 127
 }
 
+// The tables are read by name, so m2v keeps them as the program's own constants
+static float4 srgb8Encoded(uint4 mean)
+{
+    return float4(srgbCodeOfLinear(mean.x), srgbCodeOfLinear(mean.y), srgbCodeOfLinear(mean.z), mean.w) *
+           as_type<float>(0x3b808081u);  // 1 / 255
+}
+
 static float4 srgb8(Samples s, uint n, uint2 at)
 {
     uint4 sum = uint4(n / 2);
@@ -87,8 +84,20 @@ static float4 srgb8(Samples s, uint n, uint2 at)
             sum[c] += kSrgbLinear[code[c]];
         sum.w += code.w;
     }
-    sum /= n;
-    return float4(codeOfLinear(sum.x), codeOfLinear(sum.y), codeOfLinear(sum.z), sum.w) * as_type<float>(0x3b808081u);
+    return srgb8Encoded(sum / n);
+}
+
+// The same with the sample count built in, as unorm8Of: no guarded fetches past the count
+template <uint N> static float4 srgb8Of(Samples s, uint2 at)
+{
+    uint4 sum = uint4(N / 2);
+    for (uint k = 0; k < N; k++) {
+        const uint4 code = uint4(rint(s.read(at, k) * 255.0));
+        for (uint c = 0; c < 3; c++)
+            sum[c] += kSrgbLinear[code[c]];
+        sum.w += code.w;
+    }
+    return srgb8Encoded(sum / N);
 }
 
 // A half resolve: each sample's value (a NaN counts 0, an infinity 65536 of its sign) summed, times one over the count, rounded
@@ -322,6 +331,26 @@ fragment float4 resolve_bgra8_4x_frag(Out in [[stage_in]], Samples s [[texture(0
 fragment float4 resolve_bgra8_srgb_frag(Out in [[stage_in]], Samples s [[texture(0)]], constant uint &n [[buffer(0)]])
 {
     return srgb8(s, n, uint2(in.position.xy));
+}
+
+fragment float4 resolve_rgba8_srgb_2x_frag(Out in [[stage_in]], Samples s [[texture(0)]])
+{
+    return srgb8Of<2>(s, uint2(in.position.xy));
+}
+
+fragment float4 resolve_rgba8_srgb_4x_frag(Out in [[stage_in]], Samples s [[texture(0)]])
+{
+    return srgb8Of<4>(s, uint2(in.position.xy));
+}
+
+fragment float4 resolve_bgra8_srgb_2x_frag(Out in [[stage_in]], Samples s [[texture(0)]])
+{
+    return srgb8Of<2>(s, uint2(in.position.xy));
+}
+
+fragment float4 resolve_bgra8_srgb_4x_frag(Out in [[stage_in]], Samples s [[texture(0)]])
+{
+    return srgb8Of<4>(s, uint2(in.position.xy));
 }
 
 fragment float4 resolve_rg11b10f_frag(Out in [[stage_in]], Samples s [[texture(0)]], constant uint &n [[buffer(0)]])

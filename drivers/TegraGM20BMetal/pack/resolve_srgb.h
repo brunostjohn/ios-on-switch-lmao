@@ -37,3 +37,14 @@ constant ushort kSrgbThresholds[255] = {
     3193, 3225, 3257, 3289, 3321, 3354, 3386, 3419, 3452, 3485, 3518, 3552, 3586, 3620, 3654, 3688, 3722, 3757, 3792,
     3827, 3862, 3897, 3933, 3969, 4005, 4041, 4077,
 };
+
+// Metal's code of a 12-bit linear value `x` (0 to 4095): how many of the thresholds it reaches. The sRGB curve's code of
+// x / 4095 lies within 0.501 of it for every x, so its floor is that code or the one below, and the threshold of the
+// code above settles which: one table read where a binary search takes eight dependent ones.
+static inline uint srgbCodeOfLinear(uint x)
+{
+    const float l = float(x) * (1.0f / 4095.0f);
+    const float s = l <= 0.0031308f ? 12.92f * l : 1.055f * powr(l, 1.0f / 2.4f) - 0.055f;
+    const uint below = min(uint(s * 255.0f), 254u);
+    return below + (x >= kSrgbThresholds[below] ? 1u : 0u);
+}
