@@ -9,6 +9,7 @@ import importlib.util
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 SPEC = importlib.util.spec_from_file_location(
     'stage', Path(__file__).resolve().parents[1] / 'stage-tegra-gm20b-metal.py'
@@ -20,7 +21,9 @@ SELF = '_main/gpu/bundle.stage'
 SEED = 'ngpu/addons/TegraGM20BMetal.seed/shared'
 
 
-class StageTest(unittest.TestCase):
+class Card:
+    """A plain directory standing in for the Data volume, and a //gpu:bundle manifest to stage onto it."""
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
@@ -60,6 +63,8 @@ class StageTest(unittest.TestCase):
         top = self.data / 'ngpu/addons'
         return {p.relative_to(self.data).as_posix(): p.read_bytes() for p in top.rglob('*') if p.is_file()}
 
+
+class StageTest(Card, unittest.TestCase):
     def test_first_stage_replaces_the_directories_and_copies_everything(self):
         (self.data / SEED / 'v1/aa').mkdir(parents=True)
         (self.data / SEED / 'v1/aa/old').write_bytes(b'one file per entry')
@@ -117,15 +122,11 @@ class StageTest(unittest.TestCase):
         self.assertEqual(stage.digest(stage.from_directory(build)), stage.digest(stage.from_manifest(self.manifest())))
 
 
-if __name__ == '__main__':
-    unittest.main()
-
-
-class IconCacheRecordTest(StageTest):
+class IconCacheRecordTest(Card, unittest.TestCase):
     """The stager names what it staged for the kernel's icon cache drop (kernel/switch/boot/icon_cache.c)."""
 
     def record(self) -> str:
-        return (self.data / stage.ICON_CACHE_RECORD).read_text()
+        return (self.data / 'Switch/icon-cache-gpu').read_text()
 
     def test_a_stage_names_the_lists_digest(self):
         self.sync()
@@ -135,7 +136,7 @@ class IconCacheRecordTest(StageTest):
 
     def test_an_unchanged_stage_leaves_the_record_as_it_is_and_names_a_card_that_lacked_it(self):
         self.sync()
-        record = self.data / stage.ICON_CACHE_RECORD
+        record = self.data / 'Switch/icon-cache-gpu'
         before = record.stat().st_mtime_ns
         self.sync()
         self.assertEqual(record.stat().st_mtime_ns, before)
@@ -152,5 +153,19 @@ class IconCacheRecordTest(StageTest):
 
     def test_a_removed_build_is_named_as_none(self):
         self.sync()
-        stage.name_for_icon_cache(self.data, '')
+        with (
+            mock.patch.object(stage, '_check_volume'),
+            mock.patch.object(stage.sys, 'argv', ['stage', str(self.data), '--remove']),
+        ):
+            stage.main()
         self.assertEqual(self.record(), '\n')
+
+    def test_a_card_with_only_the_former_folder_gets_the_record_there(self):
+        (self.data / 'SwitchOld/overlay').mkdir(parents=True)
+        self.sync()
+        self.assertTrue((self.data / 'SwitchOld/icon-cache-gpu').is_file())
+        self.assertFalse((self.data / 'Switch').exists())
+
+
+if __name__ == '__main__':
+    unittest.main()

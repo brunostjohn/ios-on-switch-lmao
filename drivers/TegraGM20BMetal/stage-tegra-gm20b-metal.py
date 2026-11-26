@@ -194,9 +194,25 @@ def _copy_all(data: Path, wanted: Wanted, changed: list[str], report: Callable[[
                 pending.cancel()
 
 
+def _data_folder(data: Path) -> Path:
+    """The Data volume's own folder: Switch, or while only it exists the former one (tools/install/renamed.py)."""
+    folder = data / ICON_CACHE_RECORD.split('/')[0]
+    if folder.exists():
+        return folder
+
+    def ours(folder: Path) -> bool:
+        try:
+            return folder.is_dir() and not folder.is_symlink() and (folder / 'overlay').is_dir()
+        except PermissionError:  # root's 0700 folders, closed to the Mac's user: not one of ours
+            return False
+
+    older = [p for p in data.iterdir() if ours(p)]
+    return older[0] if len(older) == 1 else folder
+
+
 def name_for_icon_cache(data: Path, build: str) -> None:
     """Name the staged build in ICON_CACHE_RECORD, writing nothing when it already does."""
-    record = data / ICON_CACHE_RECORD
+    record = _data_folder(data) / ICON_CACHE_RECORD.split('/', 1)[1]
     if record.is_file() and record.read_text() == build + '\n':
         return
     record.parent.mkdir(parents=True, exist_ok=True)
