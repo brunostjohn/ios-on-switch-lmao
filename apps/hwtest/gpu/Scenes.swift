@@ -49,4 +49,5 @@ public enum Scenes {
     /// QuartzCore 27's Liquid Glass (scenes27), which only iOS 27's app runs.
     public static let glass: any GPUScene = CAGlassScene()
     public static let glassSplit: any GPUScene = CAGlassSplitScene()
+    public static let glassAxes: any GPUScene = CAGlassAxesScene()
 }

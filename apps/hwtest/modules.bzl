@@ -156,6 +156,7 @@ GPU_SCENES_SRCS = [
     "gpu/scenes/XRKernelReadScene.swift",
     "gpu/scenes/XRKernelStoreScene.swift",
     "gpu/scenes/XRKernelTable.swift",
+    "gpu/scenes27/CAGlassAxesScene.swift",
     "gpu/scenes27/CAGlassScene.swift",
     "gpu/scenes27/CAGlassSplitScene.swift",
 ]

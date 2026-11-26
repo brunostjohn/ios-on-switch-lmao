@@ -699,6 +699,7 @@ TESTS: dict[str, bool] = {
 BY_IOS: dict[str, dict[str, bool]] = {
     '27': {
         'gpu.ca.glass': False,
+        'gpu.ca.glass_axes': False,
         'gpu.ca.glass_split': False,
         'gpu.ca.fetch_routes': False,
         'metal4.device': False,
