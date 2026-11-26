@@ -57,21 +57,6 @@ uint64_t tgm_chan_check_progress_locked(struct tgm_chan *chan, const char *who, 
 	return next;
 }
 
-uint64_t tgm_writer_check_progress(uint32_t uid, uint32_t seqno, const char *who)
-{
-	struct tgm_chan *chan = NULL;
-	u64 next = 0;
-
-	if (tgm_gpu.stage < 3)
-		return TGM_HANG_NS;
-	mutex_lock(&tgm_live_lock);
-	chan = live_by_uid(uid);
-	if (chan && !chan->error && (s32)(tgm_chan_completed(chan) - seqno) < 0)
-		next = tgm_chan_check_progress_locked(chan, who, seqno);
-	mutex_unlock(&tgm_live_lock);
-	return next;
-}
-
 int tgm_all_clients(void)
 {
 	return 1; /* every process that asks gets a device */

@@ -168,7 +168,6 @@ kernel_driver(
         "SwitchGpuTimelineSyncpt.cpp",
         "SwitchGpuPresentFilter.cpp",
         "SwitchGpuBridge.cpp",
-        "SwitchGpuBridgeProducer.cpp",
         "SwitchGpuPin.cpp",
         "SwitchGpuSurfaceAccess.cpp",
         "TegraGM20BRelayout.cpp",

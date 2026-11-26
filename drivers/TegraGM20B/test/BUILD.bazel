@@ -2067,13 +2067,9 @@ host_shims(
 
 host_library(
     name = "bridge",
-    srcs = [
-        "//drivers/TegraGM20B:SwitchGpuBridge.cpp",
-        "//drivers/TegraGM20B:SwitchGpuBridgeProducer.cpp",
-    ],
+    srcs = ["//drivers/TegraGM20B:SwitchGpuBridge.cpp"],
     hdrs = [
         "//drivers/TegraGM20B:SwitchGpuBridge.h",
-        "//drivers/TegraGM20B:SwitchGpuBridgeProducer.h",
         "//drivers/TegraGM20B:SwitchGpuKqueue.h",
         "//drivers/TegraGM20B:SwitchGpuSubmitTurn.h",
         "//drivers/TegraGM20B:SwitchGpuInheritorSleep.h",
@@ -2098,13 +2094,9 @@ host_test(
 # The bridge queue under ThreadSanitizer: a submission sleeping for ring room against the queue's other users
 host_library(
     name = "bridge_tsan",
-    srcs = [
-        "//drivers/TegraGM20B:SwitchGpuBridge.cpp",
-        "//drivers/TegraGM20B:SwitchGpuBridgeProducer.cpp",
-    ],
+    srcs = ["//drivers/TegraGM20B:SwitchGpuBridge.cpp"],
     hdrs = [
         "//drivers/TegraGM20B:SwitchGpuBridge.h",
-        "//drivers/TegraGM20B:SwitchGpuBridgeProducer.h",
         "//drivers/TegraGM20B:SwitchGpuKqueue.h",
         "//drivers/TegraGM20B:SwitchGpuSubmitTurn.h",
         "//drivers/TegraGM20B:SwitchGpuInheritorSleep.h",

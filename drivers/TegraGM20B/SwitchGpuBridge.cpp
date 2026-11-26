@@ -5,7 +5,6 @@
 #include <kern/thread_call.h>
 #include <kern/thread.h>
 #include "SwitchGpuBridge.h"
-#include "SwitchGpuBridgeProducer.h"
 #include "SwitchGpuTimeline.h"
 #include "TegraGM20BGpu.h"
 #include "TegraGM20BSyncpt.h"
@@ -16,8 +15,6 @@
 struct switch_gpu_bridge {
 	switch_gpu_backing_token tokens[SWITCH_GPU_BRIDGE_MAX_TOKENS];
 	uint32_t count, refs, syncpoint, threshold, sequence, waiters;
-	uint32_t
-		producer;  // 0: the bridge's own GPU job; else its producer's syncpoint, `threshold` that producer's
 	bool active, notified;
 	int result;
 	void (*completed)(void *, int);
@@ -37,7 +34,7 @@ struct BridgeQueue {
 	uint64_t checkAt;
 	SwitchGpuKqueue space;
 	SwitchGpuSubmitTurn turn;
-	uint32_t waitingSources, lastSequence;
+	uint32_t waitingSources;
 	switch_gpu_bridge jobs[kSlots];
 } queue;
 
@@ -87,9 +84,7 @@ void checkHang(thread_call_param_t, thread_call_param_t)
 {
 	IOLockLock(queue.lock);
 	queue.checkAt = 0;
-	switch_gpu_bridge *late = oldestWaited();
-	if (late && !late->producer && !queue.space.channel)
-		late = nullptr;
+	switch_gpu_bridge *late = queue.space.channel ? oldestWaited() : nullptr;
 	if (!late) {
 		IOLockUnlock(queue.lock);
 		return;
@@ -97,14 +92,8 @@ void checkHang(thread_call_param_t, thread_call_param_t)
 	++late->refs;
 	tgm_chan *channel = queue.space.channel;
 	const uint32_t sequence = late->sequence;
-	const bool jobless = late->producer != 0;
-	switch_gpu_backing_token running = {};
-	const bool pending =
-		jobless && switch_gpu_producer_running(late->tokens, late->count, running);
 	IOLockUnlock(queue.lock);
-	const uint64_t next = !jobless ? tgm_chan_check_progress(channel, "host1x bridge", sequence)
-			      : pending ? switch_gpu_producer_check(running)
-					: 0;
+	const uint64_t next = tgm_chan_check_progress(channel, "host1x bridge", sequence);
 	IOLockLock(queue.lock);
 	if (next && !queue.checkAt && oldestWaited())
 		armHangCheck(next);
@@ -130,19 +119,15 @@ void retire(thread_call_param_t, thread_call_param_t)
 	const uint32_t completed =
 		queue.space.channel ? tgm_chan_settled(queue.space.channel, &failed) : 0;
 	for (auto &job : queue.jobs) {
-		const bool channelFailed = failed && !job.producer;
-		if (!job.active ||
-		    (!job.producer && !failed && int32_t(completed - job.sequence) < 0))
+		if (!job.active || (!failed && int32_t(completed - job.sequence) < 0))
 			continue;
 		const int source = producers(job);
-		if (!channelFailed && !source) {
+		if (!failed && !source) {
 			pendingSources = true;
 			continue;
 		}
-		job.result = channelFailed ? -5 : source == 1 ? 1 : source < 0 ? source : -5;
-		if (job.producer && job.result != 1)
-			switch_gpu_producer_release(job.producer, job.threshold);
-		if (channelFailed) {
+		job.result = failed ? -5 : source == 1 ? 1 : source < 0 ? source : -5;
+		if (failed) {
 			const int released = tegra_host1x_syncpt_release_failed(
 				job.syncpoint, job.threshold, TGM_SYNCPT_INCRS);
 			// Whatever waits on the old syncpoint fails or times out on its own engine; this slot no longer shares it.
@@ -269,19 +254,13 @@ extern "C" int switch_gpu_bridge_submit(const switch_gpu_backing_token *tokens, 
 	}
 	if (!initialize())
 		return -12;
-	SwitchGpuProducerWait wait;
-	const bool jobless = switch_gpu_producer_wait(tokens, count, wait);
-	if (jobless)
-		tgm_chan_need_tokens(tokens, count);
 	IOLockLock(queue.lock);
-	switch_gpu_producer_assign(wait);
-	if (!jobless)
-		queue.turn.enter(queue.lock);
-	int error = jobless ? 0 : channel();
+	queue.turn.enter(queue.lock);
+	int error = channel();
 	uint32_t slot = 0;
 	while (slot < kSlots && queue.jobs[slot].refs)
 		++slot;
-	if (!error && !jobless && slot < kSlots && !queue.jobs[slot].syncpoint &&
+	if (!error && slot < kSlots && !queue.jobs[slot].syncpoint &&
 	    tegra_host1x_syncpt_alloc(&queue.jobs[slot].syncpoint))
 		error = -12;
 	if (error || slot == kSlots) {
@@ -291,8 +270,6 @@ extern "C" int switch_gpu_bridge_submit(const switch_gpu_backing_token *tokens, 
 	auto &job = queue.jobs[slot];
 	job.refs = 1;
 	job.result = 0;
-	job.producer = jobless ? wait.syncpoint : 0;
-	bool producerDone = false;
 	for (uint32_t i = 0; i < count; ++i) {
 		error = switch_gpu_backing_token_retain(&tokens[i]);
 		if (error)
@@ -300,18 +277,11 @@ extern "C" int switch_gpu_bridge_submit(const switch_gpu_backing_token *tokens, 
 		job.tokens[job.count++] = tokens[i];
 	}
 	if (!error) {
-		// Ahead of the check: a producer that completes after it finds the flag and has retirement look
-		if (jobless)
-			__atomic_store_n(&queue.waitingSources, 1u, __ATOMIC_SEQ_CST);
 		const int source = producers(job);
 		if (source < 0)
 			error = source;
-		producerDone = source == 1;
 	}
-	if (!error && jobless) {
-		job.threshold = wait.threshold;
-		job.sequence = queue.lastSequence;
-	} else if (!error) {
+	if (!error) {
 		job.threshold = tegra_host1x_syncpt_read(job.syncpoint) + TGM_SYNCPT_INCRS;
 		const tgm_push push = {
 			kPushVa + slot * kPage,
@@ -342,8 +312,6 @@ extern "C" int switch_gpu_bridge_submit(const switch_gpu_backing_token *tokens, 
 				break;
 		}
 		switch_gpu_chan_submit_leave();
-		if (!error)
-			queue.lastSequence = job.sequence;
 	}
 	if (error) {
 		releaseLocked(job);
@@ -355,8 +323,6 @@ extern "C" int switch_gpu_bridge_submit(const switch_gpu_backing_token *tokens, 
 		// work is done: this job is new work on the channel that waiter's checks cover.
 		if (!queue.checkAt && oldestWaited())
 			armHangCheck(kHangCheckNs);
-		if (jobless && producerDone)
-			thread_call_enter(queue.retirement);
 	}
 	IOLockUnlock(queue.lock);
 	return error;
@@ -365,7 +331,7 @@ extern "C" int switch_gpu_bridge_submit(const switch_gpu_backing_token *tokens, 
 extern "C" void switch_gpu_bridge_syncpoint(const switch_gpu_bridge *bridge, uint32_t *syncpoint,
 					    uint32_t *threshold)
 {
-	*syncpoint = bridge->producer ? bridge->producer : bridge->syncpoint;
+	*syncpoint = bridge->syncpoint;
 	*threshold = bridge->threshold;
 }
 
@@ -423,9 +389,8 @@ extern "C" int switch_gpu_bridge_status(const switch_gpu_bridge *bridge)
 	int result = bridge->result;
 	if (!result) {
 		result = producers(*bridge);
-		const uint32_t syncpoint = bridge->producer ? bridge->producer : bridge->syncpoint;
 		if (result == 1 &&
-		    int32_t(tegra_host1x_syncpt_read(syncpoint) - bridge->threshold) < 0)
+		    int32_t(tegra_host1x_syncpt_read(bridge->syncpoint) - bridge->threshold) < 0)
 			result = 0;
 	}
 	IOLockUnlock(queue.lock);

@@ -572,10 +572,6 @@ int tegra_gm20b_iosurface_view(void *client, uint32_t index, uint32_t surface_id
 uint32_t tgm_chan_uid(struct tgm_chan *chan);
 int tgm_writer_done(uint32_t uid, uint32_t seqno);
 void tgm_writer_wait(uint32_t uid, uint32_t seqno);
-/* The hang rule's check (tgm_chan_check_progress) of the channel of `uid` for a waiter on `seqno` that holds nothing on
- * the channel but a token: a host1x stream waiting on the channel's own syncpoint (SwitchGpuBridge.cpp). Thread
- * context; takes tgm_live_lock. Returns when the next check is due, 0 when the job is done or the channel gone. */
-uint64_t tgm_writer_check_progress(uint32_t uid, uint32_t seqno, const char *who);
 int tgm_writers_all_done(void);
 void tgm_writers_wait_all(void);
 /* SurfaceLayout (method 16) for the import holding `c`: the surface's layout, decided at the first call with `writes` while
