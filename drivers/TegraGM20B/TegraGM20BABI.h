@@ -239,6 +239,14 @@ enum {
 		<< 3, /* Coherent command/control allocation; bounded ready-page preference. */
 	TegraGM20BBoSystem = 1u
 		<< 4, /* Coherent write-combined system pages (bypasses GPU pool; parkable). */
+	/* Debug kernels only (a release kernel refuses it): an uncompressed BO on direct physical addresses, never compacted
+	 * into the Tegra SMMU's 64 KiB big pages (HW Test gpu.perf.fill's A/B of that compaction) */
+	TegraGM20BBoProbeDirect = 1u << 5,
+};
+
+/* TegraGM20BAbiBoAllocReply.reserved, debug kernels only (0 in a release kernel) */
+enum {
+	TegraGM20BBoReplySmmu = 1u << 0, /* the GPU reaches the BO's memory through the Tegra SMMU */
 };
 
 /* Method 2. Zero-filled pages below 4 GiB. map_token is the clientMemoryForType type for IOConnectMapMemory64. */

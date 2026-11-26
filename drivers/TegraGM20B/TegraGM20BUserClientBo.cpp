@@ -480,9 +480,9 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 	if (!ret && !bo->chunked && !smmuComp && !(in->flags & TegraGM20BBoCoherent))
 		ret = ioreturn(switch_gpu_backing_cpu_track(bo->backing));
 	if (!ret) {
-		const bool bigSmmu =
-			!compressible && !bo->pool_va && !(in->flags & TegraGM20BBoContiguous) &&
-			bo->npages >= SWITCH_GPU_SMMU_GRANULE_PAGES && switch_gpu_smmu_ready();
+		const bool bigSmmu = switch_gpu_bo_big_smmu(in->flags, bo->pool_va != 0, bo->npages,
+							    SWITCH_GPU_SMMU_GRANULE_PAGES,
+							    switch_gpu_smmu_ready());
 		const auto acquire = compressible ? allocatedMemorySmmu
 				     : bigSmmu    ? allocatedMemoryBig
 						  : allocatedMemory;
@@ -493,6 +493,11 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 			chunksRefused = true;
 		}
 	}
+#if DEVELOPMENT || DEBUG
+	const uint32_t replied = !ret && bo->mem && tgm_mem_is_smmu(bo->mem) ? TegraGM20BBoReplySmmu : 0u;
+#else
+	const uint32_t replied = 0;
+#endif
 	lap(3);
 	IOLockLock(lock_);
 	ret = settleBo(in, charge, bo, ret, chunksRefused, system);
@@ -512,7 +517,7 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 	ownerNote(owner_, in->bytes, mark - start, kind == TGM_BO_CACHED);
 	out->handle = handle;
 	out->map_token = token;
-	out->reserved = 0;
+	out->reserved = replied;
 	return kIOReturnSuccess;
 }
 
