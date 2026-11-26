@@ -23,6 +23,7 @@ from tools.devicerun.morning import CHECKLIST
 from tools.devicerun.owed_all import summary as owed_summary
 from tools.devicerun.reports import crash_rows, frame_rows, headline, rolled_up
 from tools.devicerun.rules import FAIL, INFO, REPORT, Check, Event, Result, evaluate, match
+from tools.devicerun.shared_cache import cache_rows
 from tools.devicerun.springboard import springboard_rows
 
 OBSERVED_WIDTH = 110
@@ -213,6 +214,7 @@ def evaluate_all(
     groups.append(('launch-summary', launch_rows(by_check)))
     groups.append(('springboard-life', springboard_rows(by_check)))
     groups.append(('memory-watch', memory_rows(by_check)))
+    groups.append(('shared-cache-nested', cache_rows(by_check)))
     head = [boot_row(by_boot, judged)] if by_boot else []
     groups.append(('usb-layers', [*head, *usb.rows(by_check, crashes, end)]))
     groups.append(('frames', frame_rows(frame_lines)))

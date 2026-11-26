@@ -31,6 +31,7 @@ py_library(
         "protection.py",
         "reports.py",
         "rules.py",
+        "shared_cache.py",
         "springboard.py",
         "stutter.py",
         "textures.py",
@@ -208,6 +209,14 @@ py_test(
     name = "memory_test",
     size = "small",
     srcs = ["memory_test.py"],
+    deps = [":lib"],
+)
+
+# shared_cache.py's per-boot judgement of each pinned dyld cache over lines in the kernel's formats.
+py_test(
+    name = "shared_cache_test",
+    size = "small",
+    srcs = ["shared_cache_test.py"],
     deps = [":lib"],
 )
 

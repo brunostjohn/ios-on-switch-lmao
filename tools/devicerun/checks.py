@@ -30,6 +30,7 @@ from tools.devicerun.motion import MOTION
 from tools.devicerun.owed_all import GROUPS as OWED
 from tools.devicerun.protection import PROTECTION
 from tools.devicerun.rules import REPORT, TIMELINE, Check
+from tools.devicerun.shared_cache import SHARED_CACHE
 from tools.devicerun.springboard import OBSERVATIONS, SPRINGBOARD
 from tools.devicerun.stutter import STUTTER
 from tools.devicerun.textures import TEXTURES
@@ -1458,6 +1459,7 @@ GROUPS: dict[str, list[Check]] = {
     'protection': PROTECTION,
     'stutter': STUTTER,
     'cpu': CPU,
+    'shared-cache': SHARED_CACHE,
     'commit': COMMIT,
     'launch': LAUNCHES,
     'springboard': SPRINGBOARD,

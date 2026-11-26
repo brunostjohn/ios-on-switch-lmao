@@ -645,6 +645,7 @@ TESTS_SYSTEM_SRCS = [
     "tests/RecorderTests.swift",
     "tests/SensorTests.swift",
     "tests/SnapshotFiles.swift",
+    "tests/SharedCacheNestedTest.swift",
     "tests/SnapshotPurgeableTest.swift",
     "tests/SocThermThrottleTest.swift",
     "tests/StorageIOTest.swift",

@@ -183,7 +183,7 @@ public enum Registry {
         CPUIPIPingPongTest(), HogPacingTest(),
         DispatchSyncTest(), DispatchSyncWorkloopTest(), WorkloopSyncTest(), WidgetsRenderTest(), IconRenderTest(),
         DispatchSyncHandoffTest(),
-        SnapshotPurgeableTest(), RecorderHangDumpTest(),
+        SnapshotPurgeableTest(), RecorderHangDumpTest(), SharedCacheNestedTest(),
     ]
 
     static let compositor: [any HWTest] =

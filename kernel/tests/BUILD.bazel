@@ -2145,3 +2145,27 @@ host_test(
     ],
     includes = ["."],
 )
+
+host_test(
+    name = "switch_fvariant_test",
+    srcs = ["switch_fvariant_test.cpp"],
+    additional_compiler_inputs = [
+        "//kernel/switch:include/switch/fvariant.h",
+        "//kernel/switch:include/switch/fvariant_24B119.h",
+        "//kernel/switch:include/switch/fvariant_types.h",
+    ],
+)
+
+host_test(
+    name = "xnu_fvariant_source_test",
+    srcs = ["xnu_fvariant_source_test.cpp"],
+    data = [
+        "//kernel/switch:objects.bzl",
+        "//kernel/switch:vm/fvariant.c",
+        "//kernel/xnu-10063.141.1/osfmk:vm/vm_shared_region.c",
+        "//kernel/xnu-10063.141.1/osfmk:vm/vm_shared_region_pager.c",
+        "//kernel/xnu-12377.121.6/osfmk:vm/vm_shared_region.c",
+        "//kernel/xnu-12377.121.6/osfmk:vm/vm_shared_region_pager.c",
+        "//kernel/xnu-12377.121.6/osfmk:vm/vm_shared_region_xnu.h",
+    ],
+)
