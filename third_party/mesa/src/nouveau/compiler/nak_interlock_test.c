@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "nak_private.h"
+#include "nil.h"
 #include "nir_builder.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -358,6 +359,78 @@ test_msaa_image_offsets(void)
    }
 }
 
+/* The cell an MS image access lowered on GM20B reads, for each sample count
+ * and sample, is NIL's own (nil_sample_offset of nil_choose_sample_layout):
+ * the TXQ of the count answered with a constant, the coordinates fold */
+static void
+test_msaa_cells_are_nil_s(void)
+{
+   const struct nir_shader_compiler_options options = {0};
+   const struct nak_compiler nak = {.sm = 53};
+   for (unsigned samples = 1; samples <= 8; samples *= 2) {
+      for (unsigned s = 0; s < samples; s++) {
+         nir_builder b = nir_builder_init_simple_shader(MESA_SHADER_FRAGMENT,
+                                                        &options, "cell");
+         nir_def *zero = nir_imm_int(&b, 0);
+         nir_def *texel = nir_bindless_image_load(
+            &b, 4, 32, nir_imm_int(&b, 5), nir_vec4(&b, zero, zero, zero, zero),
+            nir_imm_int(&b, s), zero, .image_dim = GLSL_SAMPLER_DIM_MS,
+            .format = PIPE_FORMAT_R8G8B8A8_UNORM);
+         nir_store_output(&b, texel, zero,
+                          .io_semantics.location = FRAG_RESULT_DATA0);
+         require(nak_nir_lower_tex(b.shader, &nak), "MS image load not lowered");
+         nir_foreach_function_impl(impl, b.shader) {
+            nir_foreach_block(block, impl) {
+               nir_foreach_instr_safe(instr, block) {
+                  if (instr->type != nir_instr_type_tex ||
+                      nir_instr_as_tex(instr)->op != nir_texop_tex_type_nv)
+                     continue;
+                  nir_tex_instr *txq = nir_instr_as_tex(instr);
+                  b.cursor = nir_before_instr(instr);
+                  nir_def_rewrite_uses(&txq->def,
+                                       nir_imm_ivec4(&b, 0, 0, samples, 0));
+               }
+            }
+         }
+         bool progress;
+         do {
+            progress = nir_opt_constant_folding(b.shader);
+            progress |= nir_opt_algebraic(b.shader);
+            progress |= nir_opt_copy_prop(b.shader);
+            progress |= nir_opt_dce(b.shader);
+         } while (progress);
+         struct nil_sample_offset want =
+            nil_sample_offset(nil_choose_sample_layout(samples), s);
+         bool found = false;
+         nir_foreach_function_impl(impl, b.shader) {
+            nir_foreach_block(block, impl) {
+               nir_foreach_instr(instr, block) {
+                  if (instr->type != nir_instr_type_intrinsic)
+                     continue;
+                  nir_intrinsic_instr *load = nir_instr_as_intrinsic(instr);
+                  if (load->intrinsic != nir_intrinsic_bindless_image_load)
+                     continue;
+                  require(nir_src_is_const(load->src[1]),
+                          "the cell did not fold to a constant");
+                  found = true;
+                  if (nir_src_comp_as_uint(load->src[1], 0) != want.x ||
+                      nir_src_comp_as_uint(load->src[1], 1) != want.y) {
+                     fprintf(stderr, "%ux sample %u: (%u, %u), NIL (%u, %u)\n",
+                             samples, s,
+                             (unsigned)nir_src_comp_as_uint(load->src[1], 0),
+                             (unsigned)nir_src_comp_as_uint(load->src[1], 1),
+                             want.x, want.y);
+                     abort();
+                  }
+               }
+            }
+         }
+         require(found, "no image load left");
+         ralloc_free(b.shader);
+      }
+   }
+}
+
 static void
 test_compile_sm75(void)
 {
@@ -441,6 +514,7 @@ main(void)
    test_compile_sm53_interlock();
    test_compile_sm75();
    test_msaa_image_offsets();
+   test_msaa_cells_are_nil_s();
    puts("interlock NIR and SM53/SM75 full-pipeline SASS checks passed");
    return 0;
 }

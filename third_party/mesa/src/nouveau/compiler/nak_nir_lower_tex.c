@@ -803,15 +803,22 @@ lower_msaa_image_access(nir_builder *b, nir_intrinsic_instr *intrin,
 
    nir_def *sx, *sy;
    if (nak->sm >= 50 && nak->sm < 70) {
-      /* ios-on-switch-lmao: Maxwell lays sample s of 2, 4 or 8 at
-       * (s&1 | (s>>1)&2, (s>>1)&1) in its pixel's block (nv50_ir's and UAM's
-       * table 0x5050ee44), whatever the raster's sample positions. That is
-       * three ALU ops where the TXQ below is a texture-pipe round trip, which
-       * the storage forms pay inside their pixel interlock.
+      /* ios-on-switch-lmao: the cell is NIL's layout for the image's sample
+       * count (nil/image.rs choose_sample_layout and sa_offset), which no
+       * sample position changes: 2X1_D3D puts sample s at (1 - s, 0), 2X2 at
+       * (s & 1, s >> 1), and 4X2_D3D at x two bits a sample from 0xe076, y one
+       * from 0x56. A few ALU ops where the TXQ below is a texture-pipe round
+       * trip, which the storage forms pay inside their pixel interlock.
        */
-      nir_def *s_half = nir_ushr_imm(b, s, 1);
-      sx = nir_ior(b, nir_iand_imm(b, s, 1), nir_iand_imm(b, s_half, 2));
-      sy = nir_iand_imm(b, s_half, 1);
+      nir_def *is_2x = nir_ieq_imm(b, samples, 2);
+      nir_def *is_8x = nir_ieq_imm(b, samples, 8);
+      nir_def *x_8x = nir_iand_imm(
+         b, nir_ushr(b, nir_imm_int(b, 0xe076), nir_ishl_imm(b, s, 1)), 3);
+      nir_def *y_8x = nir_iand_imm(b, nir_ushr(b, nir_imm_int(b, 0x56), s), 1);
+      sx = nir_bcsel(b, is_8x, x_8x,
+                     nir_bcsel(b, is_2x, nir_ixor(b, s, nir_imm_int(b, 1)),
+                               nir_iand_imm(b, s, 1)));
+      sy = nir_bcsel(b, is_8x, y_8x, nir_ushr_imm(b, s, 1));
    } else {
       /* Compute the x/y offsets
        *
