@@ -13,6 +13,7 @@
 #include <sys/mount.h>
 #include <sys/mount_internal.h>
 #include <sys/param.h>
+#include <sys/reboot.h>
 #include <sys/ubc_internal.h>
 #include <sys/vnode.h>
 #include <uuid/uuid.h>
@@ -161,6 +162,9 @@ static int compare_runs_qsort(const void *a, const void *b)
 
 static int name_logged_vnode(vnode_t vp, void *argument)
 {
+    if (get_system_inshutdown()) {
+        return VNODE_RETURNED_DONE;
+    }
     const struct switch_naming *naming = (const struct switch_naming *)argument;
     uint32_t lo = 0;
     uint32_t hi = naming->count;
@@ -224,7 +228,7 @@ static uint32_t collect_kept_replayed(const struct switch_prefetch_run *old_runs
 
     vfs_context_t ctx = vfs_context_kernel();
     uint32_t n = 0;
-    for (uint32_t i = 0; i < ref_count;) {
+    for (uint32_t i = 0; i < ref_count && !get_system_inshutdown();) {
         const uint8_t vol = refs[i].volume;
         const uint64_t file_id = refs[i].file_id;
         uint32_t j = i + 1u;
@@ -329,6 +333,15 @@ static void kernel_unlink_file(void *ctx_arg, const char *path)
     (void)unlink1((vfs_context_t)ctx_arg, NULLVP, CAST_USER_ADDR_T(path), UIO_SYSSPACE, VNODE_REMOVE_NOFOLLOW_ANY);
 }
 
+#if DEVELOPMENT || DEBUG
+static uint64_t switch_prefetch_save_ms(uint64_t from_abs, uint64_t to_abs)
+{
+    uint64_t ns = 0;
+    absolutetime_to_nanoseconds(to_abs - from_abs, &ns);
+    return ns / NSEC_PER_MSEC;
+}
+#endif
+
 void switch_prefetch_save_next(struct switch_record_entry *log, uint32_t appended,
                                const struct switch_prefetch_run *old_runs, uint32_t replayed_runs,
                                const uint8_t *replayed_bits, const struct switch_prefetch_header *expected_key,
@@ -381,7 +394,7 @@ void switch_prefetch_save_next(struct switch_record_entry *log, uint32_t appende
             }
             i = j;
         }
-        for (uint32_t v = 0; v < mount_count && v < SWITCH_PREFETCH_VOLUME_COUNT; ++v) {
+        for (uint32_t v = 0; v < mount_count && v < SWITCH_PREFETCH_VOLUME_COUNT && !get_system_inshutdown(); ++v) {
             if (!vol_logged[v]) {
                 continue;
             }
@@ -425,12 +438,18 @@ void switch_prefetch_save_next(struct switch_record_entry *log, uint32_t appende
         }
     }
     kfree_data(groups, groups_bytes);
+#if DEVELOPMENT || DEBUG
+    const uint64_t named_abs = mach_absolute_time();
+#endif
 
     uint32_t kept = 0;
     uint32_t dropped_unused = 0;
     uint32_t evicted = 0;
     n += collect_kept_replayed(old_runs, replayed_runs, replayed_bits, mounts, fsids, mount_count, ranges + n,
                                &total_pages, &kept, &dropped_unused, &evicted);
+#if DEVELOPMENT || DEBUG
+    const uint64_t kept_abs = mach_absolute_time();
+#endif
 
     struct switch_prefetch_run *runs = NULL;
     size_t runs_bytes = 0;
@@ -455,8 +474,17 @@ void switch_prefetch_save_next(struct switch_record_entry *log, uint32_t appende
     const uint32_t count =
         runs != NULL ? switch_prefetch_cap_runs(runs, built, SWITCH_PREFETCH_CAP_PAGES, SWITCH_PREFETCH_MAX_RUNS) : 0u;
     int error = count == 0u ? ENOENT : 0;
+    /* Shutdown waits for this thread (switch_prefetch_shutdown). Once reboot_kernel sets system_inshutdown, the loops
+     * above stop at their next vnode or file, so what they built is incomplete: nothing is written and the last list
+     * stays. */
+    if (error == 0 && get_system_inshutdown()) {
+        error = ECANCELED;
+    }
     char path[192];
     switch_prefetch_list_path(path, sizeof(path));
+#if DEVELOPMENT || DEBUG
+    const uint64_t write_abs = mach_absolute_time();
+#endif
     if (error == 0) {
         struct switch_prefetch_header header = *expected_key;
         header.runs = count;
@@ -490,8 +518,7 @@ void switch_prefetch_save_next(struct switch_record_entry *log, uint32_t appende
     }
 #if DEVELOPMENT || DEBUG
     else {
-        uint64_t ns = 0;
-        absolutetime_to_nanoseconds(mach_absolute_time() - start_abs, &ns);
+        const uint64_t end_abs = mach_absolute_time();
         const uint64_t cx_mib = ((vol_pages[SWITCH_PREFETCH_VOL_SYSTEM] + vol_pages[SWITCH_PREFETCH_VOL_APP]) *
                                  SWITCH_PREFETCH_LIST_PAGE) >>
                                 20;
@@ -499,9 +526,10 @@ void switch_prefetch_save_next(struct switch_record_entry *log, uint32_t appende
         const uint64_t data_mib = (vol_pages[SWITCH_PREFETCH_VOL_DATA] * SWITCH_PREFETCH_LIST_PAGE) >> 20;
         os_log(OS_LOG_DEFAULT,
                "SwitchBootPrefetch: list saved: %u runs, %llu MiB (%llu/%llu/%llu MiB cx/root/Data; %u kept of the "
-               "last list, %u dropped unused, %u evicted) in %llu ms",
+               "last list, %u dropped unused, %u evicted) in %llu ms (naming %llu, kept %llu, write %llu)",
                count, (saved_pages * SWITCH_PREFETCH_LIST_PAGE) >> 20, cx_mib, root_mib, data_mib, kept, dropped_unused,
-               evicted, ns / NSEC_PER_MSEC);
+               evicted, switch_prefetch_save_ms(start_abs, end_abs), switch_prefetch_save_ms(start_abs, named_abs),
+               switch_prefetch_save_ms(named_abs, kept_abs), switch_prefetch_save_ms(write_abs, end_abs));
     }
 #endif
 }

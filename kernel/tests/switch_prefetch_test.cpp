@@ -834,6 +834,34 @@ TEST(SwitchPrefetchSource, ShutdownCannotHangSilentlyOnTheReplay)
     EXPECT_THAT(stop, HasSubstr("panic("));
 }
 
+// Shutdown's wait on the replay thread includes a Boot Complete save already under way (27 s on one device boot). That
+// save ends at its next vnode or file once reboot_kernel has marked the system in shutdown, which it does before
+// switch_shutdown_begin, and writes nothing from the incomplete naming.
+TEST(SwitchPrefetchSource, ARebootDuringTheListSaveEndsItAndWritesNoList)
+{
+    const std::string save = SourceText("../switch/vm/prefetch_save.c");
+    EXPECT_THAT(bodyOf(save, "static int name_logged_vnode("), HasSubstr("return VNODE_RETURNED_DONE;"));
+    EXPECT_THAT(bodyOf(save, "static uint32_t collect_kept_replayed("),
+                HasSubstr("i < ref_count && !get_system_inshutdown();"));
+    const std::string next = bodyOf(save, "void switch_prefetch_save_next(");
+    EXPECT_THAT(next, HasSubstr("v < SWITCH_PREFETCH_VOLUME_COUNT && !get_system_inshutdown();"));
+    const size_t refused = next.find("if (error == 0 && get_system_inshutdown()) {\n        error = ECANCELED;");
+    const size_t write = next.find("switch_prefetch_save_atomic(");
+    ASSERT_NE(refused, std::string::npos);
+    ASSERT_NE(write, std::string::npos);
+    EXPECT_LT(refused, write);
+
+    for (const char *tree : {"xnu-10063.141.1", "xnu-12377.121.6"}) {
+        const std::string reboot = bodyOf(SourceText(std::string("../") + tree + "/bsd/kern/kern_shutdown.c"),
+                                          "reboot_kernel(int howto, char *message)");
+        const size_t marked = reboot.find("OSCompareAndSwap(0, 1, &system_inshutdown)");
+        const size_t begin = reboot.find("switch_shutdown_begin(howto);");
+        ASSERT_NE(marked, std::string::npos) << tree;
+        ASSERT_NE(begin, std::string::npos) << tree;
+        EXPECT_LT(marked, begin) << tree;
+    }
+}
+
 TEST(SwitchPrefetchList, RefusesZeroVolumeUuidsAndInvalidRunIdentity)
 {
     const auto expected = makeExpectedKey();

@@ -570,9 +570,10 @@ void switch_boot_io_complete(void)
     (void)switch_vm_prefetch_stop(SWITCH_PREFETCH_STOP_BOOT_COMPLETE);
 }
 
-/* The replay thread's exit after a stop waits only for its in-flight reads (at most 1.5 MiB at the card). One still
- * running this long into shutdown means a read that never completed; shutdown would hang on it with nothing logged,
- * and release kernels have no other shutdown watchdog. */
+/* The replay thread's exit after a stop waits for its in-flight reads (at most 1.5 MiB at the card) and, after Boot
+ * Complete, for the list save, which stops at its next file once shutdown has begun. One still running this long into
+ * shutdown means a read or a save step that never completed; shutdown would hang on it with nothing logged, and
+ * release kernels have no other shutdown watchdog. */
 #define SWITCH_PREFETCH_SHUTDOWN_S 20u
 
 void switch_prefetch_shutdown(void)
@@ -591,8 +592,8 @@ void switch_prefetch_shutdown(void)
         }
         if (thread_block(THREAD_CONTINUE_NULL) == THREAD_TIMED_OUT &&
             __atomic_load_n(&g_prefetch.thread_done, __ATOMIC_SEQ_CST) == 0u) {
-            panic("SwitchBootPrefetch: the replay thread is still running %u s into shutdown: one of its reads never "
-                  "completed",
+            panic("SwitchBootPrefetch: the replay thread is still running %u s into shutdown: a replay read or a list "
+                  "save step never completed",
                   SWITCH_PREFETCH_SHUTDOWN_S);
         }
     }
