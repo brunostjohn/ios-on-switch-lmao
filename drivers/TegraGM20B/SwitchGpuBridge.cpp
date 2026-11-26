@@ -292,7 +292,12 @@ extern "C" int switch_gpu_bridge_source_failure(const switch_gpu_bridge *bridge)
 
 extern "C" int switch_gpu_bridge_why(const switch_gpu_bridge *bridge)
 {
-	return switch_gpu_backing_tokens_failure(bridge->tokens, bridge->count);
+	const int why = switch_gpu_backing_tokens_failure(bridge->tokens, bridge->count);
+	// A jobless bridge also fails when every token completed and its covering job died before its drain
+	const bool coveringFailed =
+		bridge->producer && __atomic_load_n(&bridge->result, __ATOMIC_ACQUIRE) < 0;
+	return why || !coveringFailed ? why
+				      : switch_gpu_backing_tokens_failure(&bridge->covering, 1);
 }
 
 extern "C" int switch_gpu_bridge_status(const switch_gpu_bridge *bridge)

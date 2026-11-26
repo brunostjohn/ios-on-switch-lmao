@@ -399,7 +399,7 @@ TEST(GM20BBridgeSource, AJoblessSlotReadsItsTokensThenItsChannelThenItsEnd)
 	const CodeText settle =
 		Block(SourceText("../SwitchGpuBridgeRetire.cpp"), "bool settleJobless(");
 	EXPECT_TRUE(settle.before("producers(job);", "switch_gpu_producer_covered("));
-	EXPECT_TRUE(settle.has("owed = stopped && cover != 1;"));
+	EXPECT_TRUE(settle.has("owed = stopped && !drained;"));
 	EXPECT_FALSE(settle.has("switch_gpu_producer_release("));
 	const CodeText retire = Block(SourceText("../SwitchGpuBridgeRetire.cpp"), "void retire(");
 	EXPECT_TRUE(retire.before(

@@ -465,9 +465,15 @@ extern "C" int switch_gpu_backing_token_physical_status(const switch_gpu_backing
 	return switch_gpu_backing_token_status(token);
 }
 
-// switch_gpu_bridge_why's: no producer of these tests has a cause to name
-extern "C" int switch_gpu_backing_tokens_failure(const switch_gpu_backing_token *, uint32_t)
+// switch_gpu_bridge_why's: the first token of `causes` with a cause to name
+std::map<Key, int> causes;
+
+extern "C" int switch_gpu_backing_tokens_failure(const switch_gpu_backing_token *tokens,
+						 uint32_t count)
 {
+	for (uint32_t i = 0; i < count; ++i)
+		if (const auto at = causes.find(key(tokens[i])); at != causes.end())
+			return at->second;
 	return 0;
 }
 
@@ -1295,6 +1301,60 @@ TEST_F(Bridge, AWatchedBridgeIsHangCheckedWithNoCallback)
 	EXPECT_EQ(hangCheck()->deadline, 0u) << "nothing watched is left";
 	release(job);
 	release(jobless);
+}
+
+// Every token completed at its own fence inside the covering job, and the channel was killed later in that job. A
+// token's own fence flushes no L2, so the writes reached DRAM only if the job's drain ran, which its increments follow.
+// Killed before them: the bridge fails, the CPU makes the increments after cancelling the consumers, and why names the
+// covering job's cause.
+TEST_F(Bridge, ACoveringJobKilledBeforeItsIncrementsFailsTheBridgeWithItsCause)
+{
+	const auto source = token(370, 23);
+	statuses[key(source)] = 0;
+	covered[key(source)] = {kProducerSyncpoint + 16, 100, 371};
+	syncpoints[kProducerSyncpoint + 16] = 98;
+	const uint32_t releasesBefore = failureReleases;
+	auto *bridge = submit({source});
+	ASSERT_NE(bridge, nullptr);
+	statuses[key(source)] = 1;
+	coveringStatus[{23, 1, 371}] = -5;
+	causes[key(token(371, 23))] = SWITCH_GPU_BACKING_WRITER_GONE;
+	stoppedChannels.insert(23);
+	switch_gpu_bridge_completed();
+	pump();
+	stoppedChannels.erase(23);
+	EXPECT_EQ(switch_gpu_bridge_status(bridge), -5);
+	EXPECT_EQ(failureReleases, releasesBefore + 1);
+	EXPECT_EQ(syncpoints[kProducerSyncpoint + 16], 100u);
+	EXPECT_EQ(switch_gpu_bridge_why(bridge), SWITCH_GPU_BACKING_WRITER_GONE);
+	causes.clear();
+	release(bridge);
+}
+
+// The same kill after the covering job's increments: its drain ran, the writes are in DRAM, and the bridge succeeds
+// with no CPU increment, so the frame shows.
+TEST_F(Bridge, ACoveringJobKilledAfterItsIncrementsLeavesTheBridgeComplete)
+{
+	const auto source = token(372, 24);
+	statuses[key(source)] = 0;
+	covered[key(source)] = {kProducerSyncpoint + 17, 110, 373};
+	syncpoints[kProducerSyncpoint + 17] = 108;
+	const uint32_t releasesBefore = failureReleases;
+	auto *bridge = submit({source});
+	ASSERT_NE(bridge, nullptr);
+	statuses[key(source)] = 1;
+	syncpoints[kProducerSyncpoint + 17] = 110;
+	coveringStatus[{24, 1, 373}] = -5;
+	causes[key(token(373, 24))] = SWITCH_GPU_BACKING_WRITER_GONE;
+	stoppedChannels.insert(24);
+	switch_gpu_bridge_completed();
+	pump();
+	stoppedChannels.erase(24);
+	EXPECT_EQ(switch_gpu_bridge_status(bridge), 1);
+	EXPECT_EQ(failureReleases, releasesBefore);
+	EXPECT_EQ(switch_gpu_bridge_why(bridge), 0);
+	causes.clear();
+	release(bridge);
 }
 
 // A kill landing between the slot's reads fails the token and stops the channel at once. The tokens are read first, so

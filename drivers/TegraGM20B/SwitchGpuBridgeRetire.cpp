@@ -22,10 +22,12 @@ switch_gpu_bridge *oldestWaitedJob()
 	return oldest;
 }
 
-// A jobless slot by its covering job's channel: done once that job drained or the channel stopped short of it. Only a
-// channel that stopped short of it owes increments (`owed`): one whose covering fence landed issued them first
-// (gpu_exec.c chan_fence_job), and a token that failed elsewhere leaves a running producer's syncpoint alone. The tokens
-// are read before the channel, so a kill that failed one of them is already in `stopped`.
+// A jobless slot by its covering job's channel: done once that job drained or the channel stopped short of it. A token's
+// own fence inside that job releases with no L2 flush (gpu_exec.c chan_job_fence): the tokens' writes reach DRAM only
+// at the covering job's drain, and its increments follow that drain. So a job that died before its fence put them in
+// DRAM exactly when the syncpoint reached the threshold, and only short of it are they lost and the increments owed
+// (`owed`). A token that failed elsewhere leaves a running producer's syncpoint alone. The tokens are read before the
+// channel, so a kill that failed one of them is already in `stopped`.
 bool settleJobless(switch_gpu_bridge &job, bool &owed)
 {
 	const int source = producers(job);
@@ -33,8 +35,11 @@ bool settleJobless(switch_gpu_bridge &job, bool &owed)
 	const int cover = switch_gpu_producer_covered(job.covering, &stopped);
 	if (source >= 0 && (cover == 0 || source == 0))
 		return false;
-	__atomic_store_n(&job.result, source < 0 ? source : cover == 1 ? 1 : -5, __ATOMIC_RELEASE);
-	owed = stopped && cover != 1;
+	const bool drained = cover == 1 ||
+			     (source == 1 &&
+			      int32_t(tegra_host1x_syncpt_read(job.producer) - job.threshold) >= 0);
+	__atomic_store_n(&job.result, source < 0 ? source : drained ? 1 : -5, __ATOMIC_RELEASE);
+	owed = stopped && !drained;
 	return true;
 }
 }  // namespace
