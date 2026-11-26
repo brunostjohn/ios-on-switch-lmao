@@ -1,5 +1,5 @@
 {
-  "checksum": "d526a5419425a3c7a556d9d2dc8b087b5deb16ec59224a272a2b0e190a09db57",
+  "checksum": "68bc4b6d3ed1a10deca083243436e50e252b822d5fa049d50c9136a41e05eec1",
   "conditions": {
     "aarch64-apple-darwin": [
       "aarch64-apple-darwin"
@@ -74,6 +74,14 @@
       "x86_64-pc-windows-msvc"
     ],
     "cfg(any())": [],
+    "cfg(any(target_arch = \"aarch64\", target_arch = \"x86\", target_arch = \"x86_64\"))": [
+      "aarch64-apple-darwin",
+      "aarch64-pc-windows-msvc",
+      "aarch64-unknown-linux-musl",
+      "x86_64-apple-darwin",
+      "x86_64-pc-windows-msvc",
+      "x86_64-unknown-linux-musl"
+    ],
     "cfg(any(target_arch = \"aarch64\", target_arch = \"x86_64\", target_arch = \"x86\"))": [
       "aarch64-apple-darwin",
       "aarch64-pc-windows-msvc",
@@ -1037,6 +1045,11 @@
     },
     "base64 0.22.1": {
       "common_attrs": {
+        "crate_features": [
+          "alloc",
+          "default",
+          "std"
+        ],
         "edition": "2018"
       },
       "library_target_name": "base64",
@@ -12492,6 +12505,60 @@
       ],
       "version": "1.0.154"
     },
+    "sha1 0.11.0": {
+      "common_attrs": {
+        "crate_features": [
+          "alloc",
+          "default",
+          "oid"
+        ],
+        "deps": {
+          "common": [
+            {
+              "id": "cfg-if 1.0.5",
+              "target": "cfg_if"
+            },
+            {
+              "id": "digest 0.11.3",
+              "target": "digest"
+            }
+          ],
+          "selects": {
+            "cfg(any(target_arch = \"aarch64\", target_arch = \"x86\", target_arch = \"x86_64\"))": [
+              {
+                "id": "cpufeatures 0.3.1",
+                "target": "cpufeatures"
+              }
+            ]
+          }
+        },
+        "edition": "2024"
+      },
+      "library_target_name": "sha1",
+      "license": "MIT OR Apache-2.0",
+      "license_file": "LICENSE-APACHE",
+      "license_ids": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "name": "sha1",
+      "package_url": "https://github.com/RustCrypto/hashes",
+      "repository": {
+        "Http": {
+          "sha256": "aacc4cc499359472b4abe1bf11d0b12e688af9a805fa5e3016f9a386dc2d0214",
+          "url": "https://static.crates.io/crates/sha1/0.11.0/download"
+        }
+      },
+      "targets": [
+        {
+          "Library": {
+            "crate_name": "sha1",
+            "crate_root": "src/lib.rs"
+          }
+        }
+      ],
+      "version": "0.11.0"
+    },
     "sha2 0.10.9": {
       "common_attrs": {
         "crate_features": [
@@ -13345,6 +13412,10 @@
               "target": "aes"
             },
             {
+              "id": "base64 0.22.1",
+              "target": "base64"
+            },
+            {
               "id": "clap 4.6.10",
               "target": "clap"
             },
@@ -13423,6 +13494,10 @@
             {
               "id": "serde_json 1.0.154",
               "target": "serde_json"
+            },
+            {
+              "id": "sha1 0.11.0",
+              "target": "sha1"
             },
             {
               "id": "sha2 0.11.2",
@@ -18272,6 +18347,7 @@
     "aea-tools 0.1.1",
     "aes 0.9.4",
     "aws-lc-rs 1.19.0",
+    "base64 0.22.1",
     "clap 4.6.10",
     "crc32c 0.6.9",
     "crossterm 0.29.0",
@@ -18292,6 +18368,7 @@
     "rustls-platform-verifier 0.7.1",
     "serde 1.0.229",
     "serde_json 1.0.154",
+    "sha1 0.11.0",
     "sha2 0.11.2",
     "tar 0.4.46",
     "thiserror 2.0.21",
