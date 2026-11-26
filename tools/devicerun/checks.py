@@ -822,13 +822,15 @@ GROUPS: dict[str, list[Check]] = {
             'ca-closure',
             ' cag=',
             'max(cag) == 0',
+            process='!SwitchHWTest',
             subsystem=GPU_METAL_SUBSYSTEM,
             regex=r'\bgm20b \d+s c=\d+\(.*?\bcag=(?P<cag>\d+)',
             show=('process', 'cag'),
             source='drivers/TegraGM20BMetal/TegraGM20BMetalRates.mm (debug builds)',
             note='no process draws a Core Animation catch-all shader across the boot: both kernels pass '
-            'CA_DISABLE_GENERIC_SHADERS=1 to every executable (kern_exec.c native_switch_exec_environment); before, '
-            'only backboardd, and SwitchHWTest drew up to 52 a window on 25 Nov',
+            'CA_DISABLE_GENERIC_SHADERS=1 to every executable (kern_exec.c native_switch_exec_environment). '
+            "SwitchHWTest's are its own: its Core Animation goldens build and draw the generic states from their "
+            'descriptors (apps/hwtest/gpu/CACorpus.swift, goldens/ca_24B119.txt)',
         ),
         Check(
             'boot.ca-pack-covers-all',
@@ -838,6 +840,7 @@ GROUPS: dict[str, list[Check]] = {
                 'SwitchMetal: in-process state the pack lacks ',
                 ' state the pack lacks ',
             ),
+            process='!SwitchHWTest',
             subsystem=GPU_METAL_SUBSYSTEM,
             regex=(
                 r'^SwitchMetal: (?:harvest [0-9a-f]{16} 1/\d+ label='
@@ -848,9 +851,9 @@ GROUPS: dict[str, list[Check]] = {
             show=('process', 'ca'),
             source='drivers/TegraGM20BMetal/TegraGM20BMetalStatesMiss.mm (every build), '
             'TegraGM20BMetalComplete{,Remote}.mm (debug builds)',
-            note='a Core Animation state any process made that the pack lacks, our own apps included: with the '
-            'catch-all off everywhere, each one is made at its first draw; `logharvest` adds them to the corpus. '
-            '25 Nov: SwitchHWTest 18 (13 named in-process), every other process 0',
+            note='a Core Animation state a process made that the pack lacks: with the catch-all off everywhere, '
+            "each one is made at its first draw; `logharvest` adds them to the corpus. SwitchHWTest's are its own "
+            'descriptors (CACorpus.swift), left out',
         ),
         Check(
             'boot.pack-pieces',

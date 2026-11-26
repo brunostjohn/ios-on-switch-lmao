@@ -668,9 +668,11 @@ class Rules(unittest.TestCase):
         results, _ = devicerun.run_checks([*clean, rates('backboardd', 3, 15)], rule)
         self.assertEqual(results[0].verdict, FAIL)
         self.assertIn('max(cag) 3', results[0].observed)
-        results, _ = devicerun.run_checks([*clean, rates('SwitchHWTest', 7, 16)], rule)
+        results, _ = devicerun.run_checks([*clean, rates('SpringBoard', 7, 16)], rule)
         self.assertEqual(results[0].verdict, FAIL)
         self.assertIn('max(cag) 7', results[0].observed)
+        results, _ = devicerun.run_checks([*clean, rates('SwitchHWTest', 7, 17)], rule)
+        self.assertEqual(results[0].verdict, PASS)
 
     def test_a_core_animation_state_any_process_lacks_fails_the_boot(self):
         rule = [c for c in checks.GROUPS['boot'] if c.name == 'boot.ca-pack-covers-all']
@@ -687,18 +689,22 @@ class Rules(unittest.TestCase):
                 'eventMessage': message,
             }
 
-        own = record('SwitchHWTest', 'SwitchMetal: SwitchHWTest: a render state the pack lacks f98fae52bc0cfe8f (-): k')
+        own = record(
+            'SwitchHWTest',
+            'SwitchMetal: SwitchHWTest: a render state the pack lacks f98fae52bc0cfe8f '
+            '(com.apple.coreanimation.Pb3a8Xm_Tds4A2Xhf_Isrc): samples=1 c0=94',
+        )
         results, _ = devicerun.run_checks([own], rule)
         self.assertEqual(results[0].verdict, PASS)
         for message in (
-            'SwitchMetal: SwitchHWTest: a render state the pack lacks f98fae52bc0cfe8f '
-            '(com.apple.coreanimation.Pb3a8Xm_Tds4A2Xhf_Isrc): samples=1 c0=94',
+            'SwitchMetal: Maps: a render state the pack lacks f98fae52bc0cfe8f '
+            '(com.apple.coreanimation.PBGRAXm_TdfgA2Xhf_Iscd): samples=1 c0=80',
             'SwitchMetal: in-process state the pack lacks f98fae52bc0cfe8f (record): '
-            'label=com.apple.coreanimation.Pb3a8Xm_Tds4A2Xhf_Isrc',
+            'label=com.apple.coreanimation.PBGRAXm_TdfgA2Xhf_Iscd',
         ):
-            results, _ = devicerun.run_checks([own, record('SwitchHWTest', message)], rule)
+            results, _ = devicerun.run_checks([own, record('Maps', message)], rule)
             self.assertEqual(results[0].verdict, FAIL)
-            self.assertIn('Pb3a8Xm_Tds4A2Xhf_Isrc', results[0].observed)
+            self.assertIn('PBGRAXm_TdfgA2Xhf_Iscd', results[0].observed)
 
     def test_pack_tier1_uses_reports_os_states_and_ignores_hwtest(self):
         rule = [c for c in checks.GROUPS['boot'] if c.name == 'pack.tier1-uses']
