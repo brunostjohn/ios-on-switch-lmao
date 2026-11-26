@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 PACK = Path(__file__).resolve().parents[3] / 'drivers/TegraGM20BMetal/pack'
+PREFERENCES = Path(__file__).resolve().parents[1] / 'stage_format.py'
 sys.path.insert(0, str(PACK))
 sys.path.insert(0, str(PACK / 'ca'))
 import caspec  # noqa: E402
@@ -37,7 +38,7 @@ def tables_for(qc: Path) -> Path:
 
 
 def drawn_ca_keys(qc: Path, corpus: Path, names: list[str]) -> set[str]:
-    cif10 = deepcolour.cif10(make_pack.STAGER)
+    cif10 = deepcolour.cif10(PREFERENCES)
     keys = set()
     for tier, lines in make_pack.ca_states(tables_for(qc), corpus, names, cif10):
         if tier in DRAWN_TIERS:

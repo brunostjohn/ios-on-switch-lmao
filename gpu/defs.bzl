@@ -414,11 +414,33 @@ def _gpu_stage_impl(ctx):
         progress_message = "Listing the GPU bundle, the shader seed and the pack for the Data volume",
     )
     files = [manifest, base, seed.replies, seed.native, ctx.file.raw]
-    return [DefaultInfo(files = depset([manifest]), runfiles = ctx.runfiles(files = files))]
+
+    # The same files copied out, at their paths below the Data volume: only for what takes the tree whole (a release
+    # asset), so a deploy, which reads the runfiles, never copies the seed and the pack.
+    tree = ctx.actions.declare_directory(ctx.attr.name + ".tree")
+    args = ctx.actions.args()
+    args.add("--tree", manifest)
+    for directory in (base, seed.replies, ctx.file.raw, seed.native):
+        args.add("--root", "{}={}".format(_rlocation(ctx, directory), directory.path))
+    args.add("--out", tree.path)
+    ctx.actions.run(
+        executable = ctx.executable._tool,
+        arguments = [args],
+        inputs = files,
+        outputs = [tree],
+        mnemonic = "GpuStageTree",
+        progress_message = "Copying the GPU stage into a tree",
+    )
+    return [
+        DefaultInfo(files = depset([manifest]), runfiles = ctx.runfiles(files = files)),
+        OutputGroupInfo(tree = depset([tree])),
+    ]
 
 gpu_stage = rule(
     implementation = _gpu_stage_impl,
-    doc = "The file deploy's stager syncs the Data volume to: every file, its sha256 and where it is in the runfiles.",
+    doc = """The file deploy's stager syncs the Data volume to (tools/gpu/stage_format.py): every file, its sha256 and
+    where it is in the runfiles, and the preferences merged there. Output group `tree`: the stage tree, every file at its
+    path below the Data volume with the same records in its gpu.stage.""",
     attrs = {
         "base": attr.label(mandatory = True, doc = "//gpu:base: the signed bundle"),
         "seed": attr.label(mandatory = True, providers = [SeedInfo]),

@@ -338,6 +338,7 @@ py_binary(
     deps = [
         "//tools/common:paths",
         "//tools/deploy:lib",
+        "//tools/gpu:stage_format",
     ],
 )
 

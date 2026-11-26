@@ -314,14 +314,14 @@ CA_NAMES = {"24B119": "//drivers/TegraGM20BMetal:precompile/ca-names/24B119.txt"
 
 genrule(
     name = "ca_asked",
-    srcs = ["//drivers/TegraGM20BMetal:stage-tegra-gm20b-metal.py"] + select({
+    srcs = ["//tools/gpu:stage_format.py"] + select({
         "//ipsw:" + kind: [tables] + ([CA_NAMES[kind]] if kind in CA_NAMES else [])
         for kind, tables in QC_TABLES.items()
     }),
     outs = ["ca_asked.log"],
     cmd = select({
         "//ipsw:" + kind: "$(execpath :ca_asked_forms) $(execpath " + tables + ") " +
-                          "$(execpath //drivers/TegraGM20BMetal:stage-tegra-gm20b-metal.py) $@" +
+                          "$(execpath //tools/gpu:stage_format.py) $@" +
                           (" $(execpath " + CA_NAMES[kind] + ")" if kind in CA_NAMES else "")
         for kind, tables in QC_TABLES.items()
     }),

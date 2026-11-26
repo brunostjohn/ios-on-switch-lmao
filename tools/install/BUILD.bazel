@@ -172,6 +172,7 @@ py_test(
 py_binary(
     name = "fake_boot_package",
     srcs = ["fake_boot_package.py"],
+    deps = ["//tools/gpu:stage_format"],
 )
 
 py_binary(

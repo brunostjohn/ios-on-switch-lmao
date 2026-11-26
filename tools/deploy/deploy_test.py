@@ -444,6 +444,24 @@ class KindTest(unittest.TestCase):
             deploy._parser().parse_args(['disk9', '--boot-package', 'x', '--spec', 'y']).pretranslated_trust
         )
 
+    def test_checked_accepts_a_stage_tree_and_refuses_a_directory_without_gpu_stage(self):
+        gpu_dir = self.pins.parent / 'gpu'
+        gpu_dir.mkdir()
+        argv = ['disk9', '--boot-package', 'unused', '--spec', 'unused', '--gpu-bundle', str(gpu_dir)]
+        args = deploy._parser().parse_args(argv)
+        target = mock.Mock(content='Apple_APFS')
+        with (
+            mock.patch.object(deploy.host, 'check_tools'),
+            mock.patch.object(pull_logs, 'load_spec', return_value={'volumes': {'data': {'uuid': 'data'}}}),
+            mock.patch.object(cards, 'resolve', return_value=self.card),
+            mock.patch.object(cards, 'check_layout_unprivileged', return_value=(mock.Mock(), target)),
+            mock.patch.object(pull_logs, 'data_volume', return_value='disk9s5'),
+        ):
+            with self.assertRaisesRegex(deploy.host.HostError, 'stage tree'):
+                deploy._checked(args, Log())
+            (gpu_dir / 'gpu.stage').write_text('# gpu stage 2 tree\n')
+            deploy._checked(args, Log())
+
 
 class JoyConPairingTest(unittest.TestCase):
     def setUp(self):

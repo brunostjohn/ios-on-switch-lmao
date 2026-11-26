@@ -13,8 +13,8 @@ label_flag(
     build_setting_default = "//:boot",
 )
 
-# The Metal bundle deploy stages: //gpu:bundle's manifest over the bundle, the seed and the raw pack, or a directory
-# laid out as //gpu:base.
+# The Metal bundle deploy stages: //gpu:bundle's manifest over the bundle, the seed and the raw pack, or a stage tree
+# like //gpu:base or //gpu:stage_tree.
 label_flag(
     name = "gpu_bundle",
     build_setting_default = "//gpu:bundle",

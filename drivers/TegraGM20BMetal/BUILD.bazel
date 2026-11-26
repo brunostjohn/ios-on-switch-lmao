@@ -516,7 +516,7 @@ py_test(
     data = [
         "pack/ca/qc-21H461.json",
         "pack/ca/qc-24B119.json",
-        "stage-tegra-gm20b-metal.py",
+        "//tools/gpu:stage_format.py",
     ],
     main = "pack/ca/deepcolour_test.py",
     deps = [":pack"],

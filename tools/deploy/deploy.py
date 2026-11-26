@@ -240,8 +240,8 @@ def _checked(args: argparse.Namespace, log: host.Log) -> tuple[cards.Card, dict,
         image = system_update.Image(Path(args.system_image), Path(args.system_image + '.sha256').read_text().strip())
         args.cryptex = (image, system_update.planned_on_card(card, spec, image, target, log))
     gpu = Path(args.gpu_bundle) if args.gpu_bundle else None
-    if not args.remove_gpu and not (gpu and (gpu.is_file() or (gpu / 'TegraGM20BMetal.trustcache').is_file())):
-        raise host.HostError('no GPU bundle (--//deploy:gpu_bundle names //gpu:bundle or a directory like //gpu:base)')
+    if not args.remove_gpu and not (gpu and (gpu.is_file() or (gpu / 'gpu.stage').is_file())):
+        raise host.HostError('no GPU bundle (--//deploy:gpu_bundle names //gpu:bundle or a stage tree like //gpu:base)')
     return card, spec, fat, target, data
 
 
