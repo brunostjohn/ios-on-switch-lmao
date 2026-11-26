@@ -33,8 +33,11 @@ struct JobVisibilityPathTest: GPUPathTest {
         let shared = Self.wrong(try await gpu.read(target, bytesPerPixel: 4), want)
         guard GPURates.bypassL2(gpu.device, true)
         else { return ["the facade cannot make an L2-bypassing shared buffer"] }
-        let bypassing = try await gpu.read(target, bytesPerPixel: 4)
-        GPURates.bypassL2(gpu.device, false)
+        let bypassing: [UInt8]
+        do {
+            defer { GPURates.bypassL2(gpu.device, false) }
+            bypassing = try await gpu.read(target, bytesPerPixel: 4)
+        }
         let volatile = Self.wrong(bypassing, want)
         let noCopy = Self.wrong(try await Self.noCopyRead(gpu, target), want)
         metrics.set("wrong_bytes_shared", shared)
