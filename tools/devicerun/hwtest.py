@@ -329,6 +329,7 @@ TESTS: dict[str, bool] = {
             'gpu.gm20b.xr_srgb',
             'gpu.gm20b.xr_srgb_alpha',
             'gpu.gm20b.xr_beside_native',
+            'gpu.gm20b.argb8_srgb_forms',
             'gpu.gm20b.compute_invalid',
             'gpu.gm20b.fill_shapes',
             'gpu.gm20b.word_mipmaps',
