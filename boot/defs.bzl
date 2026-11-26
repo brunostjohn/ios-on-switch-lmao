@@ -3,7 +3,8 @@ only the steps it reaches:
 
     boot_args.py ............................ boot-args.txt
     overlay.py plan  (manifest) ............. overlay-plan.json
-    adt_edit.py      (board ADT, Apple's tree of the IPSW's iPad, plan, iOS 27 cache list, the roles' trust modules)
+    adt_edit.py base (board ADT, plan) ...... ios-base.adt
+    adt_edit.py finish (base, Apple's tree of the IPSW's iPad, iOS 27 cache list, the roles' trust modules)
                                          ...... ios.adt
     overlay.py trust (plan, Mach-Os) ........ overlay.trustcache
     trust.py         (IPSW, overlay, GPU, iOS 27 pretranslated) ... trustcache.bundle, all in one static module
@@ -253,23 +254,32 @@ def _boot_package_impl(ctx):
     args.add("--out", plan)
     _run(ctx, ctx.executable._overlay, [args], [ctx.file.overlay_manifest, ctx.file.portrait_header], [plan], "OverlayPlan", "Planning the userland overlay")
 
-    adt = out("ios.adt")
+    # The base reads nothing of Apple's, so the release ships it; the installer runs finish's port (install/adt) on it.
+    adt_base = out("ios-base.adt")
     args = ctx.actions.args()
+    args.add("base")
     args.add("--adt", ctx.file.adt)
-    args.add("--apple-adt", ctx.file._apple_adt)
     args.add("--overlay-plan", plan)
     args.add("--bt-patch", ctx.file.bt_patch)
     args.add("--portrait-header", ctx.file.portrait_header)
-    args.add("--root-volume-uuid", os_volume_uuid(ctx.attr._kind[BuildSettingInfo].value))
     if smp:
         args.add("--smp")
+    args.add("--out", adt_base)
+    _run(ctx, ctx.executable._adt_edit, [args], [ctx.file.adt, plan, ctx.file.bt_patch, ctx.file.portrait_header], [adt_base], "BootAdtBase", "Writing the ADT's Switch and iPad parts")
+
+    adt = out("ios.adt")
+    args = ctx.actions.args()
+    args.add("finish")
+    args.add("--base", adt_base)
+    args.add("--apple-adt", ctx.file._apple_adt)
+    args.add("--root-volume-uuid", os_volume_uuid(ctx.attr._kind[BuildSettingInfo].value))
 
     # iOS 27's Image4 will not start without the current boot's manifest hash; 17's AppleImage4 boots without one.
     manifest_hash = ios_version(ctx.attr._kind[BuildSettingInfo].value) >= 27
     if manifest_hash:
         args.add("--boot-manifest-hash")
     pretranslated = ctx.attr.pretranslated[PretranslatedPinsInfo]
-    adt_inputs = [ctx.file.adt, ctx.file._apple_adt, plan, ctx.file.bt_patch, ctx.file.portrait_header]
+    adt_inputs = [adt_base, ctx.file._apple_adt]
     if catalog_digest:
         args.add("--launchd-catalog-sha256", catalog_digest)
         adt_inputs.append(catalog_digest)
@@ -444,6 +454,7 @@ def _boot_package_impl(ctx):
         DefaultInfo(files = depset([package])),
         OutputGroupInfo(
             adt = depset([adt]),
+            adt_base = depset([adt_base]),
             boot_script = depset([script_text]),
             constants = depset([constants]),
             kernel_window = depset([window, layout_h, runs_h, constants, window_plan]),

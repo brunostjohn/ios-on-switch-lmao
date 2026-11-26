@@ -292,6 +292,13 @@ filegroup(
     output_group = "adt",
 )
 
+# The ADT without the iPad's identity, made only from this project's files: what the installer finishes with Apple's
+# device tree (install/adt).
+filegroup(
+    name = "adt_base",
+    srcs = [":package"],
+    output_group = "adt_base",
+)
 # The staged kernel window decodes (lz4 -d, block by block from the table the loader compiles in) to exactly the image
 # the layout made: the compression changes the staged bytes, never the kernel the loader copies into place.
 filegroup(
