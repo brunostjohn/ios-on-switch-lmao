@@ -230,16 +230,19 @@ bool switch_sched_busy_open(thread_t thread, uint64_t *woke)
     return true;
 }
 
-/* Under the thread's lock: its open stretch's time so far (mach ticks) on a core, blocked and waiting for a core, as of
- * its last departure or dispatch; zeros when it has none. */
+/* Under the thread's lock, which orders it against the thread's own departures and dispatches: its open stretch's time
+ * so far (mach ticks) on a core, blocked and waiting for a core, the segment it is in counted; zeros when it has none. */
 void switch_sched_busy_split(thread_t thread, uint64_t *cpu, uint64_t *blocked, uint64_t *runnable)
 {
     const struct busy_slot *s = busy_slot_of(thread);
-    const bool open = s != NULL && s->state.open;
+    const uint64_t made = thread->last_made_runnable_time;
 
-    *cpu = open ? s->state.e.cpu : 0;
-    *blocked = open ? s->state.e.blocked : 0;
-    *runnable = open ? s->state.e.runnable : 0;
+    if (s == NULL) {
+        *cpu = *blocked = *runnable = 0;
+        return;
+    }
+    switch_busy_split_now(&s->state, mach_absolute_time(), recount_thread_time_mach(thread),
+                          made == THREAD_NOT_RUNNABLE ? 0 : made, cpu, blocked, runnable);
 }
 
 /* thread_dispatch, under the departing thread's lock: no lock, allocation or log here. */
