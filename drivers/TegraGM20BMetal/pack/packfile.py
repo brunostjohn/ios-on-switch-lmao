@@ -32,7 +32,8 @@ MAGIC = b'GM20BPK1'
 # tier-0 state segments in tier 0 of PackHeap (PackSegments) and tier0SlmPerWarp in PackHeader; 35: programs' header
 # facts (PackProgram.facts), a variant's set-0 memory reads (PackVariant.memoryEntries), the segments' words block
 # (PackSegmentTable); 36: a record's buffers' Metal address words (PIPELINE_V36); 37: the rules' identity, 16 bytes
-# after the tier-0 table (big/nohash rules_identity fills them; zero here)
+# after the tier-0 table (big/nohash rules_identity fills them; zero here), and a segment's blend kill
+# (segments.FLAG_BLEND_KILL)
 VERSION = 37
 SECTIONS = 17  # runtime/pack.h PackSectionCount
 ENTRY_COMPARES = 1  # runtime/pack.h kEntryCompares: a handle's sampler slot the state samples by comparison

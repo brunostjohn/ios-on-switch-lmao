@@ -2143,6 +2143,18 @@ py_test(
     deps = ["//drivers/TegraGM20BMetal:pack"],
 )
 
+# A pre-built segment's blend-kill flag is its own last SET_ITERATED_BLEND_OPTIMIZATION (pack/segments.py)
+py_test(
+    name = "segment_blend_kill_test",
+    srcs = ["segment_blend_kill_test.py"],
+    data = [
+        "//drivers/TegraGM20BMetal:chip_facts.h",  # packfile.py stamps its chip facts
+        "//drivers/TegraGM20BMetal:own_states.h",
+        "//drivers/TegraGM20BMetal:owned.h",
+    ],
+    deps = ["//drivers/TegraGM20BMetal:pack"],
+)
+
 # The pack's link step stays linear in programs and states (packfile.place_graphics, mkpack.lay_out_programs)
 py_test(
     name = "link_cost_test",
