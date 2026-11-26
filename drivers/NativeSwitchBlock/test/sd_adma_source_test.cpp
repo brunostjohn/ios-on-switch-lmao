@@ -149,28 +149,3 @@ TEST(SdAdmaSource, ReadStaging)
     const std::string done = body("void NativeSwitchBlock::completeSlot(");
     EXPECT_LT(Index(done, "finishDirect("), Index(done, "copyStaged("));
 }
-
-// SDMMC1 behind the SMMU (SwitchSdSmmu.h): attached before setup's first DMA with the bounce buffer held; a chain's
-// pages held before its command can be issued, released before its requests complete, on every path that ends a slot.
-TEST(SdAdmaSource, ChainPagesAreHeldBeforeIssueAndReleasedBeforeCompletion)
-{
-    const std::string setup = body("bool NativeSwitchBlock::setup(");
-    EXPECT_LT(Index(setup, "bouncePA = bounceMemory.pa;"), Index(setup, "setupSmmu();"));
-    EXPECT_LT(Index(setup, "setupSmmu();"), Index(setup, "transfer(1, 1, false, header)"));
-    EXPECT_LT(Index(setup, "holdOwned(slots[0].tablePA"), Index(setup, "adma = true;"));
-    EXPECT_LT(Index(setup, "holdOwned(sinkMemory.pa"), Index(setup, "sinkPA = sinkMemory.pa;"));
-    const std::string smmu = body("void NativeSwitchBlock::setupSmmu(");
-    EXPECT_LT(Index(smmu, "holdOwned(bouncePA"), Index(smmu, "smmu.attach("));
-    const std::string prep = body("void NativeSwitchBlock::prepareAndPublishSlot(");
-    EXPECT_LT(Index(prep, "buildTable("), Index(prep, "holdChain(slot);"));
-    EXPECT_LT(Index(prep, "holdChain(slot);"), Index(prep, "prepareDirect("));
-    EXPECT_LT(Index(prep, "holdChain(slot);"), Index(prep, "launchSlot(slot);"));
-    EXPECT_LT(Index(prep, "holdChain(slot);"), Index(prep, "pipe.prepared = &slot;"));
-    const std::string complete = body("void NativeSwitchBlock::completeSlot(");
-    EXPECT_LT(Index(complete, "finishDirect("), Index(complete, "releaseChain(slot);"));
-    EXPECT_LT(Index(complete, "releaseChain(slot);"), Index(complete, "completeBatch(b);"));
-    const std::string worker = body("void NativeSwitchBlock::worker(");
-    EXPECT_LT(Index(worker, "self->releaseChain(*s);"), Index(worker, "self->completeBatch(s->batch);"));
-    EXPECT_EQ(Count(driver(), "completeBatch(s->batch)"), 1u) << "a new path that ends a held slot releases it first";
-    EXPECT_EQ(Count(driver(), "holdChain("), 3u);  // declaration, definition, prepareAndPublishSlot
-}

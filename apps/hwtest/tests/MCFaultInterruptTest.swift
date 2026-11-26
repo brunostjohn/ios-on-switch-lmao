@@ -7,14 +7,10 @@ import HWTestShared
 /// page VIC's directory leaves empty, the SMMU faults each read, and the interrupt's filter takes those faults as
 /// expected instead of panicking (drivers/TegraSMMU/TegraMCErrors.cpp). A fault the interrupt never delivers panics
 /// the kernel as a lost interrupt, so this test's failure is a FAIL line or that panic, never silence.
-/// Run by hand once SD is translated: while armed, the filter takes any INVALID_SMMU_PAGE whose capture names csr_vicsrd
-/// in the probe's range, and the MC keeps only the first capture until it is cleared (TRM 18.11.1.3), so an SD write
-/// faulting in that window would pass as the probe's. Run All leaves it out.
 struct MCFaultInterruptTest: HWTest {
     let id = "system.mc_fault_interrupt"
     let name = "A deliberate SMMU fault reaches the MC error interrupt"
     let subsystem = Subsystem.system
-    let interactive = true
 
     static let notPermitted = "e00002e2"
 

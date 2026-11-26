@@ -39,14 +39,13 @@
 #include <machine/machine_routines.h>
 #if DEVELOPMENT || DEBUG
 #include <machine/cpu_number.h>
+#include "../TegraSMMU/TegraSMMU.h"
 #endif
 #include <sys/types.h>
 #include <sys/param.h>
 #include <pexpert/pexpert.h>
 #include <vm/pmap.h>
 #include "../ArmGIC/SwitchInterrupts.h"
-#include "../TegraSMMU/TegraSMMU.h"
-#include "../TegraSMMU/TegraSMMURamView.h"
 #include "../TegraI2C/TegraI2C.h"
 #include "../TegraGPIO/TegraGPIO.h"
 #include "../../kits/SwitchCAR/SwitchPMC.h"
@@ -59,7 +58,6 @@
 #include "../SwitchPower/SwitchPower.h"
 #include "block_backend.h"
 #include "NativeSwitchBlock.h"
-#include "SwitchSdSmmu.h"
 #include "SwitchClientCopy.h"
 #include "SwitchAdma.h"
 #include "SwitchQueue.h"
@@ -163,8 +161,6 @@ using Staging = SwitchAdmaStaging<IOMemoryDescriptor>;
 // pages needs (256). A chain that needs more takes the bounce buffer.
 constexpr uint32_t kAdmaDescriptors = 1024;
 constexpr uint32_t kAdmaTableBytes = kAdmaDescriptors * sizeof(SwitchAdmaDescriptor);
-// SDMMC1A's clients in MC_SMMU_TRANSLATION_ENABLE_3: sdmmcra bit 0, sdmmcwa bit 4 (T210 TRM 18.11.1.69).
-constexpr uint32_t kSmmuSdmmc1Clients = 1u << 0 | 1u << 4;
 // command()'s step beyond the SDMA ones: the ADMA engine stopped on an error (ADMA error interrupt): the host's DMA,
 // not the card or the bus.
 constexpr int kStepAdmaError = 11;
@@ -404,7 +400,6 @@ struct PipeSlot : SwitchSdPipeSlot {
     uint64_t tablePA = 0;
     const SwitchSdWindow *window = nullptr;
     bool tableUncached = false;
-    bool held = false;  // the table's request pages are held in the SMMU (SwitchSdSmmu.h)
     Staging staging = {};
     Staging::Stage *stages = nullptr;
     Batch batch = {};
@@ -455,8 +450,6 @@ struct Stats {
     // awaited by CMD13 with busy (the card still programming after a transfer complete). ADMA2 chains that reached a
     // non-cacheable page (dmaPage).
     uint64_t busRefused, releases, uncachedChains;
-    // Chains held and released through the SMMU (SwitchSdSmmu.h) and the worker time both took (part of busyNs).
-    uint64_t smmuChains, smmuNs;
 #endif
 };
 }
@@ -653,11 +646,6 @@ class NativeSwitchBlock : public IOService {
     switch_dma_buffer sinkMemory = {};
     uint64_t sinkPA = 0;
     bool gapsOn = false;
-    // SDMMC1's DMA through the SMMU (SwitchSdSmmu.h) while smmuOn: the driver's own buffers, held for good.
-    TegraSMMURamView smmu;
-    bool smmuOn = false;
-    SwitchSdOwnedRange owned[2] = {};
-    unsigned ownedCount = 0;
     // The interrupt status the last controlCommand() ended with, for the discard and erase refusal lines.
     uint32_t cardLastIrq = 0;
     // SDMMC1 interrupt: the controller's line is (STATUS & SIGNAL_ENABLE). The worker enables the signals it
@@ -792,10 +780,6 @@ class NativeSwitchBlock : public IOService {
     bool bounceChain(Request *first, uint32_t sectors);
     bool copyStaged(PipeSlot &slot);
     const char *setupAdma();
-    void setupSmmu();
-    bool holdOwned(uint64_t pa, uint64_t bytes, bool skippedInChains);
-    void holdChain(PipeSlot &slot);
-    void releaseChain(PipeSlot &slot);
     void dmaSuspend();
     void dmaResume();
     void logStats();
@@ -2025,73 +2009,6 @@ void NativeSwitchBlock::prepareDirect(PipeSlot &slot, bool write)
 #endif
 }
 
-// Before the first DMA (setup's GPT read through the bounce buffer). Every page table is made here: the worker's holds
-// must never wait for memory, since writing pages out may be what frees it. Without the SMMU the card's DMA reaches all
-// of RAM: one line says so and why.
-void NativeSwitchBlock::setupSmmu()
-{
-    char line[160] = "no memory for its directories or page tables";
-    if (smmu.init(TEGRA_SMMU_ASID_SDMMC1_LOW, TEGRA_SMMU_ASID_SDMMC1_HIGH) && smmu.reserveTables()) {
-        smmuOn = true;
-        if (!holdOwned(bouncePA, kBounceBytes, true)) {
-            snprintf(line, sizeof(line), "no page table for the bounce buffer");
-            smmuOn = false;
-        } else if (smmu.attach(TEGRA_SMMU_SDMMC1A_ASID, TEGRA_SMMU_TRANSLATION_ENABLE_3, kSmmuSdmmc1Clients, false, 0,
-                               0, line, sizeof(line))) {
-            smmuOn = false;
-        }
-    }
-    if (smmuOn)
-        IOLog("SwitchSD: DMA through the SMMU (ASIDs %u and %u): the card reaches its buffers and each command's "
-              "pages\n",
-              TEGRA_SMMU_ASID_SDMMC1_LOW, TEGRA_SMMU_ASID_SDMMC1_HIGH);
-    else
-        IOLog("SwitchSD: DMA not behind the SMMU (%s): the card can reach all of RAM\n", line);
-}
-
-// One of the driver's own DMA buffers, held for good. skippedInChains: descriptors into it are the driver's (sealed
-// bounce runs, the gap sink), so a chain's holds pass over them.
-bool NativeSwitchBlock::holdOwned(uint64_t pa, uint64_t bytes, bool skippedInChains)
-{
-    if (!smmuOn)
-        return true;
-    if (skippedInChains && ownedCount == sizeof(owned) / sizeof(owned[0]))
-        return false;
-    if (!smmu.hold(pa, bytes))
-        return false;
-    smmu.commit();
-    if (skippedInChains)
-        owned[ownedCount++] = {pa, bytes};
-    return true;
-}
-
-void NativeSwitchBlock::holdChain(PipeSlot &slot)
-{
-#if DEVELOPMENT || DEBUG
-    const uint64_t began = switch_now_ns();
-#endif
-    slot.held = switchSdHoldChain(smmu, slot.table, owned, ownedCount);
-#if DEVELOPMENT || DEBUG
-    stats.smmuNs += switch_now_ns() - began;
-#endif
-}
-
-void NativeSwitchBlock::releaseChain(PipeSlot &slot)
-{
-    if (!slot.held)
-        return;
-#if DEVELOPMENT || DEBUG
-    const uint64_t began = switch_now_ns();
-#endif
-    if (!switchSdReleaseChain(smmu, slot.table, owned, ownedCount))
-        panic("SwitchSD: a chain of %u descriptors released a page the SMMU view had no hold on", slot.table.count);
-    slot.held = false;
-#if DEVELOPMENT || DEBUG
-    ++stats.smmuChains;
-    stats.smmuNs += switch_now_ns() - began;
-#endif
-}
-
 bool NativeSwitchBlock::copyStaged(PipeSlot &slot)
 {
 #if DEVELOPMENT || DEBUG
@@ -2255,13 +2172,6 @@ void NativeSwitchBlock::prepareAndPublishSlot(PipeSlot &slot)
     b.why = kAdmaOk;
     const bool offline = first->shared && !filesPresent();
     b.direct = !offline && adma && (b.why = buildTable(slot, first, sectors, b.write)) == kAdmaOk;
-    if (b.direct && smmuOn) {
-        holdChain(slot);
-        if (!slot.held) {
-            b.direct = false;
-            b.why = kAdmaMemory;
-        }
-    }
     b.staged = b.direct && (slot.staging.count != 0u);
     b.cmd23 = b.direct && sectors > 1 && autoCmd23;
 
@@ -2387,7 +2297,6 @@ void NativeSwitchBlock::completeSlot(PipeSlot &slot, int step)
             result = kIOReturnIOError;
         }
     }
-    releaseChain(slot);
     if (b.first->shared && !filesPresent()) {
         result = kIOReturnNoMedia;
     } else if (b.direct) {
@@ -2879,7 +2788,6 @@ void NativeSwitchBlock::worker(void *context, wait_result_t)
                             IOLockWakeup(self->queueLock, &fence, false);
                         IOLockUnlock(self->queueLock);
                     }
-                    self->releaseChain(*s);
                     self->completeBatch(s->batch);
                     s->inUse = false;
                     continue;
@@ -3155,11 +3063,6 @@ void NativeSwitchBlock::logThroughput()
     if (stats.uncachedChains) {
         const size_t at = strlen(extras);
         snprintf(extras + at, sizeof(extras) - at, " uncached %llu", stats.uncachedChains);
-    }
-    if (stats.smmuChains) {
-        const size_t at = strlen(extras);
-        snprintf(extras + at, sizeof(extras) - at, " smmu %llu chains %lluns each", stats.smmuChains,
-                 stats.smmuNs / stats.smmuChains);
     }
 #endif
     // Erase-based trim: erases, MiB freed and the card's busy ms for them (since boot), and AUs still due.
@@ -4270,14 +4173,13 @@ void NativeSwitchBlock::dmaResume()
     if (!adma)
         return;
     const uint16_t control2 = r16(HOST_CONTROL2);
-    // SwitchSuspend's wake programs SDMMC1A again (tegra_smmu_resume) before the devices wake.
-    const bool translated = (switch_mmio_read32(mc, TEGRA_SMMU_SDMMC1A_ASID) & 0x80000000u) != 0u;
-    if ((control2 & CONTROL2_V4_64BIT) == CONTROL2_V4_64BIT && translated == smmuOn)
+    const bool translated = (switch_mmio_read32(mc, 0xa94) & 0x80000000u) != 0u;
+    if ((control2 & CONTROL2_V4_64BIT) == CONTROL2_V4_64BIT && !translated)
         return;
     adma = false;
-    IOLog("SwitchSD: ADMA2 off after sleep (HOST_CONTROL2 0x%04x, SMMU %s for SDMMC1, %s before); requests go through "
-          "the bounce buffer\n",
-          control2, translated ? "on" : "off", smmuOn ? "on" : "off");
+    IOLog("SwitchSD: ADMA2 off after sleep (HOST_CONTROL2 0x%04x, SMMU %s for SDMMC1); requests go through the bounce "
+          "buffer\n",
+          control2, translated ? "on" : "off");
 }
 
 Request *NativeSwitchBlock::drainQueueLocked()
@@ -4498,8 +4400,8 @@ bool NativeSwitchBlock::setup()
         IOLog("SwitchSD: no card or SD clock off\n");
         return false;
     }
-    // Nobody but this driver translates SDMMC1 (MC_SMMU_SDMMC1A_ASID): setupSmmu attaches it to its own view.
-    if (switch_mmio_read32(mc, TEGRA_SMMU_SDMMC1A_ASID) & 0x80000000u) {
+    // SDMMC1 group translation must be off for physical DMA (MC_SMMU_SDMMC1A_ASID).
+    if (switch_mmio_read32(mc, 0xa94) & 0x80000000u) {
         IOLog("SwitchSD: SMMU translation enabled for SDMMC1\n");
         return false;
     }
@@ -4515,7 +4417,6 @@ bool NativeSwitchBlock::setup()
         IOLog("SwitchSD: bad bounce PA 0x%llx\n", bouncePA);
         return false;
     }
-    setupSmmu();
 
     // SDHCI v4 64-bit SDMA (Tegra210 HOST v4). Interrupt signals stay off except
     // while the worker waits for one (waitSignal).
@@ -4577,10 +4478,6 @@ bool NativeSwitchBlock::setup()
     // path's SDMA commands 256 KiB; without ADMA2, SDMA through the bounce buffer, 256 KiB a command.
     if (const char *why = setupAdma()) {
         IOLog("SwitchSD: ADMA2 off (%s); every request through the bounce buffer\n", why);
-    } else if (!holdOwned(slots[0].tablePA, kAdmaTableBytes, false) ||
-               !holdOwned(slots[1].tablePA, kAdmaTableBytes, false)) {
-        IOLog("SwitchSD: ADMA2 off (no SMMU page table for its descriptor tables); every request through the bounce "
-              "buffer\n");
     } else {
         adma = true;
         maxSectors = kBounceSectors;
@@ -4591,8 +4488,7 @@ bool NativeSwitchBlock::setup()
         if (merge &&
             switch_dma_alloc(&sinkMemory, static_cast<size_t>(kGapSectors) * kSector,
                              0x00000000ffffffffULL & ~(kAdmaPage - 1)) &&
-            !(sinkMemory.pa & (kAdmaPage - 1)) && cacheableRam(sinkMemory.pa) &&
-            holdOwned(sinkMemory.pa, static_cast<uint64_t>(kGapSectors) * kSector, true)) {
+            !(sinkMemory.pa & (kAdmaPage - 1)) && cacheableRam(sinkMemory.pa)) {
             sinkPA = sinkMemory.pa;
         }
         gapsOn = sinkPA != 0;

@@ -695,7 +695,7 @@ TESTS: dict[str, bool] = {
     'system.snapshot_purgeable': False,
     'recorder.hang_dump': False,
     'system.shared_cache_nested': False,
-    'system.mc_fault_interrupt': True,
+    'system.mc_fault_interrupt': False,
     'system.host1x_illegal_opcode': False,
     'ui.launch_hitch': False,
     'system.compiler_alive': False,
