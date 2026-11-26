@@ -167,8 +167,8 @@ TEST_F(DeviceZcullCarry, AnAbandonedResumeCountsTheCarryLostAndEndsIt)
 }
 
 // A range whose commit the kernel refuses for a CPU-locked surface (admissionBlocked) is encoded again once the lock
-// goes: that encode resumes the carry and loads the region from the same storage. An encode abandoned in between
-// takes none of the carry's slots.
+// goes: that encode resumes the carry and loads the region from the same storage. An encode abandoned in between may
+// take the carry's slot, which the retry holds again: its pass over another depth stores elsewhere.
 TEST_F(DeviceZcullCarry, AnAdmissionBlockedCommitKeepsTheCarryForItsRetry)
 {
     const auto stored = job({true}, nullptr, &commandBuffer, 1);
@@ -199,10 +199,27 @@ TEST_F(DeviceZcullCarry, AnAdmissionBlockedCommitKeepsTheCarryForItsRetry)
     ASSERT_NE(e, nullptr) << (rule ? rule : "");
     e->end();
     between->abandon();
-    const auto loaded = job({false}, &commandBuffer);
-    ASSERT_FALSE(loaded.empty());
+    gm20b::Texture other;
+    ASSERT_TRUE(dev.createOwnedZeta(32, 32, kDepth32Float, 1, true, other));
+    gm20b::CommandBuffer *retry = dev.begin();
+    ASSERT_NE(retry, nullptr);
+    const size_t first = kernel_model::model.jobs.size();
+    retry->resumeZcull(&commandBuffer, kRange);
+    gm20b::PassDesc otherPass = depthPass(true);
+    otherPass.depthStencil.texture = &other;
+    for (const gm20b::PassDesc &p : {otherPass, depthPass(false)}) {
+        e = retry->render(p, &rule);
+        ASSERT_NE(e, nullptr) << (rule ? rule : "");
+        e->end();
+    }
+    retry->carryZcull(nullptr, kRange, 0);
+    ASSERT_TRUE(retry->commit(seqno));
+    const auto loaded = submitted(first);
     EXPECT_EQ(values(loaded, kLoadZcullMethod).size(), 1u);
     EXPECT_EQ(addressOf(loaded, kStorageA), storage);
+    const std::vector<uint32_t> upper = values(loaded, kStorageA), lower = values(loaded, kStorageA + 4);
+    ASSERT_EQ(upper.size(), 2u);
+    EXPECT_NE(uint64_t(upper[0]) << 32 | lower[0], storage) << "the other depth's region took the carried slot";
     EXPECT_EQ(dev.stats.zcullCarriesLost.load(), 0u);
 }
 
