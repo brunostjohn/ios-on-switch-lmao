@@ -782,6 +782,11 @@ struct Display : OSObject {
         return false;
     }
 
+    static bool dcChannelProbed()
+    {
+        return false;
+    }
+
     void flipLatched()
     {
         if (const int held = ring.flipHeld(); held != kNoBuffer)

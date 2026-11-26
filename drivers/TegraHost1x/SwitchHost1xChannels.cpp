@@ -63,6 +63,7 @@ enum : uint32_t {  // channel registers, channel 0 at the start of the aperture
 };
 
 enum : uint32_t {  // sync unit
+    SYNC_CMDPROC_STAT = 0x0a8,
     SYNC_CMDPROC_STOP = 0x0ac,
     SYNC_CH_TEARDOWN = 0x0b0,
     SYNC_CBREAD0 = 0xc80,
@@ -75,6 +76,7 @@ struct Channel {
     SwitchHost1xArena arena{SWITCH_HOST1X_ARENA_WORDS};
     switch_host1x_fence room = {};  // the oldest fenced job's, while a submitter waits for room
     bool roomArmed = false;
+    bool made = false;  // published after its ring and arena are taken: channels 5 and 6 are made after bring-up
     uint32_t waiters = 0;
 };
 
@@ -285,17 +287,57 @@ void statsLine()
 }
 #endif
 
+// A channel has its ring and arena from bring-up, or, for the module lock probe's, from the probe's first run.
+bool channelMade(const Channel &c)
+{
+    return __atomic_load_n(&c.made, __ATOMIC_ACQUIRE);
+}
+
 bool validChannel(uint32_t channel)
 {
-    return channel < TEGRA_HOST1X_CHANNELS && gChannelLock;
+    return channel < TEGRA_HOST1X_CHANNELS && gChannelLock && channelMade(gChannels[channel]);
+}
+
+bool makeChannel(Channel &c)
+{
+    if (!(c.pushMemory.va || switch_dma_alloc(&c.pushMemory, SwitchHost1xPush::kBytes + 4)) ||
+        !(c.arenaMemory.va || switch_dma_alloc(&c.arenaMemory, SWITCH_HOST1X_ARENA_WORDS * 4)))
+        return false;
+    __atomic_store_n(&c.made, true, __ATOMIC_RELEASE);
+    return true;
+}
+
+// Its gather filter still on afterwards: true.
+bool programChannel(uint32_t n)
+{
+    Channel &c = gChannels[n];
+    uint32_t *ring = pushRing(c);
+    memset(ring, 0, SwitchHost1xPush::kBytes + 4);
+    ring[SwitchHost1xPush::kBytes / 4] = SwitchHost1xPush::restart(0);
+    switch_dcache_clean(ring, SwitchHost1xPush::kBytes + 4);
+    syncSet(SYNC_CMDPROC_STOP, syncRead(SYNC_CMDPROC_STOP) & ~(1u << n));
+    channelWrite(n, CH_DMACTRL, DMACTRL_STOP);
+#if SWITCH_HOST1X_STATS
+    startCounters(n);
+#endif
+    constexpr uint32_t ticks = SWITCH_HOST1X_STATS ? CHANNELCTRL_ENABLETICKCNT : 0;
+    channelWrite(n, CH_CHANNELCTRL, (channelRead(n, CH_CHANNELCTRL) & ~CHANNELCTRL_KERNEL_FILTER_GBUFFER) | ticks);
+    const bool stuck = (channelRead(n, CH_CHANNELCTRL) & CHANNELCTRL_KERNEL_FILTER_GBUFFER) != 0u;
+    channelWrite(n, CH_DMASTART, static_cast<uint32_t>(c.pushMemory.pa));
+    channelWrite(n, CH_DMAPUT, 0);
+    channelWrite(n, CH_DMAEND, SwitchHost1xPush::kBytes + 4);
+    channelWrite(n, CH_DMACTRL, DMACTRL_STOP | DMACTRL_GETRST | DMACTRL_INITGET);
+    channelWrite(n, CH_DMACTRL, 0);
+    c.push.put = 0;
+    dropJobs(c);
+    return stuck;
 }
 }  // namespace
 
 bool switch_host1x_channels_alloc(volatile uint8_t *host, volatile uint8_t *sync, IOLock *lock)
 {
-    for (Channel &c : gChannels)
-        if (!switch_dma_alloc(&c.pushMemory, SwitchHost1xPush::kBytes + 4) ||
-            !switch_dma_alloc(&c.arenaMemory, SWITCH_HOST1X_ARENA_WORDS * 4))
+    for (uint32_t n = 0; n <= TEGRA_HOST1X_CHANNEL_DISPLAY; n++)
+        if (!makeChannel(gChannels[n]))
             return false;
     gChannelHost = host;
     gChannelSync = sync;
@@ -318,29 +360,9 @@ uint32_t switch_host1x_channels_buffers(const switch_dma_buffer **out, uint32_t 
 void switch_host1x_channels_program(uint32_t clockKHz)
 {
     uint32_t stuck = 0;
-    constexpr uint32_t ticks = SWITCH_HOST1X_STATS ? CHANNELCTRL_ENABLETICKCNT : 0;
-    for (uint32_t n = 0; n < TEGRA_HOST1X_CHANNELS; n++) {
-        Channel &c = gChannels[n];
-        uint32_t *ring = pushRing(c);
-        memset(ring, 0, SwitchHost1xPush::kBytes + 4);
-        ring[SwitchHost1xPush::kBytes / 4] = SwitchHost1xPush::restart(0);
-        switch_dcache_clean(ring, SwitchHost1xPush::kBytes + 4);
-        syncSet(SYNC_CMDPROC_STOP, syncRead(SYNC_CMDPROC_STOP) & ~(1u << n));
-        channelWrite(n, CH_DMACTRL, DMACTRL_STOP);
-#if SWITCH_HOST1X_STATS
-        startCounters(n);
-#endif
-        channelWrite(n, CH_CHANNELCTRL, (channelRead(n, CH_CHANNELCTRL) & ~CHANNELCTRL_KERNEL_FILTER_GBUFFER) | ticks);
-        if (channelRead(n, CH_CHANNELCTRL) & CHANNELCTRL_KERNEL_FILTER_GBUFFER)
+    for (uint32_t n = 0; n < TEGRA_HOST1X_CHANNELS; n++)
+        if (channelMade(gChannels[n]) && programChannel(n))
             stuck |= 1u << n;
-        channelWrite(n, CH_DMASTART, static_cast<uint32_t>(c.pushMemory.pa));
-        channelWrite(n, CH_DMAPUT, 0);
-        channelWrite(n, CH_DMAEND, SwitchHost1xPush::kBytes + 4);
-        channelWrite(n, CH_DMACTRL, DMACTRL_STOP | DMACTRL_GETRST | DMACTRL_INITGET);
-        channelWrite(n, CH_DMACTRL, 0);
-        c.push.put = 0;
-        dropJobs(c);
-    }
     gFilterStuck = stuck;
 #if SWITCH_HOST1X_STATS
     gGatherStats.restarted(clockKHz);
@@ -350,6 +372,26 @@ void switch_host1x_channels_program(uint32_t clockKHz)
     gRunning = true;
 }
 
+#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
+extern "C" int switch_host1x_probe_channels_take(void)
+{
+    if (!gChannelLock)
+        return TEGRA_HOST1X_ENODEV;
+    int result = TEGRA_HOST1X_OK;
+    IOLockLock(gChannelLock);
+    for (uint32_t n = TEGRA_HOST1X_CHANNEL_DISPLAY + 1; n < TEGRA_HOST1X_CHANNELS && !result; n++) {
+        if (channelMade(gChannels[n]))
+            continue;
+        if (!makeChannel(gChannels[n]))
+            result = TEGRA_HOST1X_ENOMEM;
+        else if (gRunning && programChannel(n))
+            gFilterStuck |= 1u << n;
+    }
+    IOLockUnlock(gChannelLock);
+    return result;
+}
+#endif
+
 uint32_t switch_host1x_channels_filter_stuck()
 {
     return gFilterStuck;
@@ -358,7 +400,8 @@ uint32_t switch_host1x_channels_filter_stuck()
 void switch_host1x_channels_stop()
 {
     for (uint32_t n = 0; n < TEGRA_HOST1X_CHANNELS; n++)
-        channelWrite(n, CH_DMACTRL, DMACTRL_STOP);
+        if (channelMade(gChannels[n]))
+            channelWrite(n, CH_DMACTRL, DMACTRL_STOP);
     gRunning = false;
 }
 

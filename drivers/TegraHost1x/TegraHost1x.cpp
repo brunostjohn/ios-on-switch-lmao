@@ -276,6 +276,33 @@ extern "C" void tegra_host1x_syncpt_free(uint32_t id)
         panic("TegraHost1x: syncpoint %u freed, but it is not handed out (never, reserved, or freed already)", id);
 }
 
+#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
+namespace {
+uint32_t gProbeSyncpts[SWITCH_HOST1X_PROBE_SYNCPTS];  // written only by the holder
+bool gProbeSyncptsHeld;
+}  // namespace
+
+extern "C" int switch_host1x_probe_syncpts_claim(uint32_t ids[SWITCH_HOST1X_PROBE_SYNCPTS])
+{
+    if (__atomic_exchange_n(&gProbeSyncptsHeld, true, __ATOMIC_ACQUIRE))
+        return TEGRA_HOST1X_EBUSY;
+    for (uint32_t &id : gProbeSyncpts)
+        if (!id && tegra_host1x_syncpt_alloc(&id) != TEGRA_HOST1X_OK) {
+            id = 0;
+            __atomic_store_n(&gProbeSyncptsHeld, false, __ATOMIC_RELEASE);
+            return TEGRA_HOST1X_ENOMEM;
+        }
+    for (uint32_t i = 0; i < SWITCH_HOST1X_PROBE_SYNCPTS; i++)
+        ids[i] = gProbeSyncpts[i];
+    return TEGRA_HOST1X_OK;
+}
+
+extern "C" void switch_host1x_probe_syncpts_release(void)
+{
+    __atomic_store_n(&gProbeSyncptsHeld, false, __ATOMIC_RELEASE);
+}
+#endif
+
 extern "C" void tegra_host1x_module_teardown(uint32_t module)
 {
     if (gHost && module < 32)

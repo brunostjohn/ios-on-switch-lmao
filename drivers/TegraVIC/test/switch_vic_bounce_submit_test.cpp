@@ -22,7 +22,7 @@ std::vector<uint32_t> guardCounts;
 std::vector<std::vector<switch_gpu_cpu_lease *>> stageLeases;
 std::vector<switch_gpu_backing *> vicUses, vicGuards;
 std::vector<std::pair<uint32_t, uint32_t>> copybackPlanes, sourcePlanes;  // bytes a row, rows
-bool immediate = false, dstTiled = false, dstCompressed = false;
+bool immediate = false, dstTiled = false, dstCompressed = false, srcTiled = false, srcCompressed = false;
 int failStage = -1, gates = 0, callbacks = 0, result = 0, unreservesAtCallback = -1, bounceAcquires = 0;
 unsigned writeReleases = 0;
 int writeReleasesAtCallback = -1;
@@ -92,6 +92,8 @@ protected:
         immediate = false;
         dstTiled = false;
         dstCompressed = false;
+        srcTiled = false;
+        srcCompressed = false;
         gates = callbacks = result = bounceAcquires = 0;
         unreservesAtCallback = -1;
         writeReleases = 0;
@@ -142,14 +144,14 @@ extern "C" uint64_t tegra_vic_filter_address()
 
 extern "C" int tegra_gm20b_surface_layout(uint64_t pa, tgm_layout *out)
 {
-    if (!dstTiled || pa != 0x200000)
-        return 0;
-    return tgm_layout_tiled(32, 16, 4, out);
+    if ((dstTiled && pa == 0x200000) || (srcTiled && pa == 0x100000))
+        return tgm_layout_tiled(32, 16, 4, out);
+    return 0;
 }
 
 extern "C" int tegra_gm20b_surface_compressed(uint64_t pa)
 {
-    return dstCompressed && pa == 0x200000 ? 1 : 0;
+    return (dstCompressed && pa == 0x200000) || (srcCompressed && pa == 0x100000) ? 1 : 0;
 }
 
 extern "C" void switch_gpu_backing_describe(switch_gpu_backing *backing, switch_gpu_backing_info *info)
@@ -614,6 +616,38 @@ TEST_F(Bounce, CompressedOrPartialTiledDestinationStillBounces)
     p = plan(false);
     ASSERT_EQ(switch_vic_bounce_submit(&src, &dst, &p, 0, notify, nullptr, nullptr), 1);
     EXPECT_EQ(stages, (std::vector<std::string>{"source", "preserve", "vic", "copyback"}));
+    finish();
+}
+
+// A GPU render target (a detached Metal layer Core Animation turns) is read by VIC where it lies: no copy-engine untile,
+// the source attached to the job and guarded as a pitch source is, its slot programmed with the GPU's blocks.
+TEST_F(Bounce, TiledRgbSourceIsReadInPlaceWithoutTheCopyEngine)
+{
+    srcTiled = true;
+    auto src = makeSurface(true, 192), dst = makeSurface(false, 256);
+    auto p = plan();
+    ASSERT_EQ(switch_vic_bounce_submit(&src, &dst, &p, 0, notify, nullptr, nullptr), 1);
+    EXPECT_EQ(stages, (std::vector<std::string>{"vic"}));
+    EXPECT_EQ(bounceAcquires, 0);
+    EXPECT_EQ(vicUses, (std::vector<switch_gpu_backing *>{&destinationBacking, &sourceBacking}));
+    EXPECT_EQ(vicGuards, (std::vector<switch_gpu_backing *>{&destinationBacking, &sourceBacking}));
+    tgm_layout expected = {};
+    ASSERT_EQ(tgm_layout_tiled(32, 16, 4, &expected), 1);
+    const uint32_t slot = TEGRA_VIC_SLOTS + TEGRA_VIC_SLOT_SURFACE;
+    EXPECT_EQ(TEGRA_VIC_GET(submittedJob.config, slot, SURF_BLK_KIND), uint64_t(TEGRA_VIC_BLK_16Bx2));
+    EXPECT_EQ(TEGRA_VIC_GET(submittedJob.config, slot, SURF_BLK_HEIGHT), expected.y_log2);
+    finish();
+    EXPECT_EQ(callbacks, 1);
+    EXPECT_EQ(result, 0);
+}
+
+TEST_F(Bounce, CompressedTiledSourceStillBounces)
+{
+    srcTiled = srcCompressed = true;
+    auto src = makeSurface(true, 192), dst = makeSurface(false, 256);
+    auto p = plan();
+    ASSERT_EQ(switch_vic_bounce_submit(&src, &dst, &p, 0, notify, nullptr, nullptr), 1);
+    EXPECT_EQ(stages, (std::vector<std::string>{"source", "vic"}));
     finish();
 }
 

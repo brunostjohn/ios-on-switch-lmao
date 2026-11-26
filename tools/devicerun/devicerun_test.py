@@ -173,6 +173,27 @@ class Rules(unittest.TestCase):
         self.assertIn('0.30', got['idle'].observed)
         self.assertEqual(got['none'].verdict, NO_DATA)
 
+    def test_frame_end_idle_leaves_out_debug_only_holders(self):
+        check = next(c for c in checks.GROUPS['display'] if c.name == 'display.frame-end-idle')
+        locks = 'SwitchDisplay locks: 300 frame ends; per 100: colour 0, INT_MASK 0; work-loop passes 100; '
+        debug = locks + '5011 ms, 0 swaps, 302 DC A interrupts, 2 not explained by debug holders, routed for release'
+        busy = locks + '5000 ms, 300 swaps, 300 DC A interrupts, 300 not explained by debug holders, routed for release'
+        leak = locks + '5000 ms, 0 swaps, 295 DC A interrupts, 295 not explained by debug holders, routed for release'
+
+        def verdict(*messages: str) -> str:
+            records = [record(i, m) for i, m in enumerate(messages)]
+            return devicerun.run_checks(records, [check])[0][0].verdict
+
+        self.assertEqual(verdict(debug, busy), PASS)
+        self.assertEqual(verdict(debug, leak), FAIL)
+
+    def test_transform_refused_names_the_word(self):
+        check = next(c for c in checks.GROUPS['display'] if c.name == 'display.transform-refused')
+        line = 'SwitchDisplay: swap refused: layer 2 has transform 1 (format 0x42475241, 1280x720)'
+        result = devicerun.run_checks([record(0, line)], [check])[0][0]
+        self.assertEqual(result.verdict, INFO)
+        self.assertIn('1/0x42475241/1280x720', result.observed)
+
     def test_against_and_grouping(self):
         by_name = {c.name: c for c in checks.GROUPS['gpu'] + checks.GROUPS['refusals']}
         got = run(by_name['gpu.surface-locks'], by_name['gpu.rainbow'], by_name['refusal.user'])

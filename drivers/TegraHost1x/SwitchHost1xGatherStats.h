@@ -21,7 +21,7 @@ struct SwitchHost1xChannelCounters {
 
 struct SwitchHost1xGatherStats {
     static constexpr uint64_t kWindowUs = 5000000;
-    static constexpr uint32_t kChannels = 5;
+    static constexpr uint32_t kChannels = 7;
     uint32_t gathered[kChannels], copied[kChannels], highWords[kChannels], roomWaits[kChannels];
     uint64_t windowStart;
     SwitchHost1xChannelCounters base[kChannels];  // the counters at the last line

@@ -48,6 +48,7 @@
 #include <os/log.h>
 #include <string.h>
 #include "TegraVIC.h"
+#include "../../kits/SwitchEntitlement/SwitchEntitlement.h"
 #include "../../kits/SwitchRefusal/SwitchRefusal.h"
 #include "../../kits/SwitchTime/SwitchTime.h"
 #include "TegraVICBounce.h"
@@ -68,6 +69,7 @@
 #include "SwitchVICGateABI.h"
 #include "../NativeMobileDisplay/SwitchLandscapeRunABI.h"
 #include "../TegraGM20B/TegraGM20BLayout.h"
+#include "../TegraGM20B/TegraGM20BPathsABI.h"
 
 // The kernel's IOService/IOUserClient implementations, called directly (they are the defaults the vtable copies
 // keep or fall back to), and their vtables, where the slots are found.
@@ -669,12 +671,10 @@ IOReturn transform(Conn *conn, const void *in, uint32_t size)
 // The display's window probes come through here too: the app's sandbox admits this client, not the display's.
 extern "C" IOReturn switch_display_window_probe_call(const IOExternalMethodArguments *) __attribute__((weak));
 
-// They change kernel state (display routing, traits, VIC gates), so only HW Test, which carries this, may call them
-constexpr char kKernelTestEntitlement[] = "com.brunostjohn.switch.kernel-tests";
-
+// Every request writes hardware or kernel state no client's job may reach, so only HW Test may make one.
 static IOReturn kernelTest(const Conn *conn, const IOExternalMethodArguments *a)
 {
-    if (!IOTaskHasEntitlement(conn->task, kKernelTestEntitlement))
+    if (!switch_task_entitled(conn->task, SWITCH_GPU_PROBES_ENTITLEMENT))
         return kIOReturnNotPrivileged;
     uint32_t magic = 0;
     if (a->structureInput && a->structureInputSize >= sizeof(magic))

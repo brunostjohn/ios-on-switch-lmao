@@ -14,8 +14,6 @@
 	<true/>
 	<key>com.apple.private.memorystatus</key>
 	<true/>
-	<key>com.brunostjohn.switch.kernel-tests</key>
-	<true/>
 	<key>com.brunostjohn.switch.gpu-probes</key>
 	<true/>
 	<key>com.apple.private.security.container-required</key>
@@ -60,7 +58,6 @@
 		<string>kern.switch_native_publications</string>
 		<string>kern.switch_frame_info_shown</string>
 		<string>kern.switch_frame_info_unsent</string>
-		<string>kern.switch_frame_info_ordinary</string>
 		<string>kern.switch_frame_info_early</string>
 		<string>kern.switch_frame_info_unphased</string>
 		<string>kern.switch_display_refresh_min</string>

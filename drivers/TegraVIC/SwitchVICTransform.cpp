@@ -130,7 +130,7 @@ int switch_vic_transform(const TegraVICSurface *source, const TegraVICSurface *d
     }
     TegraVICImage src = {}, dst = {};
     const uint64_t dstBase = switch_vic_mapping_address(work->mappings[1]);
-    const char *why = directTiledDst ? switch_vic_tiled_dst_image(destination, tiledDst, dstBase, &dst)
+    const char *why = directTiledDst ? switch_vic_tiled_image(destination, tiledDst, dstBase, &dst)
                                      : tegra_vic_image_from(&destination->desc, dstBase + work->access[1].offset, &dst);
     if (chromaSite)
         dst.chromaSite = chromaSite;

@@ -59,6 +59,8 @@ host_test(
     name = "switch_vic_layout_probe_test",
     srcs = [
         "switch_vic_layout_probe_test.cpp",
+        "vic_model.h",
+        "vic_model_color.h",
         "//drivers/TegraVIC:SwitchVICLayoutProbe.h",
         "//drivers/TegraVIC:TegraVICColor.h",
         "//drivers/TegraVIC:TegraVICConfig.h",
@@ -963,6 +965,15 @@ host_test(
     name = "switch_vic_capabilities_source_test",
     srcs = ["switch_vic_capabilities_source_test.cpp"],
     data = ["//drivers/TegraVIC:TegraVICUserClient.cpp"],
+)
+
+host_test(
+    name = "switch_vic_probe_gate_test",
+    srcs = ["switch_vic_probe_gate_test.cpp"],
+    data = [
+        "//drivers/TegraVIC:TegraVICUserClient.cpp",
+        "//kits/SwitchEntitlement:SwitchEntitlement.h",
+    ],
 )
 
 host_test(

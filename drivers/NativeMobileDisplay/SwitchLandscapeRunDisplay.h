@@ -79,6 +79,10 @@ int landscapeRunStart(uint32_t frames)
     s.holding = true;
     native_legacy_frame_end_hold();
     s.reply.state = SWITCH_DISPLAY_LANDSCAPE_SAMPLING;
+    IOLog("SwitchDisplay: landscape sample of %u frames after frame end %llu: landscape %d wanted %d switching %d, "
+          "portrait hold %u\n",
+          frames, frameEnds, landscapeOn() ? 1 : 0, landscapeState.wanted ? 1 : 0, landscapeState.switching ? 1 : 0,
+          __atomic_load_n(&s.portraitFrames, __ATOMIC_RELAXED));
     return 0;
 }
 
@@ -102,6 +106,10 @@ void landscapeRunFinish(int error)
     s.reply.error = error;
     s.reply.failures = landscapeState.failures;
     s.reply.state = SWITCH_DISPLAY_LANDSCAPE_DONE;
+    IOLog("SwitchDisplay: landscape sample done at frame end %llu (error %d): %u frames, %u changes of mode, %u video "
+          "and %u UI latches, landscape %d wanted %d\n",
+          frameEnds, error, s.reply.frames, s.reply.switches, s.reply.overlayLatches, s.reply.uiLatches,
+          landscapeOn() ? 1 : 0, landscapeState.wanted ? 1 : 0);
     if (s.holding) {
         s.holding = false;
         native_legacy_frame_end_release();
@@ -199,6 +207,11 @@ void landscapeRunCharge(uint64_t since)
         landscapeRun.displayTicks += mach_absolute_time() - since;
 }
 #else
+static bool landscapeRunSampling()
+{
+    return false;
+}
+
 static bool landscapeRunFailsEnter()
 {
     return false;

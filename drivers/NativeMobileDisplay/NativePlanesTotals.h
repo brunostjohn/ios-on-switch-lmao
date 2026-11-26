@@ -58,14 +58,15 @@ static void planeTotalsRegister()
 }
 
 static void planeNoteRefused(unsigned reason, uint32_t updated, const bool hasSurface[native_planes::kLayers],
-                             const native_planes::Layer layers[native_planes::kLayers], uint32_t width, uint32_t height)
+                             const native_planes::Layer layers[native_planes::kLayers], uint32_t width, uint32_t height,
+                             const native_planes::Limits &limits)
 {
     if (reason != native_planes::kFormat && reason != native_planes::kSurface && reason != native_planes::kAlignment)
         return;
     for (unsigned i = 0; i < native_planes::kLayers; ++i) {
         const native_planes::Layer &l = layers[i];
         if (!(updated & (1u << i)) || !hasSurface[i] || native_planes::isUi(l, width, height) ||
-            native_planes::checkDetached(l, width, height) != reason)
+            native_planes::checkDetached(l, width, height, limits) != reason)
             continue;
         const native_planes::Surface &s = l.surface;
         uint64_t key = switch_refusal_key_with(switch_refusal_key("display", "plane-layout"),
@@ -90,6 +91,7 @@ void planeTotalsClose() const
 static void planeTotalsRegister()
 {}
 
-static void planeNoteRefused(unsigned, uint32_t, const bool *, const native_planes::Layer *, uint32_t, uint32_t)
+static void planeNoteRefused(unsigned, uint32_t, const bool *, const native_planes::Layer *, uint32_t, uint32_t,
+                             const native_planes::Limits &)
 {}
 #endif

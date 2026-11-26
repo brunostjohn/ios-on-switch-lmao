@@ -16,6 +16,7 @@
 #include "SwitchVICPackedProbe.h"
 #include "SwitchVICPitchProbe.h"
 #include "SwitchVICTransposeProbe.h"
+#include "../TegraHost1x/SwitchHost1xMlockProbe.h"
 
 namespace {
 struct Probe {
@@ -35,6 +36,7 @@ constexpr Probe kProbes[] = {
     {SWITCH_VIC_MC_FAULT_PROBE_MAGIC, sizeof(SwitchVICMcFaultProbeReply), switch_vic_mc_fault_probe_run},
     {SWITCH_VIC_COMPOSITE_ARM_MAGIC, SWITCH_VIC_COMPOSITE_REPLY_BYTES, switch_vic_composite_arm_run},
     {SWITCH_VIC_COMPOSITE_REPORT_MAGIC, SWITCH_VIC_COMPOSITE_REPLY_BYTES, switch_vic_composite_report_run},
+    {SWITCH_HOST1X_MLOCK_PROBE_MAGIC, sizeof(SwitchHost1xMlockProbeReply), switch_host1x_mlock_probe_run},
 };
 
 bool gBusy;

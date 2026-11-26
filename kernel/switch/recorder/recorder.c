@@ -43,10 +43,12 @@
  * classes Apple's processes may emit, and new threads, execs and thread names (DBG_TRACE's data and strings: they name
  * the ring's threads that ended before its stackshot). Left out: Mach IPC (MACH_IPC_KMSG_INFO takes the destination
  * port's lock on every send in every process) and the Metal plugin's DBG_APPS 'S' points (they would turn into system
- * calls on its render thread); the kernel's flip and job tracepoints carry the frame instead.
+ * calls on its render thread); the kernel's flip and job tracepoints carry the frame instead. QuartzCore's window-server subclass (0x31ca)
+ * is in: 0x31ca02c8 is its presentation latency, logged where it changes (IOMFBDisplay::can_update_, finish_update,
+ * set_presentation_latency), which decides how many frame ends ahead it stamps a swap.
  */
 char switch_recorder_filter[] = "S0x0140,S0x0105,S0x010c,S0x0130,S0x01a8,S0x040c,S0x0301,S0x0302,C0x25,S0x0612,"
-                                "S0x210a,C0x2b,C0x35,S0x0700,S0x0701";
+                                "S0x210a,C0x2b,C0x35,S0x0700,S0x0701,S0x31ca";
 bool switch_recorder_own_filter;
 
 extern struct kd_control kd_control_trace;

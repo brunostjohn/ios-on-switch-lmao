@@ -470,13 +470,37 @@ GROUPS: dict[str, list[Check]] = {
         Check(
             'display.frame-end-idle',
             'r32-color',
-            'SwitchDisplay stats: ',
-            'max(irqs/ms*1000) < 5',
+            'SwitchDisplay locks: ',
+            'max(unexplained/ms*1000) < 5',
             process=KERNEL,
-            regex=r'(?P<ms>\d+) ms: (?P<irqs>\d+) DC A interrupts, (?P<swaps>\d+) swaps',
+            regex=r'; (?P<ms>\d+) ms, (?P<swaps>\d+) swaps, (?P<irqs>\d+) DC A interrupts, (?P<unexplained>\d+) not '
+            r'explained by debug holders',
             where='swaps == 0',
-            source='drivers/NativeMobileDisplay/NativeLegacyDisplay.cpp',
-            note='DC A interrupts/s in windows with no presents; was ~60; debug kernels',
+            source='drivers/NativeMobileDisplay/NativeLegacyDisplay.cpp (noteFrameEndRouted, SwitchFrameEndHolder.h)',
+            note='DC A interrupts/s in windows with no swaps, less the frame ends the debug-only holders (console tape, '
+            'probes, display experiments) kept routed; the line names each holder; was ~60; debug kernels',
+        ),
+        Check(
+            'display.timed-ordinary-17',
+            'big-display',
+            'SwitchDisplay requested: ',
+            REPORT,
+            process=KERNEL,
+            note='on a 21H461 boot (it keeps the ordinary-frame clause, SwitchTimedPresent.h phasedOrdinary): a "-1" bin '
+            'and "shown early" above 0 mean its render server stamps the second frame end ahead as 24B119 does, and the '
+            'clause skips frame ends there too: drop it for 21H461; all in the 0 bin means its stamps name the next frame end',
+        ),
+        Check(
+            'display.transform-refused',
+            'big-display',
+            'SwitchDisplay: swap refused: layer ',
+            REPORT,
+            process=KERNEL,
+            regex=r'has transform (?P<transform>\d+) \(format (?P<format>0x[0-9a-f]+), (?P<size>\d+x\d+)\)',
+            show=('transform', 'format', 'size'),
+            source='drivers/NativeMobileDisplay/NativeLegacyDisplay.cpp (noteTransformRefused)',
+            note='24B119 publishes rotation and shows every transform: no line. 21H461 publishes none and refuses a '
+            'transformed layer as before: each line is a transform word its render server sent anyway, once per word',
         ),
         Check(
             'display.vblank-phase-gone',
