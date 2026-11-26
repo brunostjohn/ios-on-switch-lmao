@@ -498,10 +498,11 @@ TEST(HostWrittenVolatileWc, IdleVolatileWcChunksParkAndUnparkResidentWithoutAlia
         e->end();
         uint32_t seqno = 0;
         ASSERT_TRUE(open->commit(seqno));
+        // The model stores each use under the BO it resolved to (kernel_model.h run)
         const auto &uses = kernel_model::model.jobs.back().uses;
         EXPECT_TRUE(std::any_of(uses.begin(), uses.end(), [&](const TegraGM20BAbiSurfaceUse &use) {
-            return kernel_model::model.resolve(use) == volHandle;
-        })) << "the open command buffer's job covers the unparked chunk";
+            return use.handle == volHandle && (use.access & TegraGM20BSurfaceGpuAddress);
+        })) << "the open command buffer's job names the unparked chunk by its address";
     }
 
     {
