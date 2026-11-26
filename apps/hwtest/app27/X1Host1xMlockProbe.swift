@@ -28,7 +28,11 @@ enum X1Host1xMlockProbe {
         metrics.set("after_release", reply[5] != 0)
         metrics.set("held_us", Int(reply[6]))
         metrics.set("settled", reply[7] != 0)
-        guard status == 0, reply[2] != 0 else {
+        guard status == 0 else {
+            let why = status == -16 ? "another probe holds the probes' syncpoints" : "host1x refused it"
+            return ProbeFinding(.inconclusive, metrics, note: "the probe did not run: \(why) (\(status))")
+        }
+        guard reply[2] != 0 else {
             return ProbeFinding(.inconclusive, metrics, note: "the control did not run two channels side by side")
         }
         let holds = reply[3] != 0 && reply[4] != 0 && reply[5] != 0 && reply[7] != 0
