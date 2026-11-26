@@ -116,6 +116,15 @@ const char *switch_vic_probe_running()
     return gRunning;
 }
 
+bool switch_vic_probes_entitled(struct task *task)
+{
+    OSObject *value = IOUserClient::copyClientEntitlement(task, SWITCH_VIC_PROBES_ENTITLEMENT);
+    const bool entitled = value == kOSBooleanTrue;
+    if (value)
+        value->release();
+    return entitled;
+}
+
 int switch_vic_kernel_test_call(const IOExternalMethodArguments *a)
 {
     const auto *request = static_cast<const uint32_t *>(a->structureInput);

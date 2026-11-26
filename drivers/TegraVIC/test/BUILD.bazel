@@ -261,6 +261,17 @@ host_test(
 )
 
 host_test(
+    name = "switch_vic_probe_gate_source_test",
+    srcs = ["switch_vic_probe_gate_source_test.cpp"],
+    data = [
+        "//apps/hwtest:SwitchHWTest.entitlements",
+        "//apps/hwtest:SwitchHWTest27.entitlements",
+        "//drivers/TegraVIC:TegraVIC.h",
+        "//drivers/TegraVIC:TegraVICUserClient.cpp",
+    ],
+)
+
+host_test(
     name = "switch_vic_ownership_source_test",
     srcs = ["switch_vic_ownership_source_test.cpp"],
     data = [
