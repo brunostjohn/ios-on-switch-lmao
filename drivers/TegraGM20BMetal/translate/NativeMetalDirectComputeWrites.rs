@@ -146,23 +146,8 @@ fn restore_bgra4_view(ask: &NmbDirectDispatch, slot: u32, out: &mut NmbDirectKer
     }
 }
 
-/// When a slot was bound as `ARGB8Unorm_sRGB` (compiled as `ARGB8Unorm` in `kernel_textures.rs`, which reads the codes
-/// as they are), view it as `R8G8B8A8_SRGB` under the same rotation: the window then states sRGB and the dispatch binds
-/// the texture's own rotated sRGB header (gpu.cpp), whose fetches decode as a draw's do. A UNORM window binds a view
-/// with the decode off, and the kernel reads the sRGB codes as linear values.
-fn restore_argb8_srgb_view(ask: &NmbDirectDispatch, slot: u32, out: &mut NmbDirectKernelWrite) {
-    let storage = out.write.ty == avk::DescriptorType::STORAGE_IMAGE.as_raw();
-    if !storage
-        && bound_as(ask, slot, PixelFormat::ARGB8UnormSRGB)
-        && out.view_format == avk::Format::R8G8B8A8_UNORM.as_raw() as u32
-    {
-        out.view_format = avk::Format::R8G8B8A8_SRGB.as_raw() as u32;
-    }
-}
-
 fn restore_view(ask: &NmbDirectDispatch, slot: u32, out: &mut NmbDirectKernelWrite) {
     restore_bgra4_view(ask, slot, out);
-    restore_argb8_srgb_view(ask, slot, out);
 }
 
 pub(crate) fn kernel_write(
@@ -303,45 +288,5 @@ mod tests {
         let mut raw_u16 = kernel_write_stub(avk::Format::R16_UINT.as_raw() as u32, [0; 4]);
         restore_bgra4_view(&ask, 0, &mut raw_u16);
         assert_eq!(raw_u16.view_format, avk::Format::R16_UINT.as_raw() as u32);
-    }
-
-    #[test]
-    fn restore_argb8_srgb_view_states_srgb_for_sampled_views_only() {
-        let bound = |slot, format: PixelFormat| NmbDirectBoundTexture {
-            slot,
-            planes: 0,
-            pixel_format: u64::from(format.as_raw()),
-            texture_type: 2,
-            usage: 1,
-            levels: 1,
-            array_length: 1,
-            samples: 1,
-        };
-        let textures = [bound(0, PixelFormat::ARGB8UnormSRGB), bound(1, PixelFormat::ARGB8Unorm)];
-        let ask = NmbDirectDispatch {
-            threads: [8, 8, 1],
-            memory: [0; 31],
-            textures: textures.as_ptr(),
-            texture_count: textures.len() as u32,
-            samplers: std::ptr::null(),
-            sampler_count: 0,
-            region_mode: 0,
-        };
-        let unorm = avk::Format::R8G8B8A8_UNORM.as_raw() as u32;
-        let rotated = [4, 5, 6, 3];
-
-        let mut srgb = kernel_write_stub(unorm, rotated);
-        restore_view(&ask, 0, &mut srgb);
-        assert_eq!(srgb.view_format, avk::Format::R8G8B8A8_SRGB.as_raw() as u32);
-        assert_eq!(srgb.components, rotated);
-
-        let mut linear = kernel_write_stub(unorm, rotated);
-        restore_view(&ask, 1, &mut linear);
-        assert_eq!(linear.view_format, unorm);
-
-        let mut stored = kernel_write_stub(unorm, rotated);
-        stored.write.ty = avk::DescriptorType::STORAGE_IMAGE.as_raw();
-        restore_view(&ask, 0, &mut stored);
-        assert_eq!(stored.view_format, unorm);
     }
 }

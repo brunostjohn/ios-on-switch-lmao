@@ -320,9 +320,11 @@ uint32_t slotTextureWindow(const Made &made, uint8_t slot)
 }  // namespace
 
 // A kernel's float read of each stand-in format binds, by the window its record names, the header the dispatch takes
-// under the format's own row (compute.cpp, view.h slotView): BGRA4Unorm and ARGB8Unorm their own; R8Unorm_sRGB and
-// ARGB8Unorm_sRGB their own sRGB headers, which decode as a draw's fetch of them does; the extended-range sRGB twins their
-// codes, which the kernel reads at float precision, not the half stand-in a draw samples
+// under the format's own row (compute.cpp, view.h slotView): BGRA4Unorm and ARGB8Unorm their own; R8Unorm_sRGB its own
+// sRGB header, which decodes as a draw's fetch of it does; ARGB8Unorm_sRGB its codes through a UNORM view, which m2v
+// decodes in the shader (a device decodes the first three channels before the swizzle: Metal's alpha, red and green);
+// the extended-range sRGB twins their codes, which the kernel reads at float precision, not the half stand-in a draw
+// samples
 TEST_F(CompilerStages, StandInFormatKernelReadsBindTheirOwnHeadersOrCodes)
 {
     const std::string bytes = fileBytes(library());
@@ -336,7 +338,7 @@ TEST_F(CompilerStages, StandInFormatKernelReadsBindTheirOwnHeadersOrCodes)
     } cases[] = {
         {44, 0x54e24912u, gm20b::SlotView::Own},                             // BGRA4Unorm
         {84, 0x2b1a4908u, gm20b::SlotView::Own},                             // ARGB8Unorm
-        {85, 0x2b1a4908u | gm20b::kKernelWindowSrgb, gm20b::SlotView::Own},  // ARGB8Unorm_sRGB
+        {85, 0x2b1a4908u, gm20b::SlotView::View},                            // ARGB8Unorm_sRGB: its codes
         {11, 0x7012491du | gm20b::kKernelWindowSrgb, gm20b::SlotView::Own},  // R8Unorm_sRGB
         {553, 0x58d49203u, gm20b::SlotView::Own},                            // BGRA10_XR_sRGB
         {555, 0x6014920fu, gm20b::SlotView::Own},                            // BGR10_XR_sRGB
