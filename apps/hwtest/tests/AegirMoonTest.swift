@@ -14,7 +14,7 @@ import QuartzCore
 /// and the drawable's layout hold Metal's bytes; luna's program and Core Animation's composite are not covered.
 /// `<arm>_<check>_off`: texels unlike Metal's (AegirMoon.misses); `<arm>_<target>_centre`, `_corner`: what the centre
 /// and a corner texel hold; `<arm>_<target>_facts`: the driver's layout of each target, red as `layer_drawable_facts`
-/// where the drawable has none; the 64-row expectation is 24B119's alone (`layer_block_rows_expected`); path.
+/// where the drawable has none; the 64-row expectation is iOS 27's alone (`layer_block_rows_expected`); path.
 struct AegirMoonTest: HWTest {
     let id = "gpu.gm20b.aegir_moon"
     let name = "Weather's moon passes: mask, bloom and extended-range drawable hold Metal's bytes"
@@ -58,9 +58,8 @@ struct AegirMoonTest: HWTest {
             metrics.set("\(arm)_path", reading.path)
             if reading.path != "gm20b" { wrong.append("\(arm)_path") }
         }
-        // 24B119 measured Weather's surface block-linear in 64-row blocks; another build's choice is recorded until a run
-        // there says
-        let weatherRows = DeviceInfo.sysctl("kern.osversion") == "24B119" ? 64 : nil
+        // iOS 27 measured Weather's surface block-linear in 64-row blocks; iOS 17's is recorded until a run there says
+        let weatherRows = ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27 ? 64 : nil
         if let drawable {
             let layout = SameBitsCases.facts(gpu, drawable.texture)
             metrics.set("layer_block_rows_expected", weatherRows.map(String.init) ?? "recorded")
