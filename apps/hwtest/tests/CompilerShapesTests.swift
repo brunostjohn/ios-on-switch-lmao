@@ -90,10 +90,10 @@ struct PowrSpecialsTest: HWTest {
 }
 
 /// Half fmax, fmin and a clamp over every pair of CompilerShapes.powrHalves (400: the specials, both zeros, NaNs of
-/// both signs, class boundaries), against Metal's definition (CompilerShapes.metalMax, metalMin: y where x < y, or
-/// y < x, or where x is a NaN; x otherwise), either zero for a tie of +0 and -0, and a transfer curve's tests of a
-/// half (abs(x) < y, x < 0). The shader compiler gives a half's min and max on GM20B as HSETP2 and SEL, and those tests
-/// as HSETP2 with |x| as an operand modifier and zero as RZ, with no F2F to f32 and back.
+/// both signs, class boundaries), against Apple's GPUs' answers (CompilerShapes.metalMax, metalMin: x where x > y, or
+/// x < y, or where y is a NaN; y otherwise, so a tie of +0 and -0 gives y), and a transfer curve's tests of a half
+/// (abs(x) < y, x < 0). The shader compiler gives a half's min and max on GM20B as HSETP2 and SEL, and those tests as
+/// HSETP2 with |x| as an operand modifier and zero as RZ, with no F2F to f32 and back.
 struct HalfMinMaxTest: HWTest {
     let id = "gpu.gm20b.half_min_max"
     let name = "Half fmax, fmin and clamp over every special pair, as Metal defines them, on raw"

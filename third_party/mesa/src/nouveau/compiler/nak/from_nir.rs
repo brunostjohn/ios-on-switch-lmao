@@ -1253,41 +1253,40 @@ impl<'a> ShaderFromNir<'a> {
                     && (53..70).contains(&self.sm.sm())
                 {
                     // ios-on-switch-lmao: SM53 has no HMNMX2. A compare and a
-                    // select of halves: fmax(x, y) is y where x < y, fmin(x,
-                    // y) y where y < x, and y where x is a NaN; x otherwise,
-                    // so a NaN loses as FMNMX's does. A tie of +0 and -0
-                    // gives either zero (NIR may swap the operands). A half
-                    // kept as a half where it was widened for FMNMX: three
-                    // quarter-rate F2F gone a scalar (nak_nir.c keeps these
-                    // scalar).
+                    // select of halves, as Apple's GPUs answer Metal's fmax
+                    // and fmin (an M1, host gpu_test SignedZeroTests): x
+                    // where x > y (x < y for fmin) or y is a NaN, y
+                    // otherwise, so a NaN loses and a tie of +0 and -0 gives
+                    // y. A half kept as a half where it was widened for
+                    // FMNMX: three quarter-rate F2F gone a scalar (nak_nir.c
+                    // keeps these scalar).
                     assert!(alu.def.num_components == 1);
                     let (x, y) = (srcs(0), srcs(1));
-                    let x_nan = b.alloc_ssa(RegFile::Pred);
+                    let y_nan = b.alloc_ssa(RegFile::Pred);
                     b.push_op(OpHSetP2 {
-                        dsts: [x_nan.into(), Dst::None],
+                        dsts: [y_nan.into(), Dst::None],
                         set_op: PredSetOp::And,
                         cmp_op: FloatCmpOp::IsNan,
-                        srcs: [x.clone(), x.clone()],
+                        srcs: [y.clone(), y.clone()],
                         accum: SrcRef::True.into(),
                         ftz: false,
                         horizontal: false,
                     });
-                    let (lo, hi) = if alu.op == nir_op_fmax {
-                        (x.clone(), y.clone())
-                    } else {
-                        (y.clone(), x.clone())
-                    };
-                    let take_y = b.alloc_ssa(RegFile::Pred);
+                    let keep_x = b.alloc_ssa(RegFile::Pred);
                     b.push_op(OpHSetP2 {
-                        dsts: [take_y.into(), Dst::None],
+                        dsts: [keep_x.into(), Dst::None],
                         set_op: PredSetOp::Or,
-                        cmp_op: FloatCmpOp::OrdLt,
-                        srcs: [lo, hi],
-                        accum: x_nan.into(),
+                        cmp_op: if alu.op == nir_op_fmax {
+                            FloatCmpOp::OrdGt
+                        } else {
+                            FloatCmpOp::OrdLt
+                        },
+                        srcs: [x.clone(), y.clone()],
+                        accum: y_nan.into(),
                         ftz: self.float_ctl.fp16.ftz,
                         horizontal: false,
                     });
-                    dst = b.sel(take_y.into(), y, x).into();
+                    dst = b.sel(keep_x.into(), x, y).into();
                 } else if alu.def.bit_size() == 16 {
                     dst = b.alloc_ssa_vec(RegFile::GPR, 1);
                     b.push_op(OpHMnMx2 {

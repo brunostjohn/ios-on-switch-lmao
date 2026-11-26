@@ -154,16 +154,16 @@ public enum CompilerShapes {
 }
 
 extension CompilerShapes {
-    /// Metal's fmax of two halves as the language defines it: y where x < y or x is a NaN, x otherwise
-    public static func metalMax(_ x: Float16, _ y: Float16) -> Float16 { x.isNaN || x < y ? y : x }
+    /// fmax of two halves as Apple's GPUs answer it (an M1, host gpu_test SignedZeroTests): x where x > y or y is a
+    /// NaN, y otherwise, so a NaN loses and a tie of +0 and -0 gives y
+    public static func metalMax(_ x: Float16, _ y: Float16) -> Float16 { y.isNaN || x > y ? x : y }
 
-    /// Metal's fmin: y where y < x or x is a NaN, x otherwise
-    public static func metalMin(_ x: Float16, _ y: Float16) -> Float16 { x.isNaN || y < x ? y : x }
+    /// fmin likewise: x where x < y or y is a NaN, y otherwise
+    public static func metalMin(_ x: Float16, _ y: Float16) -> Float16 { y.isNaN || x < y ? x : y }
 
-    /// Whether `got` is `want` as the GPU wrote it to an RGBA32F target: the same half, a NaN any NaN, and either zero
-    /// for a zero (which zero a tie of +0 and -0 gives is the compiler's choice)
+    /// Whether `got` is `want` as the GPU wrote it to an RGBA32F target: the same half, zeros by sign, a NaN any NaN
     public static func sameHalf(_ got: Float, _ want: Float16) -> Bool {
-        want.isNaN ? got.isNaN : Float(want) == got && (want == 0 || got.sign == want.sign)
+        want.isNaN ? got.isNaN : Float(want) == got && got.sign == want.sign
     }
 
     /// half_min_max's tests of a pair: abs(x) < y, plus two for x < 0 (a NaN compares false)

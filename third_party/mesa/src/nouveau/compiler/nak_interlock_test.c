@@ -431,6 +431,58 @@ test_msaa_cells_are_nil_s(void)
    }
 }
 
+/* A half's fmax and fmin on SM53 answer as Apple's GPUs do (host gpu_test
+ * SignedZeroTests): x where x > y (x < y for fmin) or y is a NaN, so a tie of
+ * +0 and -0 gives y. The full compile's HSETP2s: a NaN test of y alone, then
+ * GT (fmax) or LT (fmin) of x against y; the SEL keeps x where it holds */
+static void
+test_half_min_max_take_y_at_a_tie(void)
+{
+   struct nv_device_info dev = {.sm = 53, .max_warps_per_mp = 64};
+   struct nak_compiler *nak = nak_compiler_create(&dev);
+   for (unsigned max = 0; max < 2; max++) {
+      nir_builder b = nir_builder_init_simple_shader(
+         MESA_SHADER_FRAGMENT, nak_nir_options(nak), "min_max");
+      b.shader->info.io_lowered = true;
+      nir_def *addr = nir_ldc_nv(&b, 1, 64, nir_imm_int(&b, 1), nir_imm_int(&b, 0),
+                                 .align_mul = 8, .align_offset = 0);
+      nir_def *xy = nir_load_global(&b, 2, 16, addr, .align_mul = 4);
+      nir_def *x = nir_channel(&b, xy, 0), *y = nir_channel(&b, xy, 1);
+      nir_def *r = max ? nir_fmax(&b, x, y) : nir_fmin(&b, x, y);
+      nir_store_global(&b, nir_vec2(&b, r, r), addr, .align_mul = 4);
+      struct nak_fs_key fs_key = {0};
+      struct nak_shader_bin *bin =
+         nak_compile_shader(b.shader, true, nak, 0, &fs_key, false);
+      require(bin != NULL, "min/max compile failed");
+      const uint32_t *code = bin->code;
+      unsigned n = (bin->code_size / 32) * 3, nan_tests = 0, compares = 0;
+      unsigned nan_of = ~0u, compared_b = ~0u;
+      for (unsigned i = 0; i < n; i++) {
+         uint64_t w = sm50_word(code, i);
+         if (((uint16_t)(w >> 48) & 0xfff8) != 0x5d20)
+            continue;
+         unsigned cmp = (w >> 35) & 0xf;
+         unsigned a = (w >> 8) & 0xff | ((w >> 47) & 3) << 8;
+         unsigned b2 = (w >> 20) & 0xff | ((w >> 28) & 3) << 8;
+         if (cmp == 8) {
+            nan_tests++;
+            require(a == b2, "the NaN test reads one operand twice");
+            nan_of = a;
+         } else {
+            compares++;
+            require(cmp == (max ? 4 : 1),
+                    max ? "fmax keeps x where x > y" : "fmin keeps x where x < y");
+            compared_b = b2;
+         }
+      }
+      require(nan_tests == 1 && compares == 1, "one NaN test and one compare");
+      require(nan_of == compared_b, "the NaN test is of y, the compare's B");
+      nak_shader_bin_destroy(bin);
+      ralloc_free(b.shader);
+   }
+   nak_compiler_destroy(nak);
+}
+
 static void
 test_compile_sm75(void)
 {
@@ -515,6 +567,7 @@ main(void)
    test_compile_sm75();
    test_msaa_image_offsets();
    test_msaa_cells_are_nil_s();
+   test_half_min_max_take_y_at_a_tie();
    puts("interlock NIR and SM53/SM75 full-pipeline SASS checks passed");
    return 0;
 }
