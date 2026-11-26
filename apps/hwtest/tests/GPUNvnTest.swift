@@ -12,6 +12,11 @@ struct GPUNvnTest: HWTest {
     let name = "NVN's zcull, discard, 4x compression kind and tiled-flush choices, A/B"
     let subsystem = Subsystem.metal
 
+    /// The arms whose wrong pixels with the probe off are the driver's own fault
+    static let judged = [
+        "zcull_bounds_hidden_off_wrong", "stencil_zcull_off_wrong", "zcull_4x2_off_wrong", "zcull_fp_off_wrong",
+    ]
+
     func run(_ context: TestContext) async throws -> Outcome {
         let gpu = try GPU.make()
         let production = DrawBandsTest.budget(gpu.device, 0)
@@ -20,9 +25,7 @@ struct GPUNvnTest: HWTest {
         var metrics = result.metrics
         metrics.set("dev", GM20BFacade.kind(of: gpu.device))
         var failures = result.passed ? [] : result.reasons(limit: 4)
-        for key in ["zcull_bounds_hidden_off_wrong", "stencil_zcull_off_wrong", "zcull_4x2_off_wrong",
-                    "zcull_fp_off_wrong"]
-        {
+        for key in Self.judged {
             if case .integer(let wrong) = metrics[key], wrong > 0 { failures.append("\(key)=\(wrong)") }
         }
         if GM20BFacade.kind(of: gpu.device) == "gm20b" { failures += result.notes }

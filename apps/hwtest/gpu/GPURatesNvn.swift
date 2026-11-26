@@ -88,13 +88,8 @@ extension GPURates {
             let behind = SIMD4<Float>(0, 0, 1, written)
             var want: [UInt8]?
             if form == "hidden" { want = expected(SIMD4(0, 0, 1, 1)) }
-            try await ab(
-                "zcull_bounds_\(form)",
-                bits: Self.nvnZcullBounds,
-                read: want == nil ? nil : colour,
-                want: want
-            ) {
-                c in
+            let checked = want == nil ? nil : colour
+            try await ab("zcull_bounds_\(form)", bits: Self.nvnZcullBounds, read: checked, want: want) { c in
                 let e = self.pass(colour, depth, c)
                 e.setDepthStencilState(less)
                 e.setRenderPipelineState(writes)
