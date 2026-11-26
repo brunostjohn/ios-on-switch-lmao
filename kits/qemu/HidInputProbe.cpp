@@ -12,6 +12,7 @@
 extern kmod_info_t g_kernel_kmod_info;
 extern "C" {
 
+#if DEVELOPMENT || DEBUG
 volatile uint32_t native_hid_stage, native_hid_resource_found;
 volatile int native_hid_load_status = -1;
 volatile int native_hid_matching_load_status = -1;
@@ -24,17 +25,23 @@ volatile uint32_t native_hid_input_command;
 char native_hid_input_registry[2048];
 char native_hid_input_props[1024];
 extern volatile uint32_t native_legacy_transfer_calls;
+#endif
 
 bool native_hid_input_requested(void)
 {
+#if DEVELOPMENT || DEBUG
     if (native_legacy_transfer_calls < 2)
         return false;
     if (native_hid_input_command != 1)
         return false;
     native_hid_input_command = 0;
     return true;
+#else
+    return false;
+#endif
 }
 
+#if DEVELOPMENT || DEBUG
 // NOLINTNEXTLINE(misc-no-recursion): bounded by depth
 static void describeInput(const IORegistryEntry *entry, unsigned depth, size_t &used)
 {
@@ -187,4 +194,11 @@ __attribute__((noinline)) void native_hid_checkpoint(void)
 {
     __asm__ volatile("" ::: "memory");
 }
+#else
+void native_hid_live_checkpoint(const IOService *)
+{}
+
+void native_hid_input_observed(unsigned, int)
+{}
+#endif
 }

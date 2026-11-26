@@ -63,8 +63,10 @@ constexpr unsigned kTopOnOff = 1u << 1, kTopRtc = 1u << 3, kGlobalMask = 1u << 0
 constexpr uint32_t kPmicIntid = 118;  // GIC SPI 86
 constexpr uint32_t kPmcCntrl = 0;
 constexpr uint32_t kPmcIntrPolarity = 1u << 17;
+#if DEVELOPMENT || DEBUG
 constexpr uint32_t kWatchdogMS = 10000;  // with as much leeway (switch_check_after_ms): no wakeup of its own
-constexpr unsigned kPmicBurst = 20;      // PMIC interrupts per second that mean the line is stuck
+#endif
+constexpr unsigned kPmicBurst = 20;  // PMIC interrupts per second that mean the line is stuck
 
 struct Volume {
     unsigned gpio;
@@ -98,8 +100,10 @@ class SwitchButtons : public IOService {
     IOInterruptEventSource *volume[kVolumeCount] = {};
     IOInterruptEventSource *pmic = nullptr;
     IOInterruptEventSource *home = nullptr;  // software source (no provider): switch_buttons_bt_click
-    uint8_t clicks = 0;                      // SWITCH_BT_HOME | SWITCH_BT_CAPTURE asked for (atomics)
+    uint8_t clicks = 0;  // SWITCH_BT_HOME | SWITCH_BT_CAPTURE asked for (atomics)
+#if DEVELOPMENT || DEBUG
     IOTimerEventSource *watchdog = nullptr;
+#endif
     IOService *hid = nullptr;
     uint8_t buttons = 0;
     unsigned pmicCount = 0;
@@ -107,7 +111,9 @@ class SwitchButtons : public IOService {
 
     static void volumeChanged(OSObject *owner, IOInterruptEventSource *sender, int count);
     static void pmicInterrupt(OSObject *owner, IOInterruptEventSource *sender, int count);
+#if DEVELOPMENT || DEBUG
     static void watchdogFired(OSObject *owner, IOTimerEventSource *sender);
+#endif
     static void btClicks(OSObject *owner, IOInterruptEventSource *sender, int count);
     bool setUpPmic();
     void powerKeyOff();
@@ -135,9 +141,13 @@ OSDefineMetaClassAndStructors(SwitchButtons, IOService)
         return false;
     hid = switch_hid_create(kSwitchHIDButtons);
     loop = IOWorkLoop::workLoop();
-    watchdog = IOTimerEventSource::timerEventSource(this, &SwitchButtons::watchdogFired);
-    if (!loop || !watchdog || loop->addEventSource(watchdog) != kIOReturnSuccess)
+    if (!loop)
         panic("SwitchButtons: work loop setup failed");
+#if DEVELOPMENT || DEBUG
+    watchdog = IOTimerEventSource::timerEventSource(this, &SwitchButtons::watchdogFired);
+    if (!watchdog || loop->addEventSource(watchdog) != kIOReturnSuccess)
+        panic("SwitchButtons: work loop setup failed");
+#endif
 
     for (unsigned i = 0; i < kVolumeCount; ++i) {
         IOService *nub = tegra_gpio_interrupt_nub(kVolume[i].gpio, TEGRA_GPIO_EDGE_BOTH);
@@ -171,8 +181,10 @@ OSDefineMetaClassAndStructors(SwitchButtons, IOService)
     if (pmic)
         pmic->enable();
     home->enable();
+#if DEVELOPMENT || DEBUG
     switch_check_after_ms(watchdog, kWatchdogMS);
     IOLog("SwitchButtons: started\n");
+#endif
     return true;
 }
 
@@ -187,14 +199,18 @@ void SwitchButtons::free()
             loop->removeEventSource(pmic);
         if (home)
             loop->removeEventSource(home);
+#if DEVELOPMENT || DEBUG
         if (watchdog)
             loop->removeEventSource(watchdog);
+#endif
     }
     for (auto *&source : volume)
         OSSafeReleaseNULL(source);
     OSSafeReleaseNULL(pmic);
     OSSafeReleaseNULL(home);
+#if DEVELOPMENT || DEBUG
     OSSafeReleaseNULL(watchdog);
+#endif
     OSSafeReleaseNULL(loop);
     IOService::free();
 }
@@ -350,12 +366,14 @@ void SwitchButtons::btClicks(OSObject *owner, IOInterruptEventSource *, int)
     }
 }
 
+#if DEVELOPMENT || DEBUG
 void SwitchButtons::watchdogFired(OSObject *owner, IOTimerEventSource *sender)
 {
     for (const Volume &v : kVolume)
         tegra_gpio_check_delivery(v.gpio, "SwitchButtons");
     switch_check_after_ms(sender, kWatchdogMS);
 }
+#endif
 
 extern "C" int switch_buttons_start(void)
 {

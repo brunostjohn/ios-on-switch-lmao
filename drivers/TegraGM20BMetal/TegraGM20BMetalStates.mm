@@ -276,8 +276,10 @@ SwitchMetalPipeline *gm20bPipelineShell(SwitchMetalDevice *device, MTLRenderPipe
             packedVariants(p, held.records ? held : gRM->raw->pack().run(packKey));
         }
     }
+#if SWITCH_METAL_DIAGNOSTICS
     if (p->_completable && !p->_packed)
         gm20bNoteMiss("render", packKey, gm20bStateKey(p), d.label);
+#endif
     // A framework's state the pack holds is the device's archive hit, as Apple's own archives hold its states for Apple's
     // GPUs; any other state is answered by the archives the creation lists alone, as Metal answers it
     const bool deviceArchive = p->_packable && p->_raw;

@@ -419,22 +419,31 @@ __attribute__((weak)) void switch_sched_render_submitted(void)
 
 static void frame_submitted(struct tgm_chan *chan, u32 seqno, u64 start)
 {
-	u64 now = nvxnu_nanotime();
-	u64 none = 0;
-
 #if TGM_STATS
 	nvxnu_kdebug(SWITCH_KDBG_SUBMIT, chan->chid, seqno, chan->critical);
+#else
+	(void)seqno;
 #endif
-	if (!chan->critical) {
-		__atomic_fetch_add(&tgm_frame_gpu.others, 1, __ATOMIC_RELAXED);
-		return;
+	if (chan->critical)
+		switch_sched_render_submitted();
+#if SWITCH_FRAME_TIMELINE
+	{
+		u64 now = nvxnu_nanotime();
+		u64 none = 0;
+
+		if (!chan->critical) {
+			__atomic_fetch_add(&tgm_frame_gpu.others, 1, __ATOMIC_RELAXED);
+			return;
+		}
+		__atomic_compare_exchange_n(&tgm_frame_gpu.first, &none, start, false,
+					    __ATOMIC_RELAXED, __ATOMIC_RELAXED);
+		__atomic_store_n(&tgm_frame_gpu.last, start, __ATOMIC_RELAXED);
+		__atomic_fetch_add(&tgm_frame_gpu.submits, 1, __ATOMIC_RELAXED);
+		__atomic_fetch_add(&tgm_frame_gpu.exec_ns, now - start, __ATOMIC_RELAXED);
 	}
-	switch_sched_render_submitted();
-	__atomic_compare_exchange_n(&tgm_frame_gpu.first, &none, start, false, __ATOMIC_RELAXED,
-				    __ATOMIC_RELAXED);
-	__atomic_store_n(&tgm_frame_gpu.last, start, __ATOMIC_RELAXED);
-	__atomic_fetch_add(&tgm_frame_gpu.submits, 1, __ATOMIC_RELAXED);
-	__atomic_fetch_add(&tgm_frame_gpu.exec_ns, now - start, __ATOMIC_RELAXED);
+#else
+	(void)start;
+#endif
 }
 
 void tegra_gm20b_frame_take(struct SwitchFrameGpu *out)

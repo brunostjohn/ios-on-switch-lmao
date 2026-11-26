@@ -375,9 +375,11 @@ uint64_t nowNs()
 	return 0;
 }
 
+#if TGM_STATS
 void tgm_stats_bo_free(uint64_t)
 {
 }
+#endif
 
 void scheduleOrphanRelease()
 {

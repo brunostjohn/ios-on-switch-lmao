@@ -64,7 +64,10 @@ host_library(
     name = "switch_touch",
     srcs = ["//drivers/SwitchTouch:SwitchTouch.cpp"],
     copts = ["-Wno-unused-parameter"],
-    defines = ["SWITCH_IPSW_KIND_21H461=1"],
+    defines = [
+        "DEVELOPMENT=1",
+        "SWITCH_IPSW_KIND_21H461=1",
+    ],
     deps = [
         ":headers",
         ":kernel",

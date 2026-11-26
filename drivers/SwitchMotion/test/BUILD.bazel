@@ -58,6 +58,7 @@ host_test(
     # The driver is #included by the test (one translation unit: the models reach its internals).
     additional_compiler_inputs = ["//drivers/SwitchMotion:SwitchMotion.cpp"],
     copts = [
+        "-DDEVELOPMENT=1",
         "-DSWITCH_IPSW_KIND_21H461=1",
         "-Wno-unused-parameter",
     ],
@@ -76,6 +77,7 @@ host_test(
     ],
     additional_compiler_inputs = ["//drivers/SwitchMotion:SwitchMotion.cpp"],
     copts = [
+        "-DDEVELOPMENT=1",
         "-DSWITCH_IPSW_KIND_24B119=1",
         "-Wno-unused-parameter",
     ],

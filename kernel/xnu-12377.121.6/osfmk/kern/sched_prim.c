@@ -3824,7 +3824,9 @@ thread_dispatch(
 			 * CPU is not running.
 			 */
 			kperf_running_setup(processor, processor->last_dispatch);
+#if DEVELOPMENT || DEBUG
 			switch_kprof_running_setup(processor, processor->last_dispatch);
+#endif
 		}
 		running_timers_activate(processor);
 		processor->first_timeslice = TRUE;
@@ -6839,9 +6841,11 @@ sched_timeshare_maintenance_continue(void)
 	    sched_pri_shifts[TH_BUCKET_SHARE_FG], sched_pri_shifts[TH_BUCKET_SHARE_BG],
 	    sched_pri_shifts[TH_BUCKET_SHARE_UT], sched_pri_shifts[TH_BUCKET_SHARE_DF], 0);
 
+#if DEVELOPMENT || DEBUG
 	/* Switch: UI main thread stall reports (kernel/switch/diag/stall.c) sample on this tick. */
 	extern void switch_stall_tick(uint64_t now);
 	switch_stall_tick(sched_tick_ctime);
+#endif
 
 	assert_wait((event_t)sched_timeshare_maintenance_continue, THREAD_UNINT);
 	thread_block((thread_continue_t)sched_timeshare_maintenance_continue);

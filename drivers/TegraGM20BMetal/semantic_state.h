@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "grow_list.h"
+#include "stats.h"
 #include "slot_snapshots.h"
 #include "stage_textures.h"
 
@@ -261,8 +262,10 @@ struct ResourceUse {
 struct StateCursor {
     uint32_t render = kNoSnapshot;
     uint32_t compute = kNoSnapshot;
+#if SWITCH_METAL_DIAGNOSTICS
     // binding slots compared since the cursor was made, and the slots of the tables compared (a full comparison's)
     uint64_t slotsCompared = 0, slotsInTables = 0;
+#endif
 
     void reset()
     {

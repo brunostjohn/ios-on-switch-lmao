@@ -136,9 +136,11 @@ public:
     static constexpr const char kNoCompilerComes[] =
         "no shader compiler comes this boot: it declined, or its launcher stopped starting it";
 
+#if SWITCH_METAL_DIAGNOSTICS
     // What the calling thread's last makeNow got its record by
     static Obtained lastObtained();
     static void noteObtained(const Obtained &o);
+#endif
 
 private:
     struct Pending;
@@ -231,8 +233,8 @@ private:
     Compiler::Outcome remoteKernel(id facadeFunction, MTLComputePipelineDescriptor *descriptor,
                                    const NmbDirectDispatch &dispatch, const CacheKey &k, ComputeRecord &record,
                                    std::string &why, bool &taken);
-    void logRemote(const Ask &a, const CacheKey &k, RecordCache::Found found, const char *how, const Obtained &o);
 #if SWITCH_METAL_DIAGNOSTICS
+    void logRemote(const Ask &a, const CacheKey &k, RecordCache::Found found, const char *how, const Obtained &o);
     void logInProcessCa(const Ask &a, const CacheKey &k, RecordCache::Found found);
     gm20b::Mutex inProcessCaLock_;  // debug-only miss path: serializes once-per-label deduplication across threads
     std::set<std::string> inProcessCaSeen_;

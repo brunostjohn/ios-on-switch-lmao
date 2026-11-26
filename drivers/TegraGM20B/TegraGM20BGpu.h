@@ -791,7 +791,15 @@ int tgm_present_copy_read_dependencies(uint64_t src_va, uint64_t stride, int32_t
 #endif
 /* The stats: one log line per 5 s of submissions (submits, fence latency, imports, pool, MC errors).
  * tgm_stats_import(+bytes, first page) for each host import made, (-bytes, first page) for each one released. */
+#if TGM_STATS
 void tgm_stats_import(int64_t bytes, uint64_t pa);
+#else
+static inline void tgm_stats_import(int64_t bytes, uint64_t pa)
+{
+	(void)bytes;
+	(void)pa;
+}
+#endif
 
 /* With the stats, what making and dropping GPU memory costs the CPU ("tegra-gm20b: mem", per 5 s window):
  * a BoAlloc of `bytes` (pool: write-combined pool memory; else cached pages, phase_ns = kernel allocation and wiring,
@@ -812,9 +820,26 @@ enum {
 	TGM_BO_SPARE = 2
 };
 
+#if TGM_STATS
 void tgm_stats_bo_alloc(uint64_t bytes, int kind, uint64_t ns, const uint64_t phase_ns[TGM_PHASES],
 			const char *owner);
 void tgm_stats_compositor_pool(int64_t bytes);
+#else
+static inline void tgm_stats_bo_alloc(uint64_t bytes, int kind, uint64_t ns,
+				      const uint64_t phase_ns[TGM_PHASES], const char *owner)
+{
+	(void)bytes;
+	(void)kind;
+	(void)ns;
+	(void)phase_ns;
+	(void)owner;
+}
+
+static inline void tgm_stats_compositor_pool(int64_t bytes)
+{
+	(void)bytes;
+}
+#endif
 void tgm_spare_counts(uint64_t *kept_bytes, uint64_t *ready, uint64_t *pool_zeroing_bytes);
 /* debug kernels (SwitchGpuSurfaceAccess.cpp): a submission cleaned IOSurface `surface`'s `bytes` while a CPU writer held
  * it, and the window's such cleans with their lock holders */
@@ -834,8 +859,20 @@ unsigned long tgm_owner_stats(char *out, unsigned long size);
  * none holds anything. *imported: the bytes of imports they hold together, which the live imports exceed by those of
  * connections already gone whose BOs still retire */
 unsigned long tgm_owner_memory(char *out, unsigned long size, uint64_t *imported);
+#if TGM_STATS
 void tgm_stats_bo_import(uint64_t bytes, int read_only, int skipped, uint64_t ns,
 			 const uint64_t phase_ns[TGM_PHASES]);
+#else
+static inline void tgm_stats_bo_import(uint64_t bytes, int read_only, int skipped, uint64_t ns,
+				       const uint64_t phase_ns[TGM_PHASES])
+{
+	(void)bytes;
+	(void)read_only;
+	(void)skipped;
+	(void)ns;
+	(void)phase_ns;
+}
+#endif
 
 /* With the stats, one host import's costs for the "imports" line and, past 4 ms, a "slow import" line of its own: the
  * wiring's wall time and the importing thread's CPU time in it (the rest it waited: free pages, busy pages, a
@@ -878,6 +915,7 @@ static inline void tgm_stats_import_cost(const struct tgm_import_cost *cost)
 	(void)cost;
 }
 #endif
+#if TGM_STATS
 void tgm_stats_bind(int map, uint64_t pages, uint64_t ns);
 /* A fence wait that slept on `waiter`, then woke (woken 1) or reached its deadline (0), and found its fence done or
  * not: the "waits" line's wakes, waits woken at their seqno, and wake-to-waiter latency. */
@@ -885,6 +923,39 @@ void tgm_stats_wait(uint32_t waiter, int woken, int done);
 /* Debug kernels, by the channel's submission owner: a job with pushes that ends with its own interrupt, by why
  * (SwitchGpuQuiet.h enum switch_gpu_loud). */
 void tgm_stats_loud(struct tgm_chan *chan, uint32_t reason);
+void tgm_stats_bo_free(uint64_t ns);
+void tgm_stats_prefault(uint64_t bytes);
+#else
+static inline void tgm_stats_bind(int map, uint64_t pages, uint64_t ns)
+{
+	(void)map;
+	(void)pages;
+	(void)ns;
+}
+
+static inline void tgm_stats_wait(uint32_t waiter, int woken, int done)
+{
+	(void)waiter;
+	(void)woken;
+	(void)done;
+}
+
+static inline void tgm_stats_loud(struct tgm_chan *chan, uint32_t reason)
+{
+	(void)chan;
+	(void)reason;
+}
+
+static inline void tgm_stats_bo_free(uint64_t ns)
+{
+	(void)ns;
+}
+
+static inline void tgm_stats_prefault(uint64_t bytes)
+{
+	(void)bytes;
+}
+#endif
 
 /* A SubmitJob by phase (TegraGM20BUserClientJobSubmit.cpp): resolving its uses, owning them (backing locks, dependency
  * scan, room waits), chan_exec, and the commit after it (switch_gpu_job_submitted). */
@@ -899,9 +970,6 @@ enum {
 	TGM_SUBMIT_ROOM,
 	TGM_SUBMIT_PHASES
 };
-
-void tgm_stats_bo_free(uint64_t ns);
-void tgm_stats_prefault(uint64_t bytes);
 
 /* drivers/SwitchPower (gpu_clock.c "idle clock"): switch_perf_hint's touch/missed-frame/launch hints (any context; back to
  * the run rate at once if idle), and the CPU governor's tick (scheduler context: loads, at most one work item). */

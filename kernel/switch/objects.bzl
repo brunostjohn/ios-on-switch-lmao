@@ -182,17 +182,91 @@ def with_recorder(component, copts):
     """
     return copts | {obj: copts.get(obj, []) + ["-DSWITCH_RECORDER=1"] for obj in _RECORDER_OBJECTS.get(component, [])}
 
+_KPROF_OBJECTS = {
+    "osfmk": [
+        "osfmk/kern/switch_kprof.c",
+        "osfmk/kern/sched_prim.c",
+        "osfmk/vm/vm_fault.c",
+        "osfmk/vm/bsd_vm.c",
+        "osfmk/vm/vm_object.c",
+        "osfmk/arm64/sleh.c",
+    ],
+    "bsd": [
+        "bsd/kern/decmpfs.c",
+        "bsd/vfs/vfs_cluster.c",
+    ],
+}
+
+_STATS_SCHED_OBJECTS = {
+    "osfmk": [
+        "osfmk/kern/sched_prim.c",
+        "osfmk/kern/thread.c",
+        "osfmk/kern/recount.c",
+        "osfmk/kern/ledger.c",
+        "osfmk/arm64/sleh.c",
+        "switch:sched/stats.c",
+        "switch:sched/render.c",
+        "switch:sched/cpu.c",
+        "switch:sched/systime.c",
+        "switch:sched/callouts.c",
+        "switch:sched/limit_shadow.c",
+        "switch:sched/watch.c",
+        "switch:sched/watch_write.c",
+        "switch:sched/commit.c",
+        "switch:sched/busy.c",
+        "switch:diag/stall.c",
+        "switch:diag/stall_snapshot.c",
+        "switch:diag/stall_chain.c",
+        "switch:diag/stall_frame.c",
+        "switch:diag/watch.c",
+        "switch:diag/frames.c",
+    ],
+    "bsd": [
+        "bsd/kern/proc_info.c",
+        "bsd/kern/kern_resource.c",
+        "switch:diag/exit.c",
+    ],
+    "iokit": [
+        "iokit/Kernel/IOPMrootDomain.cpp",
+    ],
+}
+
+_STATS_FRAME_OBJECTS = {
+    "osfmk": [
+        "osfmk/ipc/ipc_kmsg.c",
+        "switch:diag/frames.c",
+        "switch:sched/commit.c",
+        "switch:diag/stall_frame.c",
+    ],
+}
+
+_STATS_IO_OBJECTS = {
+    "osfmk": [
+        "osfmk/vm/bsd_vm.c",
+        "osfmk/vm/vm_object.c",
+        "switch:diag/pagein.c",
+    ],
+    "bsd": [
+        "bsd/kern/decmpfs.c",
+        "bsd/vfs/vfs_cluster.c",
+        "switch:translate/a64x_xnu.c",
+        "switch:translate/a64x_traps.c",
+    ],
+}
+
 def with_kprof(component, copts):
-    """A component's `copts` with SWITCH_KPROF for switch_kprof.c (--//kernel:kprof), the one object that reads it.
+    """A component's `copts` with SWITCH_KPROF on the objects that expand kprof hooks (--//kernel:kprof)."""
+    return copts | {obj: copts.get(obj, []) + ["-DSWITCH_KPROF=1"] for obj in _KPROF_OBJECTS.get(component, [])}
 
-    Args:
-        component: osfmk, bsd, ...
-        copts: the component's per-object copts.
-
-    Returns:
-        The copts, osfmk's with the define on that object.
-    """
-    if component != "osfmk":
-        return copts
-    kprof = "osfmk/kern/switch_kprof.c"
-    return copts | {kprof: copts.get(kprof, []) + ["-DSWITCH_KPROF=1"]}
+def switch_stats_copts(component, sched, frame, io):
+    """Per-object opt-in stats defines for one XNU component (debug + diagnostics only)."""
+    out = {}
+    for on, table, flag in (
+        (sched, _STATS_SCHED_OBJECTS, "-DSWITCH_STATS_SCHED=1"),
+        (frame, _STATS_FRAME_OBJECTS, "-DSWITCH_STATS_FRAME=1"),
+        (io, _STATS_IO_OBJECTS, "-DSWITCH_STATS_IO=1"),
+    ):
+        if on:
+            for obj in table.get(component, []):
+                out[obj] = out.get(obj, []) + [flag]
+    return out

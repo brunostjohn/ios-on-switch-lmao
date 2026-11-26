@@ -125,10 +125,13 @@ struct PoolOrphan {
 };
 
 extern PoolOrphan *gPoolOrphans;
+extern volatile uint64_t gSmmuCompressibleBytes;
+#if TGM_STATS
 extern volatile uint64_t gSystemCoherent, gSystemCoherentBytes;
 extern volatile uint64_t gClientPoolBytes, gOrphanBytes, gOrphans;
 extern volatile uint64_t gCompressibleBytes, gCompressibles;
-extern volatile uint64_t gSmmuCompressibleBytes, gSmmuCompressibles;
+extern volatile uint64_t gSmmuCompressibles;
+#endif
 void pushOrphan(PoolOrphan *orphan);
 
 bool poolZeroLater(void *va, uint64_t pa, uint64_t bytes);

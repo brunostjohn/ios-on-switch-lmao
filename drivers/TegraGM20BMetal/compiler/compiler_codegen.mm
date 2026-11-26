@@ -11,7 +11,9 @@
 #include <pthread.h>
 #include <pthread/qos.h>
 #include <sys/stat.h>
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 #include <sys/sysctl.h>
+#endif
 #include <unistd.h>
 #include <algorithm>
 #include <atomic>
@@ -97,6 +99,7 @@ bool readReply(const std::string &dir, const std::string &name, gm20b::MadeLibra
     return true;
 }
 
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 std::string osBuild()
 {
     char value[128] = {};
@@ -106,6 +109,7 @@ std::string osBuild()
                ? std::string(value)
                : std::string();
 }
+#endif
 
 bool writeSynced(const std::string &path, NSData *bytes)
 {
@@ -144,12 +148,18 @@ void keepReply(const std::string &dir, const std::string &name, const uint8_t uu
         unlink(temporary.c_str());
         return;
     }
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     NSData *metallib = [NSData dataWithBytesNoCopy:const_cast<char *>(made.metallib.data())
                                             length:made.metallib.size()
                                       freeWhenDone:NO];
     static const std::string build = osBuild();
     switch_compile_reply::write(dir, name, uuid, type, request.data(), request.size(), file, metallib, build,
                                 SWITCH_METAL_KIND);
+#else
+    (void)uuid;
+    (void)type;
+    (void)request;
+#endif
 }
 
 void *runWork(void *work)

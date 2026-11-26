@@ -210,6 +210,7 @@ void AGXDeviceUserClient::releaseBo(Bo *bo)
 	if (!bo->ownsMem)
 		bo->mem = nullptr;
 	tgm_mem_del(&bo->mem);
+#if TGM_STATS
 	if (bo->pool_va && bo->handle) {
 		if (bo->compositorPool) {
 			tgm_stats_compositor_pool(-static_cast<int64_t>(bo->bytes));
@@ -217,32 +218,41 @@ void AGXDeviceUserClient::releaseBo(Bo *bo)
 			__atomic_sub_fetch(&gClientPoolBytes, bo->bytes, __ATOMIC_RELAXED);
 		}
 	}
+#endif
 	if (bo->chunked) {
+#if TGM_STATS
 		if (bo->handle) {
 			__atomic_sub_fetch(&gCompressibleBytes, bo->bytes, __ATOMIC_RELAXED);
 			__atomic_sub_fetch(&gCompressibles, 1, __ATOMIC_RELAXED);
 		}
+#endif
 		if (!bo->backing)
 			tgm_pool_free_chunks(bo->pas, bo->npages);
 	}
 	if (bo->smmuCompressible && bo->handle) {
 		__atomic_sub_fetch(&gSmmuCompressibleBytes, bo->bytes, __ATOMIC_RELAXED);
+#if TGM_STATS
 		__atomic_sub_fetch(&gSmmuCompressibles, 1, __ATOMIC_RELAXED);
+#endif
 	}
 	// A pool BO's view and pages go to the thread call (releaseOrphans: releasing the view can wait for an import on
 	// another connection), which keeps the pages while a task still maps the view. Cached and system BOs need no such
 	// care: their mappings hold the buffer itself, and releasing one waits for nothing.
 	PoolOrphan *orphan = nullptr;
+#if TGM_STATS
 	if (bo->system && bo->handle && !bo->parkReclaimed) {
 		__atomic_sub_fetch(&gSystemCoherent, 1, __ATOMIC_RELAXED);
 		__atomic_sub_fetch(&gSystemCoherentBytes, bo->bytes, __ATOMIC_RELAXED);
 	}
+#endif
 	if (bo->pool_va && bo->view)
 		orphan = IONew(PoolOrphan, 1);
 	if (orphan) {
 		*orphan = {nullptr, bo->view, bo->pool_va, bo->pool_pa, bo->bytes, bo->handle != 0};
+#if TGM_STATS
 		__atomic_add_fetch(&gOrphanBytes, bo->bytes, __ATOMIC_RELAXED);
 		__atomic_add_fetch(&gOrphans, 1, __ATOMIC_RELAXED);
+#endif
 		pushOrphan(orphan);
 		scheduleOrphanRelease();
 	} else {

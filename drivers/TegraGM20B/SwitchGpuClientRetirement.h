@@ -408,7 +408,9 @@ void AGXDeviceUserClient::drainResources()
 // are taken; resource set members also end the set's generation and rewrite its member list.
 IOReturn AGXDeviceUserClient::boFree(const TegraGM20BAbiBoFree *in)
 {
+#if TGM_STATS
 	const uint64_t start = nowNs();
+#endif
 	Bo **p = findLink(in->handle);
 	if (!*p)
 		return kIOReturnBadArgument;
@@ -421,8 +423,10 @@ IOReturn AGXDeviceUserClient::boFree(const TegraGM20BAbiBoFree *in)
 	const IOReturn freed = *p ? freeBo(p) : kIOReturnBadArgument;
 	if (mutation)
 		submitGate_.endMutation(lock_);
+#if TGM_STATS
 	if (!freed)
 		tgm_stats_bo_free(nowNs() - start);
+#endif
 	return freed;
 }
 

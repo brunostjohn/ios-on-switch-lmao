@@ -248,14 +248,15 @@ IOReturn AGXDeviceUserClient::settleBo(const TegraGM20BAbiBoAlloc *in, const BoC
 		      in->bytes, in->flags, in->align_log2, ret);
 	if (ret)
 		return ret;
+	if (bo->controlCharge)
+		switch_gpu_path_taken(SWITCH_GPU_PATH_CONTROL_BO, 1);
+#if TGM_STATS
 	if (bo->chunked) {
 		__atomic_add_fetch(&gCompressibleBytes, bo->bytes, __ATOMIC_RELAXED);
 		__atomic_add_fetch(&gCompressibles, 1, __ATOMIC_RELAXED);
 	}
 	if (bo->smmuCompressible)
 		__atomic_add_fetch(&gSmmuCompressibles, 1, __ATOMIC_RELAXED);
-	if (bo->controlCharge)
-		switch_gpu_path_taken(SWITCH_GPU_PATH_CONTROL_BO, 1);
 	if (bo->compositorPool)
 		tgm_stats_compositor_pool(static_cast<int64_t>(bo->bytes));
 	else if (bo->pool_va)
@@ -264,6 +265,7 @@ IOReturn AGXDeviceUserClient::settleBo(const TegraGM20BAbiBoAlloc *in, const BoC
 		__atomic_add_fetch(&gSystemCoherent, 1, __ATOMIC_RELAXED);
 		__atomic_add_fetch(&gSystemCoherentBytes, bo->bytes, __ATOMIC_RELAXED);
 	}
+#endif
 	return kIOReturnSuccess;
 }
 

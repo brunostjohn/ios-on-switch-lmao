@@ -252,10 +252,12 @@ ReclaimedBacking *AGXDeviceUserClient::detachReclaimedLocked(Bo *bo)
 		bo->parkReclaimed = true;
 		if (SWITCH_GPU_OWNER_COUNTS && bo->handle)
 			ownerMemory_.change(bo->ownerKind, bo->bytes, false);
+#if TGM_STATS
 		if (bo->system && bo->handle) {
 			__atomic_sub_fetch(&gSystemCoherent, 1, __ATOMIC_RELAXED);
 			__atomic_sub_fetch(&gSystemCoherentBytes, bo->bytes, __ATOMIC_RELAXED);
 		}
+#endif
 	}
 	parkSettledLocked(bo);
 	return rb;

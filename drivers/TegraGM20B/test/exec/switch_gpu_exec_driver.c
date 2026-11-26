@@ -253,9 +253,11 @@ void tgm_stats_tick(void)
 {
 }
 
+#if TGM_STATS
 void tgm_stats_loud(struct tgm_chan *chan, uint32_t reason)
 {
 }
+#endif
 
 void tgm_stats_gr_context(void)
 {

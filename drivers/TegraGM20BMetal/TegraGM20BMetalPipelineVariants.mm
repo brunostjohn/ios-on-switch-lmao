@@ -33,7 +33,9 @@ void askCompiler(SwitchMetalPipeline *p, const std::shared_ptr<RenderVariant> &v
         return;
     }
     const std::string key = gm20bStateKey(p) + forms.name();
+#if SWITCH_METAL_DIAGNOSTICS
     gm20bNoteMiss("render variant", gm20b::Pack::fnv(key.data(), key.size()), key, p.label);
+#endif
     gm20b::Completion::Ask request;
     request.descriptor = gm20bMadeFrom(p);
     request.facade = request.descriptor;

@@ -56,12 +56,17 @@
 #define A64X_WORDS    (A64X_PAGE / 4)
 #define A64X_BRK_STUB 0xD4200020u /* brk #1: never executed (no branch reaches unused stub words) */
 
+#if DEVELOPMENT || DEBUG
 /* statistics (sysctl kern.a64x.*) */
 static uint64_t a64x_images, a64x_pages, a64x_stub_words, a64x_mismatch, a64x_traps, a64x_traps_unhandled;
 static uint64_t a64x_cache_pages, a64x_images_native, a64x_images_marked, a64x_island_words;
 static uint64_t a64x_images_installed;
-#if DEVELOPMENT || DEBUG
 static uint64_t a64x_jit_patches;
+#define A64X_INC(counter)        OSIncrementAtomic64((SInt64 *)&(counter))
+#define A64X_ADD(counter, delta) OSAddAtomic64((SInt64)(delta), (SInt64 *)&(counter))
+#else
+#define A64X_INC(counter)        ((void)0)
+#define A64X_ADD(counter, delta) ((void)0)
 #endif
 
 LCK_GRP_DECLARE(a64x_lck_grp, "a64x");
@@ -165,7 +170,7 @@ static int a64x_text_page(const void *src, void *dst, unsigned long long off, vo
         uint32_t end = a64x_translate_page(src, dst, A64X_WORDS, off, &cm, c1 > c0 ? &sr : NULL, c0, NULL);
         if (end != c1 || (chk && bcmp(chk, im->stubs + c0, chk_bytes))) {
             ok = false;
-            OSIncrementAtomic64((SInt64 *)&a64x_mismatch);
+            A64X_INC(a64x_mismatch);
             printf("a64x: text page 0x%llx: stubs differ from the validated words; leaving LSE to the trap path\n",
                    off);
         }
@@ -177,7 +182,7 @@ static int a64x_text_page(const void *src, void *dst, unsigned long long off, vo
     if (chk) {
         kfree_data(chk, scratch_bytes);
     }
-    OSIncrementAtomic64((SInt64 *)&a64x_pages);
+    A64X_INC(a64x_pages);
     return 0;
 }
 
@@ -476,7 +481,7 @@ static int a64x_find_islands(struct a64x_image *im, const struct a64x_layout *la
     a64x_islands_end(&is, nbits);
     im->data = dic_only;
     if (is.runs) {
-        OSAddAtomic64((SInt64)is.words, (SInt64 *)&a64x_island_words);
+        A64X_ADD(a64x_island_words, is.words);
     }
 out:
     if (fs) {
@@ -561,7 +566,7 @@ static int a64x_map_translation(vm_map_t map, struct vnode *vp, off_t slice_off,
         printf("a64x: %s: the translation's text not mapped (kr %d)\n", vp->v_name ? vp->v_name : "?", kr);
         return EIO;
     }
-    OSIncrementAtomic64((SInt64 *)&a64x_images_installed);
+    A64X_INC(a64x_images_installed);
     return 0;
 }
 
@@ -574,7 +579,7 @@ static int a64x_map_image(vm_map_t map, struct vnode *vp, off_t slice_off, const
     }
     if (mh->reserved == A64X_PRETRANSLATED || lay->marked) {
         /* built for this core: mapped as is, like any binary (signature and trust cache checks unchanged) */
-        OSIncrementAtomic64((SInt64 *)&a64x_images_marked);
+        A64X_INC(a64x_images_marked);
         return 0;
     }
     {
@@ -615,7 +620,7 @@ static int a64x_map_image(vm_map_t map, struct vnode *vp, off_t slice_off, const
         /* plain arm64 with nothing the A57 lacks: keep the file's own mapping (byte-identical, no pager) */
         im->refs = 1;
         a64x_image_release(im);
-        OSIncrementAtomic64((SInt64 *)&a64x_images_native);
+        A64X_INC(a64x_images_native);
         return 0;
     }
     vm_map_size_t stub_size = vm_map_round_page((vm_map_size_t)im->nstub * 4, vm_map_page_mask(map));
@@ -665,8 +670,8 @@ static int a64x_map_image(vm_map_t map, struct vnode *vp, off_t slice_off, const
         /* references held by pagers that exist are dropped by their crypt_end; a failed setup leaks im */
         return error;
     }
-    OSIncrementAtomic64((SInt64 *)&a64x_images);
-    OSAddAtomic64((SInt64)im->nstub, (SInt64 *)&a64x_stub_words);
+    A64X_INC(a64x_images);
+    A64X_ADD(a64x_stub_words, im->nstub);
     return 0;
 }
 
@@ -701,7 +706,7 @@ int a64x_mmap_exec(vm_map_t map, struct vnode *vp, off_t file_pos, vm_map_offset
         return 0;
     }
     if (mh.reserved == A64X_PRETRANSLATED) {
-        OSIncrementAtomic64((SInt64 *)&a64x_images_marked);
+        A64X_INC(a64x_images_marked);
         return 0;
     }
     size_t lsize = sizeof(mh) + mh.sizeofcmds;
@@ -888,7 +893,7 @@ static int a64x_cache_page(const void *src, void *dst, unsigned long long off, v
             }
         }
     }
-    OSIncrementAtomic64((SInt64 *)&a64x_cache_pages);
+    A64X_INC(a64x_cache_pages);
     return 0;
 }
 
@@ -1125,7 +1130,7 @@ int a64x_emulate_user(arm_saved_state_t *state, uint32_t w)
             goto unhandled;
         }
         set_pc(state, get_saved_state_lr(state));
-        OSIncrementAtomic64((SInt64 *)&a64x_traps);
+        A64X_INC(a64x_traps);
         switch_a64x_trap_noted(c, false);
         return 1;
     case A64X_PAC_BR:
@@ -1133,7 +1138,7 @@ int a64x_emulate_user(arm_saved_state_t *state, uint32_t w)
             goto unhandled;
         }
         set_pc(state, reg(state, rn));
-        OSIncrementAtomic64((SInt64 *)&a64x_traps);
+        A64X_INC(a64x_traps);
         switch_a64x_trap_noted(c, false);
         return 1;
     case A64X_PAC_BLR: {
@@ -1143,14 +1148,14 @@ int a64x_emulate_user(arm_saved_state_t *state, uint32_t w)
         uint64_t target = reg(state, rn);
         set_lr(state, pc + 4);
         set_pc(state, target);
-        OSIncrementAtomic64((SInt64 *)&a64x_traps);
+        A64X_INC(a64x_traps);
         switch_a64x_trap_noted(c, false);
         return 1;
     }
     default:
     unhandled:
         {
-            OSIncrementAtomic64((SInt64 *)&a64x_traps_unhandled);
+            A64X_INC(a64x_traps_unhandled);
             static int logged;
             if (logged < 32) {
                 logged++;
@@ -1168,11 +1173,12 @@ int a64x_emulate_user(arm_saved_state_t *state, uint32_t w)
 #else
     add_saved_state_pc(state, 4);
 #endif
-    OSIncrementAtomic64((SInt64 *)&a64x_traps);
+    A64X_INC(a64x_traps);
     switch_a64x_trap_noted(c, false);
     return 1;
 }
 
+#if DEVELOPMENT || DEBUG
 SYSCTL_NODE(_kern, OID_AUTO, a64x, CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_KERN, 0, "arm64e translation");
 SYSCTL_QUAD(_kern_a64x, OID_AUTO, images, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_images, "");
 SYSCTL_QUAD(_kern_a64x, OID_AUTO, text_pages, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_pages, "");
@@ -1182,9 +1188,7 @@ SYSCTL_QUAD(_kern_a64x, OID_AUTO, stub_mismatch, CTLFLAG_RD | CTLFLAG_LOCKED | C
 SYSCTL_QUAD(_kern_a64x, OID_AUTO, traps, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_traps, "");
 SYSCTL_QUAD(_kern_a64x, OID_AUTO, traps_unhandled, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_traps_unhandled,
             "");
-#if DEVELOPMENT || DEBUG
 SYSCTL_QUAD(_kern_a64x, OID_AUTO, jit_patches, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_jit_patches, "");
-#endif
 /* arm64 images that needed nothing (mapped as is) and images marked as built for this core */
 SYSCTL_QUAD(_kern_a64x, OID_AUTO, images_native, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_images_native, "");
 SYSCTL_QUAD(_kern_a64x, OID_AUTO, images_marked, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_images_marked, "");
@@ -1193,6 +1197,7 @@ SYSCTL_QUAD(_kern_a64x, OID_AUTO, images_installed, CTLFLAG_RD | CTLFLAG_LOCKED 
             "");
 /* words of __text found to be data (assembler tables) and left untranslated */
 SYSCTL_QUAD(_kern_a64x, OID_AUTO, island_words, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_island_words, "");
+#endif
 
 bool switch_a64x_mmap_refused(vm_map_t map, struct vnode *vp, off_t file_pos, vm_map_offset_t addr, vm_map_size_t size)
 {

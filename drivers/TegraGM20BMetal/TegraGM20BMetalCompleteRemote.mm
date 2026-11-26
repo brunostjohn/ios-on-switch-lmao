@@ -129,10 +129,13 @@ bool addKernelStages(CompileRequest &r, RequestSources &sources, id kernel, MTLC
     return r.stages.size() <= kRequestStageLimit;
 }
 
+#if SWITCH_METAL_DIAGNOSTICS
 thread_local Obtained tObtained;
+#endif
 
 }  // namespace
 
+#if SWITCH_METAL_DIAGNOSTICS
 Obtained Completion::lastObtained()
 {
     return tObtained;
@@ -142,6 +145,7 @@ void Completion::noteObtained(const Obtained &o)
 {
     tObtained = o;
 }
+#endif
 
 bool Completion::renderRequest(const Ask &a, const CacheKey &k, bool bytes, CompileRequest &r, StoreKey &store,
                                bool every, RequestKind kind, RequestForm form)
@@ -209,10 +213,10 @@ std::string Completion::packKeyOf(const CompileRequest &r)
 // The wait split where it went (obtained.h; -1 for a part not measured): the request queued until its compile
 // started, the compile, the compiler's answer after it, this thread's wake after that, and the store lookup. The split
 // stays inside the parentheses: tools/gpu/logharvest.py reads the name and key after "for a compile slot: ".
+#if SWITCH_METAL_DIAGNOSTICS
 void Completion::logRemote(const Ask &a, const CacheKey &k, RecordCache::Found found, const char *how,
                            const Obtained &o)
 {
-#if SWITCH_METAL_DIAGNOSTICS
     const bool made = found == RecordCache::Found::Record;
     os_log(gm20bLog(),
            "SwitchMetal: a state the pack lacks %{public}s in %llu ms (%{public}s, %{public}s; queue %lld us, compile "
@@ -223,14 +227,8 @@ void Completion::logRemote(const Ask &a, const CacheKey &k, RecordCache::Found f
            (long long)o.queueUs, (long long)o.compileUs, (long long)o.answerUs, o.answerPriority, (long long)o.wakeUs,
            (long long)o.storeUs, (unsigned long long)k.name(), k.key.c_str());
     logHarvestParts(k.name(), a.descriptor.label ?: a.facade.label, k.key);
-#else
-    (void)a;
-    (void)k;
-    (void)found;
-    (void)how;
-    (void)o;
-#endif
 }
+#endif
 
 bool Completion::remoteNow(const Ask &a, const CacheKey &k, Compiler::State &state, RuntimeRecord &record,
                            std::string &failure)
@@ -242,14 +240,18 @@ bool Completion::remoteNow(const Ask &a, const CacheKey &k, Compiler::State &sta
     const std::string packKey = packKeyOf(r);
     std::string why;
     RecordCache::Found found = fromStore(store, packKey, record, why);
+#if SWITCH_METAL_DIAGNOSTICS
     const uint64_t began = nowUs();
-    SWITCH_METAL_DIAGNOSTIC(tObtained = {"store", 0, uint32_t(qos_class_self()), 0});
+    tObtained = {"store", 0, uint32_t(qos_class_self()), 0};
+#endif
     if (found == RecordCache::Found::None) {
         if (!remote_->taking())
             return failure = kNoCompilerComes, false;
         Remote::Answered answered;
         Remote::Answer answer = Remote::Answer::Unavailable;
+#if SWITCH_METAL_DIAGNOSTICS
         uint64_t sent = began;
+#endif
         for (const bool again : {false, true}) {
             if (!renderRequest(a, k, true, r, store, again))
                 return failure = kInexpressible, false;
@@ -271,8 +273,6 @@ bool Completion::remoteNow(const Ask &a, const CacheKey &k, Compiler::State &sta
         const TegraGM20BAbiCompileTimes &t = answered.times;
         tObtained.split(sent, t.compile_start, t.compile_end, t.answered, answered.at, foundUs);
         tObtained.answerPriority = t.answer_priority;
-#else
-        (void)sent;
 #endif
         switch (askFailure(answer, found != RecordCache::Found::None, remote_->declined())) {
         case AskFailure::None:
@@ -287,9 +287,9 @@ bool Completion::remoteNow(const Ask &a, const CacheKey &k, Compiler::State &sta
         case AskFailure::NotStored:
             return failure = kNotStored, false;
         }
-        logRemote(a, k, found, "by the shader compiler", tObtained);
+        SWITCH_METAL_DIAGNOSTIC(logRemote(a, k, found, "by the shader compiler", tObtained));
     } else {
-        logRemote(a, k, found, "from the shader compiler's store", tObtained);
+        SWITCH_METAL_DIAGNOSTIC(logRemote(a, k, found, "from the shader compiler's store", tObtained));
     }
     compiler_->keep(k, found, record, why);
     state = found == RecordCache::Found::Record ? Compiler::State::Ready : Compiler::State::Refused;
@@ -327,7 +327,8 @@ bool Completion::remoteLater(const Ask &a, const CacheKey &k,
     RuntimeRecord record;
     std::string why;
     if (const RecordCache::Found found = fromStore(store, packKey, record, why); found != RecordCache::Found::None) {
-        logRemote(a, k, found, "from the shader compiler's store", Obtained{"store", 0, uint32_t(qos_class_self())});
+        SWITCH_METAL_DIAGNOSTIC(
+            logRemote(a, k, found, "from the shader compiler's store", Obtained{"store", 0, uint32_t(qos_class_self())}));
         settle(found, record, why);
         return true;
     }
@@ -336,7 +337,11 @@ bool Completion::remoteLater(const Ask &a, const CacheKey &k,
         return true;
     }
     const std::string request = encodeRequest(r);
+#if SWITCH_METAL_DIAGNOSTICS
     const uint64_t began = nowUs();
+#else
+    const uint64_t began = 0;
+#endif
     const Ask asked = a;
     uint64_t cookie = 0;
     const bool sent = remote_->compileAsync(
@@ -350,12 +355,16 @@ bool Completion::remoteLater(const Ask &a, const CacheKey &k,
                                                  : RecordCache::Found::None;
             switch (askNext(answer, found != RecordCache::Found::None, again, remote_->declined())) {
             case AskNext::Use: {
+#if SWITCH_METAL_DIAGNOSTICS
                 Obtained o{"compiled", nowUs() - began, asked.qos, answered.how};
                 const TegraGM20BAbiCompileTimes &t = answered.times;
-                SWITCH_METAL_DIAGNOSTIC(
-                    o.split(began, t.compile_start, t.compile_end, t.answered, answered.at, began + o.waitUs));
+                o.split(began, t.compile_start, t.compile_end, t.answered, answered.at, began + o.waitUs);
                 o.answerPriority = t.answer_priority;
                 logRemote(asked, k, found, "by the shader compiler", o);
+#else
+                (void)began;
+                (void)answered;
+#endif
                 return settle(found, made, refusal);
             }
             case AskNext::AskAgain:

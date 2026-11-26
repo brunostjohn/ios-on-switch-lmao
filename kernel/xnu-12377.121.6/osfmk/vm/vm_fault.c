@@ -4863,7 +4863,9 @@ vm_fault_internal(
 	vm_map_lock_ctx_t      vml_ctx_for_vaddr)
 {
 	/* Switch (r17-faults): for the kprof faults lines (switch_kprof_fault, at done) */
+#if DEVELOPMENT || DEBUG
 	const uint64_t          switch_began = mach_absolute_time();
+#endif
 	bool                    switch_device = false;    /* the page entered was a device pager's */
 	bool                    switch_purgeable = false; /* a zero fill in a purgeable object */
 	boolean_t               wired;          /* Should mapping be wired down? */
@@ -7331,6 +7333,7 @@ done:
 		DEBUG4K_FAULT("map %p original %p vaddr 0x%llx -> 0x%x\n", map, original_map, (uint64_t)trace_real_vaddr, kr);
 	}
 
+#if DEVELOPMENT || DEBUG
 	/* Switch (r17-faults): this fault for the kprof faults lines */
 	{
 		unsigned int switch_class;
@@ -7365,6 +7368,10 @@ done:
 		    (switch_purgeable && switch_class == SWITCH_FAULT_ZF ? SWITCH_FAULT_PURGEABLE : 0),
 		    switch_began, (uint64_t)vaddr);
 	}
+#else
+	(void)switch_device;
+	(void)switch_purgeable;
+#endif
 
 	vmlp_api_end(VM_FAULT_INTERNAL, kr);
 	return kr;

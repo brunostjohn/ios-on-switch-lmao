@@ -94,19 +94,13 @@ int gExternalScanout;
 struct {
 	uint64_t invalN, invalBytes, cleanN, cleanBytes, waitedN, cannotLockN;
 } gStats;  // registry lock
-#endif
 
 void count(bool unlock, uint64_t n, uint64_t bytes)  // registry lock held
 {
-#if TGM_STATS
 	(unlock ? gStats.cleanN : gStats.invalN) += n;
 	(unlock ? gStats.cleanBytes : gStats.invalBytes) += bytes;
-#else
-	(void)unlock;
-	(void)n;
-	(void)bytes;
-#endif
 }
+#endif
 
 tgm_coh **pageSlot(uint64_t pa)
 {
@@ -288,8 +282,10 @@ void surfaceTrapped(uint32_t surfaceId, bool unlock, bool readOnly)
 		n = findById(surfaceId, skip, found);
 		if (!n)
 			break;
+#if TGM_STATS
 		uint64_t bytes = 0;
 		uint64_t done = 0;
+#endif
 		for (uint32_t i = 0; i < n; i++) {
 			if (!unlock) {
 				__atomic_add_fetch(&found[i]->cpuLocks, 1, __ATOMIC_ACQ_REL);
@@ -305,8 +301,12 @@ void surfaceTrapped(uint32_t surfaceId, bool unlock, bool readOnly)
 								__ATOMIC_ACQ_REL) != 0);
 			auto *backing = switch_gpu_backing_find_pa(found[i]->pa);
 			if (maintained && !backing) {
+#if TGM_STATS
 				bytes += maintain(found[i]);
 				done++;
+#else
+				(void)maintain(found[i]);
+#endif
 			}
 			if (backing)
 				switch_gpu_backing_release(backing);
@@ -316,9 +316,11 @@ void surfaceTrapped(uint32_t surfaceId, bool unlock, bool readOnly)
 			(void)readOnly;
 #endif
 		}
+#if TGM_STATS
 		IOLockLock(gRegistryLock);
 		count(unlock, done, bytes);
 		IOLockUnlock(gRegistryLock);
+#endif
 		drop(found, n);
 	}
 }

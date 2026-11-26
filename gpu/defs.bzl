@@ -6,7 +6,7 @@ action with declared inputs, so Bazel reruns only what an edit reaches:
 The shader seed and the pack are gpu/seed's.
 """
 
-load("//bazel:profile.bzl", "PROFILE_ATTR", "switch_debug_define")
+load("//bazel:profile.bzl", "METAL_STATS_ATTR", "PROFILE_ATTR", "metal_stats_defines", "switch_debug_define")
 load("//gpu/seed:defs.bzl", "SeedInfo")
 load("//ipsw:ipsw.bzl", "IpswInfo")
 load("//kernel/rules:layout.bzl", "MOVED_ROOTS", "OLD_TREE", "TREE_ROOT")
@@ -76,7 +76,7 @@ def _plugin_objects(ctx, name, stack):
     includes = ["-I", ctx.bin_dir.path]
     for marker in ctx.files.include_markers:
         includes += ["-I", marker.dirname]
-    defines = [switch_debug_define(ctx)]
+    defines = [switch_debug_define(ctx)] + metal_stats_defines(ctx)
     if stack:
         defines.append("-DTEGRA_STACK_KEY=0x@FILE:%s@ull" % stack.path)
     headers = ctx.files.hdrs + ctx.files.include_markers + ([stack] if stack else [])
@@ -158,7 +158,7 @@ def _metal_plugin_impl(ctx):
         OutputGroupInfo(debug = depset([dsym]), objects = depset(objects)),
     ]
 
-_PLUGIN_ATTRS = _XCODE | PROFILE_ATTR | {
+_PLUGIN_ATTRS = _XCODE | PROFILE_ATTR | METAL_STATS_ATTR | {
     "srcs": attr.label_list(mandatory = True, allow_files = [".mm"], doc = "Objective-C++ units, in link order"),
     "cc_srcs": attr.label_list(allow_files = [".cpp"], doc = "C++ units, linked after srcs"),
     "c_srcs": attr.label_list(allow_files = [".c"], doc = "C units, linked after cc_srcs"),

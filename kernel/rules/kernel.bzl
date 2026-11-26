@@ -83,6 +83,21 @@ _RECORDER_FLAGS = {
     "//conditions:default": [],
 }
 
+_STATS_FLAGS = [
+    ("//bazel:stats_sched_on", "-DSWITCH_STATS_SCHED=1"),
+    ("//bazel:stats_power_on", "-DSWITCH_STATS_POWER=1"),
+    ("//bazel:stats_frame_on", "-DSWITCH_STATS_FRAME=1"),
+    ("//bazel:stats_gpu_on", "-DSWITCH_STATS_GPU=1"),
+    ("//bazel:prof_gpu_on", "-DSWITCH_PROF_GPU=1"),
+    ("//bazel:stats_io_on", "-DSWITCH_STATS_IO=1"),
+]
+
+def _stats_selects():
+    out = []
+    for setting, flag in _STATS_FLAGS:
+        out = out + select({setting: [flag], "//conditions:default": []})
+    return out
+
 def _recipe_name(label, valid):
     name = label.rpartition(":")[2]
     if name not in valid:
@@ -278,12 +293,13 @@ def kernel_driver(
         else:
             lib = name + ("_foreign_cc" if key == "foreign" else ("_cc" if key == "own" else "_" + key.rpartition(".")[0] + "_cc"))
             flags = cxx_flags + c_copts + extra
+            stats_opts = _stats_selects()
             cc_library(
                 name = lib,
                 srcs = group,
                 hdrs = hdrs,
-                cxxopts = _expand(cxx_flags + extra) + select(_DIAGNOSTICS_OFF_FLAGS) + select(_RECORDER_FLAGS),
-                conlyopts = _expand(c_copts + extra) + select(_DIAGNOSTICS_OFF_FLAGS) + select(_RECORDER_FLAGS),
+                cxxopts = _expand(cxx_flags + extra) + select(_DIAGNOSTICS_OFF_FLAGS) + select(_RECORDER_FLAGS) + stats_opts,
+                conlyopts = _expand(c_copts + extra) + select(_DIAGNOSTICS_OFF_FLAGS) + select(_RECORDER_FLAGS) + stats_opts,
                 features = features,
                 deps = header_deps + _generated(flags),
                 toolchains = [KERNEL_SDK],

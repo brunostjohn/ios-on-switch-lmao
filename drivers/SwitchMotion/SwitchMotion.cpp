@@ -503,7 +503,9 @@ class SwitchMotion : public IOService {
     unsigned watermark = 1;
     uint64_t periodAbs = 0;       // one sample period at the current rate, in absolute time
     uint64_t lastPosted[2] = {};  // the last sample time posted per service (they only go forward)
+#if DEVELOPMENT || DEBUG
     uint32_t drains = 0, records = 0, overflows = 0;
+#endif
     // Orientation detector (detectOrientation): its input decimated to kOrientationMilliHz, the filtered gravity
     // vector, the orientation last announced and a candidate, and whether it was announced since the console moved.
     bool detecting = false;
@@ -1258,7 +1260,9 @@ void SwitchMotion::drainFifo(uint64_t now)
         return;
     }
     if (status[0] & icm42607::FifoFull) {
+#if DEVELOPMENT || DEBUG
         ++overflows;
+#endif
         if (!overflowLogged) {
             overflowLogged = true;
             IOLog("SwitchMotion: %s FIFO full (%u records, watermark %u): drained late, its oldest records lost\n",
@@ -1322,8 +1326,10 @@ void SwitchMotion::drainFifo(uint64_t now)
         return;
     empty = 0;
     ++samples;
+#if DEVELOPMENT || DEBUG
     ++drains;
     records += taken;
+#endif
 }
 
 void SwitchMotion::interruptOccurred(OSObject *owner, IOInterruptEventSource *, int)
@@ -1392,7 +1398,11 @@ void SwitchMotion::watchdogFired(OSObject *owner, IOTimerEventSource *sender)
         return;
     }
     self->samples = 0;
+#if DEVELOPMENT || DEBUG
     switch_check_after_ms(sender, kWatchdogMS);
+#else
+    (void)sender;
+#endif
 }
 
 // IOHIDEventDriver's thread, possibly holding its work loop gate (SwitchHID.h): store and kick, never wait.

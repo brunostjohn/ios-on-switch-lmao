@@ -11,13 +11,18 @@ extern "C" OSReturn switch_kernel_classes(void (*initialize)());
 extern "C" void native_keyevents_static_init(void) __asm__("__GLOBAL__sub_I_NativeKeyStoreEvents.cpp");
 extern "C" IOService *native_keyevents_allocate(void);
 extern "C" {
+static bool keyeventsProbed;
+#if DEVELOPMENT || DEBUG
 volatile uint32_t native_keyevents_stage, native_keyevents_refused_opens;
 volatile int native_keyevents_status = -1;
 volatile uint64_t native_keyevents_service;
+#endif
 
 void native_keyevents_open_refused(void)
 {
+#if DEVELOPMENT || DEBUG
     native_keyevents_refused_opens = native_keyevents_refused_opens + 1;
+#endif
 }
 
 // The owned AppleKeyStore answers the state queries (no passcode, nothing locked); counters feed a debug kernel's
@@ -100,10 +105,13 @@ void native_aks_call(uint32_t, int32_t)
 
 static void native_keyevents_probe()
 {
-    if (native_keyevents_stage)
+    if (keyeventsProbed)
         return;
+    keyeventsProbed = true;
+#if DEVELOPMENT || DEBUG
     native_keyevents_stage = 1;
     native_keyevents_status = kIOReturnNotPermitted;
+#endif
     // No SEP: stand in for AppleKeyStore whether or not Data is ephemeral.
     const OSSymbol *name = OSSymbol::withCString("AppleKeyStore");
     const bool absent = (name != nullptr) && (OSMetaClass::getMetaClassWithName(name) == nullptr);
@@ -113,10 +121,15 @@ static void native_keyevents_probe()
     IOService *provider = IOService::getResourceService();
     if (!provider)
         return;
-    native_keyevents_status = switch_kernel_classes(native_keyevents_static_init);
-    if (native_keyevents_status)
+    const OSReturn status = switch_kernel_classes(native_keyevents_static_init);
+#if DEVELOPMENT || DEBUG
+    native_keyevents_status = status;
+#endif
+    if (status)
         return;
+#if DEVELOPMENT || DEBUG
     native_keyevents_stage = 2;
+#endif
     IOService *service = native_keyevents_allocate();
     const bool initialized = (service != nullptr) && service->init();
     const bool attached = initialized && service->attach(provider);
@@ -125,12 +138,16 @@ static void native_keyevents_probe()
         if (attached)
             service->detach(provider);
         OSSafeReleaseNULL(service);
+#if DEVELOPMENT || DEBUG
         native_keyevents_status = kIOReturnError;
+#endif
         return;
     }
+#if DEVELOPMENT || DEBUG
     native_keyevents_service = (uintptr_t)service;
     native_keyevents_status = kIOReturnSuccess;
     native_keyevents_stage = 3;
+#endif
 }
 
 void native_keystore_probe(void)
