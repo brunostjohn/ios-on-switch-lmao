@@ -1,6 +1,6 @@
-// Both kernels' boot setup runs kernel/switch/boot/icon_cache.c once, before launchd, on the record the deploy writes
-// (drivers/TegraGM20BMetal/stage-tegra-gm20b-metal.py), with one error line in release; only xnu-12377 renames 24B119's salt folders aside
-// and sweeps them on System Boot Complete with zero timers.
+// Both kernels' boot setup runs kernel/switch/boot/icon_cache.c once, before launchd, on the record the GPU stager
+// writes (drivers/TegraGM20BMetal/stage-tegra-gm20b-metal.py), with one error line in release; only xnu-12377 renames
+// 24B119's salt folders aside and sweeps them on System Boot Complete with zero timers.
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 

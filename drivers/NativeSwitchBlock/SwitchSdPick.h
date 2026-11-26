@@ -45,9 +45,9 @@ template <typename Request> inline unsigned switchSdRank(const Request *r, const
     return awaited && r->queuedNs <= awaited ? 0u : 2u * r->klass + 1u;
 }
 
-// The oldest request older than `r` that `r` may not pass (and its predecessor), or nullptr. A read may not pass a write
-// it overlaps; a write passes no request it overlaps and no older write, because the write fence counts completions in
-// submission order.
+// The oldest request older than `r` that `r` may not pass (and its predecessor), or nullptr. A read may not pass a
+// write it overlaps; a write passes no request it overlaps and no older write, because the write fence counts
+// completions in submission order.
 template <typename Request> inline Request *switchSdBlocker(Request *head, const Request *r, Request **prev)
 {
     *prev = nullptr;

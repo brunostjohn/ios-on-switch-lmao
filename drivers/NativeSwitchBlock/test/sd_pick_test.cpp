@@ -176,6 +176,21 @@ TEST(SdPick, RankAndPass)
     EXPECT_EQ(picked.first, &q[1]);
 }
 
+// RankAndPass's earlier layout: a tier-0 read inside the tier-0 head write is older than the tier-0 read that may
+// pass, so it lends rank 0 to the head and the head goes first (review N2: pinned beside the new layout).
+TEST(SdPick, AnOlderBlockedReadLendsToTheHeadBeforeAYoungerOneMayPass)
+{
+    std::vector<Request> q(4);
+    q[0] = {&q[1], 100, 8, 0, true, false, 0, 0, false, 0};   // tier-0 write, head
+    q[1] = {&q[2], 100, 8, 0, false, false, 0, 1, false, 0};  // overlaps it: lends rank 0
+    q[2] = {&q[3], 300, 8, 0, false, false, 0, 2, false, 0};  // could pass, but is younger
+    q[3] = {nullptr, 500, 8, 2, false, false, 0, 3, false, 0};
+    SwitchSdPickState state = {};
+    const SwitchSdPicked<Request> picked = switchSdPick(q.data(), kNoSync, kMs, &state);
+    EXPECT_EQ(picked.first, q.data());
+    EXPECT_FALSE(picked.passed);
+}
+
 // A better request that may not pass an older one lends its rank to it, however its rank came to be better: queued at
 // tier 0, raised by doSetPriority, or counted by a synchronize that began.
 TEST(SdPick, ABlockedRequestLendsItsRankToWhatHoldsItBack)

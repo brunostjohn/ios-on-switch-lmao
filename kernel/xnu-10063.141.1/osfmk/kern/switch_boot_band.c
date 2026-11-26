@@ -13,8 +13,9 @@
  * The band closes for good at the first of: backboardd setting "System Boot Complete" on IOPMrootDomain (SpringBoard
  * finished startup, ~3 s after the boot logo is dismissed; IOPMrootDomain kPowerEventSystemBootCompleted) or 120 s of
  * uptime, a bound System Boot Complete comes well inside (81 s on 25 Nov; at 60 s the bound closed the band while
- * SpringBoard still had 18 s to go to its logo). Every process it held is put back then. One log line says when and how many. (The boot's full CPU and GPU
- * clocks are not tied to the band: they end at System Boot Complete itself, IOPMrootDomain's switch_perf_hint.)
+ * SpringBoard still had 18 s to go to its logo). Every process it held is put back then. One log line says when and
+ * how many. (The boot's full CPU and GPU clocks are not tied to the band: they end at System Boot Complete itself,
+ * IOPMrootDomain's switch_perf_hint.)
  */
 
 #include <kern/kalloc.h>

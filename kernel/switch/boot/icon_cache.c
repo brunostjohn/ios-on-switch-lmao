@@ -35,9 +35,9 @@ static const char switch_icon_cache_folder[] =
 static const char switch_icon_cache_request[] = "Switch/icon-cache-gpu";
 static const char switch_icon_cache_marker[] = "Switch/icon-cache-reset";
 #if SWITCH_ICON_CACHE_SALTED
-/* The request a drop began for, written before its first rename. Unlike the marker it is written whether or not the drop
- * finishes, so a marker that does not hold it means a drop began and stopped: the cache may then hold folders of any
- * build (moved back for the request, or drawn by the agent on the boot after), and none of it can be kept as the
+/* The request a drop began for, written before its first rename. Unlike the marker it is written whether or not the
+ * drop finishes, so a marker that does not hold it means a drop began and stopped: the cache may then hold folders of
+ * any build (moved back for the request, or drawn by the agent on the boot after), and none of it can be kept as the
  * marker's. */
 static const char switch_icon_cache_attempt[] = "Switch/icon-cache-attempt";
 #endif
