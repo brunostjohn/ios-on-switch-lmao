@@ -2175,8 +2175,12 @@ bool switch_battery_nvram_read(const char *key, uint8_t *bytes, size_t *length)
     return true;
 }
 
+static bool gNvramFull;  // every write refused, as a full NVRAM bank refuses it
+
 bool switch_battery_nvram_write(const char *key, const uint8_t *bytes, size_t length)
 {
+    if (gNvramFull)
+        return false;
     gNvram[key] = std::vector<uint8_t>(bytes, bytes + length);
     return true;
 }
@@ -2236,6 +2240,20 @@ static void batteryStore()
     check(battery()->setProperties(&dict) == kIOReturnSuccess, "an unchanged write is taken");
     advance(10);
     check(gNvram.empty() && battery()->updates == updates, "and changes nothing: no save, no status update for powerd");
+    OSDictionary changed;
+    changed.setObject("ShipChargeLimitData", &limit);
+    changed.setObject("DateOfFirstUse", date);
+    limit.setObject("ShipChargeLimitEnabled", kOSBooleanTrue);
+    gNvramFull = true;
+    check(battery()->setProperties(&changed) == kIOReturnSuccess, "a changed write is taken while NVRAM refuses it");
+    advance(10);
+    check(gNvram.empty(), "nothing saved yet");
+    gNvramFull = false;
+    const unsigned beforeRetry = battery()->updates;
+    check(battery()->setProperties(&changed) == kIOReturnSuccess, "powerd writes the same again");
+    advance(10);
+    check(gNvram.count(SWITCH_BATTERY_NVRAM_SHIP_CHARGE_LIMIT) && battery()->updates == beforeRetry,
+          "the unchanged write saves what failed, without a status update");
 #else
     check(r == kIOReturnUnsupported, "21H461 refuses them as before");
     check(gNvram.empty(), "nothing in NVRAM on 21H461");
@@ -2290,6 +2308,20 @@ static void batteryStoreEncoding()
     OSSafeReleaseNULL(back);
     n->release();
     t->release();
+    // ShipChargeLimitData's two booleans in either order, as two dictionaries may iterate them.
+    const uint8_t enabledFirst[] = {2,   7,   'E', 'n', 'a', 'b', 'l', 'e', 'd', 1, 0, 9,
+                                    'S', 'u', 'p', 'p', 'o', 'r', 't', 'e', 'd', 1, 1};
+    const uint8_t supportedFirst[] = {2, 9, 'S', 'u', 'p', 'p', 'o', 'r', 't', 'e', 'd', 1,
+                                      1, 7, 'E', 'n', 'a', 'b', 'l', 'e', 'd', 1,   0};
+    uint8_t enabledOn[sizeof(enabledFirst)];
+    std::copy(std::begin(enabledFirst), std::end(enabledFirst), enabledOn);
+    enabledOn[10] = 1;
+    check(switch_battery_store_same(enabledFirst, sizeof(enabledFirst), supportedFirst, sizeof(supportedFirst)),
+          "the same entries in another order are the same");
+    check(!switch_battery_store_same(enabledOn, sizeof(enabledOn), supportedFirst, sizeof(supportedFirst)),
+          "a changed value is not");
+    check(!switch_battery_store_same(enabledFirst, 13, supportedFirst, sizeof(supportedFirst)),
+          "nor is a different count or a cut encoding");
 }
 #endif
 

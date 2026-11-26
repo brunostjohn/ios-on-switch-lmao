@@ -25,6 +25,8 @@ bool switch_battery_nvram_write(const char *key, const uint8_t *bytes, size_t le
 size_t switch_battery_store_encode(const OSDictionary *dict, uint8_t *out, size_t capacity);
 // A new dictionary from an encoding, or null for one that does not parse.
 OSDictionary *switch_battery_store_decode(const uint8_t *in, size_t length);
+// Two encodings hold the same entries, in whatever order each dictionary iterated them.
+bool switch_battery_store_same(const uint8_t *a, size_t aLength, const uint8_t *b, size_t bLength);
 
 // The stored values, read back from NVRAM: 0 and null for what was never written.
 void switch_battery_store_load(uint64_t *dateOfFirstUse, OSDictionary **shipChargeLimit);

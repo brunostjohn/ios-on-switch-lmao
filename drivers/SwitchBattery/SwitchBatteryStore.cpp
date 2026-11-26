@@ -138,7 +138,74 @@ bool readEntry(Reader &r, OSDictionary *dict)
     }
 }
 
+// The entry at `at` in an encoding: its key, and its type with its value; `at` moves past it.
+struct Entry {
+    const uint8_t *key, *value;
+    size_t keyLength, valueLength;
+};
+
+bool nextEntry(const uint8_t *in, size_t length, size_t &at, Entry &e)
+{
+    if (at >= length)
+        return false;
+    e.keyLength = in[at];
+    e.key = in + at + 1;
+    const size_t typeAt = at + 1 + e.keyLength;
+    if (typeAt >= length)
+        return false;
+    switch (in[typeAt]) {
+    case kBoolean:
+        e.valueLength = 2;
+        break;
+    case kNumber:
+        e.valueLength = 9;
+        break;
+    case kString:
+        if (typeAt + 1 >= length)
+            return false;
+        e.valueLength = 2 + in[typeAt + 1];
+        break;
+    default:
+        return false;
+    }
+    e.value = in + typeAt;
+    if (typeAt + e.valueLength > length)
+        return false;
+    at = typeAt + e.valueLength;
+    return true;
+}
+
+bool sameEntry(const Entry &a, const Entry &b)
+{
+    return a.keyLength == b.keyLength && a.valueLength == b.valueLength &&
+           __builtin_memcmp(a.key, b.key, a.keyLength) == 0 && __builtin_memcmp(a.value, b.value, a.valueLength) == 0;
+}
+
 }  // namespace
+
+// A dictionary's keys are unique, so equal counts and every entry of `a` found in `b` make the same entries.
+bool switch_battery_store_same(const uint8_t *a, size_t aLength, const uint8_t *b, size_t bLength)
+{
+    if (aLength == 0 || bLength == 0 || a[0] != b[0])
+        return false;
+    size_t at = 1;
+    for (unsigned i = 0; i < a[0]; ++i) {
+        Entry ea{};
+        if (!nextEntry(a, aLength, at, ea))
+            return false;
+        bool found = false;
+        size_t bt = 1;
+        for (unsigned j = 0; j < b[0] && !found; ++j) {
+            Entry eb{};
+            if (!nextEntry(b, bLength, bt, eb))
+                return false;
+            found = sameEntry(ea, eb);
+        }
+        if (!found)
+            return false;
+    }
+    return at == aLength;
+}
 
 size_t switch_battery_store_encode(const OSDictionary *dict, uint8_t *out, size_t capacity)
 {
