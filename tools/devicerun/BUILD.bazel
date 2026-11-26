@@ -27,6 +27,7 @@ py_library(
         "protection.py",
         "reports.py",
         "rules.py",
+        "shared_cache.py",
         "springboard.py",
         "stutter.py",
         "textures.py",
@@ -199,6 +200,14 @@ py_test(
     deps = [":lib"],
 )
 
+# shared_cache.py's per-boot judgement of each pinned dyld cache over lines in the kernel's formats.
+py_test(
+    name = "shared_cache_test",
+    size = "small",
+    srcs = ["shared_cache_test.py"],
+    deps = [":lib"],
+)
+
 # stutter.py's frame-pacing checks over lines in the kernel's formats.
 py_test(
     name = "stutter_test",
@@ -222,6 +231,7 @@ py_test(
     srcs = ["joycon_test.py"],
     deps = [":lib"],
 )
+
 # bazel run //tools/devicerun:frame_weights -- <absolute .logarchive> --pack <pack.bin>: the frame-weights capture's table
 # (drivers/TegraGM20BMetal/draw_times.h, tools/devicerun/README.md)
 py_library(
