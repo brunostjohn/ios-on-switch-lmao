@@ -126,6 +126,15 @@
     return nullptr;
 }
 
+#if SWITCH_METAL_DIAGNOSTICS
+// hw_test_app's gpu.path.use_ranges: whether the buffer lives in a VOL=1 write-combined chunk, a resource-set member no
+// CPU lease takes out, which no job lists as a use of its own
+- (NSNumber *)switchMetalBypassesL2
+{
+    return @(_raw.wc && _raw.gpuVolatile);
+}
+#endif
+
 @end
 
 @implementation SwitchMetalBuffer (Textures)
