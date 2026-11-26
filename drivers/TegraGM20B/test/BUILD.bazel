@@ -2070,10 +2070,12 @@ host_library(
     srcs = [
         "//drivers/TegraGM20B:SwitchGpuBridge.cpp",
         "//drivers/TegraGM20B:SwitchGpuBridgeProducer.cpp",
+        "//drivers/TegraGM20B:SwitchGpuBridgeRetire.cpp",
     ],
     hdrs = [
         "//drivers/TegraGM20B:SwitchGpuBridge.h",
         "//drivers/TegraGM20B:SwitchGpuBridgeProducer.h",
+        "//drivers/TegraGM20B:SwitchGpuBridgeQueue.h",
         "//drivers/TegraGM20B:SwitchGpuKqueue.h",
         "//drivers/TegraGM20B:SwitchGpuSubmitTurn.h",
         "//drivers/TegraGM20B:SwitchGpuInheritorSleep.h",
@@ -2101,10 +2103,12 @@ host_library(
     srcs = [
         "//drivers/TegraGM20B:SwitchGpuBridge.cpp",
         "//drivers/TegraGM20B:SwitchGpuBridgeProducer.cpp",
+        "//drivers/TegraGM20B:SwitchGpuBridgeRetire.cpp",
     ],
     hdrs = [
         "//drivers/TegraGM20B:SwitchGpuBridge.h",
         "//drivers/TegraGM20B:SwitchGpuBridgeProducer.h",
+        "//drivers/TegraGM20B:SwitchGpuBridgeQueue.h",
         "//drivers/TegraGM20B:SwitchGpuKqueue.h",
         "//drivers/TegraGM20B:SwitchGpuSubmitTurn.h",
         "//drivers/TegraGM20B:SwitchGpuInheritorSleep.h",
