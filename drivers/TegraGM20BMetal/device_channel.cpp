@@ -288,11 +288,14 @@ bool Device::newContext(uint32_t channel, uint32_t &seq)
     // The interlock's tickets start at zero with the new context's dispensers (a fresh context: its dispenser values are
     // zero already). Warps of the dead channel may have held tickets, and their lines may sit dirty in the GPU's L2, so the
     // copy engine zeroes the buffer in the new channel's own order, done before the 3D engine runs again.
-    p.inc(CE_OFFSET_IN_UPPER,
-          {uint32_t(zero_.va >> 32), uint32_t(zero_.va), uint32_t(tickets_.va >> 32), uint32_t(tickets_.va)},
-          SUBC_COPY);
-    p.inc(CE_LINE_LENGTH_IN, {uint32_t(tickets_.bytes), 1}, SUBC_COPY);
-    p.m(CE_LAUNCH_DMA, kLaunchPitch, SUBC_COPY);
+    // in copies of the zero page, which is smaller than the buffer
+    for (uint64_t done = 0; done < tickets_.bytes; done += zero_.bytes) {
+        const uint64_t to = tickets_.va + done;
+        p.inc(CE_OFFSET_IN_UPPER, {uint32_t(zero_.va >> 32), uint32_t(zero_.va), uint32_t(to >> 32), uint32_t(to)},
+              SUBC_COPY);
+        p.inc(CE_LINE_LENGTH_IN, {uint32_t(std::min<uint64_t>(zero_.bytes, tickets_.bytes - done)), 1}, SUBC_COPY);
+        p.m(CE_LAUNCH_DMA, kLaunchPitch, SUBC_COPY);
+    }
     p.m(WAIT_FOR_IDLE, 0);
     fx::emitTwodInit(p);
     TegraGM20BAbiPush seg = {va, uint32_t(p.at - start), 0};

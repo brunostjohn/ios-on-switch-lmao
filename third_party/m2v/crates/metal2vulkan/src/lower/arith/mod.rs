@@ -79,6 +79,7 @@ pub(crate) mod reassoc;
 pub(crate) mod regroup;
 mod residual_round;
 pub mod srgb;
+pub mod srgb_conversions;
 pub mod texel_round;
 pub mod wide;
 
@@ -664,11 +665,11 @@ impl FamilyStrategy for ArithStrategy {
                 format,
                 floats,
             } => {
-                // Each sRGB color channel's search or step read; the table is the module's,
-                // charged once ([`routine_words`]).
+                // Each sRGB channel's table read; the table is the module's, charged once
+                // ([`routine_words`]).
                 let srgb = match (*format, *dir) {
-                    (PackFormat::Unorm4x8Srgb, PackDir::Pack) => 3 * srgb::SEARCH_WORDS,
-                    (PackFormat::Unorm4x8Srgb, PackDir::Unpack) => 3 * srgb::STEP_WORDS,
+                    (PackFormat::Unorm4x8Srgb, PackDir::Pack) => 3 * srgb_conversions::READ_WORDS,
+                    (PackFormat::Unorm4x8Srgb, PackDir::Unpack) => 4 * srgb_conversions::READ_WORDS,
                     _ => 0,
                 };
                 // One vector sequence of the exact products or exact divisions
@@ -978,7 +979,7 @@ pub fn routine_words(plan: &ArithPlan) -> impl Iterator<Item = (&'static str, u6
             PackDir::Pack => SRGB_PACK,
             PackDir::Unpack => SRGB_UNPACK,
         };
-        (name, u64::from(srgb::TABLE_WORDS))
+        (name, u64::from(srgb_conversions::TABLE_WORDS))
     });
     // The extended-range sRGB table, once, and each padded `_sRGB` form's.
     let extended = plan.extended_range_srgb.then_some((
@@ -1212,7 +1213,7 @@ pub fn declare(
         decl.fast.insert(*r, math::define_fast_division(mb, *r)?);
     }
     if plan.families.arith.srgb.is_some() {
-        decl.srgb = Some(srgb::declare(mb)?);
+        decl.srgb = Some(srgb_conversions::declare(mb)?);
     }
     if let Some(class) = plan.families.arith.color_table {
         decl.color_table = Some(srgb::declare_color_table(mb, plan.stage, class)?);

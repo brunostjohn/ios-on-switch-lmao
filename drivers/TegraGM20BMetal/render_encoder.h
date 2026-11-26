@@ -19,6 +19,7 @@
 #include "draw_refusal.h"
 #include "draw_times.h"
 #include "fetch_order.h"
+#include "fetch_route.h"
 #include "geometry.h"
 #include "icb.h"
 #include "mixed_samples.h"
@@ -718,7 +719,7 @@ private:
     // `pl`, its fetch-free form where its rung's rule holds, else its barrier twin where an attachment of this pass cannot
     // be viewed as one of its storage images or rule fetch.twin (twin_rule.h) takes the draw's shape
     Pipeline *formFor(Pipeline *pl, const FetchDraw &shape);
-    Pipeline *fetchFreeFor(const Pipeline &pl);
+    Pipeline *fetchFreeFor(const Pipeline &pl, StorageRoute *route = nullptr);
     bool matrixConstants(const Pipeline &pl, const char **why);
     uint32_t colorTargets() const;
     StorageFallback storageFallback(const Pipeline &pl) const;

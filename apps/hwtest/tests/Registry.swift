@@ -48,7 +48,7 @@ public enum Registry {
         DrawBandsTest(), GPURatesTest(), GPUFillTest(), GPUCaBindingTest(), BandsPlanarInstancedTest(),
         DispatchPiecesTest(), ProbeCtaTest(), ProbeMacroWfiTest(), ForeignWaitIsolationTest(),
         PosterTargetsTest(),
-        PushScanTargetsTest(), ResolveCostTest(), JobRefusalLinesTest(),
+        PushScanTargetsTest(), ResolveCostTest(), MapsFetchTest(), JobRefusalLinesTest(),
         MsaaFirstUseTest(), StoredDepthTest(), ZetaMoveTest(), ZetaKeptTest(), ZcViewFormatsTest(),
         ZcZetaLayersTest(), ZcZetaShadowTest(), ZcMixedTest(), ZcStencilCriterionTest(),
         ResolveTwodTest(), FillTextureTest(), StorageCompressedTest(), SharedLayoutTest(), PredicationTest(),

@@ -105,7 +105,10 @@ host_test(
     ],
     copts = ["-Idrivers/TegraGM20B"],
     cxx_std = "c++17",
-    data = ["//drivers/TegraGM20BMetal:gpu.cpp"],
+    data = [
+        "//drivers/TegraGM20BMetal:gpu.cpp",
+        "//third_party/mesa/src/nouveau/compiler:nak_nir_lower_fs_interlock.c",
+    ],
     linkopts = [
         "-framework",
         "IOKit",
@@ -2118,6 +2121,19 @@ py_test(
     name = "stage_test",
     srcs = ["stage_test.py"],
     data = ["//drivers/TegraGM20BMetal:stage-tegra-gm20b-metal.py"],
+)
+
+py_test(
+    name = "resolve_srgb_test",
+    srcs = ["resolve_srgb_test.py"],
+    args = [
+        "$(rootpath //drivers/TegraGM20BMetal:pack/resolve_srgb.h)",
+        "$(rootpath //third_party/m2v/crates/metal2vulkan:src/bind/color_resolve.rs)",
+    ],
+    data = [
+        "//drivers/TegraGM20BMetal:pack/resolve_srgb.h",
+        "//third_party/m2v/crates/metal2vulkan:src/bind/color_resolve.rs",
+    ],
 )
 
 py_test(
@@ -4195,6 +4211,7 @@ host_test(
         "//drivers/TegraGM20BMetal:turn_copy.h",
     ],
     cxx_std = "c++17",
+    data = ["//drivers/TegraGM20BMetal:pack/probe_states.h"],
 )
 
 py_test(
@@ -6955,11 +6972,21 @@ objcxx_units(
             "//ipsw:24B119": [
                 "-DSWITCH_LIBRARIES_LINK_PRIVATE_FUNCTIONS=1",
                 "'-DSWITCH_REFUSED_FRAGMENT_FUNCTION=\"sixChannelBlend_fragment\"'",
+                # Weather's VFX particle states, as the 24B119 device made them
+                "-DSWITCH_WEATHER_VFX_STATES=1",
             ],
             "//conditions:default": [],
         }),
-        ["//drivers/TegraGM20BMetal:precompile/corpus.log"],
-        {"SWITCH_CORPUS": "$(rootpath //drivers/TegraGM20BMetal:precompile/corpus.log)"},
+        [
+            ":rate_map_metallib",
+            "testdata/weather_vfx_24B119.corpus",
+            "//drivers/TegraGM20BMetal:precompile/corpus.log",
+        ],
+        {
+            "SWITCH_CORPUS": "$(rootpath //drivers/TegraGM20BMetal:precompile/corpus.log)",
+            "SWITCH_RATE_MAP_METALLIB": "$(rootpath :rate_map_metallib)",
+            "SWITCH_WEATHER_VFX": "$(rootpath testdata/weather_vfx_24B119.corpus)",
+        },
     ),
     (
         "compiler_repro_test",
@@ -7087,6 +7114,25 @@ work="$$(/usr/bin/mktemp -d)"
 export HOME="$$work" TMPDIR="$$work"
 /usr/bin/xcrun -sdk iphoneos metal -c $(execpath testdata/compiler_stages/stages.metal) -o "$$work/stages.air"
 /usr/bin/xcrun -sdk iphoneos metallib "$$work/stages.air" -o $@
+""",
+    tags = ["requires-darwin"],
+)
+
+# compiler_compile_only_test's rasterization rate map functions, compiled from source as an app's default library is
+genrule(
+    name = "rate_map_metallib",
+    testonly = True,
+    srcs = [
+        "testdata/rate_map/rate_map.metal",
+        "@xcode//:xcode.env",
+    ],
+    outs = ["rate_map.metallib"],
+    cmd = """
+export DEVELOPER_DIR="$$(/usr/bin/sed -n 's/^DEVELOPER_DIR=//p' $(execpath @xcode//:xcode.env))"
+work="$$(/usr/bin/mktemp -d)"
+export HOME="$$work" TMPDIR="$$work"
+/usr/bin/xcrun -sdk iphoneos metal -c $(execpath testdata/rate_map/rate_map.metal) -o "$$work/rate_map.air"
+/usr/bin/xcrun -sdk iphoneos metallib "$$work/rate_map.air" -o $@
 """,
     tags = ["requires-darwin"],
 )

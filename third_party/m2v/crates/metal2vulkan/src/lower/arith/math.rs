@@ -28,7 +28,7 @@ use crate::lower::arith::libm::{self, Lib};
 use crate::lower::arith::nan::{self, NanTest};
 use crate::lower::arith::narrow;
 use crate::lower::arith::ops::{fsplat, mask, ones, sext, splat, ty, CastKind};
-use crate::lower::arith::srgb;
+use crate::lower::arith::{srgb, srgb_conversions};
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
 use crate::spirv::error::{BResult, BuildError, TypeRule};
 use crate::spirv::ids::{FuncId, GlobalId, Value};
@@ -3943,8 +3943,8 @@ fn unpackable() -> crate::spirv::error::BuildError {
 /// product with `2^N - 1` (`2^(N-1) - 1`) rounded to the nearest even integer: the **exact**
 /// product ([`round_exact_product_lanes`]), except for `rgb565` and the `snorm` `rgb10a2`, which
 /// round the `f32` product ([`pack_rounding`]). The sRGB format encodes the color channels through
-/// Metal's twelve-bit table ([`srgb::search`] of the exact product with 4095), which `srgb` (the
-/// module's table) holds.
+/// Metal's twelve-bit table (the byte [`srgb::search`] finds for the exact product with 4095, read
+/// at once: [`srgb_conversions::encoded`]), which `srgb` (the module's table) holds.
 ///
 /// Every channel runs one lane of one vector sequence, its scale a per-lane constant: the
 /// instructions are lane-wise, so each lane computes exactly what it computed alone. Only the sRGB
@@ -4014,7 +4014,7 @@ pub fn pack(
         for i in 0..widths.len() {
             let field = fb.composite_extract(r, &[i as u32])?;
             fields.push(if i < color {
-                srgb::search(fb, table, field)?
+                srgb_conversions::encoded(fb, table, field)?
             } else {
                 field
             });
@@ -4152,8 +4152,8 @@ pub fn round_exact_product_lanes(
 /// normalized integer to a float: `c / (2^N - 1)` (snorm: `max(c / (2^(N-1) - 1), -1)`), the
 /// quotient correctly rounded ([`div_exact`]), except the `snorm` `rgb10a2`, which multiplies by
 /// the `f32` reciprocal ([`unpack_rounding`]); the sRGB format decodes the color channels through
-/// Metal's twelve-bit table (`k / 4095` of the step [`srgb::step`]), which `srgb` (the module's
-/// table) holds. A narrow form rounds each lane (so rounds twice, as Metal's `half` answers do).
+/// Metal's twelve-bit table (`k / 4095` of the step [`srgb::step`]) and alpha as `c / 255`, both
+/// read as their bits from `srgb` (the module's table, [`srgb_conversions`]). A narrow form rounds each lane (so rounds twice, as Metal's `half` answers do).
 /// The packed float formats decode exactly (`unpack_float`).
 ///
 /// Every channel runs one lane of one vector sequence, its field and divisor per-lane constants:
@@ -4194,18 +4194,20 @@ pub fn unpack(
     let m = per_lane(fb, u, &m)?;
     let v = bin(fb, BinOp::BitwiseAnd, v, m)?;
     let q = if format == PackFormat::Unorm4x8Srgb {
-        // The color channels' steps over 4095, the alpha channel's byte over 255.
+        // The color channels' decodes, the alpha channel's byte over 255, read as their bits.
         let table = srgb.ok_or_else(unpackable)?;
-        let mut k = Vec::with_capacity(widths.len());
+        let mut bits = Vec::with_capacity(widths.len());
         for i in 0..widths.len() {
             let b = fb.composite_extract(v, &[i as u32])?;
-            k.push(if i < 3 { srgb::step(fb, table, b)? } else { b });
+            bits.push(if i < 3 {
+                srgb_conversions::decoded(fb, table, b)?
+            } else {
+                srgb_conversions::quotient(fb, table, b)?
+            });
         }
-        let k = fb.composite_construct(ut, &k)?;
-        let d: Vec<u32> = (0..widths.len())
-            .map(|i| if i < 3 { 4095 } else { 255 })
-            .collect();
-        div_exact_lanes(fb, u, k, &d)?
+        let bits = fb.composite_construct(ut, &bits)?;
+        let st = ty(fb, s)?;
+        fb.convert(ConvOp::Bitcast, bits, st)?
     } else if snorm {
         let d: Vec<u32> = widths.iter().map(|n| (1u32 << (n - 1)) - 1).collect();
         let up: Vec<u64> = widths.iter().map(|n| u64::from(32 - n)).collect();

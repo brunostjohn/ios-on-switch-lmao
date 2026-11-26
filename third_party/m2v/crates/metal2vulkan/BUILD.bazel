@@ -221,6 +221,23 @@ rust_test(
     deps = ["//third_party/m2v/crates/metal2vulkan-devtools"],
 )
 
+# Metal's sRGB decode of every byte and encode at every threshold, run on the interpreter, and the words each charges
+rust_test(
+    name = "srgb_conversions_test",
+    args = [
+        "lower::arith::tests::narrow::srgb_conversions_",
+        "lower::arith::srgb_conversions::",
+    ],
+    compile_data = glob(["tests/**"]),
+    crate = ":metal2vulkan",
+    data = [
+        "//third_party/m2v:translation_test_inputs",
+        "@spirv_tools//:spirv-val",
+    ],
+    env = {"METAL2VULKAN_SPIRV_VAL": "$(rootpath @spirv_tools//:spirv-val)"},
+    deps = ["//third_party/m2v/crates/metal2vulkan-devtools"],
+)
+
 rust_test(
     name = "store_code_test",
     args = ["lower::arith::tests::store_code::"],
@@ -276,13 +293,51 @@ rust_test(
 )
 
 # A slice-choosing vertex function links with the layered storage form, and a slice-reading fragment function compiled
-# for another vertex function stays refused (pipeline/link/varyings.rs)
+# for another vertex function stays refused (pipeline/link/varyings.rs); an amplified draw takes the storage form one
+# amplification at a time (tests/engine_amplified_storage.rs)
 rust_test(
     name = "layered_storage_link_test",
-    args = ["tests::engine_layered_storage_link::"],
+    args = [
+        "tests::engine_amplified_storage::",
+        "tests::engine_layered_storage_link::",
+    ],
     compile_data = glob(["tests/**"]),
     crate = ":metal2vulkan",
     data = ["@gpu_llvm_as//:bin/llvm-as"],
+    env = {"METAL2VULKAN_LLVM_AS": "$(rootpath @gpu_llvm_as//:bin/llvm-as)"},
+    deps = ["//third_party/m2v/crates/metal2vulkan-devtools"],
+)
+
+# The storage form's choice (lower/fragment/fetch/tests.rs): what blocks it and how it declares an attachment, on the
+# committed profiles it names
+rust_test(
+    name = "fetch_form_test",
+    args = ["lower::fragment::fetch::tests::"],
+    compile_data = glob(["tests/**"]),
+    crate = ":metal2vulkan",
+    data = [
+        "//third_party/m2v:fetch_test_inputs",
+        "//third_party/m2v:translation_test_inputs",
+    ],
+    deps = ["//third_party/m2v/crates/metal2vulkan-devtools"],
+)
+
+# The binder's storage attachments on MoltenVK's M3 profile (tests/engine_fragment.rs): the attachment's own storage
+# view, the layered variant in a pass of layers, an amplified draw drawn one amplification at a time, refused as views.
+# The file's other tests need fixtures this import leaves out.
+rust_test(
+    name = "storage_binder_test",
+    args = [
+        "--exact",
+        "tests::engine_fragment::the_binder_writes_storage_attachments_and_layers_them_in_layered_passes",
+    ],
+    compile_data = glob(["tests/**"]),
+    crate = ":metal2vulkan",
+    data = [
+        "//third_party/m2v:fetch_test_inputs",
+        "//third_party/m2v:translation_test_inputs",
+        "@gpu_llvm_as//:bin/llvm-as",
+    ],
     env = {"METAL2VULKAN_LLVM_AS": "$(rootpath @gpu_llvm_as//:bin/llvm-as)"},
     deps = ["//third_party/m2v/crates/metal2vulkan-devtools"],
 )

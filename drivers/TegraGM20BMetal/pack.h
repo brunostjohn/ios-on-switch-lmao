@@ -59,8 +59,8 @@ enum PackAssumption : uint32_t {
     AssumeRopZeroOneFactors = 1u << 20,  // a factor of zero drops its term (an infinity or NaN too), one passes it
     // a normalized source clamped to [0, 1] (NaN 0), the store rounding to the nearest code
     AssumeRopUnormStore = 1u << 21,
-    AssumeRopHalfStore = 1u << 22,     // a half store rounding to nearest even
-    AssumeRopSrgbTables = 1u << 23,    // sRGB decoded and encoded by Metal's tables
+    AssumeRopHalfStore = 1u << 22,   // a half store rounding to nearest even, a packed float one as the storage write's
+    AssumeRopSrgbTables = 1u << 23,  // sRGB decoded and encoded by Metal's tables
     AssumeRopMinMaxNumber = 1u << 24,  // Min and Max answer the operand that is not a NaN
     AssumeRopDenormals = 1u << 25,     // f32 denormals flushed to zero
     // The pass draws into a turned plane (rotation.h): the fragment program reads the frame through the root table's turn

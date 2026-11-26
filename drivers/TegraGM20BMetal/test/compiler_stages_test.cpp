@@ -416,3 +416,56 @@ TEST_F(CompilerStages, FetchDepthOnlyStencilWriteCompilesWithShaderStencilTest)
         EXPECT_EQ(record.pipeline.storageTests, 4u) << ds;
     }
 }
+
+// Fetching states of vertex amplification in Weather's VFX particles' colour layouts (maxVertexAmplificationCount 2, a
+// blended RGBA16Float, RGBA8Unorm or RG11B10Float colour 0, a Depth32Float_Stencil8 attachment), drawn one amplification
+// at a time, each into its layer: a function no test can drop a write of takes the storage form under early tests, and
+// one that discards the storage form of each class of tests a draw asks
+TEST_F(CompilerStages, AnAmplifiedFetchStateTakesTheStorageForm)
+{
+    nmb_keep_translations(0);
+    Compiler compiler(false);
+    const std::string fetchDiscard = " | f stages_fetch_discard_fragment lib=" + std::string(kLibrary);
+    const std::string head = "samples=1 topo=3 ds=260/260 amp=2";
+    for (const char *colours :
+         {"c0=115:15:1:1:5:0:1:5:0", "c0=70:15:1:1:5:0:1:5:0",
+          "c0=92:15:1:1:5:0:1:5:0 c1=115:15:0:1:0:0:1:0:0 c2=70:15:0:1:0:0:1:0:0 c3=115:15:0:1:0:0:1:0:0"}) {
+        for (uint32_t tests = 0; tests <= 4; tests++) {
+            const std::string line =
+                tests ? state(head, colours, kAttributes, fetchDiscard) + " | tests=" + std::to_string(tests)
+                      : state(head, colours, kAttributes, kFetch);
+            const Made made = compiler.render(line);
+            ASSERT_EQ(made.result, TegraGM20BCompileMade) << colours << " tests=" << tests << ": " << made.why;
+            gm20b::RuntimeRecord record;
+            std::string refusal;
+            ASSERT_EQ(gm20b::decodeEntry(made.entry, made.key, record, refusal), gm20b::RecordCache::Found::Record)
+                << colours << " tests=" << tests << ": " << refusal;
+            EXPECT_EQ(record.pipeline.storageMask, 1u) << colours << " tests=" << tests;
+            EXPECT_EQ(record.pipeline.storageTests, tests) << colours;
+            EXPECT_EQ(record.pipeline.amplificationMax, 2u) << colours << " tests=" << tests;
+            EXPECT_TRUE(gm20b::layeredRecord(uint8_t(record.pipeline.arrayLengthWord)))
+                << colours << " tests=" << tests;
+        }
+    }
+}
+
+// A multisampled fetching state of vertex amplification: its draws' layered form has no multisampled storage, so it
+// fetches through its input attachment, beside a depth and stencil attachment or none, and its record still draws each
+// amplification into its layer
+TEST_F(CompilerStages, AMultisampledAmplifiedFetchStateReadsItsInputAttachment)
+{
+    nmb_keep_translations(0);
+    Compiler compiler(false);
+    for (const char *head : {"samples=4 topo=3 ds=0/0 amp=2", "samples=4 topo=3 ds=260/260 amp=2"}) {
+        const Made made = compiler.render(state(head, "c0=70:15:1:1:5:0:1:5:0", kAttributes, kFetch));
+        ASSERT_EQ(made.result, TegraGM20BCompileMade) << head << ": " << made.why;
+        gm20b::RuntimeRecord record;
+        std::string refusal;
+        ASSERT_EQ(gm20b::decodeEntry(made.entry, made.key, record, refusal), gm20b::RecordCache::Found::Record)
+            << head << ": " << refusal;
+        EXPECT_TRUE(record.pipeline.flags & gm20b::PipelineFetches) << head;
+        EXPECT_EQ(record.pipeline.storageMask, 0u) << head;
+        EXPECT_EQ(record.pipeline.amplificationMax, 2u) << head;
+        EXPECT_TRUE(gm20b::layeredRecord(uint8_t(record.pipeline.arrayLengthWord))) << head;
+    }
+}

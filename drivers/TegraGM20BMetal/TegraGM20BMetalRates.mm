@@ -468,15 +468,15 @@ void gm20bStallTick()
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 // The fetch barrier's way, switched from the Mac within one boot (`idevicenotificationproxy -u <udid> post
-// com.brunostjohn.switch.debug.fetch-barrier-<ps|psonly|none>`), to measure what the barrier costs: the shipped barrier
-// and texture invalidate (ps) against the barrier alone (psonly) and nothing (none). Measurement only: psonly and none
+// com.brunostjohn.switch.debug.fetch-barrier-<ps|psonly|none|tiles>`), to measure what the barrier costs: the shipped
+// barrier and texture invalidate (ps) against the barrier alone (psonly), nothing (none) and the tile barrier (tiles). Measurement only: psonly and none
 // let a fetching draw read colors still being written. wfi, HW Test's ui.glass_ab, goes back to ps after a minute
 // unless another way was posted since
 void watchFetchBarrierWay(gm20b::Device *dev)
 {
     using Way = gm20b::Device::FetchBarrier;
     static std::atomic<uint32_t> posted{0};
-    for (const Way way : {Way::PixelShader, Way::PixelShaderOnly, Way::None, Way::WaitForIdle}) {
+    for (const Way way : {Way::PixelShader, Way::PixelShaderOnly, Way::None, Way::WaitForIdle, Way::Tiles}) {
         char name[96];
         snprintf(name, sizeof name, "com.brunostjohn.switch.debug.fetch-barrier-%s",
                  gm20b::Device::fetchBarrierName(way));

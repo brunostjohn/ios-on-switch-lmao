@@ -261,12 +261,17 @@ StorageFallback RenderEncoder::storageFallback(const Pipeline &pl) const
 // The state's fetch-free form where this draw takes it (fetch_free.h): the blended colour's target in the pass,
 // CPU-visible memory that is not a surface, the rung-2 blends already over it, whether every image its program samples
 // is of unorm8 codes, and whether the pass loads it over an earlier command buffer's rung-2 blends decide rule fetch.blend
-Pipeline *RenderEncoder::fetchFreeFor(const Pipeline &pl)
+Pipeline *RenderEncoder::fetchFreeFor(const Pipeline &pl, [[maybe_unused]] StorageRoute *route)
 {
     Pipeline *free = __atomic_load_n(&pl.fetchFree, __ATOMIC_ACQUIRE);
+    SWITCH_METAL_DIAGNOSTIC(if (route) route->free = FreeMiss::NoForm);
     if (!free)
         return nullptr;
     const FetchFreeForm &f = free->freeForm;
+    SWITCH_METAL_DIAGNOSTIC(if (route) {
+        route->free = FreeMiss::NoTarget;
+        route->rung = f.rung;
+    });
     const Texture *t = f.colour < pass_.count ? pass_.color[f.colour].texture : nullptr;
     if (t && f.colour < 8 && shadowOf_[f.colour])
         t = shadowOf_[f.colour];  // the texture the client holds, not the pool image the pass renders it through
@@ -281,8 +286,13 @@ Pipeline *RenderEncoder::fetchFreeFor(const Pipeline &pl)
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     forced = dev_->probeFetchRung.load(std::memory_order_relaxed);
 #endif
+    SWITCH_METAL_DIAGNOSTIC(if (route) {
+        route->free = FreeMiss::Rule;
+        route->draw = draw;
+    });
     if (!fetchFreeTaken(f, draw, forced))
         return nullptr;
+    SWITCH_METAL_DIAGNOSTIC(if (route) route->free = FreeMiss::None);
     if (f.rung == FetchBlend && fixedBlendCountsLayer(uint16_t(t->format), draw.eightBitSources) &&
         ropLayers_[f.colour] < 255)
         ropLayers_[f.colour]++;
@@ -310,16 +320,35 @@ Pipeline *RenderEncoder::formFor(Pipeline *pl, const FetchDraw &shape)
         if (Pipeline *twin = barrierTwin ? barrierTwin : blendTwin)
             return twin;
 #endif
+    StorageRoute route;
     if (pl)
-        if (Pipeline *free = fetchFreeFor(*pl))
+        if (Pipeline *free = fetchFreeFor(*pl, SWITCH_METAL_DIAGNOSTICS ? &route : nullptr))
             return free;
-    if (!pl || !pl->storageBits)
+    if (!pl || !pl->storageBits) {
+#if SWITCH_METAL_DIAGNOSTICS
+        if (pl && pl->fetchBits && pl->rec) {
+            route.key = pl->rec->keyHash;
+            route.barrier = true;
+            route.triangles = triangles(shape);
+            route.areaPixels = areaW_ * areaH_;
+            noteStorageRoute(route);
+        }
+#endif
         return pl;
+    }
     const StorageFallback reason = storageFallback(*pl);
     if (reason == StorageFallback::None) {
         Pipeline *twin = blendTwin ? blendTwin : barrierTwin;
-        if (forced || !twin || !twinTaken({shape, twin->primitiveId, uint64_t(areaW_) * areaH_, amplifications_ > 1}))
+        if (forced || !twin || !twinTaken({shape, twin->primitiveId, uint64_t(areaW_) * areaH_, amplifications_ > 1})) {
+#if SWITCH_METAL_DIAGNOSTICS
+            route.key = pl->rec ? pl->rec->keyHash : 0;
+            route.twin = !twin ? TwinMiss::NoTwin : forced ? TwinMiss::Probe : TwinMiss::Shape;
+            route.triangles = triangles(shape);
+            route.areaPixels = areaW_ * areaH_;
+            noteStorageRoute(route);
+#endif
             return pl;
+        }
         SWITCH_METAL_DIAGNOSTIC(cb_->counts_.twinRule++);
         return twin;
     }
