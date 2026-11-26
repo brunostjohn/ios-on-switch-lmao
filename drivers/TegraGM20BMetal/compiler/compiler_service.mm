@@ -125,7 +125,9 @@ private:
     std::unique_ptr<Pool> pool_;
     size_t bufferBytes_ = 1u << 20;
     std::unique_ptr<uint8_t[]> buffer_ = untouched(bufferBytes_);
-    Persister persister_{[this] { persist(); }};
+    Persister persister_{[this] {
+        persist();
+    }};
 
     int call(uint32_t method, const void *in, size_t inSize, void *out, size_t outSize)
     {
@@ -561,7 +563,9 @@ void Service::serve()
 // it only sleeps in the kernel and hands each request on, and a compile runs at its waiters' class on a pool worker.
 extern "C" __attribute__((visibility("default"))) int switch_shader_compiler_main(void)
 {
-    static switch_compiler::Service service;
+    // Never destroyed: the take thread, the pool's workers and a pending sync of the store still run while exit()
+    // runs static destructors
+    static switch_compiler::Service &service = *new switch_compiler::Service;
     IONotificationPortRef port = IONotificationPortCreate(kIOMainPortDefault);
     IONotificationPortSetDispatchQueue(port, dispatch_get_main_queue());
     io_iterator_t matches = 0;

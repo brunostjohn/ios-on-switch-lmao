@@ -279,9 +279,10 @@ TEST_F(SeedStore, AnEntryPastTheDurableEndIsRetiredByAWriterOfALaterBoot)
         openIn(writer, "boot A");
         ASSERT_EQ(put(writer, 1), pack::StoreWriter::Put::Added);
         ASSERT_EQ(put(writer, 2), pack::StoreWriter::Put::Added);
+        const uint64_t written = writer.layout().dataOffset + writer.dataUsed();
         ASSERT_TRUE(writer.persist());
         durable = writer.durableEnd();
-        EXPECT_EQ(durable, writer.layout().dataOffset + writer.dataUsed());
+        EXPECT_EQ(durable, written);
         ASSERT_EQ(put(writer, 3), pack::StoreWriter::Put::Added);
     }
     pack::StoreWriter writer;
@@ -296,6 +297,74 @@ TEST_F(SeedStore, AnEntryPastTheDurableEndIsRetiredByAWriterOfALaterBoot)
     pack::Bytes found;
     ASSERT_TRUE(writer.reader().find(nameOf(3).data(), found));
     EXPECT_GE(uint64_t(found.data - writer.base()), durable) << "a new entry lands past what a later boot trusts";
+    EXPECT_EQ(uint64_t(found.data - writer.base()) % pack::kStorePageBytes, 0u) << "and off the mark's page";
+}
+
+uint64_t offsetOf(const pack::StoreWriter &writer, uint32_t n)
+{
+    pack::Bytes found;
+    return writer.reader().find(nameOf(n).data(), found) ? uint64_t(found.data - writer.base()) : 0;
+}
+
+// A torn write of the page an entry shares with trusted bytes would corrupt them with nothing to see it
+TEST_F(SeedStore, AnEntryPutAfterAPersistStartsOnAPageOfItsOwn)
+{
+    pack::StoreWriter writer;
+    openIn(writer, "boot A");
+    ASSERT_EQ(put(writer, 1), pack::StoreWriter::Put::Added);
+    ASSERT_TRUE(writer.persist());
+    const uint64_t durable = writer.durableEnd();
+    ASSERT_EQ(put(writer, 2), pack::StoreWriter::Put::Added);
+    EXPECT_EQ(offsetOf(writer, 2) % pack::kStorePageBytes, 0u);
+    EXPECT_GE(offsetOf(writer, 2), durable);
+    ASSERT_EQ(put(writer, 3), pack::StoreWriter::Put::Added);
+    EXPECT_EQ(offsetOf(writer, 3), offsetOf(writer, 2) + bytesOf(2).size() + (8 - bytesOf(2).size() % 8) % 8)
+        << "entries between persists are packed";
+}
+
+// The compiler restarted in the boot that wrote the store, its newest entries retired (a refusal made again): the
+// bytes below the mark are a later boot's to trust, so nothing is written there again
+TEST_F(SeedStore, ASameBootWriterWhoseNewestEntriesWereRetiredAppendsPastTheMark)
+{
+    uint64_t durable = 0;
+    {
+        pack::StoreWriter writer;
+        openIn(writer, "boot A");
+        ASSERT_EQ(put(writer, 1), pack::StoreWriter::Put::Added);
+        ASSERT_EQ(put(writer, 2), pack::StoreWriter::Put::Added);
+        ASSERT_TRUE(writer.persist());
+        durable = writer.durableEnd();
+        ASSERT_TRUE(writer.retire(nameOf(2).data()));
+    }
+    pack::StoreWriter writer;
+    openIn(writer, "boot A");
+    ASSERT_EQ(put(writer, 3), pack::StoreWriter::Put::Added);
+    EXPECT_GE(offsetOf(writer, 3), durable);
+    EXPECT_EQ(offsetOf(writer, 3) % pack::kStorePageBytes, 0u);
+    EXPECT_TRUE(holds(writer.reader(), 1));
+}
+
+// The newer mark's write torn so its generation is the old one's: the older mark is read, which trusts less
+TEST_F(SeedStore, ATornNewerMarkFallsBackToTheOlderMark)
+{
+    uint64_t older = 0;
+    {
+        pack::StoreWriter writer;
+        openIn(writer, "boot A");
+        ASSERT_EQ(put(writer, 1), pack::StoreWriter::Put::Added);
+        ASSERT_TRUE(writer.persist());
+        older = writer.durableEnd();
+        ASSERT_EQ(put(writer, 2), pack::StoreWriter::Put::Added);
+        ASSERT_TRUE(writer.persist());
+        ASSERT_GT(writer.durableEnd(), older);
+        uint8_t *newer = writer.base() + pack::kStoreMarksAt;  // generation 2's slot
+        memset(newer + 8, 0, 8);
+    }
+    pack::StoreWriter writer;
+    openIn(writer, "boot B");
+    EXPECT_EQ(writer.durableEnd(), older);
+    EXPECT_TRUE(holds(writer.reader(), 1));
+    EXPECT_FALSE(holds(writer.reader(), 2));
 }
 
 // The compiler started again in the boot that wrote the store: the page cache holds every published entry whole

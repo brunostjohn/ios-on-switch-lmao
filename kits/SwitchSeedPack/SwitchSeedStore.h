@@ -4,8 +4,8 @@
 // and a lookup is a probe of the slot table in memory: no system call.
 //
 //   header (kStoreHeaderBytes): magic "SWSTORE1" | version u32 | name bytes u32 | slots u32 (a power of two) | 0 u32
-//          | data offset u64 | data bytes u64 | identity [32] | durable end u64 | writer's boot [kStoreBootBytes]
-//          (little endian)
+//          | data offset u64 | data bytes u64 | identity [32] | 2 x (durable end u64, generation u64)
+//          | writer's boot [kStoreBootBytes] (little endian)
 //   slots, from kStoreHeaderBytes: per slot offset u64 | length u32 | 0 u32 | name [kStoreNameBytes]
 //   data, from data offset: the entries' bytes, each at a kStoreAlignment boundary; an entry whose length is a whole
 //          number of kStorePageBytes pages starts on such a page and has its pages to itself (a GPU client imports
@@ -19,7 +19,10 @@
 // published entry is whole to every reader. A panic or power cut can leave a slot on the medium without its bytes (pages
 // are written back in any order), so persist() syncs every published entry before it moves the durable end past them,
 // and a writer opening the store in a later boot retires each entry that ends past that mark. Nothing reads an entry's
-// bytes to decide it is whole. A slot is never emptied again: a retired one holds kRetired, which a probe steps over.
+// bytes to decide it is whole, so nothing may write a page that holds bytes below the mark once it is set: data is
+// only ever appended at or past the mark rounded up to a page, and a persist moves the next append to a page of its
+// own. The mark is written into whichever of its two slots holds the older one, so a write torn inside it leaves a mark
+// no newer than the last whole one (the newer generation is read, and its end only grows). A slot is never emptied again: a retired one holds kRetired, which a probe steps over.
 // Names are hashes: their first bytes pick the slot a probe starts at.
 #pragma once
 #include "SwitchSeedPack.h"
@@ -38,7 +41,7 @@ constexpr char kStoreMagic[8] = {'S', 'W', 'S', 'T', 'O', 'R', 'E', '1'};
 constexpr uint32_t kStoreVersion = 2, kStoreNameBytes = 32, kStoreAlignment = 8;
 constexpr uint64_t kStorePageBytes = 16384;
 constexpr size_t kStoreHeaderBytes = 4096, kStoreSlotBytes = 16 + kStoreNameBytes;
-constexpr size_t kStoreDurableAt = 72, kStoreBootAt = 80, kStoreBootBytes = 48;
+constexpr size_t kStoreMarksAt = 72, kStoreMarkBytes = 16, kStoreBootAt = 104, kStoreBootBytes = 48;
 constexpr uint64_t kRetired = ~uint64_t(0);
 
 // kern.bootsessionuuid, which every boot draws anew; false where the system gives none
@@ -219,12 +222,15 @@ public:
         uint64_t from = 0, end = 0, changes = 0;
     };
 
-    // False: nothing was put or retired since the last persist
-    bool pending(Pending &out) const
+    // False: nothing was put or retired since the last persist. Every byte written since the mark lies at or past the
+    // mark's page end; the next put starts on a page of its own, so no later sync rewrites one this persist trusts.
+    bool pending(Pending &out)
     {
         if (!base_ || changes_ == persisted_)
             return false;
-        out = {le64(base_ + kStoreDurableAt) & ~(kStorePageBytes - 1), end_, changes_};
+        out = {pageEnd(durable()), end_, changes_};
+        if (end_ > out.from)
+            end_ = pageEnd(end_);
         return true;
     }
 
@@ -236,11 +242,15 @@ public:
                msync(base_, size_t(layout_.dataOffset), MS_SYNC) == 0 && syncBarrier(fd_);
     }
 
-    // After sync(p): the durable end moved past `p`, for syncMark to sync
+    // After sync(p): the durable end moved past `p`, for syncMark to sync, in the slot of the older mark
     void markDurable(const Pending &p)
     {
-        if (p.end > le64(base_ + kStoreDurableAt))
-            putLe64(base_ + kStoreDurableAt, p.end);
+        if (p.end > durable()) {
+            const uint64_t generation = markGeneration() + 1;
+            uint8_t *mark = base_ + kStoreMarksAt + (generation & 1) * kStoreMarkBytes;
+            putLe64(mark, p.end);
+            putLe64(mark + 8, generation);
+        }
         persisted_ = std::max(persisted_, p.changes);
     }
 
@@ -347,7 +357,7 @@ public:
 
     uint64_t durableEnd() const
     {
-        return base_ ? le64(base_ + kStoreDurableAt) : 0;
+        return base_ ? durable() : 0;
     }
 
     const StoreLayout &layout() const
@@ -387,6 +397,25 @@ private:
     uint8_t *slotAt(uint32_t slot) const
     {
         return base_ + kStoreHeaderBytes + uint64_t(slot) * kStoreSlotBytes;
+    }
+
+    uint64_t pageEnd(uint64_t offset) const
+    {
+        return std::min((offset + kStorePageBytes - 1) & ~(kStorePageBytes - 1), layout_.fileBytes());
+    }
+
+    // The two marks' newer generation, 0 for a store never persisted
+    uint64_t markGeneration() const
+    {
+        return std::max(le64(base_ + kStoreMarksAt + 8), le64(base_ + kStoreMarksAt + kStoreMarkBytes + 8));
+    }
+
+    // The newer mark's end: every published entry below it is on the medium (the data offset: none is)
+    uint64_t durable() const
+    {
+        const uint8_t *first = base_ + kStoreMarksAt, *second = first + kStoreMarkBytes;
+        const uint8_t *newer = le64(second + 8) > le64(first + 8) ? second : first;
+        return std::clamp(le64(newer), layout_.dataOffset, layout_.fileBytes());
     }
 
     bool mapRange(uint64_t bytes)
@@ -445,7 +474,6 @@ private:
         putLe64(base_ + 24, wanted.dataOffset);
         putLe64(base_ + 32, wanted.dataBytes);
         memcpy(base_ + 40, identity, kIdentityBytes);
-        putLe64(base_ + kStoreDurableAt, wanted.dataOffset);
         return reader_.attach(base_, size_t(wanted.fileBytes()), identity) ||
                (error = "the store made does not parse", false);
     }
@@ -454,7 +482,7 @@ private:
     // those below the durable end are, and the rest are retired before any reader maps the store
     void recover(bool sameBoot)
     {
-        const uint64_t durable = le64(base_ + kStoreDurableAt);
+        const uint64_t durable = this->durable();
         end_ = layout_.dataOffset;
         for (uint32_t slot = 0; slot < layout_.slots; ++slot) {
             uint8_t *entry = slotAt(slot);
@@ -475,9 +503,9 @@ private:
             ++used_;
             end_ = entryEnd > end_ && entryEnd <= layout_.fileBytes() ? entryEnd : end_;
         }
-        // nothing new lands below the mark, where a later boot would trust it before it was synced
-        if (!sameBoot)
-            end_ = std::max(end_, std::min(durable, layout_.fileBytes()));
+        // nothing new lands in a page that holds bytes below the mark, in either case: the same boot's newest entries
+        // may have been retired below it
+        end_ = std::max(end_, pageEnd(durable));
     }
 };
 
