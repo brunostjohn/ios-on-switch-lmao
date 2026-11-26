@@ -139,29 +139,44 @@ extension BlendKillTest {
         return (wrong, killBinds(gpu) - binds, [drawn.path])
     }
 
-    static func reachArms(_ gpu: GPU, _ metrics: inout Metrics, _ wrong: inout [String], _ paths: inout [String])
-        async throws
-    {
-        for (label, fragment) in [("late_depth", "blend_kill_depth_fragment"), ("late_discard", "blend_kill_discard_fragment")] {
-            let arm = try await lateArm(gpu, fragment: fragment)
-            metrics.set("\(label)_wrong", arm.wrong)
-            metrics.set("\(label)_colour_changed_bytes", arm.colourChanged)
-            metrics.set("\(label)_kill_binds", arm.binds)
-            paths.append(arm.path)
-            if arm.wrong != 0 { wrong.append("\(label)_wrong") }
-            if arm.colourChanged != 0 { wrong.append("\(label)_colour_changed_bytes") }
-            // with the kill off the arm asks nothing of it
-            if arm.binds == 0 { wrong.append("\(label)_kill_binds") }
+    /// Each arm into `metrics`; an arm that throws is `<arm>_error`, and the others still run
+    static func reachArms(_ gpu: GPU, _ metrics: inout Metrics, _ wrong: inout [String], _ paths: inout [String]) async {
+        func failed(_ arm: String, _ error: Error) -> [String] {
+            metrics.set("\(arm)_error", String(describing: error).prefix(80).description)
+            return ["\(arm)_error"]
         }
-        let visibility = try await visibilityArm(gpu)
-        metrics.set("visibility_counted", Int(visibility.counted))
-        metrics.set("visibility_wanted", Int(visibility.wanted))
-        paths.append(visibility.path)
-        if visibility.counted != visibility.wanted { wrong.append("visibility_counted") }
-        let zero = try await zeroClearArm(gpu)
-        metrics.set("zero_clear_wrong", zero.wrong)
-        metrics.set("zero_clear_kill_binds", zero.binds)
-        paths.append(contentsOf: zero.paths)
-        if zero.wrong != 0 { wrong.append("zero_clear_wrong") }
+        for (label, fragment) in [("late_depth", "blend_kill_depth_fragment"), ("late_discard", "blend_kill_discard_fragment")] {
+            do {
+                let arm = try await lateArm(gpu, fragment: fragment)
+                metrics.set("\(label)_wrong", arm.wrong)
+                metrics.set("\(label)_colour_changed_bytes", arm.colourChanged)
+                metrics.set("\(label)_kill_binds", arm.binds)
+                paths.append(arm.path)
+                if arm.wrong != 0 { wrong.append("\(label)_wrong") }
+                if arm.colourChanged != 0 { wrong.append("\(label)_colour_changed_bytes") }
+                // with the kill off the arm asks nothing of it
+                if arm.binds == 0 { wrong.append("\(label)_kill_binds") }
+            } catch {
+                wrong += failed(label, error)
+            }
+        }
+        do {
+            let visibility = try await visibilityArm(gpu)
+            metrics.set("visibility_counted", Int(visibility.counted))
+            metrics.set("visibility_wanted", Int(visibility.wanted))
+            paths.append(visibility.path)
+            if visibility.counted != visibility.wanted { wrong.append("visibility_counted") }
+        } catch {
+            wrong += failed("visibility", error)
+        }
+        do {
+            let zero = try await zeroClearArm(gpu)
+            metrics.set("zero_clear_wrong", zero.wrong)
+            metrics.set("zero_clear_kill_binds", zero.binds)
+            paths.append(contentsOf: zero.paths)
+            if zero.wrong != 0 { wrong.append("zero_clear_wrong") }
+        } catch {
+            wrong += failed("zero_clear", error)
+        }
     }
 }

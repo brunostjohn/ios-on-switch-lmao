@@ -29,15 +29,24 @@ struct AegirMoonTest: HWTest {
         layer.pixelFormat = .bgr10_xr_srgb
         layer.framebufferOnly = false
         layer.drawableSize = CGSize(width: AegirMoon.side, height: AegirMoon.side)
-        guard let drawable = layer.nextDrawable() else { return .fail("layer_no_drawable", Metrics()) }
+        let drawable = layer.nextDrawable()
         let facts = { (texture: MTLTexture) in
             SameBitsCases.facts(gpu, texture).sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }
                 .joined(separator: ",")
         }
         var metrics = Metrics()
-        var wrong: [String] = []
-        for (arm, given) in [("layer", drawable.texture), ("surface", nil)] as [(String, MTLTexture?)] {
-            let reading = try await AegirMoon.run(gpu, drawable: given, facts: facts)
+        var wrong: [String] = drawable == nil ? ["layer_no_drawable"] : []
+        var arms: [(String, MTLTexture?)] = [("surface", nil)]
+        if let drawable { arms.insert(("layer", drawable.texture), at: 0) }
+        for (arm, given) in arms {
+            let reading: AegirMoon.Reading
+            do {
+                reading = try await AegirMoon.run(gpu, drawable: given, facts: facts)
+            } catch {
+                metrics.set("\(arm)_error", String(describing: error).prefix(80).description)
+                wrong.append("\(arm)_error")
+                continue
+            }
             for (check, off) in AegirMoon.misses(reading) {
                 metrics.set("\(arm)_\(check)_off", off)
                 if off != 0 { wrong.append("\(arm)_\(check)") }
@@ -48,7 +57,7 @@ struct AegirMoonTest: HWTest {
             metrics.set("\(arm)_path", reading.path)
             if reading.path != "gm20b" { wrong.append("\(arm)_path") }
         }
-        let layout = SameBitsCases.facts(gpu, drawable.texture)
+        let layout = drawable.map { SameBitsCases.facts(gpu, $0.texture) } ?? [:]
         if !layout.isEmpty && (layout["block_linear"] != 1 || layout["block_rows"] != 64) {
             wrong.append("layer_drawable_layout")
         }
