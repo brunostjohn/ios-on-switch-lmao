@@ -42,16 +42,64 @@ jobs:
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
       - run: bazel build --config=release //:boot //:gpu //release:assets
+      - name: Build desktop installer binaries and catalog tool
+        run: bazel build --config=release //release:installer_binaries //install/catalog:switch_catalog_tool
       - name: Name the assets for the release
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           dist="$RUNNER_TEMP/dist"
-          mkdir "$dist"
+          catalogs="$RUNNER_TEMP/catalogs"
+          mkdir -p "$dist" "$catalogs"
           files="$(bazel cquery --config=release --output=files //release:assets)"
           for f in $files; do
-            cp "$f" "$dist/ios-on-switch-lmao-$VERSION-$(basename "$f")"
+            cp -L "$f" "$dist/ios-on-switch-lmao-$VERSION-$(basename "$f")"
           done
+          for cfg in ios17 ios27; do
+            bazel build --config="$cfg" --config=release //release:installer_kind_assets
+            kind_files="$(bazel cquery --config="$cfg" --config=release --output=files //release:installer_kind_assets)"
+            for f in $kind_files; do
+              base="$(basename "$f")"
+              if [ "$base" = "catalog.json" ]; then
+                cp -fL "$f" "$catalogs/$cfg.json"
+              elif [ -e "$dist/$base" ]; then
+                if ! cmp -s "$f" "$dist/$base"; then
+                  echo "::error::Shared release asset $base differs for --config=$cfg."
+                  exit 1
+                fi
+              else
+                cp -L "$f" "$dist/$base"
+                chmod u+w "$dist/$base"
+              fi
+            done
+          done
+          catalog_tool="$(bazel cquery --config=release --output=files //install/catalog:switch_catalog_tool)"
+          "$catalog_tool" \
+            --merge "$catalogs/ios17.json" \
+            --merge "$catalogs/ios27.json" \
+            --require-role boot --require-role overlay --require-role bootstrap \
+            --assets-dir "$dist" \
+            --out "$dist/catalog.json"
+          bins="$(bazel cquery --config=release --output=files //release:installer_binaries)"
+          bin_count=0
+          for f in $bins; do
+            dir="$(basename "$(dirname "$f")")"
+            plat="${dir#desktop_}"
+            os="${plat%%_*}"
+            cpu="${plat#*_}"
+            ext=""
+            case "$f" in
+              *.exe) ext=".exe" ;;
+            esac
+            out="$dist/ios-on-switch-lmao-$VERSION-installer-$os-$cpu$ext"
+            cp -L "$f" "$out"
+            chmod +x "$out"
+            bin_count=$((bin_count + 1))
+          done
+          if [ "$bin_count" -ne 6 ]; then
+            echo "::error::Expected 6 desktop installer binaries, got $bin_count."
+            exit 1
+          fi
           cd "$dist"
           shasum -a 256 -- * > SHA256SUMS
           cat SHA256SUMS
@@ -118,3 +166,45 @@ jobs:
           fi
       - name: Dry-run the image builder on this build's assets
         run: bazel run --repo_env=SWITCH_RELEASE_DIR="$RUNNER_TEMP/assets" --//install:prebuilt=release //:image_dry_run
+  smoke-linux:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v8.0.2
+        with:
+          name: release-assets
+          path: ${{ runner.temp }}/assets
+      - name: Smoke-test the Linux x86_64 desktop installer
+        run: |
+          assets="$RUNNER_TEMP/assets"
+          bin="$(ls "$assets"/ios-on-switch-lmao-*-installer-linux-x86_64)"
+          chmod +x "$bin"
+          "$bin" --catalog "$assets/catalog.json" --list-builds
+          img="$RUNNER_TEMP/smoke.img"
+          truncate -s 64M "$img"
+          "$bin" --mode partition+install --build 21H461 --image "$img" --dry-run \
+            --catalog "$assets/catalog.json" --assets-dir "$assets" --no-tui
+  smoke-windows:
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v8.0.2
+        with:
+          name: release-assets
+          path: ${{ runner.temp }}/assets
+      - name: Smoke-test the Windows x86_64 desktop installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $assets = Join-Path $env:RUNNER_TEMP 'assets'
+          $bin = (Get-Item (Join-Path $assets 'ios-on-switch-lmao-*-installer-windows-x86_64.exe')).FullName
+          & $bin --catalog (Join-Path $assets 'catalog.json') --list-builds
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $img = Join-Path $env:RUNNER_TEMP 'smoke.img'
+          $fs = [System.IO.File]::OpenWrite($img)
+          try { $fs.SetLength(64MB) } finally { $fs.Dispose() }
+          & $bin --mode partition+install --build 21H461 --image $img --dry-run `
+            --catalog (Join-Path $assets 'catalog.json') --assets-dir $assets --no-tui
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

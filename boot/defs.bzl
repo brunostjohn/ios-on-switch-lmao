@@ -108,6 +108,10 @@ done
 
 # The overlay's installd: Apple's, patched and re-signed (drivers/SwitchInstallPolicy), so never in a release asset.
 _INSTALLD = "build/switch-apps/installd"
+_LAUNCHD_CATALOG = (
+    "build/switch-bootstrap/launchd.plist",
+    "build/switch-bootstrap/launchd.plist.sig",
+)
 
 def _one(target, what):
     files = target.files.to_list()
@@ -431,6 +435,26 @@ def _boot_package_impl(ctx):
     args.add("--out", overlay.path)
     _run(ctx, ctx.executable._overlay, [args], [plan] + files.values(), [overlay], "OverlayTree", "Laying out the userland overlay")
 
+    overlay_base = out("overlay-base.tar")
+    leave_out = [_INSTALLD] + (list(_LAUNCHD_CATALOG) if ctx.file.launchd_catalog else [])
+    shipped_files = {source: f for source, f in files.items() if source not in leave_out}
+    args = ctx.actions.args()
+    args.add("tree")
+    args.add("--plan", plan)
+    args.add_all(["%s=%s" % (source, f.path) for source, f in sorted(shipped_files.items())], before_each = "--file")
+    args.add_all(leave_out, before_each = "--leave-out")
+    args.add("--tar")
+    args.add("--out", overlay_base)
+    _run(
+        ctx,
+        ctx.executable._overlay,
+        [args],
+        [plan] + shipped_files.values(),
+        [overlay_base],
+        "OverlayTreeBase",
+        "Packing the release userland overlay",
+    )
+
     switchroot = {
         "bl31.bin": ctx.file.bl31,
         "bl33.bin": bl33,
@@ -480,6 +504,7 @@ def _boot_package_impl(ctx):
             launchd_catalog = depset(catalog_outputs),
             loader = depset([loader]),
             overlay = depset([plan, overlay_trust, overlay]),
+            overlay_base = depset([overlay_base]),
             overlay_trust_base = depset([overlay_trust_base]),
             stage = depset([boot_args, u_boot, script]),
             trust = depset([bundle]),

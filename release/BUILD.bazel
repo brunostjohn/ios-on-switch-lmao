@@ -106,6 +106,18 @@ filegroup(
     ],
 )
 
+ipsw_free(
+    name = "installer_kind_assets",
+    src = "//install/catalog:selected_catalog",
+    tags = ["manual"],
+)
+
+ipsw_free(
+    name = "installer_binaries",
+    src = "//install/installer:desktop",
+    tags = ["manual"],
+)
+
 ipsw_free_tests(
     name = "ipsw_free_test",
     bindings = "//kernel:prelink_bindings_12377",
@@ -113,6 +125,7 @@ ipsw_free_tests(
         "//boot:loader",
         "//boot:loader_constants",
     ],
+    fileset_pins = "//install/prelink:fileset_pins",
     member = "@ipsw//:app_cryptex_trust_cache",
     prelinked = "//kernel:kernel_12377",
     window = "//boot:kernel_window",

@@ -303,6 +303,13 @@ filegroup(
     output_group = "adt_base",
 )
 
+filegroup(
+    name = "overlay_assets",
+    srcs = [":package"],
+    output_group = "overlay_base",
+    tags = ["manual"],
+)
+
 # The release's boot assets for the selected kind, one tar: with the IPSW, everything the installer (install/boot)
 # makes this package's switchroot/, bootloader/ and Apple-made overlay files from, under the members it reads.
 boot_assets(
@@ -337,7 +344,10 @@ boot_assets(
         }
         for kind, ipsw in IPSWS.items()
         if ipsw.get("derived", {}).get("launchd_catalog_sha256")
-    } | {"//conditions:default": {}}),
+    } | {"//conditions:default": {}}) | select({
+        "//ipsw:ios27": {"//translate/arm64e/pretranslate:edits_24B119.json": "pretranslated/edits.json"},
+        "//conditions:default": {},
+    }),
     package = ":package",
     tags = ["manual"],
 )

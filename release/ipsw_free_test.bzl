@@ -63,6 +63,14 @@ def _bindings_passed_impl(ctx):
 
 _bindings_passed_test = analysistest.make(_bindings_passed_impl)
 
+def _fileset_pins_passed_impl(ctx):
+    env = analysistest.begin(ctx)
+    files = analysistest.target_under_test(env)[DefaultInfo].files.to_list()
+    asserts.equals(env, ["prelink-pins.json"], [f.basename for f in files])
+    return analysistest.end(env)
+
+_fileset_pins_passed_test = analysistest.make(_fileset_pins_passed_impl)
+
 def _file_refused_impl(ctx):
     env = analysistest.begin(ctx)
     asserts.expect_failure(env, "would ship Apple's bytes")
@@ -75,8 +83,8 @@ _file_refused_test = analysistest.make(
     attrs = {"file": attr.string(mandatory = True, doc = "a path the refusal names")},
 )
 
-def _bindings_tests(name, bindings, prelinked):
-    """The cases of the iOS 27 bindings: the export passes; every other file made beside it stays refused."""
+def _bindings_tests(name, bindings, prelinked, fileset_pins):
+    """The cases of the iOS 27 bindings and pins: the exports pass; every other file made beside them stays refused."""
     ipsw_free(
         name = "bindings_checked",
         src = bindings,
@@ -85,6 +93,15 @@ def _bindings_tests(name, bindings, prelinked):
     _bindings_passed_test(
         name = name + "_passes_the_bindings",
         target_under_test = ":bindings_checked",
+    )
+    ipsw_free(
+        name = "fileset_pins_checked",
+        src = fileset_pins,
+        tags = ["manual"],
+    )
+    _fileset_pins_passed_test(
+        name = name + "_passes_the_fileset_pins",
+        target_under_test = ":fileset_pins_checked",
     )
     cases = {
         "rebuilt": (bindings, "rebuilt", "xnu-12377/prelink-bindings.macho"),
@@ -109,9 +126,12 @@ def _bindings_tests(name, bindings, prelinked):
             target_under_test = ":" + case + "_checked",
             file = file,
         )
-    return [name + "_passes_the_bindings"] + ["{}_refuses_the_{}".format(name, case) for case in cases]
+    return [
+        name + "_passes_the_bindings",
+        name + "_passes_the_fileset_pins",
+    ] + ["{}_refuses_the_{}".format(name, case) for case in cases]
 
-def ipsw_free_tests(name, member, declassified, window, bindings, prelinked):
+def ipsw_free_tests(name, member, declassified, window, bindings, prelinked, fileset_pins):
     """The tests, as one test_suite.
 
     Args:
@@ -121,6 +141,7 @@ def ipsw_free_tests(name, member, declassified, window, bindings, prelinked):
         window: a target whose files were made beside them from the IPSW (the kernel window), which stay refused.
         bindings: the declassified iOS 27 prelink bindings' target; its rebuilt kernel stays refused.
         prelinked: the fileset prelink the bindings come from, whose kernel, raw bindings and names stay refused.
+        fileset_pins: the declassified iOS 27 fileset prelink pins target.
     """
     native.genrule(
         name = "member_copy",
@@ -213,5 +234,5 @@ def ipsw_free_tests(name, member, declassified, window, bindings, prelinked):
             name + "_passes_a_validation",
             name + "_passes_the_declassified",
             name + "_refuses_the_window",
-        ] + _bindings_tests(name, bindings, prelinked),
+        ] + _bindings_tests(name, bindings, prelinked, fileset_pins),
     )

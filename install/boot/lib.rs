@@ -17,7 +17,7 @@ mod tests;
 use std::collections::BTreeMap;
 use std::path::Path;
 
-pub use assets::Assets;
+pub use assets::{Assets, PRETRANSLATED_EDITS};
 use switch_catalog::Build;
 
 /// Where Apple's launchd catalogue is on the OS volume, and where the overlay puts ours.

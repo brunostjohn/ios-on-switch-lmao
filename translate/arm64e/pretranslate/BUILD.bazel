@@ -17,6 +17,8 @@ package(default_visibility = ["//visibility:public"])
 
 lint_files()
 
+exports_files(["edits_24B119.json"])
+
 py_binary(
     name = "translate_tree",
     srcs = ["translate_tree.py"],

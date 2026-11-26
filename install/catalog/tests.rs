@@ -110,15 +110,29 @@ fn unknown_steps_roles_containers_and_assets_are_refused() {
     value["steps"]["seed"] = json!("v2");
     value["members"]["exclave"] = member(Role::DeviceTree);
     value["members"]["os"]["container"]["format"] = json!("sparse");
-    value["assets"]["overlay"] = value["assets"]["boot"].clone();
+    value["assets"]["firmware"] = value["assets"]["boot"].clone();
     let reasons = unsupported(value).reasons;
     for expected in [
         "the seed step, which",
         "the exclave member, which",
         "the os member's container format sparse, which",
-        "the overlay asset, which",
+        "the firmware asset, which",
     ] {
         assert!(reasons.iter().any(|r| r.contains(expected)), "{expected}: {reasons:?}");
+    }
+}
+
+#[test]
+fn known_asset_roles_plan() {
+    let mut value = record("1A1");
+    let boot = value["assets"]["boot"].clone();
+    for role in crate::KNOWN_ASSET_ROLES {
+        value["assets"][role] = boot.clone();
+    }
+    let catalog = parse(&catalog(vec![value])).unwrap();
+    let build = catalog.builds[0].plan().unwrap();
+    for role in crate::KNOWN_ASSET_ROLES {
+        assert_eq!(build.asset(role).unwrap().size, 5, "{role}");
     }
 }
 

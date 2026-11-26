@@ -93,6 +93,7 @@ pub struct Steps {
 }
 
 pub const ASSET_ROLES: [&str; 1] = ["boot"];
+pub const KNOWN_ASSET_ROLES: [&str; 5] = ["boot", "overlay", "bootstrap", "gpu", "seed"];
 
 /// Apple's launchd catalogue and its detached signature, as the OS volume holds them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -248,7 +249,11 @@ impl Record {
         for role in Role::ALL.iter().filter(|role| !members.contains_key(role)) {
             reasons.push(format!("it has no {} member", role.name()));
         }
-        for role in self.assets.keys().filter(|role| !ASSET_ROLES.contains(&role.as_str())) {
+        for role in self
+            .assets
+            .keys()
+            .filter(|role| !KNOWN_ASSET_ROLES.contains(&role.as_str()))
+        {
             reasons.push(newer(format!("the {role} asset")));
         }
         match steps {

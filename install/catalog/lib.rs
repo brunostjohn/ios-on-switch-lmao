@@ -16,7 +16,7 @@ mod tests;
 
 pub use asset::{CATALOG_NAME, Checked, catalog_url};
 pub use digest::{Digest, Sha256, Sha384};
-pub use plan::{ASSET_ROLES, Build, Container, LaunchdPins, Prelink, Role, Steps, Unsupported};
+pub use plan::{ASSET_ROLES, Build, Container, KNOWN_ASSET_ROLES, LaunchdPins, Prelink, Role, Steps, Unsupported};
 pub use record::{Aea, Asset, Catalog, ContainerPins, Derived, Im4p, Ipsw, Member, Record, Volumes};
 
 pub const FORMAT: u32 = 1;

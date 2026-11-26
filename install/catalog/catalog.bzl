@@ -178,25 +178,41 @@ def catalog_records(release, kinds = None):
 def boot_asset_name(release, build):
     return "{}-{}-boot-{}.tar".format(REPO.split("/")[1], release, build)
 
-def _write_catalog(ctx, tars):
+def overlay_asset_name(release, build):
+    return "{}-{}-overlay-{}.tar".format(REPO.split("/")[1], release, build)
+
+def bootstrap_asset_name(release, build):
+    return "{}-{}-bootstrap-{}.tar".format(REPO.split("/")[1], release, build)
+
+def _write_catalog(ctx, kinds_assets):
     release = ctx.attr.release
     records = ctx.actions.declare_file(ctx.label.name + "/records.json")
-    ctx.actions.write(records, json.encode_indent(catalog_records(release, list(tars)), indent = "  ") + "\n")
+    ctx.actions.write(records, json.encode_indent(catalog_records(release, list(kinds_assets)), indent = "  ") + "\n")
     out = ctx.actions.declare_file(ctx.label.name + "/catalog.json")
     args = ctx.actions.args()
     args.add("--records", records)
     args.add("--out", out)
+    args.add_all(["boot", "overlay", "bootstrap"], before_each = "--require-role")
     published = []
-    for kind, tar in tars.items():
-        name = boot_asset_name(release, IPSWS[kind]["build"])
-        args.add_all("--asset", [IPSWS[kind]["build"], "boot", name, tar])
-        link = ctx.actions.declare_file("{}/{}".format(ctx.label.name, name))
-        ctx.actions.symlink(output = link, target_file = tar)
-        published.append(link)
+    seen = {}
+    inputs = [records]
+    for kind, assets in kinds_assets.items():
+        build = IPSWS[kind]["build"]
+        for role, (name, tar) in sorted(assets.items()):
+            args.add_all("--asset", [build, role, name, tar])
+            if name in seen:
+                if seen[name] != tar:
+                    fail("asset {} maps to two different files: {} and {}".format(name, seen[name].path, tar.path))
+            else:
+                link = ctx.actions.declare_file("{}/{}".format(ctx.label.name, name))
+                ctx.actions.symlink(output = link, target_file = tar)
+                published.append(link)
+                seen[name] = tar
+                inputs.append(tar)
     ctx.actions.run(
         executable = ctx.executable._tool,
         arguments = [args],
-        inputs = [records] + tars.values(),
+        inputs = inputs,
         outputs = [out],
         mnemonic = "SwitchCatalog",
         progress_message = "Writing %{label}'s catalog.json",
@@ -222,28 +238,57 @@ _COMMON = {
     "_tool": attr.label(default = "//install/catalog:switch_catalog_tool", executable = True, cfg = "exec"),
 }
 
+def _kind_assets(release, kind, boot_tar, overlay_tar, bootstrap_tar):
+    build = IPSWS[kind]["build"]
+    return {
+        "boot": (boot_asset_name(release, build), boot_tar),
+        "bootstrap": (bootstrap_asset_name(release, build), bootstrap_tar),
+        "overlay": (overlay_asset_name(release, build), overlay_tar),
+    }
+
 def _catalog_impl(ctx):
-    return _write_catalog(ctx, {kind: _single(ctx.split_attr.boot_assets[kind]) for kind in ctx.attr.kinds})
+    return _write_catalog(ctx, {
+        kind: _kind_assets(
+            ctx.attr.release,
+            kind,
+            _single(ctx.split_attr.boot_assets[kind]),
+            _single(ctx.split_attr.overlay_assets[kind]),
+            _single(ctx.split_attr.bootstrap_assets[kind]),
+        )
+        for kind in ctx.attr.kinds
+    })
 
 catalog = rule(
     implementation = _catalog_impl,
-    doc = "catalog.json for every kind in `kinds`, each kind's boot assets built for it, and those assets under the " +
-          "names the release publishes them by.",
+    doc = "catalog.json for every kind in `kinds`, each kind's boot, overlay, and bootstrap assets, and those assets " +
+          "under the names the release publishes them by.",
     attrs = _COMMON | {
         "boot_assets": attr.label(mandatory = True, cfg = _kinds, doc = "//boot:boot_assets"),
+        "bootstrap_assets": attr.label(mandatory = True, cfg = _kinds, doc = "//bootstrap:payload"),
         "kinds": attr.string_list(mandatory = True),
+        "overlay_assets": attr.label(mandatory = True, cfg = _kinds, doc = "//boot:overlay_assets"),
     },
 )
 
 def _selected_catalog_impl(ctx):
     kind = ctx.attr._kind[BuildSettingInfo].value
-    return _write_catalog(ctx, {kind: ctx.file.boot_assets})
+    return _write_catalog(ctx, {
+        kind: _kind_assets(
+            ctx.attr.release,
+            kind,
+            ctx.file.boot_assets,
+            ctx.file.overlay_assets,
+            ctx.file.bootstrap_assets,
+        ),
+    })
 
 selected_catalog = rule(
     implementation = _selected_catalog_impl,
-    doc = "catalog.json for the selected kind alone, from its boot assets in this configuration.",
+    doc = "catalog.json for the selected kind alone, from its boot, overlay, and bootstrap assets in this configuration.",
     attrs = _COMMON | {
         "boot_assets": attr.label(mandatory = True, allow_single_file = True, doc = "//boot:boot_assets"),
+        "bootstrap_assets": attr.label(mandatory = True, allow_single_file = True, doc = "//bootstrap:payload"),
+        "overlay_assets": attr.label(mandatory = True, allow_single_file = True, doc = "//boot:overlay_assets"),
         "_kind": attr.label(default = "//ipsw:kind"),
     },
 )

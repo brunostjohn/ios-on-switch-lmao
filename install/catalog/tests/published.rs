@@ -2,12 +2,15 @@
 //! The catalog the release publishes, with the files published beside it: every record plans, every asset is the
 //! file of its name, and without its assets the catalog is records.json.
 
+use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
-use switch_catalog::{ASSET_ROLES, CATALOG_NAME, Catalog};
+use switch_catalog::{CATALOG_NAME, Catalog};
+
+const PUBLISHED_ROLES: [&str; 3] = ["boot", "overlay", "bootstrap"];
 
 fn files() -> Vec<PathBuf> {
     let listed = std::env::var("SWITCH_PUBLISHED").expect("SWITCH_PUBLISHED is set by the BUILD file");
@@ -27,26 +30,30 @@ fn every_asset_is_the_file_published_under_its_name() {
     let files = files();
     let json = std::fs::read(named(&files, CATALOG_NAME)).unwrap();
     let catalog = Catalog::parse(&json).unwrap();
-    let mut names = vec![CATALOG_NAME.to_owned()];
+    let mut names = BTreeSet::from([CATALOG_NAME.to_owned()]);
+    let mut verified = BTreeSet::new();
     for record in &catalog.builds {
         let build = record.plan().unwrap_or_else(|e| panic!("{e}"));
-        for role in ASSET_ROLES {
-            let asset = build.asset(role).unwrap();
+        for role in PUBLISHED_ROLES {
+            build.asset(role).unwrap();
+        }
+        for (role, asset) in &record.assets {
             let file = named(&files, &asset.name);
-            asset.check(BufReader::new(File::open(file).unwrap())).unwrap();
+            if verified.insert((asset.name.clone(), asset.size, asset.sha256.0)) {
+                asset.check(BufReader::new(File::open(file).unwrap())).unwrap();
+            }
             println!(
                 "{} {role}: {} {} B, sha256 {}",
                 record.build, asset.name, asset.size, asset.sha256
             );
-            names.push(asset.name.clone());
+            names.insert(asset.name.clone());
         }
     }
-    let mut published: Vec<String> = files
+    let published: BTreeSet<String> = files
         .iter()
         .map(|f| f.file_name().unwrap().to_str().unwrap().to_owned())
         .collect();
-    published.sort();
-    names.sort();
+    assert_eq!(published.len(), files.len(), "published file names must be unique");
     assert_eq!(published, names, "the published files are the catalog and its assets");
 
     let mut stripped: Value = serde_json::from_slice(&json).unwrap();

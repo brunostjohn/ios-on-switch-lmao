@@ -29,6 +29,7 @@ pub const PRETRANSLATED_OS: &str = "pretranslated/os.trustcache";
 pub const PRETRANSLATED_SYSTEM_CRYPTEX: &str = "pretranslated/system_cryptex.trustcache";
 pub const PRETRANSLATED_APP_CRYPTEX: &str = "pretranslated/app_cryptex.trustcache";
 pub const PRETRANSLATED_CACHE_LIST: &str = "pretranslated/a64x-cache-pretranslated.bin";
+pub const PRETRANSLATED_EDITS: &str = "pretranslated/edits.json";
 pub const BOOTSTRAP_JOB: &str = "launchd/bootstrap.plist";
 pub const APPS_JOB: &str = "launchd/bootstrap-apps.plist";
 pub const SDWAKE_JOB: &str = "launchd/sdwake.plist";
@@ -55,7 +56,7 @@ const ALWAYS: [&str; 12] = [
     EXPORTER,
     DTB,
 ];
-const OPTIONAL: [&str; 1] = [GPU_TRUST];
+const OPTIONAL: [&str; 2] = [GPU_TRUST, PRETRANSLATED_EDITS];
 const PRETRANSLATE: [&str; 4] = [
     PRETRANSLATED_OS,
     PRETRANSLATED_SYSTEM_CRYPTEX,

@@ -34,6 +34,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import tarfile
 import tempfile
 import zipfile
 from collections.abc import Iterable
@@ -268,6 +269,63 @@ def trust(entries: list[dict], files: dict[str, Path], leave_out: Iterable[str] 
     return (trust_module(hashes) if hashes else b''), len(hashes)
 
 
+def stage_tree(entries: list[dict], files: dict[str, Path], out: Path, leave_out: Iterable[str] = ()) -> None:
+    leave_out = set(leave_out)
+    unknown = sorted(leave_out - {e['source'] for e in entries})
+    if unknown:
+        sys.exit(f'overlay: --leave-out {", ".join(unknown)} is no file of the plan')
+    out.mkdir(parents=True, exist_ok=True)
+    for entry in entries:
+        if entry['source'] in leave_out:
+            continue
+        target = out / entry['path'].lstrip('/')
+        if entry.get('bundle-signature'):
+            detached_signature(_need(files, entry), entry['bundle-signature'], target)
+            target.chmod(entry['mode'])
+            continue
+        if entry.get('bundle-info'):
+            _placeholder(_need(files, entry), target, entry['mode'])
+            continue
+        if entry['bundle']:
+            for name, data in bundle_files(_need(files, entry), entry['path']):
+                member = target / name
+                member.parent.mkdir(parents=True, exist_ok=True)
+                member.write_bytes(data)
+                member.chmod(0o755 if data[:4] == MACHO_64 else 0o644)
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(_need(files, entry), target)
+        target.chmod(entry['mode'])
+
+
+def write_tree_tar(entries: list[dict], files: dict[str, Path], out: Path, leave_out: Iterable[str] = ()) -> None:
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='switch-overlay-tar-') as temporary:
+        root = Path(temporary) / 'tree'
+        stage_tree(entries, files, root, leave_out)
+        members = sorted(root.rglob('*'), key=lambda p: p.relative_to(root).as_posix())
+        with tarfile.open(out, 'w', format=tarfile.PAX_FORMAT) as archive:
+            for member in members:
+                rel = member.relative_to(root).as_posix()
+                info = tarfile.TarInfo(name=rel)
+                info.uid = 0
+                info.gid = 0
+                info.uname = ''
+                info.gname = ''
+                info.mtime = 0
+                if member.is_dir():
+                    info.type = tarfile.DIRTYPE
+                    info.mode = 0o755
+                    info.size = 0
+                    archive.addfile(info)
+                else:
+                    info.type = tarfile.REGTYPE
+                    info.mode = member.stat().st_mode & 0o777
+                    info.size = member.stat().st_size
+                    with member.open('rb') as fd:
+                        archive.addfile(info, fd)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     step = parser.add_subparsers(dest='step', required=True)
@@ -284,6 +342,12 @@ def main() -> None:
         p.add_argument('--out', required=True, type=Path)
     step.choices['trust'].add_argument(
         '--leave-out', action='append', default=[], help='SOURCE: a trusted file not to hash'
+    )
+    step.choices['tree'].add_argument(
+        '--leave-out', action='append', default=[], help='SOURCE: a plan file not to stage'
+    )
+    step.choices['tree'].add_argument(
+        '--tar', action='store_true', help='write a deterministic tar archive to --out instead of a directory'
     )
     args = parser.parse_args()
     if args.step == 'plan':
@@ -303,26 +367,10 @@ def main() -> None:
         args.out.write_bytes(module)
         print(f'overlay: {len(entries)} files ({trusted} trusted) -> Data {OVERLAY_ROOT}')
         return
-    args.out.mkdir(parents=True, exist_ok=True)
-    for entry in entries:
-        target = args.out / entry['path'].lstrip('/')
-        if entry.get('bundle-signature'):
-            detached_signature(_need(files, entry), entry['bundle-signature'], target)
-            target.chmod(entry['mode'])
-            continue
-        if entry.get('bundle-info'):
-            _placeholder(_need(files, entry), target, entry['mode'])
-            continue
-        if entry['bundle']:
-            for name, data in bundle_files(_need(files, entry), entry['path']):
-                member = target / name
-                member.parent.mkdir(parents=True, exist_ok=True)
-                member.write_bytes(data)
-                member.chmod(0o755 if data[:4] == MACHO_64 else 0o644)
-            continue
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(_need(files, entry), target)
-        target.chmod(entry['mode'])
+    if args.tar:
+        write_tree_tar(entries, files, args.out, args.leave_out)
+        return
+    stage_tree(entries, files, args.out, args.leave_out)
 
 
 if __name__ == '__main__':

@@ -60,6 +60,12 @@ rust_binary(
     ],
 )
 
+rust_test(
+    name = "switch_catalog_tool_test",
+    crate = ":switch_catalog_tool",
+    deps = ["@installer_crates//:tempfile"],
+)
+
 desktop_binaries(
     name = "desktop",
     binary = ":switch_catalog_tool",
@@ -87,20 +93,24 @@ write_file(
     content = [json.encode(STAGED)],
 )
 
-# What the release publishes: catalog.json and each kind's boot assets, each kind's built for it, under their release
+# What the release publishes: catalog.json and each kind's boot, overlay, and bootstrap assets under their release
 # names.
 catalog(
     name = "catalog_json",
     boot_assets = "//boot:boot_assets",
+    bootstrap_assets = "//bootstrap:payload",
     kinds = catalog_kinds(),
+    overlay_assets = "//boot:overlay_assets",
     release = _RELEASE,
     tags = ["manual"],
 )
 
-# The selected kind's record and boot assets alone, from this configuration: switch_boot's tests.
+# The selected kind's record and assets alone, from this configuration: switch_boot's tests and per-kind CI builds.
 selected_catalog(
     name = "selected_catalog",
     boot_assets = "//boot:boot_assets",
+    bootstrap_assets = "//bootstrap:payload",
+    overlay_assets = "//boot:overlay_assets",
     release = _RELEASE,
     tags = ["manual"],
 )
