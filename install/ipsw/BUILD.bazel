@@ -1,0 +1,138 @@
+# switch_ipsw: an IPSW member's content from its stored bytes, inflated where the pins say so and checked against
+# them, and the APFS container of an OS image, unwrapped from UDIF (21H461) or bare. Which members each test reads comes
+# from ipsw/pins.bzl (cases.bzl); pins.json is that table for the Rust side.
+#
+#   bazel test //install/ipsw:synthetic_test //install/ipsw:pinned_test
+#   bazel test -c opt //install/ipsw:large_test        manual: the large members against their pins (GBs, build host)
+#   bazel test -c opt //install/ipsw:hdiutil_test      manual: each UDIF OS image against hdiutil's UDTO (build host)
+#   bazel build //install/ipsw:member_all              switch_ipsw_member <pins.json> <kind> <role> <dir>, six platforms
+load("@bazel_skylib//rules:write_file.bzl", "write_file")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("//bazel/desktop:defs.bzl", "desktop_binaries")
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//ipsw:pins.bzl", "IPSWS")
+load(":cases.bzl", "LARGE", "large_members", "small_members", "stored_images")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+write_file(
+    name = "pins_json",
+    out = "pins.json",
+    content = [json.encode_indent(
+        IPSWS,
+        indent = "  ",
+    )],
+)
+
+rust_library(
+    name = "switch_ipsw",
+    srcs = glob(["src/*.rs"]),
+    crate_root = "src/lib.rs",
+    deps = [
+        "//install/fetch:switch_fetch",
+        "@installer_crates//:flate2",
+        "@installer_crates//:hex",
+        "@installer_crates//:serde",
+        "@installer_crates//:serde_json",
+        "@installer_crates//:sha2",
+        "@installer_crates//:thiserror",
+        "@installer_crates//:udif",
+    ],
+)
+
+rust_test(
+    name = "synthetic_test",
+    srcs = ["tests/synthetic.rs"],
+    deps = [
+        ":switch_ipsw",
+        "@installer_crates//:flate2",
+        "@installer_crates//:sha2",
+        "@installer_crates//:tempfile",
+        "@installer_crates//:udif",
+    ],
+)
+
+_TEST_DEPS = [
+    ":switch_ipsw",
+    "@installer_crates//:hex",
+    "@rules_rust//rust/runfiles",
+]
+
+_SMALL = small_members()
+
+rust_test(
+    name = "pinned_test",
+    srcs = [
+        "tests/cases.rs",
+        "tests/pinned.rs",
+    ],
+    crate_root = "tests/pinned.rs",
+    data = [":pins.json"] + _SMALL.data,
+    env = {
+        "SWITCH_LARGE": str(LARGE),
+        "SWITCH_PINS": "$(rlocationpath :pins.json)",
+        "SWITCH_SMALL_MEMBERS": _SMALL.env,
+    },
+    deps = _TEST_DEPS,
+)
+
+_LARGE_MEMBERS = large_members()
+
+rust_test(
+    name = "large_test",
+    size = "enormous",
+    srcs = [
+        "tests/cases.rs",
+        "tests/large.rs",
+    ],
+    crate_root = "tests/large.rs",
+    data = [":pins.json"] + _LARGE_MEMBERS.data,
+    env = {
+        "SWITCH_LARGE": str(LARGE),
+        "SWITCH_LARGE_MEMBERS": _LARGE_MEMBERS.env,
+        "SWITCH_PINS": "$(rlocationpath :pins.json)",
+    },
+    tags = ["manual"],
+    deps = _TEST_DEPS,
+)
+
+_IMAGES = stored_images()
+
+rust_test(
+    name = "hdiutil_test",
+    size = "enormous",
+    srcs = [
+        "tests/cases.rs",
+        "tests/hdiutil.rs",
+    ],
+    crate_root = "tests/hdiutil.rs",
+    data = [":pins.json"] + _IMAGES.data,
+    env = {
+        "SWITCH_PINS": "$(rlocationpath :pins.json)",
+        "SWITCH_STORED_IMAGES": _IMAGES.env,
+    },
+    tags = [
+        "manual",
+        "requires-darwin",
+    ],
+    deps = _TEST_DEPS + ["@installer_crates//:udif"],
+)
+
+rust_binary(
+    name = "switch_ipsw_member",
+    srcs = ["cli/member.rs"],
+    deps = [
+        ":switch_ipsw",
+        "//install/fetch:switch_fetch",
+        "@installer_crates//:hex",
+        "@installer_crates//:reqwest",
+        "@installer_crates//:tokio",
+    ],
+)
+
+desktop_binaries(
+    name = "member_all",
+    binary = ":switch_ipsw_member",
+)
