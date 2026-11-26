@@ -32,3 +32,27 @@ host_test(
         "//kits/SwitchPretranslated:switch_pretranslated_updates.h",
     ],
 )
+
+# iOS 27: the same check over the real translated files the pins name (//install:pretranslated_updates, built from the
+# os delta), as capture runs it on the card.
+host_test(
+    name = "switch_pretranslated_real_updates_test",
+    size = "medium",
+    srcs = [
+        "switch_pretranslated_real_updates_test.cpp",
+        "//kits/SwitchPretranslated:switch_pretranslated.h",
+        "//kits/SwitchPretranslated:switch_pretranslated_updates.h",
+    ],
+    data = [
+        "//install:pretranslated_updates",
+        "//ipsw:pretranslated_os_updates",
+    ],
+    env = {
+        "SWITCH_UPDATES_PINS": "$(rootpath //ipsw:pretranslated_os_updates)",
+        "SWITCH_UPDATES_TREE": "$(rootpath //install:pretranslated_updates)",
+    },
+    target_compatible_with = select({
+        "//ipsw:ios27": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+)

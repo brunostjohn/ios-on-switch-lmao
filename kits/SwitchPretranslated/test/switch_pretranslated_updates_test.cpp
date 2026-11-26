@@ -1,8 +1,11 @@
 // A deploy's translated System files (kits/SwitchPretranslated/switch_pretranslated_updates.h): the boot package's
-// /chosen list the 12377 kernel accepts and refuses, and an update taking over its file's index entries.
+// /chosen list the 12377 kernel accepts and refuses, an update taking over its file's index entries, a turned-down
+// update's file leaving the redirect, and the signature check.
+#include <CommonCrypto/CommonDigest.h>
 #include <gtest/gtest.h>
 
 #include <array>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -176,6 +179,54 @@ TEST(Updates, AnUpdateTakesOverEveryRecordOfItsFile)
     EXPECT_EQ(switch_pt_system_id(&tables, 100), 10u) << "other files untouched";
 }
 
+// A turned-down update's file leaves the redirect: no lookup finds it, so its System file runs translated at load time,
+// and its tree copy stays listed, so the tables keep protecting it.
+TEST(Updates, ATurnedDownUpdatesFileLeavesTheRedirect)
+{
+    const std::vector<File> files = {
+        {"/System/Library/a", 10, 100},
+        {"/usr/libexec/locationd", 20, 200, {{0xac, 0x43}}},
+        {"/usr/libexec/locationd-link", 20, 200, {{0xac, 0x43}}},
+        {"/usr/sbin/b", 40, 400},
+    };
+    std::vector<uint8_t> raw = encode(files, {1000, 1001});
+    struct switch_pt_index index;
+    ASSERT_EQ(switch_pt_index_parse(raw.data(), raw.size(), &index), SWITCH_PT_OK);
+    EXPECT_EQ(switch_pt_index_find(&index, "/usr/libexec/locationd", 22), 1);
+    EXPECT_EQ(switch_pt_index_find(&index, "/usr/libexec/locationd-link", 27), 2);
+    EXPECT_EQ(switch_pt_index_find(&index, "/System/Library/a", 17), 0);
+    EXPECT_EQ(switch_pt_index_find(&index, "/usr/sbin/b", 11), 3);
+    EXPECT_EQ(switch_pt_index_find(&index, "/usr/libexec/locationd2", 23), -1);
+    EXPECT_EQ(switch_pt_index_find(&index, "/usr/libexec", 12), -1);
+    EXPECT_EQ(switch_pt_index_unlist(raw.data(), &index, 20, 0), 2u);
+    ASSERT_EQ(switch_pt_index_parse(raw.data(), raw.size(), &index), SWITCH_PT_OK) << "still a valid index";
+    const size_t bytes = switch_pt_tables_bytes(&index, 2);
+    std::vector<uint64_t> storage((bytes + 7) / 8, 0);
+    struct switch_pt_tables tables;
+    ASSERT_EQ(switch_pt_tables_build(&tables, &index, 2, storage.data(), bytes, fnv), SWITCH_PT_OK);
+    EXPECT_EQ(switch_pt_system_file(&tables, 20, fnv("locationd", 9), "locationd", 9), -1);
+    EXPECT_EQ(switch_pt_system_file(&tables, 20, fnv("locationd-link", 14), "locationd-link", 14), -1);
+    EXPECT_NE(switch_pt_system_id(&tables, 200), 0u) << "the tree's copy stays listed";
+    EXPECT_EQ(switch_pt_system_id(&tables, 200), SWITCH_PT_UNLISTED_ID(0));
+    EXPECT_GE(switch_pt_system_file(&tables, 40, fnv("b", 1), "b", 1), 0) << "other files untouched";
+}
+
+// Two turned-down files keep ids of their own, so the tables still take every record.
+TEST(Updates, TurnedDownFilesKeepDistinctIds)
+{
+    const std::vector<File> files = {{"/usr/a", 20, 200}, {"/usr/b", 30, 300}};
+    std::vector<uint8_t> raw = encode(files, {1000});
+    struct switch_pt_index index;
+    ASSERT_EQ(switch_pt_index_parse(raw.data(), raw.size(), &index), SWITCH_PT_OK);
+    EXPECT_EQ(switch_pt_index_unlist(raw.data(), &index, 20, 0), 1u);
+    EXPECT_EQ(switch_pt_index_unlist(raw.data(), &index, 30, 1), 1u);
+    EXPECT_EQ(switch_pt_index_unlist(raw.data(), &index, 77, 2), 0u) << "not in the tree";
+    const size_t bytes = switch_pt_tables_bytes(&index, 2);
+    std::vector<uint64_t> storage((bytes + 7) / 8, 0);
+    struct switch_pt_tables tables;
+    EXPECT_EQ(switch_pt_tables_build(&tables, &index, 2, storage.data(), bytes, fnv), SWITCH_PT_OK);
+}
+
 namespace {
 
 void be32(std::vector<uint8_t> &out, uint32_t v)
@@ -251,6 +302,77 @@ TEST(Signature, TheSha256CodeDirectoryIsTheOneATrustCacheNames)
     EXPECT_EQ(length, 48u);
     for (size_t n = 0; n < blob.size(); ++n)
         EXPECT_FALSE(switch_pt_code_directory(blob.data(), n, &offset, &length)) << n;
+}
+
+namespace {
+
+// A whole file: the Mach-O head, padding, then the signature at its offset.
+std::vector<uint8_t> signedFile()
+{
+    const std::vector<uint8_t> blob = signature();
+    std::vector<uint8_t> file = macho(0x8000, static_cast<uint32_t>(blob.size()));
+    file.resize(0x8000, 0);
+    file.insert(file.end(), blob.begin(), blob.end());
+    return file;
+}
+
+struct Bytes {
+    const std::vector<uint8_t> *file;
+    unsigned reads = 0;
+};
+
+bool readBytes(void *context, void *buffer, uint32_t size, uint64_t offset)
+{
+    auto *bytes = static_cast<Bytes *>(context);
+    ++bytes->reads;
+    if (offset + size > bytes->file->size())
+        return false;
+    std::memcpy(buffer, bytes->file->data() + offset, size);
+    return true;
+}
+
+void *allocate(size_t size)
+{
+    return std::malloc(size);
+}
+
+void release(void *bytes, size_t)
+{
+    std::free(bytes);
+}
+
+void sha256(const void *bytes, size_t size, uint8_t digest[SWITCH_PT_SHA256])
+{
+    CC_SHA256(bytes, static_cast<CC_LONG>(size), digest);
+}
+
+std::array<uint8_t, SWITCH_PT_SHA256> cdhashOf(const std::vector<uint8_t> &file)
+{
+    std::array<uint8_t, SWITCH_PT_SHA256> digest{};
+    CC_SHA256(file.data() + 0x8000 + 28 + 48, 48, digest.data());
+    return digest;
+}
+
+}  // namespace
+
+// The kernel's whole check, as capture runs it: the head, the signature it names, the SHA-256 CodeDirectory's hash.
+TEST(Signature, AFileIsSignedAsTheHashOfItsSha256CodeDirectory)
+{
+    const std::vector<uint8_t> file = signedFile();
+    const std::array<uint8_t, SWITCH_PT_SHA256> cdhash = cdhashOf(file);
+    Bytes bytes{&file};
+    const struct switch_pt_reader reader = {&bytes, readBytes, allocate, release, sha256};
+    EXPECT_TRUE(switch_pt_signed_as_cdhash(&reader, file.size(), cdhash.data()));
+    EXPECT_EQ(bytes.reads, 2u) << "the head, then the signature";
+    std::array<uint8_t, SWITCH_PT_SHA256> other = cdhash;
+    other[19] ^= 1;
+    EXPECT_FALSE(switch_pt_signed_as_cdhash(&reader, file.size(), other.data()));
+    std::vector<uint8_t> changed = file;
+    changed[0x8000 + 28 + 48 + 40] ^= 1;
+    Bytes changedBytes{&changed};
+    const struct switch_pt_reader changedReader = {&changedBytes, readBytes, allocate, release, sha256};
+    EXPECT_FALSE(switch_pt_signed_as_cdhash(&changedReader, changed.size(), cdhash.data()));
+    EXPECT_FALSE(switch_pt_signed_as_cdhash(&reader, file.size() - 1, cdhash.data())) << "signature past the end";
 }
 
 TEST(Signature, NoSha256CodeDirectoryIsNoMatch)

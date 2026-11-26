@@ -107,6 +107,51 @@ static inline const char *switch_pt_update_relative(const struct switch_pt_updat
     return update->path + 1;
 }
 
+/* The record of the tree's file at this System path, or -1: the index lists its records sorted by path. */
+static inline int64_t switch_pt_index_find(const struct switch_pt_index *index, const char *path, uint32_t length)
+{
+    uint32_t lo = 0, hi = index->count;
+    while (lo < hi) {
+        const uint32_t mid = lo + (hi - lo) / 2;
+        const struct switch_pt_file file = switch_pt_file_at(index, mid);
+        const int order = switch_pt_bytes_cmp(file.path, file.length, path, length);
+        if (order == 0) {
+            return mid;
+        }
+        if (order < 0) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return -1;
+}
+
+/* A System file id no file has, one per update (n): APFS file ids are 60-bit object ids, so the top bit is never set. */
+#define SWITCH_PT_UNLISTED_ID(n) (((uint64_t)1 << 63) | (uint64_t)(n))
+
+/*
+ * Takes the System file `system_id` (every record of it, its hard links too) out of the redirect, in the index's own
+ * bytes before the tables are built: a lookup then finds the System file itself, which runs translated at load time as
+ * with the tree off. The records keep their Data copy, so the copy stays listed and protected, and is served to nobody.
+ * `n` keeps each unlisted file's id its own. Returns the records changed.
+ */
+static inline uint32_t switch_pt_index_unlist(uint8_t *raw, const struct switch_pt_index *index, uint64_t system_id,
+                                              uint32_t n)
+{
+    const uint64_t unlisted = SWITCH_PT_UNLISTED_ID(n);
+    uint32_t changed = 0;
+    uint8_t *records = raw + SWITCH_PT_HEADER;
+    for (uint32_t i = 0; i < index->count; ++i) {
+        uint8_t *record = records + (size_t)SWITCH_PT_RECORD * i;
+        if (switch_pt_u64(record) == system_id) {
+            __builtin_memcpy(record, &unlisted, sizeof(unlisted));
+            ++changed;
+        }
+    }
+    return changed;
+}
+
 /*
  * Points every record of the System file `system_id` (several for its hard links) at the Data file `data_id` with this
  * CDHash, in the index's own bytes (`raw`, which `index` was parsed from), before the tables are built from it. The
@@ -209,4 +254,53 @@ static inline bool switch_pt_code_directory(const uint8_t *blob, size_t n, uint3
         }
     }
     return false;
+}
+
+/* What the signature check reads of an update: its head, which holds its load commands. A translation keeps its
+ * original's load commands (locationd's arm64e original has 19,656 bytes of them), and the real-bytes test
+ * (test/switch_pretranslated_real_updates_test.cpp) runs this check on each update the pins name. */
+#define SWITCH_PT_UPDATE_HEAD (32u << 10)
+#define SWITCH_PT_SHA256      32u
+
+/* The file the check reads, and the kernel's or the host's allocator and SHA-256. read fills all of `size` or fails. */
+struct switch_pt_reader {
+    void *context;
+    bool (*read)(void *context, void *buffer, uint32_t size, uint64_t offset);
+    void *(*allocate)(size_t size);
+    void (*release)(void *bytes, size_t size);
+    void (*sha256)(const void *bytes, size_t size, uint8_t digest[SWITCH_PT_SHA256]);
+};
+
+/* Whether a file of `size` bytes is signed as `cdhash`: its SHA-256 CodeDirectory hashes to it, as a trust cache entry
+ * of hash type 2 names the file. */
+static inline bool switch_pt_signed_as_cdhash(const struct switch_pt_reader *reader, uint64_t size,
+                                              const uint8_t *cdhash)
+{
+    if (size < 32) {
+        return false;
+    }
+    const uint32_t head_size = size < SWITCH_PT_UPDATE_HEAD ? (uint32_t)size : SWITCH_PT_UPDATE_HEAD;
+    uint8_t *head = (uint8_t *)reader->allocate(head_size);
+    uint32_t offset = 0;
+    uint32_t length = 0;
+    const bool found = head != NULL && reader->read(reader->context, head, head_size, 0) &&
+                       switch_pt_macho_signature(head, head_size, &offset, &length) &&
+                       (uint64_t)offset + length <= size;
+    if (head) {
+        reader->release(head, head_size);
+    }
+    uint8_t *blob = found ? (uint8_t *)reader->allocate(length) : NULL;
+    uint32_t cd = 0;
+    uint32_t cd_length = 0;
+    bool signed_as = false;
+    if (blob != NULL && reader->read(reader->context, blob, length, offset) &&
+        switch_pt_code_directory(blob, length, &cd, &cd_length)) {
+        uint8_t digest[SWITCH_PT_SHA256];
+        reader->sha256(blob + cd, cd_length, digest);
+        signed_as = __builtin_memcmp(digest, cdhash, SWITCH_PT_CDHASH) == 0;
+    }
+    if (blob) {
+        reader->release(blob, length);
+    }
+    return signed_as;
 }
