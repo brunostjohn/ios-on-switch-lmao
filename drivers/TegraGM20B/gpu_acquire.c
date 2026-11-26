@@ -394,8 +394,8 @@ void tgm_acquire_probe_window(char *line, unsigned int len, u64 now)
 /* tgm_live_lock held: chan is parked on a failed producer word that will never advance */
 static void isolate_failed_waiter(struct tgm_chan *chan, const char *why, const char *what, u64 now)
 {
-	char state[192];
-	char report[288];
+	char state[256];
+	char report[sizeof(chan->fault)];
 	const u32 seqno = tgm_chan_completed(chan) + 1;
 	const u64 waited_ns = chan->submit_ns ? now - chan->submit_ns : 0;
 	const char *detail = what && what[0] ? what : "stopped producer";
@@ -557,13 +557,20 @@ void tgm_acquire_recover_failed(const char *why)
 	int recovered = 1;
 	u32 rounds = 0;
 
+	if (tgm_gpu.stage < 3 || !tgm_iso.deadline)
+		return;
 	while (recovered && rounds++ < ACQUIRE_CHIDS) {
 		const u64 now = nvxnu_nanotime();
 		recovered = 0;
 		mutex_lock(&tgm_live_lock);
+		if (tgm_gpu.stage < 3 || !tgm_iso.deadline) {
+			mutex_unlock(&tgm_live_lock);
+			return;
+		}
 		list_for_each_entry(chan, &tgm_live_chans, live)
 		{
-			if (READ_ONCE(chan->error) || chan->isolating ||
+			if (chan->kernel || READ_ONCE(chan->error) || chan->isolating ||
+			    (s32)(tgm_chan_completed(chan) - chan->submitted) >= 0 ||
 			    tgm_chan_wait_source(chan, &source, what, sizeof(what)) !=
 				    TGM_WAITS_FAILED)
 				continue;

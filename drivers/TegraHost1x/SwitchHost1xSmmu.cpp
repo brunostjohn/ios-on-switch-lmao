@@ -66,6 +66,7 @@ bool switch_host1x_channels_confine_channel(const switch_dma_buffer *push, const
         return false;
     if (!gView.hold(arena->pa, arena->size)) {
         gView.release(push->pa, push->size);
+        gView.commit();
         return false;
     }
     gView.commit();
