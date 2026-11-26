@@ -56,6 +56,7 @@ enum : uint32_t {  // channel registers, channel 0 at the start of the aperture
 };
 
 enum : uint32_t {  // sync unit
+    SYNC_CMDPROC_STAT = 0x0a8,
     SYNC_CMDPROC_STOP = 0x0ac,
     SYNC_CH_TEARDOWN = 0x0b0,
     SYNC_CBREAD0 = 0xc80,

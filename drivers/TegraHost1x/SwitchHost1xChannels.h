@@ -14,6 +14,13 @@ uint32_t switch_host1x_channels_filter_stuck();
 // Suspend: every channel stopped; submits fail until program.
 void switch_host1x_channels_stop();
 
+// Under the submit lock, from host1x's general interrupt once the display channel's command processor stopped on an
+// illegal opcode, before any of its fences is failed. A display stream still short of its syncpoint carries a swap the
+// display accepted, built from the display's own words (WAIT, SETCLASS 0x70, INCR, IMM): no client is to blame, so it
+// panics with the channel's state. With none out it returns, and the channel's other jobs (a debug probe's) fail as any
+// channel's do.
+void switch_host1x_display_channel_stopped_locked();
+
 // Under the submit lock, host1x up, once a failed producer's cancellation is stored: the display stream that waits on
 // it is cancelled, then the producer's syncpoint is released to `threshold`. An increment that does not take panics.
 void switch_host1x_channels_release_failed(uint32_t id, uint32_t threshold);

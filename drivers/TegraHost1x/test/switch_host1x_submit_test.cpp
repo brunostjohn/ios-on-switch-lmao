@@ -548,6 +548,33 @@ TEST_F(Host1xSubmit, AnotherSlotsReleaseOnTheProducerSyncpointLeavesADrainedStre
     EXPECT_EQ(bridge.releases, 1u);
 }
 
+// host1x stopping the display channel on an illegal opcode under a stream still out is the kernel's own failure: the
+// accepted swap cannot present. With none out (none queued, or it completed) the channel's other jobs fail as usual.
+TEST_F(Host1xSubmit, AStopOfTheDisplayChannelUnderAStreamStillOutPanics)
+{
+    auto &stream = Bridged::get().stream;
+    IOLockLock(gSubmitLock);
+    EXPECT_NO_THROW(switch_host1x_display_channel_stopped_locked()) << "no stream out";
+    IOLockUnlock(gSubmitLock);
+    switch_gpu_bridge bridge = {Bridged::get().bridgeSyncpt, syncpoint(Bridged::get().bridgeSyncpt) + 1, 0, 0, false};
+    const uint32_t word = 0xdc0, address = 0x20000000;
+    DisplayCompletion done;
+    ASSERT_EQ(switch_host1x_display_submit(&stream, nullptr, 0, &word, &address, 1, 0x500, 5, DisplayCompletion::heard,
+                                           &done, &bridge),
+              0);
+    IOLockLock(gSubmitLock);
+    EXPECT_THROW(switch_host1x_display_channel_stopped_locked(), std::runtime_error);
+    IOLockUnlock(gSubmitLock);
+    syncpoint(bridge.syncpoint) = bridge.threshold;
+    DisplayExecution execution;
+    execution.run();
+    IOLockLock(gSubmitLock);
+    EXPECT_NO_THROW(switch_host1x_display_channel_stopped_locked()) << "the stream ran to its syncpoint";
+    IOLockUnlock(gSubmitLock);
+    stream.fence.signaled(&stream.fence, 0);
+    EXPECT_EQ(done.calls, 1u);
+}
+
 // A bridge whose producers already failed is refused, and stays its caller's.
 TEST_F(Host1xSubmit, AnAlreadyFailedBridgeIsRefusedAndStaysTheCallers)
 {

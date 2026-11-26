@@ -65,6 +65,23 @@ void displayCancelLocked(bool force = false, uint32_t released = 0)
 
 }  // namespace
 
+void switch_host1x_display_channel_stopped_locked()
+{
+    const auto *stream = gDisplayStream;
+    if (!stream || stream->status)
+        return;
+    const uint32_t at = tegra_host1x_syncpt_read(stream->syncpt);
+    if (static_cast<int32_t>(at - stream->fence.threshold) >= 0)
+        return;
+    char host[200];
+    tegra_host1x_describe_channel(TEGRA_HOST1X_CHANNEL_DISPLAY, host, sizeof(host));
+    panic("SwitchDisplay: host1x stopped windows B and C's stream on an illegal opcode (CMDPROC_STAT %#x): an accepted "
+          "swap cannot present; syncpoint %u at %u of %u, bridge %u at %u of %u, %u engine producers; %s",
+          syncRead(SYNC_CMDPROC_STAT), stream->syncpt, at, stream->fence.threshold, stream->bridgeSyncpt,
+          stream->bridgeSyncpt ? tegra_host1x_syncpt_read(stream->bridgeSyncpt) : 0u, stream->bridgeThreshold,
+          stream->count, host);
+}
+
 void switch_host1x_channels_release_failed(uint32_t id, uint32_t threshold)
 {
     displayCancelLocked(false, id);
