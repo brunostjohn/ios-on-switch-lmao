@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // NativePlanesTurn.h's screenConversionOf through VIC's own builder and the unit's model (TegraVIC test/vic_model.h,
 // which reproduces the boots' transpose and sub-rectangle lines): the plane the conversion job writes is the layer's
-// turned surface where it lands on the screen, pixel for pixel, for every word, clipped and scaled.
+// turned surface where it lands on the screen, pixel for pixel, for every word, clipped, and at the source's own size
+// when the layer is shown larger.
 #include <gtest/gtest.h>
 
 #include <cstring>
@@ -108,11 +109,13 @@ TEST(ScreenConversionVic, EveryWordWritesTheTurnedSurfaceWhereItLands)
                     return;
                 const auto &c = run.conversion;
                 const Rect o = turnedRect(l.src, kSourceWidth, kSourceHeight, transform);
+                EXPECT_EQ(c.width, c.screen.w / int32_t(scale)) << "no more pixels than the source has";
+                EXPECT_EQ(c.height, c.screen.h / int32_t(scale));
                 unsigned wrong = 0;
-                for (int32_t row = 0; row != c.screen.h; ++row)
-                    for (int32_t column = 0; column != c.screen.w; ++column) {
-                        const int64_t ox = o.x + (c.screen.x + column - l.dst.x) / int32_t(scale);
-                        const int64_t oy = o.y + (c.screen.y + row - l.dst.y) / int32_t(scale);
+                for (int32_t row = 0; row != c.height; ++row)
+                    for (int32_t column = 0; column != c.width; ++column) {
+                        const int64_t ox = o.x + (c.screen.x - l.dst.x) / int32_t(scale) + column;
+                        const int64_t oy = o.y + (c.screen.y - l.dst.y) / int32_t(scale) + row;
                         uint32_t got = 0;
                         memcpy(&got, run.target.data() + size_t(row) * run.pitch + size_t(column) * 4, 4);
                         if (got != turnedPixel(transform, ox, oy) && wrong++ == 0)

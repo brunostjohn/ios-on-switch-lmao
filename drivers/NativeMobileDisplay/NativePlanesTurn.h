@@ -67,12 +67,12 @@ inline bool clipped(const Rect &d, uint32_t width, uint32_t height, int64_t &x0,
     return x1 > x0 && y1 > y0;
 }
 
-// What the plane conversion job makes of a layer, turned or not: its part on the screen, turned and scaled by VIC to the
-// size it is shown at, so the window scans the plane 1:1 (an RGB window stops at 1/4 across, where a YUV layer may come
-// at 1/6).
-// srcX..srcH: VIC's source rectangle in the untransformed surface, 16.16. width x height: the plane, the screen part's
-// size but at least VIC's smallest surface side, so a sliver one pixel on the screen is a 2-pixel plane the window
-// shows halved.
+// What the plane conversion job makes of a layer, turned or not: its part on the screen, turned by VIC. Each side of the
+// plane is the smaller of that part's size on the screen and its size in the source. VIC scales a layer shown smaller
+// down to its size on the screen (an RGB window stops at 1/4 across, where a YUV layer may come at 1/6), and the window
+// scales a layer shown larger up, so VIC writes and the window fetches no more pixels than the source has.
+// srcX..srcH: VIC's source rectangle in the untransformed surface, 16.16. width x height: the plane, at least VIC's
+// smallest surface side, so a sliver one pixel on the screen is a 2-pixel plane the window shows halved.
 struct ScreenConversion {
     Rect screen;
     uint64_t srcX, srcY, srcW, srcH;
@@ -80,6 +80,17 @@ struct ScreenConversion {
 };
 
 constexpr int32_t kConvertedMinimumSide = 2;
+
+// The most source pixels an RGB window's DDA steps over per output pixel: across, and down for every format.
+constexpr uint32_t kRgbShrinkAcross = 4, kShrinkDown = 15;
+
+// source: the part's length in the source, 16.16.
+inline int32_t convertedSide(int64_t screen, uint64_t source)
+{
+    const uint64_t pixels = (source + 0xffff) >> 16;
+    const int64_t side = pixels < static_cast<uint64_t>(screen) ? static_cast<int64_t>(pixels) : screen;
+    return side < kConvertedMinimumSide ? kConvertedMinimumSide : static_cast<int32_t>(side);
+}
 
 inline void screenConversionAxis(int32_t s, int32_t sn, int32_t d, int32_t dn, int64_t d0, int64_t d1, uint64_t &start,
                                  uint64_t &length)
@@ -114,9 +125,21 @@ inline bool screenConversionOf(const Layer &l, uint32_t width, uint32_t height, 
         c.srcY = (static_cast<uint64_t>(l.surface.height) << 16) - c.srcY - c.srcH;
     c.screen = {static_cast<int32_t>(x0), static_cast<int32_t>(y0), static_cast<int32_t>(x1 - x0),
                 static_cast<int32_t>(y1 - y0)};
-    c.width = c.screen.w < kConvertedMinimumSide ? kConvertedMinimumSide : c.screen.w;
-    c.height = c.screen.h < kConvertedMinimumSide ? kConvertedMinimumSide : c.screen.h;
+    c.width = convertedSide(x1 - x0, aw);
+    c.height = convertedSide(y1 - y0, bh);
     return true;
+}
+
+// Whether a plane converted as `made` can show what `now` asks for: the same part of the source, at least as many pixels
+// as `now` would convert, and few enough for the window to shrink to the part's size on the screen. A layer wholly on
+// the screen converts its whole source rectangle wherever it goes, so moving or resizing still content keeps its plane
+// until the layer grows past it.
+inline bool screenConversionShows(const ScreenConversion &made, const ScreenConversion &now)
+{
+    return made.srcX == now.srcX && made.srcY == now.srcY && made.srcW == now.srcW && made.srcH == now.srcH &&
+           made.width >= now.width && made.height >= now.height &&
+           made.width <= static_cast<int64_t>(now.screen.w) * kRgbShrinkAcross &&
+           made.height <= static_cast<int64_t>(now.screen.h) * kShrinkDown;
 }
 
 // The plane screenConversionOf describes, as the layer the window shows.

@@ -171,10 +171,12 @@ int planeConvertSlot(int sourceSlot, const native_planes::Layer &layer, uint32_t
     const bool packed = layer.kind == native_planes::kKindBgra || layer.kind == native_planes::kKindRgba;
     if (!source || !source->lease || (!native_planes::isYuv(layer.kind) && !packed))
         return -95;
-    // The plane is the layer's part on the screen, turned and scaled by VIC (NativePlanesTurn.h): the window shows it 1:1.
+    // The plane is the layer's part on the screen, turned by VIC, at most the source's pixels (NativePlanesTurn.h).
     native_planes::ScreenConversion shown = {};
-    if (!native_planes::screenConversionOf(layer, width, height, shown))
-        return -2;
+    if (!native_planes::screenConversionOf(layer, width, height, shown)) {
+        image = native_planes::Image();
+        return sourceSlot;
+    }
     static_assert(native_planes::kConvertedMinimumSide == TEGRA_VIC_MIN_DIM, "VIC's smallest surface side");
     const uint32_t outWidth = uint32_t(shown.width), outHeight = uint32_t(shown.height);
     const uint32_t pitch = (outWidth * 4 + 255) & ~255u;
@@ -209,9 +211,7 @@ int planeConvertSlot(int sourceSlot, const native_planes::Layer &layer, uint32_t
             buffer.height == layer.surface.height && buffer.cropX == view.crop.x && buffer.cropY == view.crop.y &&
             buffer.format == layer.surface.format && buffer.matrix == matrix && buffer.transfer == transfer &&
             buffer.primaries == primaries && buffer.chromaTop == chromaTop && buffer.chromaBottom == chromaBottom &&
-            buffer.transform == layer.transform && buffer.shown.srcX == shown.srcX && buffer.shown.srcY == shown.srcY &&
-            buffer.shown.srcW == shown.srcW && buffer.shown.srcH == shown.srcH &&
-            buffer.shown.screen.w == shown.screen.w && buffer.shown.screen.h == shown.screen.h) {
+            buffer.transform == layer.transform && native_planes::screenConversionShows(buffer.shown, shown)) {
             selected = &buffer;
             cached = true;
             break;
@@ -318,7 +318,11 @@ int planeConvertSlot(int sourceSlot, const native_planes::Layer &layer, uint32_t
         copySource->interruptOccurred(nullptr, nullptr, 0);
         return -115;
     }
-    const native_planes::Layer rgb = native_planes::screenConversionLayer(shown, pitch);
+    native_planes::ScreenConversion plane = shown;
+    plane.width = selected->shown.width;
+    plane.height = selected->shown.height;
+    const uint32_t planePitch = (uint32_t(plane.width) * 4 + 255) & ~255u;
+    const native_planes::Layer rgb = native_planes::screenConversionLayer(plane, planePitch);
     if (!native_planes::imageOf(rgb, width, height, image)) {
         switch_native_scanout_release(&result);
         return -95;

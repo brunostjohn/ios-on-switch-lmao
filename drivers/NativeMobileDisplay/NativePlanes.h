@@ -456,8 +456,8 @@ inline bool imageOf(const Layer &l, uint32_t width, uint32_t height, Image &imag
     image.yuv = isYuv(l.kind);
     image.convert = image.yuv && !switch_surface_dc_siting(l.surface.chromaTop, l.surface.chromaBottom);
     const uint32_t bpp = image.yuv ? 1 : 4;  // bytes per pixel the offsets and PRESCALED count (luma)
-    const uint32_t hMax = image.yuv ? 8 : 4;
-    const uint32_t vMax = 15;  // DDA limits (4:2:0 and 4:2:2 count as 2 bytes per pixel)
+    const uint32_t hMax = image.yuv ? 8 : kRgbShrinkAcross;
+    const uint32_t vMax = kShrinkDown;  // DDA limits (4:2:0 and 4:2:2 count as 2 bytes per pixel)
     Axis x;
     Axis y;
     if (!axisOf(l.src.x, l.src.w, l.dst.x, l.dst.w, width, l.surface.width, hMax, image.yuv, x) ||
