@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 // The registers HW Test's probe words (TegraGM20BMetalProbe.mm switchMetalProbeBefore:after:) may write that a state's
-// words do not set at its bind: a probe draw that wrote one sets it back to the GM20B golden context's value
-// (nvidia/gm20b/gr/sw_method_init.bin), which every later draw assumes, so no probe leaves hardware state behind.
+// words do not set at its bind: a probe draw that wrote one sets it back to the value the channel's init context writes
+// (kits/SwitchGM20BEmit/context/context.tsv, the GM20B golden context's: probe_restores_test holds them equal), which
+// every later draw assumes, so no probe leaves hardware state behind.
 #pragma once
 #include <cstdint>
 #include "../../kits/SwitchGM20B/SwitchGM20B3D.h"
@@ -30,11 +31,6 @@ inline uint32_t probeRestoreBits(uint32_t method)
     for (uint32_t i = 0; i < sizeof kProbeRestores / sizeof *kProbeRestores; i++)
         bits |= uint32_t(kProbeRestores[i].method == method) << i;
     return bits;
-}
-
-inline bool probeWritesRasterMasks(uint32_t method)
-{
-    return method >= NVB197_SET_SAMPLE_MASK_X0_Y0 && method <= NVB197_SET_SAMPLE_MASK_X1_Y1;
 }
 
 }  // namespace gm20b

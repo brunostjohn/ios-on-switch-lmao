@@ -1158,10 +1158,9 @@ public:
     // BEGIN, and after its END the words that set back what those set, while armed
     struct ProbeWords {
         std::vector<uint32_t> before, after;
-        // the registers its words write that the draw sets back after it (probe_restores.h): kProbeRestores' entries,
-        // and whether SET_SAMPLE_MASK_X0_Y0..X1_Y1, which the next draw writes again
+        // the registers its words write that the draw sets back after it (probe_restores.h): kProbeRestores' entries.
+        // Whatever they write, the raster masks' held word is unknown after it, so the next draw writes them again.
         uint32_t restores = 0;
-        bool rasterMasks = false;
     };
 
     std::atomic<bool> probeArmed{false};

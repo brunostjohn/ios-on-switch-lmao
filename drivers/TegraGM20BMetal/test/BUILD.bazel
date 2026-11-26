@@ -3661,6 +3661,29 @@ device_test(
 # Device::compressedFromPlain)
 # A state's written colour targets are the ones its key names, whatever SET_CT_WRITE the pack's baseline leaves the others
 # (device_write_bits_test.cpp)
+# Every pre-built state of the built pack pushes its rule's zero-source kill, both ways (Device::build, S7)
+device_test(
+    name = "device_kill_pack_test",
+    srcs = ["device_kill_pack_test.cpp"],
+    data = ["//gpu/seed:pack"],
+    env = {"SWITCH_METAL_KILL_PACK": "$(rootpath //gpu/seed:pack)/pack.bin"},
+    tags = ["pack"],
+)
+
+# A probe draw sets back what the channel's init context writes (probe_restores.h against context.tsv)
+host_test(
+    name = "probe_restores_test",
+    srcs = [
+        "probe_restores_test.cpp",
+        "//drivers/TegraGM20BMetal:probe_restores.h",
+    ],
+    cxx_std = "c++17",
+    deps = [
+        "//kits/SwitchGM20B:classes",
+        "//kits/SwitchGM20BEmit:context_h",
+    ],
+)
+
 # A probe draw that writes the sample-mask registers sets the golden context's values back after it
 device_test(
     name = "device_probe_masks_test",

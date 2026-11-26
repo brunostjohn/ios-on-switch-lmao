@@ -42,7 +42,6 @@ protected:
             words->before.push_back(gm20b::Push::hdr(1, gm20b::SUBC_3D, method, 1));
             words->before.push_back(value);
             words->restores |= gm20b::probeRestoreBits(method);
-            words->rasterMasks |= gm20b::probeWritesRasterMasks(method);
         }
         {
             std::lock_guard<gm20b::Mutex> hold(dev.probeLock);

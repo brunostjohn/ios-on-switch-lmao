@@ -193,8 +193,7 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
         for (uint32_t i = 0; i < std::size(kProbeRestores); i++)
             if (probe->restores >> i & 1)
                 p_.m(kProbeRestores[i].method, kProbeRestores[i].value);
-        if (probe->rasterMasks)
-            cb_->sampleMaskHeld_ = kSampleMaskUnknown;
+        cb_->sampleMaskHeld_ = kSampleMaskUnknown;
         finishDraw(count, drawnInstances);
         return true;
     }

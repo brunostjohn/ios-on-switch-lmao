@@ -41,7 +41,6 @@ static bool appendMethods(NSData *pairs, std::vector<uint32_t> &words, gm20b::De
         if (v[i] >= 0x8000 || v[i] % 4)
             return false;
         into.restores |= gm20b::probeRestoreBits(v[i]);
-        into.rasterMasks |= gm20b::probeWritesRasterMasks(v[i]);
         words.push_back(gm20b::Push::hdr(1, gm20b::SUBC_3D, v[i], 1));
         words.push_back(v[i + 1]);
     }
