@@ -91,6 +91,7 @@ host_test(
 host_test(
     name = "switch_host1x_submit_test",
     srcs = [
+        "switch_host1x_submit_harness.h",
         "switch_host1x_submit_test.cpp",
         "//drivers/ArmGIC:SwitchInterrupts.h",
         "//drivers/TegraHost1x:SwitchHost1xArena.h",
