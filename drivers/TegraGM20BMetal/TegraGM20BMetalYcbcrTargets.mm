@@ -19,6 +19,10 @@
 #include "ycbcr_meet.h"
 #include "ycbcr_store.h"
 
+static_assert(gm20b::kPackedLoadTag + 8 <= gm20b::kBackingReaderColorTag &&
+                  gm20b::kBackingReaderColorTag + 8 <= gm20b::kYcbcrLoadTag,
+              "a backing reader's colour tags between the loaded packed planes' and the loaded YCbCr textures'");
+
 static gm20b::Pipeline *packState(const char *name)
 {
     return name ? gRM->raw->ownPipeline(name) : nullptr;

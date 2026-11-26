@@ -13,7 +13,7 @@ namespace {
 // The scratch backings' tags: a mirror's at + slot, a colour stand-in's at + 8 + slot, the depth stand-in's at + 16, a
 // separate stencil's at + 17
 constexpr uint32_t kTurnTag = 48;
-static_assert(kBackingReaderColorTag + 8 <= kTurnTag, "a backing reader's colour tags below the turn copies'");
+static_assert(kTurnTag + 18 <= kBackingReaderColorTag, "the turn copies' tags below a backing reader's");
 
 Rotation quarterFrame(const Texture &t)
 {
