@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // SwitchGpuPlaneStream.h in the media completion flip's model (switch_media_completion_flip_harness.h), with a bridge
 // that fails: the stream route is a jobless bridge's alone and watched from its submission, and the set's verdict
-// follows what the hardware did. A set the stream wrote is shown, with one line when a producer's failure is dated after
-// its writes; a set the failure cancelled first is not shown; neither panics. Everything else completes through the
-// bridge.
+// follows what the hardware did. A set the stream wrote is shown, with one line when a client's failure is dated after
+// its writes; a set the failure cancelled first is not shown. Only a compositor's kill or a loss nothing reports panics.
+// Everything else completes through the bridge.
 #include <gtest/gtest.h>
 
 #include <cstdint>
@@ -227,7 +227,19 @@ TEST_F(GpuPlaneStreamFlip, AFrameEndDuringTheStreamsCompletionFindsItsPassSignal
     EXPECT_EQ(d.model.active[kStartB], address(2));
 }
 
-// The one panic left: a set host1x wrote whose bridge says its producers finished, and whose frame was then lost.
+// A compositor's own GPU fault is a contract our driver or compiler breaks: the written set's verdict panics, as the
+// bridge fence's does for it, so the record finds the bug.
+TEST_F(GpuPlaneStreamFlip, AWrittenSetWhoseCompositorProducerWasKilledPanics)
+{
+    ASSERT_TRUE(d.offerGpu(video(2), ++seq));
+    d.copyThread();
+    d.filter();
+    gBridge.status = -5;
+    gBridge.why = SWITCH_GPU_BACKING_WRITER_FAILED;
+    EXPECT_THROW(d.complete(0), std::runtime_error);
+}
+
+// The other panic: a set host1x wrote whose bridge says its producers finished, and whose frame was then lost.
 TEST_F(GpuPlaneStreamFlip, AWrittenSetLostWithNoFailureReportedIsTheKernels)
 {
     ASSERT_TRUE(d.offerGpu(video(2), ++seq));

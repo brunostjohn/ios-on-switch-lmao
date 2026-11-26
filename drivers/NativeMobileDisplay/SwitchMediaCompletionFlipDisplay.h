@@ -124,10 +124,10 @@ void writeEarlyMediaFlip(uint32_t generation)
 }
 
 // completionFlipVerdict's: a set the stream wrote (host1x's filter early, or the stream's completion with no filter) is
-// on screen, whatever its producers say by now. A failure dated after the writes reached DRAM leaves it shown with one
-// line: a GPU producer's, by the reason its bridge gave before it went (SwitchHost1xDisplay.h), or a VIC or NVDEC
-// producer's client's. A written set with no failure reported, or a VIC or NVDEC producer's compositor kill, is the
-// kernel's own.
+// on screen, whatever its producers say by now. A client's failure dated after the writes reached DRAM (its kill or close,
+// GONE; a refused write) leaves it shown with one line: a GPU producer's by the reason its bridge gave before it went
+// (SwitchHost1xDisplay.h), else a VIC or NVDEC producer's. A written set with no failure reported, or any producer's
+// compositor kill (FAILED: a contract our driver breaks), is the kernel's own.
 int mediaFlipVerdict(int status)
 {
     if (!status || !(mediaFlip.early() || mediaFlipWrittenByStream()))
@@ -135,7 +135,7 @@ int mediaFlipVerdict(int status)
     const int bridgeWhy = mediaHostStream.bridgeWhy;
     const int why =
         bridgeWhy ? bridgeWhy : switch_gpu_backing_tokens_failure(mediaHostStream.producers, mediaHostStream.count);
-    if (!why || (!bridgeWhy && why == SWITCH_GPU_BACKING_WRITER_FAILED))
+    if (!why || why == SWITCH_GPU_BACKING_WRITER_FAILED)
         panic("SwitchDisplay: windows B and C's set was written by host1x, and its frame was then lost (%d, its "
               "producers' %d)",
               status, why);
