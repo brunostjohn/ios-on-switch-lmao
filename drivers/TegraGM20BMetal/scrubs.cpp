@@ -49,17 +49,13 @@ void Device::scrubbedFree(const Scrub &s, DeferredFrees *deferred)
 void Device::retireScrubs(DeferredFrees *deferred)
 {
     for (auto it = scrubbing_.begin(); it != scrubbing_.end();) {
-        // The fence first, then the channel, then the kill record. A kill writes its range before it moves the fence
-        // past every seqno it gave out, so a record read after the fence sees any kill covering it. A reopen retires
-        // the generation before it releases the stand-in fence done() then reads (reopen, device_channel.cpp), so a
-        // done() that read it is followed by a channelCurrent() that reads the channel lost.
-        const bool finished = done(it->seqno);
-        const bool current = channelCurrent(it->generation);
-        if (current && !finished) {
+        const ScrubFate fate = scrubFate([&] { return done(it->seqno); }, [&] { return channelCurrent(it->generation); },
+                                         [&] { return killed(it->seqno); });
+        if (fate == ScrubFate::Waiting) {
             ++it;
             continue;
         }
-        if (current && !killed(it->seqno)) {
+        if (fate == ScrubFate::Zeroed) {
             scrubbedFree(*it, deferred);
         } else {
             // its job was on a channel since lost, or a kill covered it: it may never have run
