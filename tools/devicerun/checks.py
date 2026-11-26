@@ -1254,6 +1254,42 @@ GROUPS: dict[str, list[Check]] = {
     ],
     'storage': [
         Check(
+            'storage.purgeable-supplemental-flags',
+            'big-boot',
+            'supplemental flags',
+            process=KERNEL,
+            regex=r'Requested supplemental flags (?P<flags>[0-9a-f]+) are not supported on this volume',
+            show=('flags',),
+            source='APFS (24B119), boot 2693043C',
+            note="APFS refusing a purgeable mark's supplemental flags on a Data volume made without the iOS features "
+            '(rocompat 0xc, incompat 0x200); a card whose Data the installer rebuilt reads 0 (O16)',
+        ),
+        Check(
+            'storage.purgeable-mark-unsupported',
+            'big-boot',
+            'SwitchFsctl: ',
+            process=KERNEL,
+            regex=r"SwitchFsctl: (?P<who>[^\[]+)\[\d+\] fsctl 0x[0-9a-f]+ \('J' 111\) refused (?P<errno>\d+)",
+            where='errno == 45',
+            show=('who',),
+            source='kernel/switch/vfs/fsctl_diag.c',
+            note="APFS's ENOTSUP for a purgeable mark (SpringBoard's SplashBoard snapshots, nsurlsessiond); boot "
+            '2693043C: SpringBoard and nsurlsessiond. 0 once the Data volume has its features (O16)',
+        ),
+        Check(
+            'storage.purgeable-mark-compressed',
+            'big-boot',
+            'SwitchFsctl: ',
+            REPORT,
+            process=KERNEL,
+            regex=r"SwitchFsctl: (?P<who>[^\[]+)\[\d+\] fsctl 0x[0-9a-f]+ \('J' 111\) refused (?P<errno>\d+)",
+            where='errno == 22',
+            show=('who',),
+            source='kernel/switch/vfs/fsctl_diag.c',
+            note="APFS's EINVAL for a purgeable mark on a decmpfs-compressed file: SplashBoard's snapshots are written "
+            "'lzfse 0' and then compressed, where ImageIO in an app writes 'lzfse 1' (O16's own half, open)",
+        ),
+        Check(
             'storage.sd-read-rate',
             'r116-sched',
             'SwitchSD: ',
