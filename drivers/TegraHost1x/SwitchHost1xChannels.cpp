@@ -68,6 +68,7 @@ struct Channel {
     SwitchHost1xArena arena{SWITCH_HOST1X_ARENA_WORDS};
     switch_host1x_fence room = {};  // the oldest fenced job's, while a submitter waits for room
     bool roomArmed = false;
+    bool made = false;  // published after its ring and arena are taken: channels 5 and 6 are made after bring-up
     uint32_t waiters = 0;
 };
 
@@ -244,7 +245,7 @@ void statsLine()
 // A channel has its ring and arena from bring-up, or, for the module lock probe's, from the probe's first run.
 bool channelMade(const Channel &c)
 {
-    return c.arenaMemory.va != nullptr;
+    return __atomic_load_n(&c.made, __ATOMIC_ACQUIRE);
 }
 
 bool validChannel(uint32_t channel)
@@ -254,8 +255,11 @@ bool validChannel(uint32_t channel)
 
 bool makeChannel(Channel &c)
 {
-    return (c.pushMemory.va || switch_dma_alloc(&c.pushMemory, SwitchHost1xPush::kBytes + 4)) &&
-           (c.arenaMemory.va || switch_dma_alloc(&c.arenaMemory, SWITCH_HOST1X_ARENA_WORDS * 4));
+    if (!(c.pushMemory.va || switch_dma_alloc(&c.pushMemory, SwitchHost1xPush::kBytes + 4)) ||
+        !(c.arenaMemory.va || switch_dma_alloc(&c.arenaMemory, SWITCH_HOST1X_ARENA_WORDS * 4)))
+        return false;
+    __atomic_store_n(&c.made, true, __ATOMIC_RELEASE);
+    return true;
 }
 
 // Its gather filter still on afterwards: true.

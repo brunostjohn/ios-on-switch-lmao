@@ -59,6 +59,8 @@ TEST_F(Host1xSubmit, AFailureReleasedWhileTheStreamIsPublishedNeverLetsItWrite)
         EXPECT_EQ(bridge.releases, 1u) << round;
     }
     EXPECT_EQ(refused + cancelled, 400u);
+    EXPECT_GT(refused, 0u) << "the release before the publication";
+    EXPECT_GT(cancelled, 0u) << "the publication before the release";
     std::printf("orders: refused %u, published then cancelled %u\n", refused, cancelled);
 }
 

@@ -39,6 +39,9 @@ void displaySignaled(switch_host1x_fence *fence, int failure)
 }
 
 // released: a syncpoint whose producer failed; the stream is affected when it waits on it, directly or through its bridge.
+// A jobless bridge's syncpoint is its producer's, shared by every slot on it: only a stream whose own threshold the GPU
+// has not reached waits on this release (read before releaseLocked's CPU increments), as VIC's and NVDEC's
+// producerCancelled match.
 void displayCancelLocked(bool force = false, uint32_t released = 0)
 {
     auto *stream = gDisplayStream;
@@ -46,7 +49,8 @@ void displayCancelLocked(bool force = false, uint32_t released = 0)
         static_cast<int32_t>(tegra_host1x_syncpt_read(stream->syncpt) - stream->fence.threshold) >= 0)
         return;
     if (!force) {
-        bool affected = stream->bridge && released && stream->bridgeSyncpt == released;
+        bool affected = stream->bridge && released && stream->bridgeSyncpt == released &&
+                        static_cast<int32_t>(tegra_host1x_syncpt_read(released) - stream->bridgeThreshold) < 0;
         for (uint32_t i = 0; i < stream->count && !affected; ++i)
             affected = switch_gpu_backing_token_physical_status(&stream->producers[i], 0) < 0;
         if (!affected)
@@ -87,14 +91,10 @@ int switch_host1x_display_submit(SwitchHost1xDisplayStream *stream, const switch
         !gChannelLock)
         return TEGRA_HOST1X_EINVAL;
     uint32_t bridgeSyncpt = 0, bridgeThreshold = 0;
-    int produced = 0;
-    if (bridge) {
-        // Outside gChannelLock: the bridge releases a failed syncpoint into host1x under its own lock.
+    if (bridge)
         switch_gpu_bridge_syncpoint(bridge, &bridgeSyncpt, &bridgeThreshold);
-        produced = switch_gpu_bridge_status(bridge);
-    }
     IOLockLock(gChannelLock);
-    int error = !gRunning ? TEGRA_HOST1X_ENODEV : gDisplayStream ? TEGRA_HOST1X_EAGAIN : produced < 0 ? produced : 0;
+    int error = !gRunning ? TEGRA_HOST1X_ENODEV : gDisplayStream ? TEGRA_HOST1X_EAGAIN : 0;
     // In the hold that publishes the stream: a failure is stored before the release that would cancel the stream, and
     // that release takes this lock, so it either finds the stream published or its failure is read here. The stored
     // failure trails a producer's own by up to one retire pass, so the producers are read too (their timeline's lock is
@@ -149,6 +149,7 @@ int switch_host1x_display_submit(SwitchHost1xDisplayStream *stream, const switch
             stream->producers[i] = producers[i];
         stream->bridge = bridge;
         stream->bridgeSyncpt = bridgeSyncpt;
+        stream->bridgeThreshold = bridgeThreshold;
         stream->bridgeWhy = 0;
         stream->completed = completed;
         stream->context = context;

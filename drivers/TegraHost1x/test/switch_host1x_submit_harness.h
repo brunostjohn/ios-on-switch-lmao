@@ -107,7 +107,8 @@ extern "C" int switch_gpu_backing_token_status(const switch_gpu_backing_token *)
 }
 
 // A GPU producer's jobless bridge as the display stream sees it: its syncpoint, its status, its stored failure and
-// reason, and its owner's release. afterStatus runs once, inside the first status read, as a failure handled then would.
+// reason, and its owner's release. beforeLock runs once, inside the syncpoint read the submit makes before its lock, as a
+// failure handled then would.
 struct switch_gpu_bridge {
     uint32_t syncpoint, threshold;
     int status;
@@ -116,25 +117,27 @@ struct switch_gpu_bridge {
     int failed = 0, why = 0, sourceFailure = 0;
     bool sourceReadLocked = false;
     bool failedReadUnlocked = false, whyReadAfterRelease = false;
-    void (*afterStatus)(switch_gpu_bridge *) = nullptr;
+    unsigned statusReads = 0;
+    void (*beforeLock)(switch_gpu_bridge *) = nullptr;
 };
 
 extern "C" void switch_gpu_bridge_syncpoint(const switch_gpu_bridge *bridge, uint32_t *syncpoint, uint32_t *threshold)
 {
-    *syncpoint = bridge->syncpoint;
-    *threshold = bridge->threshold;
+    auto *b = const_cast<switch_gpu_bridge *>(bridge);
+    *syncpoint = b->syncpoint;
+    *threshold = b->threshold;
+    if (auto *before = b->beforeLock) {
+        b->beforeLock = nullptr;
+        before(b);
+    }
 }
 
 extern "C" int switch_gpu_bridge_status(const switch_gpu_bridge *bridge)
 {
     auto *b = const_cast<switch_gpu_bridge *>(bridge);
     b->lockedWhenAsked |= gSubmitLock->held;
-    const int status = b->status;
-    if (auto *after = b->afterStatus) {
-        b->afterStatus = nullptr;
-        after(b);
-    }
-    return status;
+    ++b->statusReads;
+    return b->status;
 }
 
 extern "C" int switch_gpu_bridge_failed(const switch_gpu_bridge *bridge)

@@ -13,7 +13,7 @@ struct SwitchHost1xDisplayStream {
     // A GPU producer's: the GPU-to-host1x bridge the stream waits on first, owned from a successful submit until the
     // completion has its status.
     switch_gpu_bridge *bridge = nullptr;
-    uint32_t bridgeSyncpt = 0;
+    uint32_t bridgeSyncpt = 0, bridgeThreshold = 0;
     // Why the bridge's producers failed (switch_gpu_bridge_why), read before the completion lets the bridge go; 0 when
     // none did. The completion's caller judges a set the stream already wrote by it.
     int bridgeWhy = 0;

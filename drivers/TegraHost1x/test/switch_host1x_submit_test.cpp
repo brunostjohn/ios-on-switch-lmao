@@ -443,14 +443,14 @@ TEST_F(Host1xSubmit, AFailedBridgeTearsDownItsStreamBeforeItsSyncpointRelease)
     EXPECT_EQ(bridge.releases, 1u);
 }
 
-// A failure handled between the stream's status read and its publication: the release raised the syncpoint with no
+// A failure handled between the stream's syncpoint read and its publication: the release raised the syncpoint with no
 // stream to cancel, so a stream queued now would pass its WAIT over unfinished writes. Read under the channel lock in
 // the hold that publishes the stream, the failure refuses it.
 TEST_F(Host1xSubmit, AFailureReleasedJustBeforeThePublicationRefusesTheStream)
 {
     auto &stream = Bridged::get().stream;
     switch_gpu_bridge bridge = {Bridged::get().bridgeSyncpt, syncpoint(Bridged::get().bridgeSyncpt) + 2, 0, 0, false};
-    bridge.afterStatus = [](switch_gpu_bridge *b) {
+    bridge.beforeLock = [](switch_gpu_bridge *b) {
         b->failed = b->why = SWITCH_GPU_BACKING_WRITER_GONE;
         gCpuIncrements = true;
         EXPECT_EQ(tegra_host1x_syncpt_release_failed(b->syncpoint, b->threshold, 2), 0);
@@ -475,7 +475,7 @@ TEST_F(Host1xSubmit, AProducerFailureTheBridgeHasNotStoredYetRefusesTheStream)
 {
     auto &stream = Bridged::get().stream;
     switch_gpu_bridge bridge = {Bridged::get().bridgeSyncpt, syncpoint(Bridged::get().bridgeSyncpt) + 2, 0, 0, false};
-    bridge.afterStatus = [](switch_gpu_bridge *b) {
+    bridge.beforeLock = [](switch_gpu_bridge *b) {
         b->sourceFailure = SWITCH_GPU_BACKING_WRITER_GONE;
     };
     const uint32_t word = 0xdc0, address = 0x20000000, put = doorbell(TEGRA_HOST1X_CHANNEL_DISPLAY);
@@ -500,6 +500,7 @@ TEST_F(Host1xSubmit, AWrittenSetsLateFailureCarriesItsReason)
     ASSERT_EQ(switch_host1x_display_submit(&stream, nullptr, 0, &word, &address, 1, 0x500, 5, DisplayCompletion::heard,
                                            &done, &bridge),
               0);
+    EXPECT_EQ(bridge.statusReads, 0u) << "the publishing hold's reads decide; no queue.lock trip a frame before it";
     syncpoint(bridge.syncpoint) = bridge.threshold;
     DisplayExecution execution;
     execution.run();
@@ -514,12 +515,45 @@ TEST_F(Host1xSubmit, AWrittenSetsLateFailureCarriesItsReason)
     EXPECT_FALSE(bridge.whyReadAfterRelease);
 }
 
+// A mixed set's stream past its bridge's threshold (the GPU drained its slot's covering job), still waiting on VIC:
+// another slot's release on the same producer syncpoint, to a later threshold, is not this stream's. It writes once
+// VIC is done.
+TEST_F(Host1xSubmit, AnotherSlotsReleaseOnTheProducerSyncpointLeavesADrainedStream)
+{
+    auto &shared = Bridged::get();
+    auto &stream = shared.stream;
+    const uint32_t vicAt = syncpoint(shared.unrelated) + 1;
+    const switch_gpu_backing_token vic = {vicAt, 1, SWITCH_GPU_ENGINE_VIC, shared.unrelated};
+    switch_gpu_bridge bridge = {shared.bridgeSyncpt, syncpoint(shared.bridgeSyncpt) + 1, 0, 0, false};
+    const uint32_t word = 0xdc0, address = 0x20000000;
+    DisplayCompletion done;
+    ASSERT_EQ(switch_host1x_display_submit(&stream, &vic, 1, &word, &address, 1, 0x500, 5, DisplayCompletion::heard,
+                                           &done, &bridge),
+              0);
+    syncpoint(bridge.syncpoint) = bridge.threshold;
+    DisplayExecution execution;
+    execution.run();
+    ASSERT_TRUE(execution.controller.empty()) << "waiting on VIC";
+    gCpuIncrements = true;
+    ASSERT_EQ(tegra_host1x_syncpt_release_failed(bridge.syncpoint, bridge.threshold + 2, 2), 0);
+    EXPECT_EQ(gDisplayTeardowns, 0u);
+    EXPECT_EQ(stream.status, 0);
+    EXPECT_EQ(gDisplayStream, &stream);
+    syncpoint(shared.unrelated) = vicAt;
+    execution.run();
+    EXPECT_FALSE(execution.controller.empty());
+    stream.fence.signaled(&stream.fence, 0);
+    EXPECT_EQ(done.calls, 1u);
+    EXPECT_EQ(done.status, 0);
+    EXPECT_EQ(bridge.releases, 1u);
+}
+
 // A bridge whose producers already failed is refused, and stays its caller's.
 TEST_F(Host1xSubmit, AnAlreadyFailedBridgeIsRefusedAndStaysTheCallers)
 {
     auto &stream = Bridged::get().stream;
-    const switch_gpu_bridge refused = {0, 2, -5, 0, false};
-    switch_gpu_bridge bridge = refused;
+    switch_gpu_bridge bridge = {0, 2, -5, 0, false};
+    bridge.failed = -5;
     const uint32_t word = 0xdc0, address = 0x20000000;
     DisplayCompletion done;
     EXPECT_EQ(switch_host1x_display_submit(&stream, nullptr, 0, &word, &address, 1, 0x500, 5, DisplayCompletion::heard,
