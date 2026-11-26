@@ -294,6 +294,13 @@ bool prepare(const std::string &bytes, uint64_t stack, SystemLibraries &system, 
     gm20b::StoreKey store = gm20b::storeKeyOf(p.key, p.request, stages, scope);
     p.content = std::move(store.content);
     p.name = store.name;
+    if (p.request.form == gm20b::RequestForm::Full) {
+        gm20b::CompileRequest primary = p.request;
+        primary.form = gm20b::RequestForm::Primary;
+        gm20b::StoreKey filed = gm20b::storeKeyOf(p.key, primary, stages, scope);
+        p.primaryContent = std::move(filed.content);
+        p.primaryName = filed.name;
+    }
     out = std::move(p);
     return true;
 }

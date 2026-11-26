@@ -28,6 +28,7 @@
 #include "compiler_engine.h"
 #include "compiler_log.h"
 #include "compiler_pool.h"
+#include "compiler_record.h"
 #include "compiler_refusals.h"
 #include "compiler_restart.h"
 #include "compiler_sandbox.h"
@@ -242,6 +243,12 @@ int32_t Service::run(Work &work)
 #endif
     if (!entry.empty() && !publish(&p.name, p.content, entry, result == TegraGM20BCompileMade, why))
         result = TegraGM20BCompileFailed;
+    if (result == TegraGM20BCompileMade && p.request.form == gm20b::RequestForm::Full) {
+        gm20b::Digest primary = p.primaryName;
+        std::string ignored;
+        if (const std::string filed = asPrimary(p, entry); !filed.empty())
+            publish(&primary, p.primaryContent, filed, false, ignored);
+    }
 #if SWITCH_DEBUG
     tJobSplit.storeNs = uptimeNs() - publishing;
 #endif

@@ -671,7 +671,7 @@ TEST(CompileRequest, AReflectionIsKeyedAsItsStateAndNamedApart)
     limits.kernel.maxThreads = 256;
     EXPECT_FALSE(switch_compiler::prepare(gm20b::encodeRequest(limits), kStack, system, p, why));
     gm20b::CompileRequest split = compute;
-    split.form = gm20b::RequestForm::Split;
+    split.form = gm20b::RequestForm::Full;
     EXPECT_FALSE(gm20b::decodeRequest(gm20b::encodeRequest(split), back));
 }
 

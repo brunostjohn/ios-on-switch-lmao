@@ -43,13 +43,14 @@ enum class RequestKind : uint8_t {
 // kCodeGenSpecialize is MTLSpecializeFunctionToArchive)
 constexpr uint32_t kCodeGenImageFilters = 5, kCodeGenSource = 13, kCodeGenStitch = 14, kCodeGenSpecialize = 15;
 
-// Primary: the state's record; Split: the same with its fragment program's split, which the compiler makes after the
-// primary record is published and nobody waits for; Barrier: a storage form's barrier twin (Direct::make's
-// PackForm::Barrier), which a client asks at the background class once its primary record is a storage form, as the
-// pack gives each of its storage forms one
+// Primary: the state's record; Full: the same with its fragment program's split and its program variants, as a pack
+// build makes them, which a client asks at the background class once its primary record is placed (so no creation waits
+// for the extra compiles) and the compiler files under the primary's content too; Barrier: a storage form's barrier twin
+// (Direct::make's PackForm::Barrier), asked the same way once its primary record is a storage form, as the pack gives
+// each of its storage forms one
 enum class RequestForm : uint8_t {
     Primary,
-    Split,
+    Full,
     Barrier
 };
 
