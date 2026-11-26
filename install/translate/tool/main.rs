@@ -120,7 +120,7 @@ fn role(args: &RoleArgs) -> Result<()> {
         translator: &translator,
         pins: &pins,
     };
-    let delta = switch_translate::translate(&inputs, &args.out)?;
+    let delta = switch_translate::translate_file(&inputs, &args.image, 0, &args.out)?;
     for line in &delta.log {
         println!("{line}");
     }

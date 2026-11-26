@@ -2,6 +2,10 @@
 //! A role's volume, read straight from its decoded member: its regular files, and their contents as the kernel would
 //! give them, decompressed and, on a sealed volume, checked against the seal's hashes.
 
+use std::fs::File as HostFile;
+use std::io::{BufWriter, Write};
+use std::path::Path;
+
 use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 use switch_apfs_format::BLOCK_SIZE;
@@ -10,11 +14,19 @@ use switch_apfs_read::{Container, Entry, Fs, Step, Stream, XattrData, stream};
 
 use crate::Error;
 use crate::buffer::Buffer;
+use crate::mmap::{Mapped, ReadOnlyMap, TempFile};
 
 /// A source that the worker threads can share.
 pub type Source<'a> = &'a (dyn BlockSource + Sync);
 
+#[derive(Clone, Copy)]
+pub(crate) struct Backing<'a> {
+    pub file: &'a HostFile,
+    pub base: u64,
+}
+
 const APFS_FILE_INFO_DATA_HASH: u8 = 1;
+const STREAM_BUF_BYTES: usize = 1 << 20;
 
 #[derive(Clone, Debug)]
 pub enum Data {
@@ -165,6 +177,10 @@ fn file(e: &Entry) -> Result<File, switch_apfs_read::ReadError> {
 }
 
 impl File {
+    pub(crate) fn is_compressed(&self) -> bool {
+        matches!(self.data, Data::Compressed { .. })
+    }
+
     /// The file's bytes if it starts with a Mach-O magic. An uncompressed file is read only that far otherwise.
     pub fn macho_contents(&self, src: Source<'_>, sealed: bool) -> Result<Option<Buffer>, Error> {
         if let Data::Plain(s) = &self.data
@@ -213,6 +229,146 @@ impl File {
             }
         }
     }
+
+    /// The file's bytes in a read-only file-backed mapping: straight from `backing` when the stream is stored
+    /// uncompressed and physically contiguous, otherwise streamed or decompressed into `temp_dir/tag`.
+    pub(crate) fn map_contents(
+        &self,
+        src: Source<'_>,
+        backing: Option<Backing<'_>>,
+        sealed: bool,
+        temp_dir: &Path,
+        tag: &str,
+    ) -> Result<Mapped, Error> {
+        let at = |e: Error| e.at(&self.path);
+        match &self.data {
+            Data::Empty => Ok(Mapped::Direct(ReadOnlyMap::empty())),
+            Data::Plain(s) => {
+                let mapped = map_stream(src, s, backing, temp_dir, tag).map_err(at)?;
+                if sealed {
+                    mapped.advise_sequential();
+                    check_seal(&mapped, s).map_err(at)?;
+                    mapped.advise_dontneed();
+                    mapped.advise_normal();
+                } else {
+                    mapped.advise_dontneed();
+                }
+                Ok(mapped)
+            }
+            Data::Compressed { decmpfs, fork } => {
+                let header = match decmpfs {
+                    Xattr::Embedded(b) => b.clone(),
+                    Xattr::Stream(s) => read(src, s).map_err(at)?.to_vec(),
+                };
+                let plain = match fork {
+                    Some(s) => {
+                        let fork_map = map_stream(src, s, backing, temp_dir, &format!("{tag}.fork")).map_err(at)?;
+                        switch_decmpfs::decompress(&header, Some(&fork_map)).map_err(|e| at(e.into()))?
+                    }
+                    None => switch_decmpfs::decompress(&header, None).map_err(|e| at(e.into()))?,
+                };
+                if sealed && let Some(s) = fork {
+                    check_seal(&plain, s).map_err(at)?;
+                }
+                let temp = TempFile::new(temp_dir.join(tag));
+                std::fs::write(temp.path(), &plain).map_err(|e| at(e.into()))?;
+                drop(plain);
+                let map = ReadOnlyMap::open(temp.path()).map_err(|e| at(e.into()))?;
+                map.advise_dontneed();
+                Ok(Mapped::temp(map, temp))
+            }
+        }
+    }
+}
+
+pub(crate) fn contiguous_offset(s: &Stream, base: u64) -> Option<u64> {
+    usize::try_from(s.size).ok()?;
+    if s.size == 0 {
+        return Some(0);
+    }
+    let mut extents = s.extents.clone();
+    extents.sort_by_key(|e| e.logical_addr);
+    let mut prev_end = 0u64;
+    for e in &extents {
+        if e.logical_addr < prev_end {
+            return None;
+        }
+        prev_end = e.logical_addr.checked_add(e.len)?;
+    }
+    let mut covered = 0u64;
+    let mut first_phys: Option<u64> = None;
+    for e in &extents {
+        if covered >= s.size {
+            break;
+        }
+        if e.logical_addr != covered || e.phys_block_num == 0 || e.len == 0 {
+            return None;
+        }
+        match first_phys {
+            None => first_phys = Some(e.phys_block_num),
+            Some(first) => {
+                if !covered.is_multiple_of(BLOCK_SIZE as u64)
+                    || e.phys_block_num != first.checked_add(covered / BLOCK_SIZE as u64)?
+                {
+                    return None;
+                }
+            }
+        }
+        covered = covered.checked_add(e.len)?;
+    }
+    if covered < s.size {
+        return None;
+    }
+    let byte_offset = base.checked_add(first_phys?.checked_mul(BLOCK_SIZE as u64)?)?;
+    byte_offset.is_multiple_of(16).then_some(byte_offset)
+}
+
+fn map_contiguous(s: &Stream, backing: Backing<'_>) -> Result<Option<ReadOnlyMap>, Error> {
+    let Some(off) = contiguous_offset(s, backing.base) else {
+        return Ok(None);
+    };
+    let size = usize::try_from(s.size).map_err(|_| Error::Refused(format!("stream {}: {} bytes", s.id, s.size)))?;
+    if size == 0 {
+        return Ok(Some(ReadOnlyMap::empty()));
+    }
+    Ok(Some(ReadOnlyMap::range(backing.file, off, size)?))
+}
+
+fn map_stream(
+    src: Source<'_>,
+    s: &Stream,
+    backing: Option<Backing<'_>>,
+    temp_dir: &Path,
+    tag: &str,
+) -> Result<Mapped, Error> {
+    if let Some(b) = backing
+        && let Some(map) = map_contiguous(s, b)?
+    {
+        return Ok(Mapped::Direct(map));
+    }
+    let size = usize::try_from(s.size).map_err(|_| Error::Refused(format!("stream {}: {} bytes", s.id, s.size)))?;
+    if size == 0 {
+        return Ok(Mapped::Direct(ReadOnlyMap::empty()));
+    }
+    let temp = TempFile::new(temp_dir.join(tag));
+    {
+        let file = HostFile::create(temp.path())?;
+        let mut writer = BufWriter::with_capacity(STREAM_BUF_BYTES, file);
+        let mut write_err = None;
+        stream::read(src, s, &mut |chunk| {
+            if write_err.is_none()
+                && let Err(e) = writer.write_all(chunk)
+            {
+                write_err = Some(e);
+            }
+        })?;
+        if let Some(e) = write_err {
+            return Err(e.into());
+        }
+        writer.flush()?;
+    }
+    let map = ReadOnlyMap::open(temp.path())?;
+    Ok(Mapped::temp(map, temp))
 }
 
 fn read(src: Source<'_>, s: &Stream) -> Result<Buffer, Error> {
@@ -240,6 +396,7 @@ fn head(src: Source<'_>, s: &Stream) -> Result<Vec<u8>, Error> {
 
 /// The seal hashes a stream's plaintext: SHA-256 over each stretch, the last zero-padded to whole blocks.
 fn check_seal(plain: &[u8], s: &Stream) -> Result<(), Error> {
+    const ZERO: [u8; BLOCK_SIZE] = [0; BLOCK_SIZE];
     for info in &s.file_info {
         let start = usize::try_from(info.offset).unwrap_or(usize::MAX);
         let end = start.saturating_add(usize::from(info.hashed_len) * BLOCK_SIZE);
@@ -249,7 +406,12 @@ fn check_seal(plain: &[u8], s: &Stream) -> Result<(), Error> {
         let mut h = Sha256::new();
         let have = &plain[start..end.min(plain.len())];
         h.update(have);
-        h.update(vec![0u8; end - start - have.len()]);
+        let mut pad = end - start - have.len();
+        while pad > 0 {
+            let n = pad.min(ZERO.len());
+            h.update(&ZERO[..n]);
+            pad -= n;
+        }
         if h.finalize()[..] != info.hash[..] {
             return Err(Error::Refused(format!("bytes {start}..{end} fail the volume's seal")));
         }

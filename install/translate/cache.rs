@@ -3,18 +3,20 @@
 //! with its plan, the prebuilt loaders' cdhashes of on-disk binaries replaced, and re-signed (`arm64e dsc-apply`).
 
 use std::ffi::c_char;
+use std::sync::{Condvar, Mutex};
 use std::time::Instant;
 
 use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 use switch_trustcache::Entry as TrustEntry;
 
-use crate::buffer::Buffer;
+use crate::buffer::{AnonBuffer, Buffer};
 use crate::ffi::{self, CDHASH, CdhashPair};
 use crate::manifest::Entry;
+use crate::mmap::Mapped;
 use crate::output::Output;
 use crate::trust::Categories;
-use crate::volume::{Source, Volume};
+use crate::volume::{Backing, Source, Volume};
 use crate::{Error, plan};
 
 /// Each cache directory and the infix its plan's name takes after the role's.
@@ -26,6 +28,8 @@ const MAIN: &str = "dyld_shared_cache_arm64e";
 const SUBCACHES: usize = 0x188;
 const SUBCACHE_ENTRY: usize = 56;
 const CODE_DIRECTORY: [u8; 4] = [0xfa, 0xde, 0x0c, 0x02];
+/// Caps concurrent heap output buffers in `apply` so parallel threads do not stack gigabytes of dirty memory.
+const APPLY_BUDGET: usize = 512 << 20;
 
 #[derive(Default)]
 pub struct Caches {
@@ -40,6 +44,7 @@ pub struct Caches {
 pub struct Job<'a> {
     pub volume: &'a Volume<'a>,
     pub src: Source<'a>,
+    pub backing: Option<Backing<'a>>,
     pub role: &'a str,
     /// Sorted by old cdhash.
     pub pairs: &'a [CdhashPair],
@@ -49,37 +54,58 @@ pub struct Job<'a> {
 
 pub fn translate(job: &Job) -> Result<Caches, Error> {
     let mut caches = Caches::default();
-    for (dir, infix) in CACHES {
+    for (idx, (dir, infix)) in CACHES.into_iter().enumerate() {
         if job.volume.is_dir(dir)? {
-            translate_dir(job, dir, infix, &mut caches)?;
+            translate_dir(job, idx, dir, infix, &mut caches)?;
         }
     }
     Ok(caches)
 }
 
-fn translate_dir(job: &Job, dir: &str, infix: &str, caches: &mut Caches) -> Result<(), Error> {
+fn translate_dir(job: &Job, dir_idx: usize, dir: &str, infix: &str, caches: &mut Caches) -> Result<(), Error> {
     let started = Instant::now();
-    let (src, sealed) = (job.src, job.volume.sealed);
+    let (src, backing, sealed) = (job.src, job.backing, job.volume.sealed);
+    // Declared before `main` and `files` so every mapping unmaps and deletes its temp file before `.cache-tmp` drops.
+    let temp = job.out.temp_dir(&format!(".cache-tmp-{dir_idx}"))?;
     let main = job
         .volume
         .file(&format!("{dir}/{MAIN}"))?
         .ok_or_else(|| Error::Refused(format!("{dir}: no {MAIN}")))?
-        .contents(src, sealed)?;
+        .map_contents(src, backing, sealed, temp.path(), "0")?;
     let mut found = Vec::new();
     for suffix in subcache_suffixes(&main).map_err(|e| e.at(dir))? {
         if let Some(f) = job.volume.file(&format!("{dir}/{MAIN}{suffix}"))? {
             found.push((suffix, f));
         }
     }
-    let subcaches = found
+    let total = found.len();
+    let (compressed, plain): (Vec<_>, Vec<_>) =
+        found.into_iter().enumerate().partition(|(_, (_, f))| f.is_compressed());
+    let plain_mapped = plain
         .into_par_iter()
-        .map(|(suffix, f)| Ok((suffix, f.contents(src, sealed)?)))
+        .map(|(i, (suffix, f))| {
+            let tag = (i + 1).to_string();
+            Ok((i, suffix, f.map_contents(src, backing, sealed, temp.path(), &tag)?))
+        })
         .collect::<Result<Vec<_>, Error>>()?;
-    let mut files: Vec<(String, Buffer)> = vec![(String::new(), main)];
-    files.extend(subcaches);
+    // Decompress large compressed subcaches one at a time so their transient heap buffers never overlap.
+    let mut ordered: Vec<Option<(String, Mapped)>> = (0..total).map(|_| None).collect();
+    for (i, suffix, mapped) in plain_mapped {
+        ordered[i] = Some((suffix, mapped));
+    }
+    for (i, (suffix, f)) in compressed {
+        let tag = (i + 1).to_string();
+        let mapped = f.map_contents(src, backing, sealed, temp.path(), &tag)?;
+        ordered[i] = Some((suffix, mapped));
+    }
+    let mut files: Vec<(String, Mapped)> = Vec::with_capacity(1 + total);
+    files.push((String::new(), main));
+    for slot in ordered {
+        files.push(slot.expect("every subcache slot filled"));
+    }
     let size: usize = files.iter().map(|(_, b)| b.len()).sum();
     caches.logs.push(format!(
-        "{dir}: {} files, {size} bytes, read in {:.1?}",
+        "{dir}: {} files, {size} bytes, mapped in {:.1?}",
         files.len(),
         started.elapsed()
     ));
@@ -95,10 +121,14 @@ fn translate_dir(job: &Job, dir: &str, infix: &str, caches: &mut Caches) -> Resu
     let started = Instant::now();
 
     files.retain(|(suffix, _)| !suffix.ends_with(".symbols") && !suffix.ends_with(".atlas"));
+    for (_, mapped) in &files {
+        mapped.advise_dontneed();
+    }
     let (pairs, out) = (job.pairs, job.out);
+    let budget = Budget::new();
     let applied = files
         .into_par_iter()
-        .map(|(suffix, bytes)| apply(pairs, out, &format!("{dir}/{MAIN}{suffix}"), &plan, &bytes))
+        .map(|(suffix, bytes)| apply(pairs, out, &budget, &format!("{dir}/{MAIN}{suffix}"), &plan, &bytes))
         .collect::<Result<Vec<_>, Error>>()?;
     for (cdhash, changed) in applied {
         caches.listed.push(cdhash);
@@ -118,8 +148,53 @@ fn translate_dir(job: &Job, dir: &str, infix: &str, caches: &mut Caches) -> Resu
 
 type Applied = ([u8; CDHASH], Option<(Entry, [u8; CDHASH])>);
 
-fn apply(pairs: &[CdhashPair], out_dir: &Output, path: &str, plan: &[u8], input: &[u8]) -> Result<Applied, Error> {
-    let mut out = Buffer::zeroed(input.len());
+struct Budget {
+    in_flight: Mutex<usize>,
+    ready: Condvar,
+}
+
+struct Permit<'a> {
+    budget: &'a Budget,
+    bytes: usize,
+}
+
+impl Budget {
+    fn new() -> Self {
+        Self {
+            in_flight: Mutex::new(0),
+            ready: Condvar::new(),
+        }
+    }
+
+    fn acquire(&self, bytes: usize) -> Permit<'_> {
+        let mut used = self.in_flight.lock().unwrap_or_else(|p| p.into_inner());
+        while *used > 0 && used.saturating_add(bytes) > APPLY_BUDGET {
+            used = self.ready.wait(used).unwrap_or_else(|p| p.into_inner());
+        }
+        *used = used.saturating_add(bytes);
+        Permit { budget: self, bytes }
+    }
+}
+
+impl Drop for Permit<'_> {
+    fn drop(&mut self) {
+        let mut used = self.budget.in_flight.lock().unwrap_or_else(|p| p.into_inner());
+        *used = used.saturating_sub(self.bytes);
+        self.budget.ready.notify_all();
+    }
+}
+
+fn apply(
+    pairs: &[CdhashPair],
+    out_dir: &Output,
+    budget: &Budget,
+    path: &str,
+    plan: &[u8],
+    input: &Mapped,
+) -> Result<Applied, Error> {
+    input.advise_sequential();
+    let permit = budget.acquire(input.len());
+    let mut out = AnonBuffer::zeroed(input.len())?;
     let mut cdhash = [0u8; CDHASH];
     let mut err = [0 as c_char; ffi::ERR_LEN];
     // SAFETY: each buffer is as long as its length, `cdhash` holds CDHASH bytes and `err` ERR_LEN.
@@ -146,10 +221,13 @@ fn apply(pairs: &[CdhashPair], out_dir: &Output, path: &str, plan: &[u8], input:
         return Ok((cdhash, None));
     }
     out_dir.write(&format!("files{path}"), &out)?;
+    let sha256_out = hex::encode(Sha256::digest(&out[..]));
+    drop(out);
+    drop(permit);
     let entry = Entry {
         path: path.to_owned(),
-        sha256_in: hex::encode(Sha256::digest(input)),
-        sha256_out: hex::encode(Sha256::digest(&out[..])),
+        sha256_in: hex::encode(Sha256::digest(&input[..])),
+        sha256_out,
         cdhash: vec![hex::encode(cdhash)],
     };
     Ok((cdhash, Some((entry, original_cdhash(input).map_err(|e| e.at(path))?))))

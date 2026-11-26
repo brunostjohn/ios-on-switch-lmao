@@ -8,6 +8,7 @@
  */
 #include "plan.h"
 #include "sort.h"
+#include "vmem.h"
 
 #include <setjmp.h>
 #include <stdarg.h>
@@ -68,13 +69,17 @@ static void bytes_vprintf(struct bytes *b, const char *fmt, va_list ap)
     va_end(again);
 }
 
+/* Allocations at or above 1 MiB bypass libc malloc so realloc growth and plan_free_all return pages immediately. */
+#define PLAN_VMEM_THRESHOLD (1u << 20)
+
 /* The planner's heap: a circular list of every live block, headed by 32 bytes so blocks keep malloc's alignment. */
 struct block {
     struct block *prev, *next;
-    uint64_t pad[2];
+    size_t vmem_size;
+    size_t user_size;
 };
 
-static struct block plan_blocks = {&plan_blocks, &plan_blocks, {0, 0}};
+static struct block plan_blocks = {&plan_blocks, &plan_blocks, 0, 0};
 
 static void *link_block(struct block *b)
 {
@@ -93,19 +98,45 @@ static void unlink_block(struct block *b)
     b->next->prev = b->prev;
 }
 
+static void free_block(struct block *b)
+{
+    if (b->vmem_size)
+        switch_vmem_free(b, b->vmem_size);
+    else
+        free(b);
+}
+
+static struct block *alloc_block(size_t n, int zero)
+{
+    if (n > SIZE_MAX - sizeof(struct block))
+        return NULL;
+    size_t total = sizeof(struct block) + n;
+    struct block *b;
+    if (total >= PLAN_VMEM_THRESHOLD) {
+        b = switch_vmem_alloc(total);
+        if (!b)
+            return NULL;
+        b->vmem_size = total;
+    } else {
+        b = zero ? calloc(1, total) : malloc(total);
+        if (!b)
+            return NULL;
+        b->vmem_size = 0;
+    }
+    b->user_size = n;
+    return b;
+}
+
 static void *plan_malloc(size_t n)
 {
-    return n > SIZE_MAX - sizeof(struct block) ? NULL : link_block(malloc(sizeof(struct block) + n));
+    return link_block(alloc_block(n, 0));
 }
 
 static void *plan_calloc(size_t n, size_t size)
 {
     if (size && n > (SIZE_MAX - sizeof(struct block)) / size)
         return NULL;
-    void *p = plan_malloc(n * size);
-    if (p)
-        memset(p, 0, n * size);
-    return p;
+    return link_block(alloc_block(n * size, 1));
 }
 
 static void plan_free(void *p)
@@ -114,7 +145,7 @@ static void plan_free(void *p)
         return;
     struct block *b = (struct block *)p - 1;
     unlink_block(b);
-    free(b);
+    free_block(b);
 }
 
 static void *plan_realloc(void *p, size_t n)
@@ -124,12 +155,26 @@ static void *plan_realloc(void *p, size_t n)
     if (n > SIZE_MAX - sizeof(struct block))
         return NULL;
     struct block *b = (struct block *)p - 1;
+    size_t total = sizeof(struct block) + n;
+    if (b->vmem_size || total >= PLAN_VMEM_THRESHOLD) {
+        struct block *grown = alloc_block(n, 0);
+        if (!grown)
+            return NULL;
+        size_t copy = b->user_size < n ? b->user_size : n;
+        if (copy)
+            memcpy(grown + 1, p, copy);
+        unlink_block(b);
+        free_block(b);
+        return link_block(grown);
+    }
     unlink_block(b);
-    struct block *grown = realloc(b, sizeof(struct block) + n);
+    struct block *grown = realloc(b, total);
     if (!grown) {
         link_block(b);
         return NULL;
     }
+    grown->vmem_size = 0;
+    grown->user_size = n;
     return link_block(grown);
 }
 
@@ -138,7 +183,7 @@ static void plan_free_all(void)
     while (plan_blocks.next != &plan_blocks) {
         struct block *b = plan_blocks.next;
         unlink_block(b);
-        free(b);
+        free_block(b);
     }
 }
 

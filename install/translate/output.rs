@@ -50,10 +50,33 @@ impl Output {
         fs::write(&path, bytes).map_err(|e| Error::Io(std::io::Error::new(e.kind(), format!("{rel}: {e}"))))
     }
 
+    pub fn temp_dir(&self, name: &str) -> Result<TempDir, Error> {
+        let path = self.staging.join(name);
+        if path.exists() {
+            fs::remove_dir_all(&path)?;
+        }
+        fs::create_dir_all(&path)?;
+        Ok(TempDir(path))
+    }
+
     pub fn commit(mut self) -> Result<PathBuf, Error> {
         fs::rename(&self.staging, &self.out)?;
         self.committed = true;
         Ok(self.out.clone())
+    }
+}
+
+pub struct TempDir(PathBuf);
+
+impl TempDir {
+    pub fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
     }
 }
 

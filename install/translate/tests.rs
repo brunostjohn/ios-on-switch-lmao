@@ -189,3 +189,127 @@ fn the_planner_refuses_a_missing_subcache_twice_alike() {
     assert!(logs[0].contains("cache.01: not among the cache's files"), "{}", logs[0]);
     assert_eq!(logs[0], logs[1]);
 }
+
+#[test]
+fn contiguous_extent_detection_and_mapping_paths() {
+    use sha2::{Digest, Sha256};
+    use switch_apfs_format::BLOCK_SIZE;
+    use switch_apfs_format::io::FileSource;
+    use switch_apfs_read::{FileExtent, FileInfo, Stream};
+
+    use crate::mmap::Mapped;
+    use crate::volume::{Backing, Data, File, contiguous_offset};
+
+    let ext = |logical_addr, len, phys_block_num| FileExtent {
+        stream: 1,
+        logical_addr,
+        len,
+        flags: 0,
+        phys_block_num,
+        crypto_id: 0,
+    };
+    let stream_of = |size, extents, file_info| Stream {
+        id: 1,
+        size,
+        extents,
+        file_info,
+        refcnt: None,
+    };
+
+    let single = stream_of(10_000, vec![ext(0, 12_288, 3)], vec![]);
+    assert_eq!(contiguous_offset(&single, 0), Some(3 * BLOCK_SIZE as u64));
+    assert_eq!(contiguous_offset(&single, 17_408), Some(17_408 + 3 * BLOCK_SIZE as u64));
+    assert_eq!(contiguous_offset(&single, 5), None);
+
+    let adjacent = stream_of(10_000, vec![ext(4096, 8192, 4), ext(0, 4096, 3)], vec![]);
+    assert_eq!(contiguous_offset(&adjacent, 0), Some(3 * BLOCK_SIZE as u64));
+
+    let discontig = stream_of(8192, vec![ext(0, 4096, 3), ext(4096, 4096, 9)], vec![]);
+    assert_eq!(contiguous_offset(&discontig, 0), None);
+    let hole = stream_of(8192, vec![ext(0, 4096, 0), ext(4096, 4096, 4)], vec![]);
+    assert_eq!(contiguous_offset(&hole, 0), None);
+    let short = stream_of(12_288, vec![ext(0, 4096, 3)], vec![]);
+    assert_eq!(contiguous_offset(&short, 0), None);
+    let overlap = stream_of(8192, vec![ext(0, 8192, 3), ext(4096, 4096, 4)], vec![]);
+    assert_eq!(contiguous_offset(&overlap, 0), None);
+
+    let dir = scratch("map_contents");
+    std::fs::create_dir_all(&dir).unwrap();
+    let img_path = dir.join("container.img");
+    let mut img = vec![0u8; 8 * BLOCK_SIZE];
+    for (i, b) in img[2 * BLOCK_SIZE..2 * BLOCK_SIZE + 6000].iter_mut().enumerate() {
+        *b = (i.wrapping_mul(17) & 0xff) as u8;
+    }
+    for (i, b) in img[5 * BLOCK_SIZE..6 * BLOCK_SIZE].iter_mut().enumerate() {
+        *b = (i.wrapping_mul(29) & 0xff) as u8;
+    }
+    std::fs::write(&img_path, &img).unwrap();
+
+    let expected_contig = img[2 * BLOCK_SIZE..2 * BLOCK_SIZE + 6000].to_vec();
+    let mut padded = expected_contig.clone();
+    padded.resize(2 * BLOCK_SIZE, 0);
+    let good_info = FileInfo {
+        stream: 1,
+        info_type: 1,
+        offset: 0,
+        hashed_len: 2,
+        hash: Sha256::digest(&padded).to_vec(),
+    };
+    let contig_file = File {
+        path: "/cache/main".into(),
+        data: Data::Plain(stream_of(6000, vec![ext(0, 8192, 2)], vec![good_info.clone()])),
+    };
+    let src = FileSource::open(&img_path, 0).unwrap();
+    let host = std::fs::File::open(&img_path).unwrap();
+    let backing = Backing { file: &host, base: 0 };
+
+    let direct = contig_file
+        .map_contents(&src, Some(backing), true, &dir, "direct")
+        .unwrap();
+    assert!(matches!(direct, Mapped::Direct(_)));
+    assert_eq!(&direct[..], &expected_contig[..]);
+    assert!(!dir.join("direct").exists());
+
+    let streamed = contig_file.map_contents(&src, None, true, &dir, "streamed").unwrap();
+    assert!(matches!(streamed, Mapped::Temp { .. }));
+    assert_eq!(&streamed[..], &expected_contig[..]);
+    assert!(dir.join("streamed").exists());
+    drop(streamed);
+    assert!(!dir.join("streamed").exists());
+
+    let mut expected_split = img[2 * BLOCK_SIZE..3 * BLOCK_SIZE].to_vec();
+    expected_split.extend_from_slice(&img[5 * BLOCK_SIZE..6 * BLOCK_SIZE]);
+    let split_file = File {
+        path: "/cache/split".into(),
+        data: Data::Plain(stream_of(
+            2 * BLOCK_SIZE as u64,
+            vec![
+                ext(0, BLOCK_SIZE as u64, 2),
+                ext(BLOCK_SIZE as u64, BLOCK_SIZE as u64, 5),
+            ],
+            vec![],
+        )),
+    };
+    let split = split_file
+        .map_contents(&src, Some(backing), false, &dir, "split")
+        .unwrap();
+    assert!(matches!(split, Mapped::Temp { .. }));
+    assert_eq!(&split[..], &expected_split[..]);
+    drop(split);
+    assert!(!dir.join("split").exists());
+
+    let mut bad_info = good_info;
+    bad_info.hash[0] ^= 0xff;
+    let bad_file = File {
+        path: "/cache/bad".into(),
+        data: Data::Plain(stream_of(6000, vec![ext(0, 8192, 2)], vec![bad_info])),
+    };
+    assert!(matches!(
+        bad_file.map_contents(&src, Some(backing), true, &dir, "bad"),
+        Err(Error::At { .. })
+    ));
+
+    drop(direct);
+    drop(host);
+    std::fs::remove_dir_all(&dir).unwrap();
+}

@@ -2,6 +2,7 @@
 //! One role's delta: translate_tree.py's main() over a volume read in process.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs::File as HostFile;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -15,7 +16,7 @@ use crate::ffi::{CDHASH, CdhashPair};
 use crate::manifest::{Entry, Manifest};
 use crate::output::Output;
 use crate::trust::{self, Pins};
-use crate::volume::{File, Source, Volume};
+use crate::volume::{Backing, File, Source, Volume};
 use crate::{Error, macho};
 
 const CACHE_LIST: &str = "a64x-cache-pretranslated.bin";
@@ -73,8 +74,19 @@ pub struct Delta {
 /// module, the cdhash pairs and, for the SystemOS cryptex, each cache's plan and the cache list. Nothing is left in
 /// `out` unless the pins accept the result.
 pub fn translate(inputs: &Inputs, out: &Path) -> Result<Delta, Error> {
+    translate_with(inputs, None, out)
+}
+
+/// Like `translate`, when `image` at byte offset `base` backs `inputs.source`: contiguous uncompressed dyld shared
+/// cache files map straight from `image` without staging temporary copies.
+pub fn translate_file(inputs: &Inputs, image: &Path, base: u64, out: &Path) -> Result<Delta, Error> {
+    let file = HostFile::open(image)?;
+    translate_with(inputs, Some(Backing { file: &file, base }), out)
+}
+
+fn translate_with(inputs: &Inputs, backing: Option<Backing<'_>>, out: &Path) -> Result<Delta, Error> {
     let output = Output::create(out)?;
-    let made = run(inputs, &output)?;
+    let made = run(inputs, backing, &output)?;
     let dir = output.commit()?;
     Ok(Delta { dir, ..made })
 }
@@ -87,7 +99,7 @@ struct Translated {
 /// A Mach-O candidate's outcome: None for a file that isn't one.
 type Outcome = Option<(String, Option<Translated>)>;
 
-fn run(inputs: &Inputs, output: &Output) -> Result<Delta, Error> {
+fn run(inputs: &Inputs, backing: Option<Backing<'_>>, output: &Output) -> Result<Delta, Error> {
     let role = inputs.role.name();
     let mut log = Vec::new();
     let start = Instant::now();
@@ -105,8 +117,8 @@ fn run(inputs: &Inputs, output: &Output) -> Result<Delta, Error> {
     let sealed = volume.sealed;
     let started = Instant::now();
     let outcomes = files
-        .par_iter()
-        .map(|f| translate_file(inputs, sealed, f, output))
+        .into_par_iter()
+        .map(|f| translate_file_entry(inputs, sealed, f, output))
         .collect::<Result<Vec<Outcome>, Error>>()?;
     let machos: BTreeSet<&str> = outcomes.iter().flatten().map(|(p, _)| p.as_str()).collect();
     if let Some(missing) = inputs.edits.keys().find(|p| !machos.contains(p.as_str())) {
@@ -165,6 +177,7 @@ fn run(inputs: &Inputs, output: &Output) -> Result<Delta, Error> {
         let job = cache::Job {
             volume: &volume,
             src: inputs.source,
+            backing,
             role,
             pairs: &all,
             apple: &apple,
@@ -197,7 +210,7 @@ fn run(inputs: &Inputs, output: &Output) -> Result<Delta, Error> {
     })
 }
 
-fn translate_file(inputs: &Inputs, sealed: bool, f: &File, output: &Output) -> Result<Outcome, Error> {
+fn translate_file_entry(inputs: &Inputs, sealed: bool, f: File, output: &Output) -> Result<Outcome, Error> {
     let Some(bytes) = f.macho_contents(inputs.source, sealed)? else {
         return Ok(None);
     };
@@ -210,7 +223,7 @@ fn translate_file(inputs: &Inputs, sealed: bool, f: &File, output: &Output) -> R
         if !edits.is_empty() {
             return Err(Error::Refused(format!("{}: edited, but not translated", f.path)));
         }
-        return Ok(Some((f.path.clone(), None)));
+        return Ok(Some((f.path, None)));
     }
     let entry = Entry {
         path: f.path.clone(),
@@ -219,7 +232,7 @@ fn translate_file(inputs: &Inputs, sealed: bool, f: &File, output: &Output) -> R
         cdhash: slices.iter().map(|s| hex::encode(s.cdhash_out)).collect(),
     };
     output.write(&entry.file(), &t.bytes)?;
-    Ok(Some((f.path.clone(), Some(Translated { entry, slices }))))
+    Ok(Some((f.path, Some(Translated { entry, slices }))))
 }
 
 /// `<role>.cdhash-pairs`: "OLD NEW" in hex, a line each.

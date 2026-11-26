@@ -10,6 +10,7 @@ pub mod edits;
 mod ffi;
 mod macho;
 mod manifest;
+mod mmap;
 mod output;
 #[cfg(switch_translate_perturb)]
 mod perturb;
@@ -22,7 +23,7 @@ use std::io;
 
 pub use edits::Edit;
 pub use ffi::CdhashPair;
-pub use role::{Delta, Inputs, Role, pair_lines, parse_pairs, translate};
+pub use role::{Delta, Inputs, Role, pair_lines, parse_pairs, translate, translate_file};
 pub use trust::Pins;
 
 #[derive(Debug, thiserror::Error)]
