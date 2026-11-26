@@ -8,8 +8,8 @@ use crate::pipeline::descriptor::ColorAttachmentDescriptor;
 
 /// Committed profile `stem` with `features` removed from its description.
 fn profile(stem: &str, features: &[VkFeature]) -> DeviceProfile {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/profiles")
+    let path = crate::pipeline::testing::fixtures_dir()
+        .join("../../profiles")
         .join(format!("{stem}.json"));
     let text = std::fs::read_to_string(path).expect("profile");
     let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
@@ -256,10 +256,11 @@ fn a_four_channel_srgb_attachment_takes_a_uint_view() {
 
 /// A blend of one and zero, added, for color and alpha stores the source as no blend does, so a
 /// written attachment under it takes the storage form, but for a signed normalized format (its NaN
-/// stores another code under the blend); one and zero for color alone is a blend. A write whose
-/// mask covers none of the format's channels stores nothing: no blend, alpha to coverage, one
-/// sample's returned mask, or late depth test bears on it, but an `Unspecialized` mask stays
-/// refused.
+/// stores another code under the blend); one and zero for color alone is a blend, which the form
+/// computes in the shader by the device's blend model (`rop_blend`), as any other it holds. A
+/// write whose mask covers none of the format's channels stores nothing: no blend, alpha to
+/// coverage, one sample's returned mask, or late depth test bears on it, but an `Unspecialized`
+/// mask stays refused.
 #[test]
 fn a_replacing_blend_and_a_write_that_stores_nothing_take_the_storage_form() {
     use crate::metal::{BlendFactor, BlendOperation};
@@ -281,12 +282,14 @@ fn a_replacing_blend_and_a_write_that_stores_nothing_take_the_storage_form() {
         c.blending_enabled = true;
         c.destination_alpha_blend_factor = BlendFactor::One;
     });
-    assert_eq!(form(&alpha_adds, false, WRITES, &p), ni);
     let subtracts = state(PixelFormat::RG16Float, |c| {
         c.blending_enabled = true;
         c.rgb_blend_operation = BlendOperation::Subtract;
     });
-    assert_eq!(form(&subtracts, false, WRITES, &p), ni);
+    for (what, inputs) in [("alpha adds", &alpha_adds), ("subtracts", &subtracts)] {
+        let view = form(inputs, false, WRITES, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
+        assert!(view.rop, "{what}: the device's blend in the shader");
+    }
     // A write that stores nothing, under each state that refuses a store.
     let none = |edit: fn(&mut ColorAttachmentDescriptor)| {
         state(PixelFormat::RG16Float, |c| {

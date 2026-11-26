@@ -34,7 +34,8 @@ use crate::pipeline::layout::BindingSource;
 use crate::pipeline::lower_inputs::{FramebufferFetchInputs, LoweringInputs};
 use crate::pipeline::sym::ResourceKind;
 use crate::pipeline::testing::{
-    compile, compile_with, engine_dir, interlocked_coherence, link_and_validate, llvm_assemble,
+    compile, compile_with, engine_dir, fixtures_dir, interlocked_coherence, link_and_validate,
+    llvm_assemble,
     moltenvk_msl_compile, profile, typed_module, typed_module_with, AssembleError,
 };
 use crate::spirv::ids::FuncId;
@@ -713,8 +714,7 @@ fn the_binder_writes_storage_attachments_and_layers_them_in_layered_passes() {
     let (Some(io), Some(fetch)) = (fixture("stage_io"), fixture("fragment_fetch")) else {
         return;
     };
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/profiles/moltenvk-m3.json");
+    let path = fixtures_dir().join("../../profiles/moltenvk-m3.json");
     let text = std::fs::read_to_string(path).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
     let dev = Device::new(desc, DevicePolicy::default()).expect("device");

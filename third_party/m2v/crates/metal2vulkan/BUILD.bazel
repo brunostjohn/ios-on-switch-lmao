@@ -284,6 +284,40 @@ rust_test(
     deps = ["//third_party/m2v/crates/metal2vulkan-devtools"],
 )
 
+# The storage form's choice (lower/fragment/fetch/tests.rs): what blocks it and how it declares an attachment, on the
+# committed profiles it names
+rust_test(
+    name = "fetch_form_test",
+    args = ["lower::fragment::fetch::tests::"],
+    compile_data = glob(["tests/**"]),
+    crate = ":metal2vulkan",
+    data = [
+        "//third_party/m2v:fetch_test_inputs",
+        "//third_party/m2v:translation_test_inputs",
+    ],
+    deps = ["//third_party/m2v/crates/metal2vulkan-devtools"],
+)
+
+# The binder's storage attachments on MoltenVK's M3 profile (tests/engine_fragment.rs): the attachment's own storage
+# view, the layered variant in a pass of layers, an amplified draw drawn one amplification at a time, refused as views.
+# The file's other tests need fixtures this import leaves out.
+rust_test(
+    name = "storage_binder_test",
+    args = [
+        "--exact",
+        "tests::engine_fragment::the_binder_writes_storage_attachments_and_layers_them_in_layered_passes",
+    ],
+    compile_data = glob(["tests/**"]),
+    crate = ":metal2vulkan",
+    data = [
+        "//third_party/m2v:fetch_test_inputs",
+        "//third_party/m2v:translation_test_inputs",
+        "@gpu_llvm_as//:bin/llvm-as",
+    ],
+    env = {"METAL2VULKAN_LLVM_AS": "$(rootpath @gpu_llvm_as//:bin/llvm-as)"},
+    deps = ["//third_party/m2v/crates/metal2vulkan-devtools"],
+)
+
 # ios-on-switch-lmao: two-plane YCbCr reads converted from their surfaces (bind/ycbcr_convert.rs), the packed 10-bit
 # code formats with them, and the formats the crate holds a texture of. The profile sweep runs in validation; this
 # target checks the native conversion.
