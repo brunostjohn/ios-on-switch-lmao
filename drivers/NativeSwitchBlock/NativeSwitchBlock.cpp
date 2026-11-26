@@ -1026,11 +1026,12 @@ IOReturn NativeSwitchBlockDevice::doAsyncReadWrite(IOMemoryDescriptor *buffer, U
         return kIOReturnBadArgument;
     // No attributes: the default class, as IOStorage's own default priority.
     const IOStoragePriority priority = attributes ? attributes->priority : kIOStoragePriorityDefault;
-    const bool replay = &switch_vm_prefetch_is_replay_thread && switch_vm_prefetch_is_replay_thread(current_thread());
+    const bool replay = direction == kIODirectionIn && &switch_vm_prefetch_is_replay_thread &&
+                        switch_vm_prefetch_is_replay_thread(current_thread());
     const uint8_t klass = switchSdClassOf(static_cast<uint8_t>(priority >> 6), replay);
 #if DEVELOPMENT || DEBUG
     switchSdAdd(&gIo.asked[priority >> 6], 1);
-    if (klass != priority >> 6)
+    if (replay)
         switchSdAdd(&gIo.chosen, 1);
 #endif
     const Request spec = {nullptr,

@@ -324,6 +324,31 @@ TEST(SdPick, OnlyCountedWritesRankWithTierZero)
     EXPECT_EQ(switchSdRank(&counted, kNoSync), 5u);
 }
 
+// The ager moves replay reads only: a replay-flagged write keeps its class and the read counts stay in step.
+TEST(SdPick, OnlyReplayReadsAge)
+{
+    std::vector<Request> q(3);
+    for (size_t i = 0; i < q.size(); ++i) {
+        q[i] = {};
+        q[i].next = i + 1 < q.size() ? &q[i + 1] : nullptr;
+        q[i].lba = 1000 * i;
+        q[i].sectors = 8;
+        q[i].klass = kSwitchSdReplayClass;
+        q[i].replay = true;
+    }
+    q[1].write = true;
+    q[2].queuedNs = kSwitchSdReplayAgeNs;
+    uint32_t reads[kSwitchSdPickClasses] = {0, 2, 0, 0};
+    EXPECT_EQ(switchSdAgeReplay(&q[0], kSwitchSdReplayAgeNs, reads), 1u);
+    EXPECT_EQ(q[0].klass, 0u);
+    EXPECT_EQ(q[1].klass, kSwitchSdReplayClass);
+    EXPECT_EQ(q[2].klass, kSwitchSdReplayClass);
+    EXPECT_EQ(reads[0], 1u);
+    EXPECT_EQ(reads[1], 1u);
+    uint32_t none[kSwitchSdPickClasses] = {};
+    EXPECT_EQ(switchSdAgeReplay(&q[2], 10 * kSwitchSdReplayAgeNs, none), 0u);  // no class-1 read: no walk
+}
+
 TEST(SdPick, PromoteRaisesOnly)
 {
     std::vector<Request> q(3);

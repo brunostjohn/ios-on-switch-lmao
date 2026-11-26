@@ -123,14 +123,14 @@ inline uint8_t switchSdClassOf(uint8_t asked, bool replay)
     return replay && asked < kSwitchSdReplayClass ? kSwitchSdReplayClass : asked;
 }
 
-// Puts each replay read queued for kSwitchSdReplayAgeNs or more back in class 0, keeping queuedReads in step. Returns
-// how many it moved.
+// Puts each replay read queued for kSwitchSdReplayAgeNs or more back in class 0, keeping queuedReads (reads only) in
+// step. Returns how many it moved. No walk while the replay class holds no read, which is every pick after the boot.
 template <typename Request>
 inline uint32_t switchSdAgeReplay(Request *head, uint64_t now, uint32_t queuedReads[kSwitchSdPickClasses])
 {
     uint32_t aged = 0;
-    for (Request *r = head; r; r = r->next) {
-        if (!r->replay || !r->klass || now - r->queuedNs < kSwitchSdReplayAgeNs)
+    for (Request *r = queuedReads[kSwitchSdReplayClass] ? head : nullptr; r; r = r->next) {
+        if (!r->replay || r->write || !r->klass || now - r->queuedNs < kSwitchSdReplayAgeNs)
             continue;
         --queuedReads[r->klass];
         ++queuedReads[0];

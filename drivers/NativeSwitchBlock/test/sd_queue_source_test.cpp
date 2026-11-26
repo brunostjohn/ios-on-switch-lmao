@@ -94,6 +94,8 @@ TEST(SdQueueSource, ReplayReadsAreKnownByTheKernelsReplayThread)
 {
     const std::string io = body("IOReturn NativeSwitchBlockDevice::doAsyncReadWrite(");
     EXPECT_THAT(io, HasSubstr("switch_vm_prefetch_is_replay_thread(current_thread())"));
+    EXPECT_LT(Index(io, "direction == kIODirectionIn && &switch_vm_prefetch_is_replay_thread"),
+              Index(io, "switchSdClassOf("));
     EXPECT_THAT(io, HasSubstr("switchSdClassOf(static_cast<uint8_t>(priority >> 6), replay)"));
     EXPECT_LT(Index(io, "switchSdClassOf("), Index(io, "owner->submit(spec)"));
     EXPECT_TRUE(Search(io, R"(shared,\s*replay,\s*\*completion,)"));
