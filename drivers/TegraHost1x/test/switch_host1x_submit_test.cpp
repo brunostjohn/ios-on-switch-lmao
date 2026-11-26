@@ -516,7 +516,7 @@ TEST(Host1xSubmitShape, EveryEngineBuildsItsJobsInTheArena)
         {"../../TegraNVENC/TegraNVENC.cpp", "int run(",
          "switch_host1x_job_begin(TEGRA_HOST1X_CHANNEL_NVENC, kWords, &words)",
          "switch_host1x_job_submit(TEGRA_HOST1X_CHANNEL_NVENC, words + first, n - first, gSyncpt, gBase + job)"},
-        {"../../TegraNVJPG/TegraNVJPG.cpp", "int tegra_nvjpg_run(",
+        {"../../TegraNVJPG/TegraNVJPG.cpp", "int tegra_nvjpg_start(",
          "switch_host1x_job_begin(TEGRA_HOST1X_CHANNEL_NVJPG, 1 + 3 * 11 + 1, &words)",
          "switch_host1x_job_submit(TEGRA_HOST1X_CHANNEL_NVJPG, words, n, gSyncpt, fence)"},
     };
