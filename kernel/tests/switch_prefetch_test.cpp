@@ -826,6 +826,9 @@ TEST(SwitchPrefetchSource, ShutdownCannotHangSilentlyOnTheReplay)
     ASSERT_NE(wait, std::string::npos);
     EXPECT_LT(begin.find("switch_power_trail_watch(WATCHDOG_S"), wait);
     EXPECT_LT(begin.find("switch_shutdown_arm_deadline();"), wait);
+    EXPECT_LT(begin.find("switch_gpu_pack_shutdown_request();"), wait);
+    const std::string release = bodyOf(shutdown, "void switch_shutdown_begin(int howto __unused)");
+    EXPECT_LT(release.find("switch_gpu_pack_shutdown_request();"), release.find("switch_prefetch_shutdown();"));
 
     const std::string stop = bodyOf(SourceText("../switch/vm/prefetch.c"), "void switch_prefetch_shutdown(void)");
     EXPECT_THAT(stop, HasSubstr("assert_wait_deadline((event_t)&g_prefetch.done_event, THREAD_UNINT, deadline)"));

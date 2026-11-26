@@ -2,6 +2,7 @@
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
 #include <IOKit/IOMemoryDescriptor.h>
+#include <kern/clock.h>
 #include <kern/thread.h>
 #include <string.h>
 #include <sys/errno.h>
@@ -449,7 +450,7 @@ extern "C" void switch_gpu_boot_complete(void)
 	IOLockUnlock(lock);
 }
 
-extern "C" void switch_gpu_pack_shutdown(void)
+extern "C" void switch_gpu_pack_shutdown_request(void)
 {
 	// Dekker seq_cst pair with packLock(): either shutdown observes the initialized lock and
 	// drains active workers, or any late caller observes gShutdown before launching a worker.
@@ -461,10 +462,30 @@ extern "C" void switch_gpu_pack_shutdown(void)
 	if (gPack.state == SwitchGpuPackState::None)
 		gPack.state = SwitchGpuPackState::Refused;
 	IOLockWakeup(lock, &gPack.state, false);
-	while (gPack.buildActive)
-		IOLockSleep(lock, &gPack.buildActive, THREAD_UNINT);
-	while (gPack.warmActive)
-		IOLockSleep(lock, &gPack.warmActive, THREAD_UNINT);
+	IOLockUnlock(lock);
+}
+
+// The build and warm threads check gShutdown before each 1 MiB read and each copy, so a stop waits on at most one of
+// those per thread. A thread still running this long into shutdown is on one that never completed, and release kernels
+// have no other shutdown watchdog.
+constexpr uint32_t kShutdownWaitSeconds = 20;
+
+extern "C" void switch_gpu_pack_shutdown(void)
+{
+	switch_gpu_pack_shutdown_request();
+	IOLock *lock = __atomic_load_n(&gPack.lock, __ATOMIC_SEQ_CST);
+	if (!lock)
+		return;
+	uint64_t deadline = 0;
+	clock_interval_to_deadline(kShutdownWaitSeconds, NSEC_PER_SEC, &deadline);
+	IOLockLock(lock);
+	while (gPack.buildActive || gPack.warmActive) {
+		bool *active = gPack.buildActive ? &gPack.buildActive : &gPack.warmActive;
+		if (IOLockSleepDeadline(lock, active, deadline, THREAD_UNINT) == THREAD_TIMED_OUT && *active)
+			panic("tegra-gm20b: pack image: the %s thread is still running %u s into shutdown: a read or a "
+			      "copy never completed",
+			      active == &gPack.buildActive ? "build" : "warm", kShutdownWaitSeconds);
+	}
 	IOLockUnlock(lock);
 }
 

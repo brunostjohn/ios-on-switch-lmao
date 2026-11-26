@@ -2,6 +2,9 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <atomic>
+#include <chrono>
+#include <cstdarg>
+#include <cstdio>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -125,6 +128,8 @@ struct Model {
 	bool warmPressureTriggered = false;
 	uint32_t sleepers = 0;
 	uint32_t unintSleepers = 0;
+	bool shutdownDeadlinePassed = false;
+	IOLock *panicLock = nullptr;  // the lock a timed-out sleep returned holding, which panic() lets go of
 
 	void reset()
 	{
@@ -170,6 +175,8 @@ struct Model {
 		warmPressureTriggered = false;
 		sleepers = 0;
 		unintSleepers = 0;
+		shutdownDeadlinePassed = false;
+		panicLock = nullptr;
 		memorystatus_vm_pressure_level = 0;
 	}
 
@@ -316,6 +323,45 @@ int switch_pack_test_sleep(IOLock *lock, void *, int interruptible)
 	}
 	held.release();
 	return THREAD_AWAKENED;
+}
+
+int switch_pack_test_sleep_deadline(IOLock *lock, void *event, uint64_t, int interruptible)
+{
+	{
+		std::lock_guard<std::mutex> g(gModel.mu);
+		if (gModel.shutdownDeadlinePassed) {
+			gModel.panicLock = lock;
+			return THREAD_TIMED_OUT;
+		}
+	}
+	return switch_pack_test_sleep(lock, event, interruptible);
+}
+
+void clock_interval_to_deadline(uint32_t interval, uint32_t scale_factor, uint64_t *result)
+{
+	*result = mach_absolute_time() + uint64_t(interval) * scale_factor;
+}
+
+struct PackPanic {
+	std::string message;
+};
+
+void panic(const char *fmt, ...) __attribute__((no_thread_safety_analysis))
+{
+	char buf[512];
+	va_list ap;
+	va_start(ap, fmt);
+	vsnprintf(buf, sizeof(buf), fmt, ap);
+	va_end(ap);
+	IOLock *held = nullptr;
+	{
+		std::lock_guard<std::mutex> g(gModel.mu);
+		held = gModel.panicLock;
+		gModel.panicLock = nullptr;
+	}
+	if (held)
+		held->mutex.unlock();
+	throw PackPanic{buf};
 }
 
 void switch_pack_test_dcache_op(const char *op, uintptr_t)
@@ -1115,6 +1161,43 @@ TEST_F(PackImageTest, ShutdownDrainsActiveBuildClosesVnodeAndWakesWaiter)
 	EXPECT_EQ(gModel.liveDescriptors, 0);
 }
 
+TEST_F(PackImageTest, AStopThatNeverEndsPanicsNamingTheThreadInsteadOfHangingTheReboot)
+{
+	gModel.fileBytes = makePackFile(256ULL << 10, 0);
+	gModel.pauseFirstPagein = true;
+
+	SwitchGpuPackImageView view = {};
+	auto caller = std::async(std::launch::async, [&] {
+		return switch_gpu_pack_image_acquire("backboardd", &view, nullptr);
+	});
+	{
+		std::unique_lock<std::mutex> g(gModel.mu);
+		gModel.cv.wait(g, [] {
+			return gModel.firstPageinEntered && gModel.sleepers >= 1;
+		});
+		gModel.shutdownDeadlinePassed = true;
+	}
+	auto stopping = std::async(std::launch::async, []() -> std::string {
+		try {
+			switch_gpu_pack_shutdown();
+		} catch (const PackPanic &p) {
+			return p.message;
+		}
+		return {};
+	});
+	const bool ended = stopping.wait_for(std::chrono::seconds(10)) == std::future_status::ready;
+	EXPECT_TRUE(ended) << "the stop waited past its deadline";
+	{
+		std::lock_guard<std::mutex> g(gModel.mu);
+		gModel.shutdownDeadlinePassed = false;
+		gModel.releaseFirstPagein = true;
+		gModel.cv.notify_all();
+	}
+	EXPECT_THAT(stopping.get(), HasSubstr("the build thread is still running 20 s into shutdown"));
+	ASSERT_EQ(caller.get(), kIOReturnSuccess);
+	EXPECT_FALSE(view.ready);
+}
+
 TEST_F(PackImageTest, XnuBootCompleteAndShutdownHooksWiredInBothTrees)
 {
 	const std::string pm10063 =
@@ -1133,6 +1216,9 @@ TEST_F(PackImageTest, XnuBootCompleteAndShutdownHooksWiredInBothTrees)
 	const std::string shutdown = SourceText("../../../kernel/switch/shutdown/shutdown.c");
 	EXPECT_THAT(shutdown,
 		    HasSubstr("extern void switch_gpu_pack_shutdown(void) __attribute__((weak));"));
+	EXPECT_THAT(shutdown, HasSubstr("extern void switch_gpu_pack_shutdown_request(void) "
+					"__attribute__((weak));"));
+	EXPECT_GE(Count(shutdown, "switch_gpu_pack_shutdown_request();"), 2u);
 	EXPECT_GE(Count(shutdown, "switch_gpu_pack_shutdown()"), 2u);
 }
 

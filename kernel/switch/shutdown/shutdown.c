@@ -24,6 +24,7 @@
 #include <switch/shutdown.h>
 #include "SwitchPowerTrail.h"
 
+extern void switch_gpu_pack_shutdown_request(void) __attribute__((weak));
 extern void switch_gpu_pack_shutdown(void) __attribute__((weak));
 
 #if DEVELOPMENT || DEBUG
@@ -89,7 +90,8 @@ static void switch_shutdown_arm_deadline(void)
     thread_call_enter_delayed(call, deadline);
 }
 
-/* The trail, the SoC watchdog and the deadline come first: the replay and pack stops below wait on other threads. */
+/* The trail, the SoC watchdog and the deadline come first: the replay and pack stops below wait on other threads.
+ * The pack is told to stop before the replay wait, so both threads wind down side by side. */
 void switch_shutdown_begin(int howto)
 {
     shutdown_howto = howto;
@@ -98,6 +100,8 @@ void switch_shutdown_begin(int howto)
     switch_power_trail_watch(WATCHDOG_S, "shutdown");
     switch_shutdown_arm_deadline();
     last_step = "reboot(2) began; stopping the boot replay and the GPU pack";
+    if (switch_gpu_pack_shutdown_request != NULL)
+        switch_gpu_pack_shutdown_request();
     if (switch_prefetch_shutdown != NULL)
         switch_prefetch_shutdown();
     if (switch_gpu_pack_shutdown != NULL)
@@ -141,6 +145,8 @@ SYSCTL_PROC(_debug, OID_AUTO, switch_watchdog_bench, CTLTYPE_INT | CTLFLAG_WR | 
 #else
 void switch_shutdown_begin(int howto __unused)
 {
+    if (switch_gpu_pack_shutdown_request != NULL)
+        switch_gpu_pack_shutdown_request();
     if (switch_prefetch_shutdown != NULL)
         switch_prefetch_shutdown();
     if (switch_gpu_pack_shutdown != NULL)
