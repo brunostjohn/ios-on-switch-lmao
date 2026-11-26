@@ -281,10 +281,13 @@ public:
     void timestampAtStart(uint64_t va, counters::Point point);
     void end();
 #if SWITCH_METAL_DIAGNOSTICS
+    // nvn_probes.cpp
     void nvnPassEnd();
+    void nvnKnob(Push &p);
+    void nvnZcullFormats(Push &p, const DepthStencilAttachment &zs, uint32_t &regionFormat, uint32_t &zFormat);
 #endif
 
-    void continuePass(uint8_t stores);
+    void continuePass(uint8_t stores, uint8_t discards = 0);
     // A pass whose draws bind colours `storage` as storage images, `arrayed` of them as 2D arrays, fused into this one:
     // false where this pass's begin laid those colours out otherwise (a colour bound as storage takes an uncompressed
     // backing where a storage form cannot view compressed memory, one bound as a 2D array a block-linear target), else

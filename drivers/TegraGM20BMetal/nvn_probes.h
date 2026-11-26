@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 // HW Test gpu.perf.nvn's A/B probes (Device::probeNvn, debug builds): state NVN writes and the driver does not, each
 // tried on the device before any becomes a rule (c38-audit/perf1/learn/deko3d.md Z1-Z3 and C5). Method words from
-// deko3d's maxwell/engine_3d.def (kits/SwitchGM20B/SwitchGM20BTegra.h) and clb197.h.
+// deko3d's maxwell/engine_3d.def (kits/SwitchGM20B/SwitchGM20BTegra.h) and clb197.h. The host tests' method check
+// (switch_gm20b_method_legal) covers these methods' addresses, never their values: a value the chip refuses shows only on
+// the device.
 #pragma once
 #include <cstdint>
 #include "../../kits/SwitchGM20B/SwitchGM20BTegra.h"

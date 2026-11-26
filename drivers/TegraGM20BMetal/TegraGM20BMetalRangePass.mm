@@ -81,11 +81,14 @@ bool SwitchMetalRangeEncode::beginPass(size_t at)
     renderBegin_ = at;
     if (continuing_) {
         continuing_ = false;
-        uint8_t stores = 0;
-        for (uint32_t i = 0; i < 8; ++i)
+        uint8_t stores = 0, discards = 0;
+        for (uint32_t i = 0; i < 8; ++i) {
             if (pass.color[i].texture && pass.color[i].store == MTLStoreActionStore)
                 stores |= uint8_t(1u << i);
-        re_->continuePass(stores);
+            if (pass.color[i].texture && pass.color[i].store == MTLStoreActionDontCare)
+                discards |= uint8_t(1u << i);
+        }
+        re_->continuePass(stores, discards);
         planSplitPrograms(cb, at, *re_);
         planPassUses(cb, at, planned_);
         return true;

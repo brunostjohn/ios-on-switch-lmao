@@ -143,6 +143,39 @@ TEST(GM20BFacadeNvnProbes, TheCbrProbeTurningOffFreesWhatItsKindsMade)
     EXPECT_EQ(compressed(@"held"), before) << "the 2CBR memory stayed held after the probe went off";
 }
 
+// Two passes on one target fused into one (pass_fusion.h): the second's DontCare store is the group's, so under the
+// discard probe the group's end discards the target
+TEST(GM20BFacadeNvnProbes, AFusedPassStoredDontCareDiscardsItsTarget)
+{
+    ASSERT_NE(device(), nil);
+    id<MTLTexture> into = target();
+    id<MTLCommandBuffer> cb = [[device() newCommandQueue] commandBuffer];
+    for (MTLStoreAction store : {MTLStoreActionStore, MTLStoreActionDontCare}) {
+        MTLRenderPassDescriptor *d = [MTLRenderPassDescriptor renderPassDescriptor];
+        d.colorAttachments[0].texture = into;
+        d.colorAttachments[0].loadAction = store == MTLStoreActionStore ? MTLLoadActionClear : MTLLoadActionLoad;
+        d.colorAttachments[0].storeAction = store;
+        id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:d];
+        [e setRenderPipelineState:opened().state];
+        const float vertices[16] = {-1, -1, 0, 1, 1, -1, 0, 1, -1, 1, 0, 1, 1, 1, 0, 1};
+        const float transform[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+        const float colour[4] = {0.25f, 0.5f, 0.75f, 1};
+        [e setVertexBytes:vertices length:sizeof vertices atIndex:0];
+        [e setVertexBytes:transform length:sizeof transform atIndex:2];
+        [e setFragmentBytes:colour length:sizeof colour atIndex:0];
+        [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
+        [e endEncoding];
+    }
+    const long fused = counter(@"fused_passes"), discards = counter(@"nvn_discards");
+    probe("switchMetalProbeNvn:", @(kNvnDiscard));
+    [cb commit];
+    [cb waitUntilCompleted];
+    probe("switchMetalProbeNvn:", @0);
+    EXPECT_EQ(cb.status, MTLCommandBufferStatusCompleted);
+    ASSERT_EQ(counter(@"fused_passes") - fused, 1) << "the two passes did not fuse";
+    EXPECT_EQ(counter(@"nvn_discards") - discards, 1) << "the fused group kept its first pass's store";
+}
+
 TEST(GM20BFacadeNvnProbes, APassUnderNoflushFormsCountsTheFlushItLeftOut)
 {
     ASSERT_NE(device(), nil);
