@@ -42,8 +42,8 @@ struct Prepared {
     std::string packKey;      // the key Direct makes the record under (a kernel's compute key)
     gm20b::CacheKey content;  // what its store entry's head holds (store_key.h), from the AIR the compiler read itself
     gm20b::Digest name{};
-    // a full form's (RequestForm::Full) primary content and name, which its record is filed under too: the state's own
-    // lookup then finds its fullest record
+    // a full form's (gm20b::fullForm) content and name without it (withoutFull), which its record is filed under too:
+    // the state's or twin's own lookup then finds its fullest record
     gm20b::CacheKey primaryContent;
     gm20b::Digest primaryName{};
     std::vector<std::shared_ptr<const MappedClientLibrary>> clientLibraries;

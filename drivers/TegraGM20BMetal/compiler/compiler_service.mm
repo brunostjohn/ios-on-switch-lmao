@@ -158,8 +158,9 @@ private:
     Placed placed(const Prepared &p) const;
     int32_t run(Work &work);
     void remember(const Asked &asked, int32_t ran);
-    bool publish(gm20b::Digest *name, const gm20b::CacheKey &key, const std::string &entry, bool slots,
+    bool publish(gm20b::Digest *name, const gm20b::CacheKey &key, const std::string &entry, bool slots, bool keepMade,
                  std::string &why);
+    bool filedAsPlain(const Prepared &p, const std::string &entry, bool write);
     bool connect(std::string &why, StartFailure &failure);
     void decline();
     bool kernelGaveUp();
@@ -182,10 +183,11 @@ int32_t packed(int32_t result, bool stored, qos_class_t ran)
 }
 
 // The entry of `key` placed from `name` (Store::put; null: the store holds it already), `name` then the one it went
-// under, and with `slots` its program slots ahead of it
+// under, and with `slots` its program slots ahead of it. `keepMade`: a made entry of `key` already there stays (a
+// compile's result: one content compiles to one record, and the one there may be a full form's, filedAsPlain)
 // (Store::putProgramSlots): a full store is written again with its newest half and registered again, then takes both
 bool Service::publish(gm20b::Digest *name, const gm20b::CacheKey &key, const std::string &entry, bool slots,
-                      std::string &why)
+                      bool keepMade, std::string &why)
 {
     std::lock_guard<std::mutex> l(publishLock_);
     const auto putAll = [&] {
@@ -194,8 +196,10 @@ bool Service::publish(gm20b::Digest *name, const gm20b::CacheKey &key, const std
         if (!name)
             return Store::Put::Added;
         gm20b::Digest at{};
-        const Store::Put put = store_.put(*name, key, entry, at);
-        if (put == Store::Put::Added)
+        const Store::Put put = store_.put(*name, key, entry, at, [&](const std::string &held) {
+            return keepMade && storedResult(held, key) == TegraGM20BCompileMade;
+        });
+        if (put == Store::Put::Added || put == Store::Put::Kept)
             *name = at;
         return put;
     };
@@ -208,9 +212,26 @@ bool Service::publish(gm20b::Digest *name, const gm20b::CacheKey &key, const std
                before);
         put = putAll();
     }
-    if (put != Store::Put::Added)
+    if (put != Store::Put::Added && put != Store::Put::Kept)
         why = "the store took no entry";
-    return put == Store::Put::Added;
+    return put == Store::Put::Added || put == Store::Put::Kept;
+}
+
+// Whether a full form's stored record `entry` is also what its plain content's lookup finds (asPrimary); with `write`,
+// filed there where it is not. A plain compile racing the full one, or an entry an older build made, leaves the plain
+// record under that content, and the state's creations would wait for their full form at every launch.
+bool Service::filedAsPlain(const Prepared &p, const std::string &entry, bool write)
+{
+    const std::string filed = asPrimary(p, entry);
+    std::string held;
+    gm20b::Digest at{};
+    if (filed.empty() || (store_.find(p.primaryName, p.primaryContent, held, at) && held == filed))
+        return true;
+    if (!write)
+        return false;
+    gm20b::Digest primary = p.primaryName;
+    std::string ignored;
+    return publish(&primary, p.primaryContent, filed, false, false, ignored);
 }
 
 Service::Placed Service::placed(const Prepared &p) const
@@ -232,6 +253,8 @@ int32_t Service::run(Work &work)
     std::string why;
     if (const Placed place = placed(p); place.stored >= 0) {
         p.name = place.name;
+        if (gm20b::fullForm(p.request.form) && place.stored == TegraGM20BCompileMade)
+            filedAsPlain(p, place.bytes, true);
         noCompile();
         return packed(place.stored, true, workerClass);
     }
@@ -241,14 +264,10 @@ int32_t Service::run(Work &work)
 #if SWITCH_DEBUG
     const uint64_t publishing = uptimeNs();
 #endif
-    if (!entry.empty() && !publish(&p.name, p.content, entry, result == TegraGM20BCompileMade, why))
+    if (!entry.empty() && !publish(&p.name, p.content, entry, result == TegraGM20BCompileMade, true, why))
         result = TegraGM20BCompileFailed;
-    if (result == TegraGM20BCompileMade && p.request.form == gm20b::RequestForm::Full) {
-        gm20b::Digest primary = p.primaryName;
-        std::string ignored;
-        if (const std::string filed = asPrimary(p, entry); !filed.empty())
-            publish(&primary, p.primaryContent, filed, false, ignored);
-    }
+    if (result == TegraGM20BCompileMade && gm20b::fullForm(p.request.form))
+        filedAsPlain(p, entry, true);
 #if SWITCH_DEBUG
     tJobSplit.storeNs = uptimeNs() - publishing;
 #endif
@@ -288,7 +307,10 @@ void Service::remember(const Asked &asked, int32_t ran)
 bool Service::submit(Prepared prepared, std::string request, const Waiter &waiter, int32_t pid,
                      dispatch_semaphore_t done)
 {
-    if (const Placed place = placed(prepared); place.stored >= 0) {
+    // a full form stored but not yet filed as its plain content's record goes to a worker, which files it
+    if (const Placed place = placed(prepared);
+        place.stored >= 0 && (!gm20b::fullForm(prepared.request.form) || place.stored != TegraGM20BCompileMade ||
+                              filedAsPlain(prepared, place.bytes, false))) {
         complete(waiter, place.stored, TegraGM20BCompileStored);
         return false;
     }
@@ -476,7 +498,7 @@ void Service::warm(uint64_t stack)
             (unconfirmed ? refusals : again)++;
             if (submit(std::move(prepared), std::string(), {0, 0, Band::Background, false}, 0, ran))
                 dispatch_semaphore_wait(ran, DISPATCH_TIME_FOREVER);
-        } else if (stored == TegraGM20BCompileMade && !publish(nullptr, prepared.content, bytes, true, why)) {
+        } else if (stored == TegraGM20BCompileMade && !publish(nullptr, prepared.content, bytes, true, false, why)) {
             os_log_error(logger(), "SwitchShaderCompiler: a stored record's program slots not kept: %{public}s",
                          why.c_str());
         }

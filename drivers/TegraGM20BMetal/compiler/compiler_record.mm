@@ -94,9 +94,10 @@ int32_t render(const Prepared &p, const Libraries &libraries, gm20b::Direct &dir
     if (!d)
         return TegraGM20BCompileUnavailable;
     gm20b::RuntimeRecord record;
-    const gm20b::PackForm form =
-        p.request.form == gm20b::RequestForm::Barrier ? gm20b::PackForm::Barrier : gm20b::PackForm::Default;
-    const bool full = p.request.form == gm20b::RequestForm::Full;
+    const gm20b::PackForm form = gm20b::withoutFull(p.request.form) == gm20b::RequestForm::Barrier
+                                     ? gm20b::PackForm::Barrier
+                                     : gm20b::PackForm::Default;
+    const bool full = gm20b::fullForm(p.request.form);
     direct.makeVariants(full);
     const gm20b::CompileOutcome outcome =
         direct.make(d, p.packKey, record, why, gm20b::probeTexturesOf(p.request.variant), nullptr, full, form);

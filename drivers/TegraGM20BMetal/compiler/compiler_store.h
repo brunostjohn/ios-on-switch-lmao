@@ -7,6 +7,7 @@
 // written again with its newest half (makeRoom), never refusing an entry.
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <string>
 #include "../../../kits/SwitchSeedPack/SwitchSeedStore.h"
@@ -35,14 +36,17 @@ public:
     enum class Put : uint8_t {
         Added,
         Full,  // makeRoom, then put again
-        Failed
+        Failed,
+        Kept  // the candidate's entry of the content was one `keep` keeps
     };
 
     // Published for every reader (an entry already under `name` retired once this one is in)
     Put put(const gm20b::Digest &name, const std::string &entry);
     // `entry` of content `key` under the candidate of `name` that find(name, key) gives, `at` the one taken. Chosen and
-    // written under one lock, so two contents compiled at once under one name each keep an entry.
-    Put put(const gm20b::Digest &name, const gm20b::CacheKey &key, const std::string &entry, gm20b::Digest &at);
+    // written under one lock, so two contents compiled at once under one name each keep an entry. `keep`: an entry of
+    // `key` already there that it answers true for stays, decided under the same lock.
+    Put put(const gm20b::Digest &name, const gm20b::CacheKey &key, const std::string &entry, gm20b::Digest &at,
+            const std::function<bool(const std::string &held)> &keep = nullptr);
     // Each program slot of a page or more that the record or kernel `entry` of `key` holds (record.h programSlot,
     // compute_slot.h computeSlot), published ahead of the entry as an entry of its own pages (program_pages.h
     // programSlotEntryBytes) under its programSlotName: a client that takes the entry runs those slots in place from its
