@@ -57,15 +57,10 @@ uint32_t roundUp(uint32_t v, uint32_t a)
 
 // Why an accepted turned layer would not be shown, or empty: the window's own scan, or the conversion job's plane, its
 // VIC job within the unit's 16x either way (TegraVICConfig.h) and the window showing the plane 1:1 where the layer goes.
-std::string turnedUnshown(const Layer &l)
+std::string convertedUnshown(const Layer &l, const Image &image)
 {
-    Image image;
-    if (!imageOf(l, W, H, image))
-        return "no window image";
-    if (!image.convert || !image.visible)
-        return "";
-    TurnedConversion c;
-    if (!turnedConversionOf(l, W, H, c))
+    ScreenConversion c;
+    if (!screenConversionOf(l, W, H, c))
         return "no conversion of a visible layer";
     const bool transpose = turnOf(l.transform).transpose;
     const uint64_t sw = transpose ? c.srcH : c.srcW, sh = transpose ? c.srcW : c.srcH;
@@ -78,13 +73,21 @@ std::string turnedUnshown(const Layer &l)
     Image shown;
     if (c.width < 2 || c.height < 2)
         return "a plane VIC refuses (a side under 2)";
-    const Layer plane = turnedConversionLayer(c, roundUp(static_cast<uint32_t>(c.width) * 4, 256));
+    const Layer plane = screenConversionLayer(c, roundUp(static_cast<uint32_t>(c.width) * 4, 256));
     if (!imageOf(plane, W, H, shown) || !shown.visible)
         return "the plane has no window image";
     const bool widened = c.width != c.screen.w || c.height != c.screen.h;
     if ((!widened && shown.dda != 0x10001000u) || shown.position != image.position || shown.size != image.size)
         return format("the plane is not shown 1:1 where the layer goes: dda %#x", shown.dda);
     return "";
+}
+
+std::string turnedUnshown(const Layer &l)
+{
+    Image image;
+    if (!imageOf(l, W, H, image))
+        return "no window image";
+    return image.convert && image.visible ? convertedUnshown(l, image) : "";
 }
 
 Surface makeSurface(Kind kind, uint32_t width, uint32_t height)
@@ -205,8 +208,9 @@ void testAcceptance()
               image.dda);
         CHECK(!d.transform || image.convert || (image.options & 0x15u) == turnOptions(d.transform),
               "a transformed layer the window scans has the wrong direction bits");
-        if (d.transform) {
-            const std::string why = turnedUnshown(d);
+        // Any YUV layer may go to the conversion job (a chroma siting DC A lacks, or a live window's other matrix).
+        if (d.transform || isYuv(d.kind)) {
+            const std::string why = d.transform ? turnedUnshown(d) : convertedUnshown(d, image);
             CHECK(why.empty(), "transform %u kind %d src %dx%d dst %dx%d: %s", d.transform, d.kind, d.src.w, d.src.h,
                   d.dst.w, d.dst.h, why.c_str());
         }
@@ -512,7 +516,7 @@ TEST(DisplayPlanesTurn, TurnedRectMatchesThePixelMapping)
 }
 
 // The conversion job reads exactly the source pixels that land on the screen, by the turned surface's own mapping.
-TEST(DisplayPlanesTurn, TurnedConversionReadsThePixelsOnTheScreen)
+TEST(DisplayPlanesTurn, ScreenConversionReadsThePixelsOnTheScreen)
 {
     const uint32_t sw = 13, sh = 7;
     const int32_t screenW = 4, screenH = 3;
@@ -526,8 +530,8 @@ TEST(DisplayPlanesTurn, TurnedConversionReadsThePixelsOnTheScreen)
         const Turn turn = turnOf(t);
         const Rect o = turnedRect(l.src, sw, sh, t);
         l.dst = {-1, -1, o.w, o.h};
-        TurnedConversion c;
-        ASSERT_TRUE(turnedConversionOf(l, uint32_t(screenW), uint32_t(screenH), c)) << t;
+        ScreenConversion c;
+        ASSERT_TRUE(screenConversionOf(l, uint32_t(screenW), uint32_t(screenH), c)) << t;
         uint32_t lowA = sw, lowB = sh, highA = 0, highB = 0;
         for (int32_t y = 0; y < screenH; ++y)
             for (int32_t x = 0; x < screenW; ++x) {

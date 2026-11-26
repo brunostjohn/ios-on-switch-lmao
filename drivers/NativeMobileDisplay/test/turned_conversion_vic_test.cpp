@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// NativePlanesTurn.h's turnedConversionOf through VIC's own builder and the unit's model (TegraVIC test/vic_model.h,
+// NativePlanesTurn.h's screenConversionOf through VIC's own builder and the unit's model (TegraVIC test/vic_model.h,
 // which reproduces the boots' transpose and sub-rectangle lines): the plane the conversion job writes is the layer's
 // turned surface where it lands on the screen, pixel for pixel, for every word, clipped and scaled.
 #include <gtest/gtest.h>
@@ -35,7 +35,7 @@ uint32_t turnedPixel(uint32_t transform, int64_t ox, int64_t oy)
 }
 
 struct Converted {
-    TurnedConversion conversion = {};
+    ScreenConversion conversion = {};
     std::vector<uint8_t> target;
     uint32_t pitch = 0;
     VicModel model{};
@@ -54,7 +54,7 @@ void convert(uint32_t transform, uint32_t numerator, uint32_t denominator, int32
     const Rect o = turnedRect(l.src, kSourceWidth, kSourceHeight, transform);
     l.dst = {x, y, static_cast<int32_t>(o.w * numerator / denominator),
              static_cast<int32_t>(o.h * numerator / denominator)};
-    ASSERT_TRUE(turnedConversionOf(l, kScreenWidth, kScreenHeight, run.conversion));
+    ASSERT_TRUE(screenConversionOf(l, kScreenWidth, kScreenHeight, run.conversion));
     const auto &c = run.conversion;
 
     static std::vector<uint8_t> source(size_t(TEGRA_VIC_PROBE_PITCH) * kSourceHeight);
@@ -86,7 +86,7 @@ void convert(uint32_t transform, uint32_t numerator, uint32_t denominator, int32
     EXPECT_EQ(run.model.writes, uint64_t(c.width) * uint64_t(c.height));
 }
 
-TEST(TurnedConversionVic, EveryWordWritesTheTurnedSurfaceWhereItLands)
+TEST(ScreenConversionVic, EveryWordWritesTheTurnedSurfaceWhereItLands)
 {
     struct Place {
         int32_t x, y;
@@ -123,7 +123,7 @@ TEST(TurnedConversionVic, EveryWordWritesTheTurnedSurfaceWhereItLands)
 
 // Shown smaller than the turned source, down to 1/6 (a YUV layer's published limit), and down to a sliver one pixel on
 // the screen: VIC takes the job and writes the whole plane inside its bounds.
-TEST(TurnedConversionVic, ADownscaledTurnIsWithinVICsBounds)
+TEST(ScreenConversionVic, ADownscaledTurnIsWithinVICsBounds)
 {
     for (uint32_t transform = 0; transform != 8; ++transform)
         for (const uint32_t denominator : {2u, 4u, 6u})

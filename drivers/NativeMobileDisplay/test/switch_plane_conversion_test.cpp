@@ -465,6 +465,19 @@ TEST_F(PlaneConversion, AClippedTurnedLayerConvertsOnlyItsPartOnTheScreen)
     EXPECT_EQ(image.size, (256u << 16) | 78u);
 }
 
+// A video the job converts unturned, shown small (1/5 across), is scaled by VIC too: an RGB window stops at 1/4.
+TEST_F(PlaneConversion, ASmallVideoIsScaledByVICAndShownOneToOne)
+{
+    layer.dst = {100, 200, 25, 12};
+    ASSERT_GE(convert(), 0);
+    EXPECT_EQ(lastOperation.transform, 0u);
+    EXPECT_EQ(lastOperation.srcW, 128u << 16);
+    EXPECT_EQ(lastOperation.dstW, 25u);
+    EXPECT_EQ(lastOperation.dstH, 12u);
+    EXPECT_EQ(image.size, (12u << 16) | 25u);
+    EXPECT_EQ(image.dda, 0x10001000u);
+}
+
 // A packed RGB layer the windows cannot scan turned (scaled, or pitch-linear with a quarter turn) converts the same way.
 TEST_F(PlaneConversion, APackedLayerTheWindowCannotTurnConvertsToo)
 {
