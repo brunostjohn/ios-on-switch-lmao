@@ -214,7 +214,6 @@ CommandBuffer *Device::begin()
     cb.textureWrites_.clear();
     cb.geometryBudget_ = {};
     cb.geometryPool_.clear();
-    cb.scrubSegment_ = cb.segments_.size();
     scrubInto(cb);
     return &cb;
 }
@@ -536,8 +535,6 @@ bool CommandBuffer::commit(uint32_t &seqno)
             closing && waited + waitCount == sharedWaits_.size() && signaled + signalCount == sharedSignals_.size();
         if (!submit(segments_.data() + at, uint32_t(n), surfaces_, visibility, events, last))
             return false;
-        if (at + n > scrubSegment_)
-            d.scrubsSubmitted(*this, seq);
         waited += waitCount;
         signaled += signalCount;
         for (NativeSurface *surface : nativeSurfaces_) {
@@ -562,6 +559,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
         signaled += signalCount;
     }
     seqno = d.lastSubmitted();
+    d.scrubsSubmitted(*this, seqno);
 #if SWITCH_METAL_DIAGNOSTICS
     if (glassMemSlot_ >= 0) {
         d.glassMemCbs_[glassMemSlot_].seqno = seqno;

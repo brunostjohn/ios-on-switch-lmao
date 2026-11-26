@@ -319,8 +319,9 @@ private:
     JobVisibility visibility_ = JobVisibility::Legacy;
     bool externalWrites_ = false;
     bool volatileWrites_ = false;
-    std::vector<Scrub> scrubs_;  // the Shared spans its front fills (Device::scrubInto)
-    size_t scrubSegment_ = 0;    // its first segment that holds them: the job that takes it submits them
+    // the Shared spans its front fills (Device::scrubInto); its closing job, the one that ends Volatile or External,
+    // is the one they wait for
+    std::vector<Scrub> scrubs_;
     EventPublication publication_;
     BarrierEngine lastEngine_ = BarrierEngine::None;  // the engine of the work encoded last (barrier_forms.h)
     PassChain chain_;                                 // the passes since the last drain (pass_hazard.h)
