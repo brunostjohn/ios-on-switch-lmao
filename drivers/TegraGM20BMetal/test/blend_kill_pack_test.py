@@ -19,6 +19,7 @@ sys.path[:0] = [HERE, os.path.join(HERE, '..', 'pack')]
 import directlink
 import make_pack_targets_test as targets
 import packfile
+import segments
 
 SET_BLEND, PER_TARGET, ALPHA_TO_COVERAGE = 0x1360, 0x1E04, 0x153C
 ITERATED_BLEND_OPTIMIZATION, NOOP_SOURCE_RGBA_0000 = 0x02F4, 1
@@ -63,18 +64,23 @@ def pushed_kills(path: str) -> tuple[list[int | None], list[tuple[int, int]]]:
         flags = directlink.PIPELINE.unpack_from(data, at)[-1]
         storage.append((flags, data[at + STORAGE_MASK_AT]))
     seg_at, seg_bytes = sections[SEGMENTS]
-    if seg_bytes < 8:
-        return [], storage
-    pipelines, _variants = struct.unpack_from('<II', data, seg_at)
     kills: list[int | None] = []
-    for i in range(pipelines):
-        heap_offset, words, _flags = struct.unpack_from('<IHH', data, seg_at + 8 + 8 * i)
+    for heap_offset, words in segment_entries(data[seg_at : seg_at + seg_bytes]):
         if not words:
             kills.append(None)
             continue
         stream = struct.unpack_from(f'<{words}I', data, sections[HEAP][0] + heap_offset)
         kills.append(last_written(stream, ITERATED_BLEND_OPTIMIZATION))
     return kills, storage
+
+
+def segment_entries(table: bytes) -> list[tuple[int, int]]:
+    """Give each pipeline's (heapOffset, words) of a PackSegments section, in the layout segments.py writes it."""
+    header, entry = segments._SEGMENT_TABLE, segments._SEGMENT_ENTRY
+    if len(table) < header.size:
+        return []
+    pipelines = header.unpack_from(table, 0)[0]
+    return [entry.unpack_from(table, header.size + entry.size * i)[:2] for i in range(pipelines)]
 
 
 def source_over_on_target_0_alone(record: targets.Record, flags: int, storage_mask: int) -> bool:
@@ -92,6 +98,10 @@ def source_over_on_target_0_alone(record: targets.Record, flags: int, storage_ma
 
 
 class BlendKillPackTest(unittest.TestCase):
+    def test_the_segment_table_reads_as_segments_py_writes_it(self) -> None:
+        table = segments.encode_table([(0x40, 12, 1), (0, 0, 0), (0x400, 3, 0)], [~0 & 0xFFFFFFFF] * 3, [(0x80, 5, 0)])
+        self.assertEqual(segment_entries(table), [(0x40, 12), (0, 0), (0x400, 3)])
+
     def test_every_one_target_source_over_segment_pushes_the_kill(self) -> None:
         records, baseline = targets.load(PACK)
         kills, storage = pushed_kills(PACK)
