@@ -176,6 +176,13 @@ static enum tgm_wait_source semaphore_source(struct tgm_chan *chan,
 				  at, w->payload);
 			return TGM_WAITS_FAILED;
 		}
+		if (!owner &&
+		    tgm_fence_offset(word) == TGM_FENCE_USER_PAGES * TGM_FENCE_SLOT +
+						      TGM_FENCE_KERNEL_BRIDGE_GATE *
+							      sizeof(struct TegraGM20BAbiFence)) {
+			scnprintf(what, len, "the host1x bridge gate (at %u)", at);
+			return TGM_WAITS_VICTIM;
+		}
 		scnprintf(what, len, "%s ch %d fence %u (at %u)", owner ? owner->owner : "a gone",
 			  owner ? (int)owner->chid : -1, w->payload, at);
 		*source = owner;

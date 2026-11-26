@@ -60,6 +60,7 @@ std::vector<std::pair<uint32_t, uint32_t>>
 	cancelledWaiters;  // tegra_host1x_syncpt_cancel_waiters's (id, threshold)
 std::function<void(uint32_t, uint32_t)> onCancelWaiters;
 std::function<void()> onExec;
+std::function<void()> onSubmitEnter, onOpenChannel;
 uint32_t physicalStatusNonGpuCalls;
 int nextExecError;
 bool pushVolatile;
@@ -141,6 +142,8 @@ protected:
 	{
 		onCancelWaiters = nullptr;
 		onExec = nullptr;
+		onSubmitEnter = nullptr;
+		onOpenChannel = nullptr;
 		gateVaFailures = 0;
 		{
 			std::lock_guard<std::mutex> guard(stateMutex);
@@ -289,6 +292,8 @@ extern "C" int tgm_vm_kmap(tgm_vm *, tgm_mem *, uint64_t, uint64_t *va)
 extern "C" int tgm_chan_new_copy(tgm_vm *, const void *, volatile uint32_t *, uint64_t,
 				 const char *, int, tgm_chan **out)
 {
+	if (onOpenChannel)
+		onOpenChannel();
 	gpu = {};
 	*out = &gpu;
 	return 0;
@@ -471,6 +476,8 @@ extern "C" int tegra_host1x_syncpt_release_failed(uint32_t id, uint32_t threshol
 
 extern "C" void switch_gpu_chan_submit_enter(tgm_chan *)
 {
+	if (onSubmitEnter)
+		onSubmitEnter();
 }
 
 extern "C" void switch_gpu_chan_submit_leave()
@@ -2105,9 +2112,9 @@ TEST_F(Bridge, ReallocatedSlotSyncpointRewritesItsGateAndIncrementPush)
 
 TEST_F(Bridge, ConcurrentGateClosesPassesAndSubmitsAreRaceFree)
 {
-	std::atomic<bool> stop{false};
+	std::atomic<bool> stopCloser{false}, stopPasser{false};
 	std::thread passer([&] {
-		while (!stop.load(std::memory_order_acquire)) {
+		while (!stopPasser.load(std::memory_order_acquire)) {
 			if (!runGatePass())
 				std::this_thread::yield();
 		}
@@ -2115,7 +2122,7 @@ TEST_F(Bridge, ConcurrentGateClosesPassesAndSubmitsAreRaceFree)
 			;
 	});
 	std::thread closer([&] {
-		while (!stop.load(std::memory_order_acquire)) {
+		while (!stopCloser.load(std::memory_order_acquire)) {
 			switch_gpu_bridge_gate_close();
 			std::this_thread::yield();
 		}
@@ -2141,8 +2148,83 @@ TEST_F(Bridge, ConcurrentGateClosesPassesAndSubmitsAreRaceFree)
 		EXPECT_EQ(switch_gpu_bridge_status(bridge), -5);
 		switch_gpu_bridge_release(&bridge);
 	}
-	stop.store(true, std::memory_order_release);
+	stopCloser.store(true, std::memory_order_release);
 	closer.join();
+	stopPasser.store(true, std::memory_order_release);
 	passer.join();
 	EXPECT_EQ(loadGate(), 0u);
+}
+
+TEST_F(Bridge, GatePassRunsWhileSubmitterWaitsInSubmitEnter)
+{
+	const auto first = token(750, 41);
+	const auto second = token(751, 42);
+	statuses[key(first)] = 0;
+	statuses[key(second)] = 0;
+	auto *a = submit({first});
+	ASSERT_NE(a, nullptr);
+	bool ran = false;
+	onSubmitEnter = [&] {
+		onSubmitEnter = nullptr;
+		statuses[key(first)] = -5;
+		switch_gpu_bridge_gate_close();
+		EXPECT_TRUE(runGatePass());
+		EXPECT_EQ(loadGate(), 0u);
+		ran = true;
+	};
+	auto *b = submit({second});
+	EXPECT_TRUE(ran);
+	ASSERT_NE(b, nullptr);
+	EXPECT_EQ(switch_gpu_bridge_failed(a), -5);
+	EXPECT_EQ(switch_gpu_bridge_failed(b), 0);
+	statuses[key(second)] = 1;
+	finish();
+	release(a);
+	release(b);
+}
+
+TEST_F(Bridge, AProducerFailingDuringSubmitEnterIsRefusedWithoutSubmitting)
+{
+	const auto source = token(752, 43);
+	statuses[key(source)] = 0;
+	const uint32_t execsBefore = execs;
+	onSubmitEnter = [&] {
+		onSubmitEnter = nullptr;
+		statuses[key(source)] = -5;
+		switch_gpu_bridge_gate_close();
+		runGatePass();
+	};
+	switch_gpu_bridge *bridge = nullptr;
+	EXPECT_EQ(switch_gpu_bridge_submit(&source, 1, &bridge), -5);
+	EXPECT_EQ(bridge, nullptr);
+	EXPECT_EQ(execs, execsBefore);
+	EXPECT_EQ(refs[key(source)], 0);
+	EXPECT_EQ(loadGate(), 0u);
+}
+
+TEST_F(Bridge, GatePassRunsWhileChannelSlowPathReopensErroredChannel)
+{
+	const auto lost = token(753, 44);
+	statuses[key(lost)] = 0;
+	auto *old = submit({lost});
+	ASSERT_NE(old, nullptr);
+	statuses[key(lost)] = -5;
+	finish(true);
+	release(old);
+
+	const auto next = token(754, 45);
+	statuses[key(next)] = 1;
+	bool ran = false;
+	onOpenChannel = [&] {
+		onOpenChannel = nullptr;
+		switch_gpu_bridge_gate_close();
+		EXPECT_TRUE(runGatePass());
+		EXPECT_EQ(loadGate(), 0u);
+		ran = true;
+	};
+	auto *reopened = submit({next});
+	EXPECT_TRUE(ran);
+	ASSERT_NE(reopened, nullptr);
+	finish();
+	release(reopened);
 }

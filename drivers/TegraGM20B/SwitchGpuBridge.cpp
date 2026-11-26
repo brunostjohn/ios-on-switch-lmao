@@ -98,27 +98,38 @@ bool initialize()
 }
 
 // A syncpoint stays with its slot across a failed open, as host1x hands none back.
-bool openSpace()
-{
-	for (auto &job : queue.jobs)
-		if (!job.syncpoint && tegra_host1x_syncpt_alloc(&job.syncpoint))
-			return false;
-	return queue.space.openSpace(kShape, &queue) && gateOpen();
-}
-
+// Releases queue.lock via queue.turn across tgm_chan_del / openSpace / openChannel (each enters tgm_sc7_gate) so
+// gatePass and retirement can still acquire queue.lock during sleep or rail-down drain.
 int channel()
 {
-	if (queue.space.channel && tgm_chan_error(queue.space.channel)) {
+	if (queue.space.channel && !tgm_chan_error(queue.space.channel))
+		return 0;
+	if (queue.space.channel) {
 		for (const auto &job : queue.jobs)
 			if (job.refs && !job.producer)
 				return -16;
-		tgm_chan_del(&queue.space.channel);
 	}
-	if (!queue.space.vm && !openSpace()) {
-		queue.space.discardSpace(kShape);
-		return -12;
+	if (!queue.space.vm) {
+		for (auto &job : queue.jobs)
+			if (!job.syncpoint && tegra_host1x_syncpt_alloc(&job.syncpoint))
+				return -12;
 	}
-	return queue.space.openChannel(kShape, &queue, completed);
+	tgm_chan *oldChannel = queue.space.channel;
+	queue.space.channel = nullptr;
+	tgm_chan *newChannel = nullptr;
+	const int error = queue.turn.waitForRoom(queue.lock, [&] {
+		if (oldChannel)
+			tgm_chan_del(&oldChannel);
+		if (!queue.space.vm &&
+		    (!queue.space.openSpace(kShape, &queue) || !gateOpen(queue.space.vm))) {
+			queue.space.discardSpace(kShape);
+			return -12;
+		}
+		return queue.space.openChannel(kShape, &queue, completed, &newChannel);
+	});
+	if (!error)
+		queue.space.channel = newChannel;
+	return error;
 }
 }  // namespace
 
@@ -191,34 +202,44 @@ static int submitBridge(const switch_gpu_backing_token *tokens, uint32_t count,
 		int stopped = 0;
 		producerDone = switch_gpu_producer_covered(job.covering, &stopped) != 0;
 	} else if (!error) {
-		job.threshold = tegra_host1x_syncpt_read(job.syncpoint) + TGM_SYNCPT_INCRS;
-		const tgm_push push = {kPushVa + slot * kPage, slotPush(job, slot), 0, 0, 0, 0};
 		tgm_chan *const chan = queue.space.channel;
-		switch_gpu_chan_submit_enter(chan);
-		for (;;) {
-			// No L2 invalidate ahead of it: the job reads no memory, its push slots are volatile, and the push's own
-			// flush (tgm_syncpt_incr) puts the producers' writes in DRAM before host1x sees the increment.
-			error = switch_gpu_chan_exec_visibility(
-				chan, &push, 1, job.tokens, job.count, &job.sequence, nullptr,
-				SWITCH_GPU_SUBMIT_VISIBILITY_EXPLICIT |
-					SWITCH_GPU_SUBMIT_EXTERNAL_VISIBILITY);
-			if (error != -11)
-				break;
-			error = queue.turn.waitForRoom(queue.lock, [&] {
+		queue.turn.waitForRoom(queue.lock, [&] {
+			switch_gpu_chan_submit_enter(chan);
+			return 0;
+		});
+		const int entered = producers(job);
+		if (entered < 0) {
+			error = entered;
+		} else {
+			job.threshold = tegra_host1x_syncpt_read(job.syncpoint) + TGM_SYNCPT_INCRS;
+			const tgm_push push = {
+				kPushVa + slot * kPage, slotPush(job, slot), 0, 0, 0, 0};
+			for (;;) {
+				// No L2 invalidate ahead of it: the job reads no memory, its push slots are volatile, and the push's own
+				// flush (tgm_syncpt_incr) puts the producers' writes in DRAM before host1x sees the increment.
+				error = switch_gpu_chan_exec_visibility(
+					chan, &push, 1, job.tokens, job.count, &job.sequence,
+					nullptr,
+					SWITCH_GPU_SUBMIT_VISIBILITY_EXPLICIT |
+						SWITCH_GPU_SUBMIT_EXTERNAL_VISIBILITY);
+				if (error != -11)
+					break;
+				error = queue.turn.waitForRoom(queue.lock, [&] {
 #if TGM_STATS
-				tgm_stats_unlocked(TGM_UNLOCKED_BRIDGE_ROOM, 0);
+					tgm_stats_unlocked(TGM_UNLOCKED_BRIDGE_ROOM, 0);
 #endif
-				return switch_gpu_chan_wait_submission_room(chan, &push, 1,
-									    job.count, nullptr);
-			});
-			if (error)
-				break;
-			// waitForRoom dropped queue.lock; gatePass may have already reopened the gate for a producer
-			// that failed meanwhile.
-			const int source = producers(job);
-			if (source < 0) {
-				error = source;
-				break;
+					return switch_gpu_chan_wait_submission_room(
+						chan, &push, 1, job.count, nullptr);
+				});
+				if (error)
+					break;
+				// waitForRoom dropped queue.lock; gatePass may have already reopened the gate for a producer
+				// that failed meanwhile.
+				const int source = producers(job);
+				if (source < 0) {
+					error = source;
+					break;
+				}
 			}
 		}
 		switch_gpu_chan_submit_leave();

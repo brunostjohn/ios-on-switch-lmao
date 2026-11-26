@@ -9,7 +9,7 @@
 namespace {
 constexpr uint32_t kSyncpt = 170, kBridgeSyncpt = 190;
 std::vector<switch_host1x_fence *> gRetirements;
-int gBridgesLive, gBridgesSubmitted, gBridgeSubmitError;
+int gBridgesLive, gBridgesSubmitted, gBridgeSubmitError, gBridgeFailed;
 std::vector<const switch_gpu_bridge *> gBridgesWatched;
 IOReturn gLookupResult = -1;
 int gAcquireResult = -95;
@@ -85,6 +85,7 @@ protected:
         gAcquireView = {};
         gMapResult = nullptr;
         gBridgeSubmitError = 0;
+        gBridgeFailed = 0;
     }
 
     void TearDown() override
@@ -173,6 +174,16 @@ void switch_gpu_bridge_syncpoint(const switch_gpu_bridge *bridge, uint32_t *sync
 {
     *syncpoint = kBridgeSyncpt;
     *threshold = bridge->threshold;
+}
+
+int switch_gpu_bridge_failed(const switch_gpu_bridge *)
+{
+    return gBridgeFailed;
+}
+
+int switch_gpu_bridge_source_failure(const switch_gpu_bridge *)
+{
+    return 0;
 }
 
 int switch_gpu_bridge_submit_watched(const switch_gpu_backing_token *tokens, uint32_t count, switch_gpu_bridge **bridge)
@@ -391,5 +402,22 @@ TEST_F(NVENCDirect, DirectPrepareBridgesGpuRenderedBL2AndNamesBridgeFailures)
     EXPECT_EQ(patched.entries[0].value, uint32_t(TEGRA_NVENC_DIRECT_HANDLE));
     EXPECT_EQ(patched.entries[1].offset, 1280u * 736u);
     tegra_nvenc_direct_release(&direct);
+    complete(render);
+}
+
+TEST_F(NVENCDirect, AFailedBridgeRefusesDirectBegin)
+{
+    Picture picture;
+    const auto render = token(9, 32, SWITCH_GPU_ENGINE_GM20B);
+    ASSERT_EQ(publish(picture.native, SWITCH_GPU_BACKING_WRITE, render), 0);
+    auto d = picture.direct();
+    ASSERT_EQ(bridgeGpuWriters(&d), 0);
+    ASSERT_NE(d.bridge, nullptr);
+    gBridgeFailed = -5;
+    TegraNVENCAfter waits[TEGRA_NVENC_ORDER_WAITS] = {};
+    uint32_t count = 0;
+    EXPECT_EQ(begin(&d, 46, waits, &count), -5);
+    EXPECT_TRUE(writerWaits(picture.logical).empty());
+    switch_gpu_bridge_release(&d.bridge);
     complete(render);
 }

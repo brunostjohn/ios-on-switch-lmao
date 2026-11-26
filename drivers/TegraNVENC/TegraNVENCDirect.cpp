@@ -113,6 +113,14 @@ int begin(void *context, uint32_t fence, TegraNVENCAfter *waits, uint32_t *count
             error = wait == 1 ? -11 : wait;
         }
     }
+    if (!error && d->bridge) {
+        error = switch_gpu_bridge_failed(d->bridge);
+        if (!error) {
+            const int source = switch_gpu_bridge_source_failure(d->bridge);
+            if (source < 0)
+                error = source;
+        }
+    }
     if (error) {
         switch_gpu_backing_abort(&d->transaction);
         return error == -28 ? -11 : error;

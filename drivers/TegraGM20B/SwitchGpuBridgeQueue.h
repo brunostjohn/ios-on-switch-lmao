@@ -53,8 +53,8 @@ bool coveringDrained(const switch_gpu_bridge &job, int source, int cover);
 bool anyWaited();
 void armHangCheck(uint64_t ns);
 
-// SwitchGpuBridgeGate.cpp, queue.lock held
-bool gateOpen();
+// SwitchGpuBridgeGate.cpp: gateOpen runs under queue.turn without queue.lock; slotPush with queue.lock held
+bool gateOpen(tgm_vm *vm);
 uint32_t slotPush(switch_gpu_bridge &job, uint32_t slot);
 
 void checkHang(thread_call_param_t, thread_call_param_t);

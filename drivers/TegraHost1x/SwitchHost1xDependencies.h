@@ -93,6 +93,16 @@ public:
         return submitWith(switch_gpu_bridge_submit_watched);
     }
 
+    int failed() const
+    {
+        if (!bridge)
+            return 0;
+        if (const int error = switch_gpu_bridge_failed(bridge))
+            return error;
+        const int source = switch_gpu_bridge_source_failure(bridge);
+        return source < 0 ? source : 0;
+    }
+
     bool acquire(uint32_t *syncpoint, uint32_t *threshold) const
     {
         if (!bridge)

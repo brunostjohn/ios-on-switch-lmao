@@ -22,7 +22,7 @@ std::vector<uint32_t> publishedWords;
 uint32_t arena[SWITCH_HOST1X_ARENA_WORDS], reservedWords, submittedSyncpt, submittedThreshold;
 uint32_t arenaShort, arenaWaits, reservedCapacity;
 uint32_t begins, aborts, commits, retained, bridges, released, roomWaits, submits, powerUses, powerDones;
-int bridgeError, submitError, retainError, statusError, powerError, semanticResult = 1, batchSettled = 1;
+int bridgeError, bridgeFailed, submitError, retainError, statusError, powerError, semanticResult = 1, batchSettled = 1;
 switch_gpu_event_waits *preparedBatch;
 std::vector<switch_host1x_fence *> fences;
 std::vector<uint32_t> fenceBounds, watchedBounds;
@@ -35,7 +35,7 @@ struct Notification {
 
 std::vector<Notification> notifications;
 uint64_t nextTestSequence = 0;
-bool transactionLocked, changeProducer, busyOnce;
+bool transactionLocked, changeProducer, busyOnce, failBridgeAfterSubmit;
 volatile uint64_t *changeGeneration;
 
 // The engine and host1x behind the queue: the job syncpoint's value, what the cancellation did to the channel and the
@@ -241,6 +241,11 @@ int switch_gpu_bridge_submit(const switch_gpu_backing_token *tokens, uint32_t co
         ++sourceTokens[0].value;
         changeProducer = false;
     }
+    if (failBridgeAfterSubmit) {
+        bridgeFailed = -5;
+        sourceTokens.clear();
+        failBridgeAfterSubmit = false;
+    }
     return 0;
 }
 
@@ -248,6 +253,11 @@ void switch_gpu_bridge_syncpoint(const switch_gpu_bridge *, uint32_t *id, uint32
 {
     *id = 170;
     *threshold = 0x1000001;
+}
+
+int switch_gpu_bridge_failed(const switch_gpu_bridge *)
+{
+    return bridgeFailed;
 }
 
 int switch_gpu_bridge_covers(const switch_gpu_bridge *bridge, const switch_gpu_backing_token *token)
@@ -585,7 +595,7 @@ protected:
     {
         begins = aborts = commits = retained = bridges = released = roomWaits = submits = powerUses = powerDones = 0;
         reservedWords = submittedSyncpt = submittedThreshold = arenaShort = arenaWaits = reservedCapacity = 0;
-        bridgeError = submitError = retainError = statusError = powerError = 0;
+        bridgeError = bridgeFailed = submitError = retainError = statusError = powerError = 0;
         semanticResult = batchSettled = 1;
         preparedBatch = nullptr;
         fences.clear();
@@ -593,7 +603,7 @@ protected:
         watchedBounds.clear();
         producerPhysical.clear();
         notifications.clear();
-        transactionLocked = changeProducer = busyOnce = false;
+        transactionLocked = changeProducer = busyOnce = failBridgeAfterSubmit = false;
         changeGeneration = nullptr;
         sourceTokens.clear();
         bridgePhysicalAtRelease.clear();
@@ -1557,4 +1567,16 @@ TEST_F(SwitchVICJobsTest, AParkedQueueHoldsTheNextSubmissionUntilAResumeRebasesI
     ASSERT_EQ(submit(), 0);
     EXPECT_EQ(gQueue.submitted, base + 3);
     EXPECT_EQ(powerUses, powerDones);
+}
+
+TEST_F(SwitchVICJobsTest, AFailedBridgeBetweenPassesRefusesSubmissionBeforeHardwarePublication)
+{
+    gpu();
+    failBridgeAfterSubmit = true;
+    EXPECT_EQ(submit(), -5);
+    EXPECT_EQ(submits, 0u);
+    EXPECT_EQ(commits, 0u);
+    EXPECT_EQ(gQueue.count, 0u);
+    EXPECT_EQ(bridges, 1u);
+    EXPECT_EQ(released, 1u);
 }

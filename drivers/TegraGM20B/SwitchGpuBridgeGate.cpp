@@ -81,7 +81,7 @@ void gatePass(thread_call_param_t, thread_call_param_t)
 }
 }  // namespace
 
-bool gateOpen()
+bool gateOpen(tgm_vm *vm)
 {
 	if (!bridgeGate.lock)
 		bridgeGate.lock = IOSimpleLockAlloc();
@@ -94,7 +94,7 @@ bool gateOpen()
 	if (!bridgeGate.lock || !bridgeGate.pass ||
 	    tgm_fence_kernel(TGM_FENCE_KERNEL_BRIDGE_GATE, &word, &page, &offset))
 		return false;
-	bridgeGate.va = tgm_fence_kernel_va(queue.space.vm, TGM_FENCE_KERNEL_BRIDGE_GATE);
+	bridgeGate.va = tgm_fence_kernel_va(vm, TGM_FENCE_KERNEL_BRIDGE_GATE);
 	if (!bridgeGate.va)
 		return false;
 	writeGate(word, kOpen);

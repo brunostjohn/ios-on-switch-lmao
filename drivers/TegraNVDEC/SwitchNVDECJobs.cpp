@@ -355,6 +355,11 @@ int publish(const TegraNVDECSubmit &submit, Submission &work, const SwitchNVDECC
                 return submitted;
             continue;
         }
+        if (const int failed = dependencies.failed()) {
+            switch_gpu_backing_abort(&transaction);
+            IOLockUnlock(gLock);
+            return failed;
+        }
         uint32_t bridgeSyncpoint = 0, bridgeThreshold = 0;
         const bool bridged = dependencies.acquire(&bridgeSyncpoint, &bridgeThreshold);
         const uint32_t waits = (bridged ? 1 : 0) + producers.foreignCount(gSyncpt);
