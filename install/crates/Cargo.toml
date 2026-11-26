@@ -13,14 +13,41 @@ path = "lib.rs"
 [workspace]
 
 [dependencies]
+aea-tools = "0.1.1"
+aes = "0.9"
+clap = { version = "4.6", features = ["derive"] }
+crc32c = "0.6"
 crossterm = "0.29"
+ctr = "0.10"
+ferrosys-ucd = "0.8"
+flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
+hex = "0.4"
+hkdf = "0.13"
+hmac = "0.13"
+image4 = "0.8.2"
+lz4-sys = "1.11.1"
+lzfse_rust = "0.2.1"
+object = { version = "0.41", default-features = false, features = ["macho", "read_core", "std", "write_std"] }
+plist = "1.10"
 ratatui = "0.30"
-reqwest = { version = "0.13", features = ["json", "stream"] }
+rayon = "1.12"
+reqwest = { version = "0.13", features = ["blocking", "json", "stream"] }
 rustls-platform-verifier = "0.7"
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["macros", "rt"] }
+sha2 = "0.11"
+tar = "0.4.46"
+thiserror = "2"
+tokio = { version = "1", features = ["fs", "io-util", "macros", "rt", "rt-multi-thread", "sync", "time"] }
+udif = "0.4.2"
+unicode-normalization = "0.1.26"
+zerocopy = { version = "0.8", features = ["derive"] }
 
 # aws-lc-sys assembles x86-64 with NASM on Windows; prebuilt-nasm links its pre-assembled objects instead. rustls
 # turns it on today as well; this keeps it on if rustls stops.
 [target.'cfg(all(windows, target_arch = "x86_64"))'.dependencies]
 aws-lc-rs = { version = "1", default-features = false, features = ["prebuilt-nasm"] }
+
+[dev-dependencies]
+apfs = "0.4.1"
+tempfile = "3"

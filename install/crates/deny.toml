@@ -33,6 +33,11 @@ allow = [
   "Zlib",
 ]
 
+# libbz2-rs-sys, udif's pure-Rust bzip2, carries bzip2's own BSD-style licence. Allowed for that crate alone.
+[[licenses.exceptions]]
+allow = ["bzip2-1.0.6"]
+crate = "libbz2-rs-sys"
+
 [licenses.private]
 ignore = true
 
