@@ -19,6 +19,7 @@ from tools.devicerun.cpu import cpu_rows
 from tools.devicerun.hwtest import joined
 from tools.devicerun.launch import launch_rows
 from tools.devicerun.memory import memory_rows
+from tools.devicerun.pack_image import pack_image_rows
 from tools.devicerun.morning import CHECKLIST
 from tools.devicerun.reports import crash_rows, frame_rows, headline, rolled_up
 from tools.devicerun.rules import FAIL, INFO, REPORT, Check, Event, Result, evaluate, match
@@ -211,6 +212,7 @@ def evaluate_all(
     groups.append(('commit-summary', commit_rows(by_check)))
     groups.append(('launch-summary', launch_rows(by_check)))
     groups.append(('springboard-life', springboard_rows(by_check)))
+    groups.append(('pack-image-boot', pack_image_rows(by_check)))
     groups.append(('memory-watch', memory_rows(by_check)))
     head = [boot_row(by_boot, judged)] if by_boot else []
     groups.append(('usb-layers', [*head, *usb.rows(by_check, crashes, end)]))

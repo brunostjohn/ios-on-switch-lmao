@@ -24,6 +24,7 @@ py_library(
         "memory.py",
         "morning.py",
         "motion.py",
+        "pack_image.py",
         "protection.py",
         "reports.py",
         "rules.py",
@@ -191,6 +192,14 @@ py_test(
     deps = [":lib"],
 )
 
+# pack_image.py: the pack image's build, open and stream, backboardd's wait at its open and the boot time, in uptime.
+py_test(
+    name = "pack_image_test",
+    size = "small",
+    srcs = ["pack_image_test.py"],
+    deps = [":lib"],
+)
+
 # memory.py's kill and small-daemon rows over lines in the Metal driver's and XNU's formats.
 py_test(
     name = "memory_test",
@@ -222,6 +231,7 @@ py_test(
     srcs = ["joycon_test.py"],
     deps = [":lib"],
 )
+
 # bazel run //tools/devicerun:frame_weights -- <absolute .logarchive> --pack <pack.bin>: the frame-weights capture's table
 # (drivers/TegraGM20BMetal/draw_times.h, tools/devicerun/README.md)
 py_library(
