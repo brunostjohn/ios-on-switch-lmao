@@ -256,16 +256,18 @@ static gm20b::ProbeSurface probeSurface(const gm20b::Texture &t, uint32_t fmt2d)
 }
 
 // What a probe's line says of a texture and the device: "raw=1 comptags=1 block_linear=1 pitch=N tiled_cache=1
-// compression=1", raw=0 where the driver does not hold it
+// compression=1 block_rows=N" (a block's rows, 0 for a pitch-linear texture), raw=0 where the driver does not hold it
 - (NSString *)switchMetalProbeFacts:(id<MTLTexture>)texture
 {
     const uint32_t flags = gRM->raw->kernelInfo().flags;
     SwitchMetalTexture *t = gm20bTexture(texture);
     const gm20b::Texture now = t ? gRM->raw->lockedCopy(t->_raw) : gm20b::Texture();
-    return
-        [NSString stringWithFormat:@"raw=%d comptags=%d block_linear=%d pitch=%u tiled_cache=%d compression=%d",
-                                   t != nil, t && now.comptags, t && now.blockLinear, t ? now.pitch : 0,
-                                   (flags & TegraGM20BInfoTiledCache) != 0, (flags & TegraGM20BInfoCompression) != 0];
+    const bool blockLinear = t && now.blockLinear;
+    return [NSString
+        stringWithFormat:@"raw=%d comptags=%d block_linear=%d pitch=%u tiled_cache=%d compression=%d block_rows=%u",
+                         t != nil, t && now.comptags, blockLinear, t ? now.pitch : 0,
+                         (flags & TegraGM20BInfoTiledCache) != 0, (flags & TegraGM20BInfoCompression) != 0,
+                         blockLinear ? 8u << now.blockHeight : 0u];
 }
 
 // gpu.x1.clean_l2_syncpoint's read: a buffer's bytes as the CPU sees them in its own mapping, with none of the driver's

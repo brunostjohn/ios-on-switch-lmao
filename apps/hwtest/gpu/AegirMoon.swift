@@ -3,8 +3,9 @@ import HWTestCore
 import IOSurface
 import Metal
 
-/// gpu.gm20b.aegir_moon's frame: Weather's moon card as NanoUniverse's Aegir renderer draws its first frame on a fresh
-/// queue (shaders/AegirMoon.metal). A 172x172 BGR10_XR_sRGB drawable over a 'w30r' IOSurface and a mask over an 'A008'
+/// gpu.gm20b.aegir_moon's frame: the pass structure of Weather's moon card as NanoUniverse's Aegir renderer draws its first
+/// frame on a fresh queue (shaders/AegirMoon.metal: a disc stands in for luna's ray-traced sphere). A 172x172
+/// BGR10_XR_sRGB drawable (a CAMetalLayer's, as Weather's, or one over a 'w30r' IOSurface) and a mask over an 'A008'
 /// IOSurface through an R8Unorm texture, in one command buffer of three passes:
 ///  1. scene: the drawable cleared to 0 and the mask to 1, a disc drawn source-over into both;
 ///  2. bloom: the drawable's threshold into an 86x86 R8Unorm texture of three levels, then generateMipmaps;
@@ -19,8 +20,9 @@ public enum AegirMoon {
     public struct Reading: Sendable {
         public var mask: [UInt8] = [] // side x side, rows packed, read under the surface's lock
         public var bloom2: [UInt8] = [] // the bloom chain's level 2, rows packed
-        public var drawable: [UInt32] = [] // side x side words, read under the surface's lock
+        public var drawable: [UInt32] = [] // side x side words
         public var path = ""
+        public var drawableFacts = "", maskFacts = "" // the driver's layout of each (switchMetalProbeFacts:)
     }
 
     static func surface(_ fourcc: String, bytesPerElement: Int) throws -> IOSurfaceRef {
@@ -97,12 +99,14 @@ public enum AegirMoon {
         return pass
     }
 
-    public static func run(_ gpu: GPU) async throws -> Reading {
-        let drawableSurface = try surface("w30r", bytesPerElement: 4), maskSurface = try surface(
-            "A008",
-            bytesPerElement: 1
-        )
-        let drawable = try texture(gpu, drawableSurface, .bgr10_xr_srgb), mask = try texture(gpu, maskSurface, .r8Unorm)
+    /// The frame into `given` (a CAMetalLayer drawable's texture, side x side), or into a texture over a 'w30r' surface
+    public static func run(
+        _ gpu: GPU, drawable given: MTLTexture? = nil, facts: (MTLTexture) -> String = { _ in "" }
+    ) async throws -> Reading {
+        let drawableSurface = given == nil ? try surface("w30r", bytesPerElement: 4) : nil
+        let maskSurface = try surface("A008", bytesPerElement: 1)
+        let drawable = try given ?? texture(gpu, drawableSurface!, .bgr10_xr_srgb)
+        let mask = try texture(gpu, maskSurface, .r8Unorm)
         let bloom = try gpu.texture(.r8Unorm, bloomSide, bloomSide, mipmaps: 3)
         let formats: [MTLPixelFormat] = [.bgr10_xr_srgb, .r8Unorm]
         let scene = try pipeline(gpu, "aegir_moon_scene", formats) { a, _ in
@@ -137,7 +141,16 @@ public enum AegirMoon {
         }
         var reading = Reading(path: ran.path)
         reading.mask = rows(maskSurface, UInt8.self)
-        reading.drawable = rows(drawableSurface, UInt32.self)
+        if let drawableSurface {
+            reading.drawable = rows(drawableSurface, UInt32.self)
+        } else {
+            let bytes = try await gpu.read(drawable, bytesPerPixel: 4)
+            reading.drawable = stride(from: 0, to: bytes.count, by: 4).map { at in
+                (0 ..< 4).reduce(UInt32(0)) { $0 | UInt32(bytes[at + $1]) << (8 * $1) }
+            }
+        }
+        reading.drawableFacts = facts(drawable)
+        reading.maskFacts = facts(mask)
         reading.bloom2 = try await gpu.read(bloom, bytesPerPixel: 1, level: 2)
         return reading
     }
