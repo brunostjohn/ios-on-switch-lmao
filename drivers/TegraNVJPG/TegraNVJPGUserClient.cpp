@@ -77,11 +77,9 @@ volatile uint32_t gConnections;
 // caller's TegraNVJPGRouteCounts, through the selector CMPhoto's own decodes use, which the app's sandbox admits where
 // it may deny a registry or sysctl read.
 constexpr uint32_t kRouteMagic = 0x5050;  // 'PP', as TegraGM20BMethodPaths
-#if TEGRA_NVJPG_STATS
 // A selector 7 decode with this at +0xcac, the tile mode at +0xcb0 and the block height code at +0xcb4: HW Test's
 // image.nvjpg_tile_probe (TegraNVJPGRoute.h tegra_nvjpg_route_tile_probe)
 constexpr uint32_t kTileProbeMagic = 0x5054;
-#endif
 static_assert(sizeof(TegraNVJPGRouteCounts::routes) / sizeof(uint64_t) == TEGRA_NVJPG_ROUTE_COUNT,
               "a route count for every route");
 #endif

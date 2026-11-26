@@ -40,6 +40,10 @@ struct NVJPGTileProbeTest: HWTest {
         let rows = try Self.rowsDecode(file)
         metrics.set("rows_before", rows.description)
         checks.append(("NVJPG decodes the picture by rows before the probes (\(rows))", rows.right))
+        if !rows.right {
+            metrics.set("stopped_after", "rows_before")
+            return .judged(checks, metrics, proof: gpu.proof)
+        }
 
         let (surface, sampler) = try await Self.blockLinear(gpu)
         let first = try? JPEGRoute.decodes().get()
