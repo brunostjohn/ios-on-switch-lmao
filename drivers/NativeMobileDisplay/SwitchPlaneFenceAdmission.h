@@ -6,6 +6,10 @@ void planeFenceWork()
     planeFenceQueued = false;
     switch_gpu_backing_token producers[kPlaneDependencies] = {};
     const unsigned count = planeDependencies(planeFencing, producers);
+    if (planeBridgeArmed) {
+        planeBridgeWork(producers, count);
+        return;
+    }
     const uint64_t pa = count ? 0 : planeFencePa(planeFencing);
     int error = kIOReturnAborted;
     while (!__atomic_load_n(&copyStopping, __ATOMIC_ACQUIRE)) {

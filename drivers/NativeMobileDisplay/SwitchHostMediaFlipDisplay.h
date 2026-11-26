@@ -48,7 +48,7 @@ void stampMediaHostFlip()
     mediaFlip.writtenAt = mach_absolute_time();
 }
 
-int submitMediaHostFlip(const switch_gpu_backing_token *producers, unsigned count)
+int submitMediaHostFlip(const switch_gpu_backing_token *producers, unsigned count, switch_gpu_bridge *bridge = nullptr)
 {
     const uint32_t generation = mediaFlip.generation();
     auto &offer = mediaHostOffers[generation & 1];
@@ -56,7 +56,7 @@ int submitMediaHostFlip(const switch_gpu_backing_token *producers, unsigned coun
     __atomic_store_n(&mediaHostGeneration, generation, __ATOMIC_RELEASE);
     const int error = switch_host1x_display_submit(&mediaHostStream, producers, count, mediaFlip.word, mediaFlip.value,
                                                    mediaFlip.stores, mediaFlip.update, mediaFlip.request,
-                                                   &mediaHostCompleted<decltype(this)>, &offer);
+                                                   &mediaHostCompleted<decltype(this)>, &offer, bridge);
     if (error) {
         __atomic_store_n(&mediaHostGeneration, 0u, __ATOMIC_RELEASE);
         withdrawMediaFlip();

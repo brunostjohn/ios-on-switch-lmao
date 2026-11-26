@@ -1278,6 +1278,16 @@ host_test(
     ],
 )
 
+# SwitchGpuPlaneStream.h: GPU-rendered window B/C sets flip by display stream over the GPU-to-host1x bridge.
+host_test(
+    name = "switch_gpu_plane_stream_test",
+    srcs = [
+        "switch_gpu_plane_stream_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchGpuPlaneStream.h",
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
+    ],
+)
+
 # SwitchMediaPlaneFence.h: video planes armed on VIC's and NVDEC's syncpoints, the GPU's left on the bridge.
 host_test(
     name = "switch_media_plane_fence_test",

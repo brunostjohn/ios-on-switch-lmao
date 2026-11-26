@@ -1155,8 +1155,9 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     uint32_t stPlaneFlips = 0, stPlaneOnly = 0, stPlaneLatched = 0, stPlaneMaps = 0, stPlaneRemaps = 0,
              stPlaneDropped = 0, stPlaneUnderflows = 0, stPlaneUnready = 0, stPlaneComposited = 0;
     // Of the placements, a decoder's own block-linear picture (SwitchNativePlane.h): static, the instance is at the size
-    // a kalloc_type class may have.
-    static uint32_t stPlaneNative;
+    // a kalloc_type class may have. GPU-rendered window B/C sets (SwitchGpuPlaneStream.h): written by the display
+    // stream, by the CPU (a geometry change: not armed), or by the CPU after their armed stream was refused.
+    static uint32_t stPlaneNative, stPlaneGpuStreamed, stPlaneGpuByCpu, stPlaneGpuStreamRefused;
     bool kickDeferred = false;                  // a swap is waiting for a frame end (or for the SC7 resume)
     uint64_t flipRequested = 0, flipWaits = 0;  // frameEnds when the last flip went out; swaps that waited for a buffer
     IOTimerEventSource *flipTimer =
@@ -1935,16 +1936,17 @@ private:
             planesState = "off";
         }
         add("; planes %s: flips %u (b-only %u) latched %u, maps %u (native %u, remaps %u), dropped %u, underflow %u, "
-            "unready %u, composited %u",
+            "unready %u, composited %u; GPU sets streamed %u, by the CPU %u, stream refused %u",
             planesState, stPlaneFlips, stPlaneOnly, stPlaneLatched, stPlaneMaps, stPlaneNative, stPlaneRemaps,
-            stPlaneDropped, stPlaneUnderflows, stPlaneUnready, stPlaneComposited);
+            stPlaneDropped, stPlaneUnderflows, stPlaneUnready, stPlaneComposited, stPlaneGpuStreamed, stPlaneGpuByCpu,
+            stPlaneGpuStreamRefused);
         add("; UFLOW_STATUS A %llu (%u frames) B %llu (%u) C %llu (%u)%s",
             static_cast<unsigned long long>(counted[0].counted), counted[0].frames,
             static_cast<unsigned long long>(counted[1].counted), counted[1].frames,
             static_cast<unsigned long long>(counted[2].counted), counted[2].frames,
             counted[0].overflowed || counted[1].overflowed || counted[2].overflowed ? " overflowed" : "");
         planeTotalsClose();
-        stPlaneNative = 0;
+        stPlaneNative = stPlaneGpuStreamed = stPlaneGpuByCpu = stPlaneGpuStreamRefused = 0;
         stPlaneFlips = stPlaneOnly = stPlaneLatched = stPlaneMaps = stPlaneRemaps = stPlaneDropped = stPlaneComposited =
             stPlaneUnderflows = stPlaneUnready = 0;
         uint32_t longs = 0;
@@ -4859,6 +4861,7 @@ public:
 #include "NativePlaneFenceDisplay.h"
 #include "SwitchMediaPlaneFence.h"
 #include "SwitchMediaCompletionFlipDisplay.h"
+#include "SwitchGpuPlaneStream.h"
 #include "SwitchPlaneFenceAdmission.h"
 #include "NativePlanesTotals.h"
 #include "SwitchPlaneSurfaceUseDisplay.h"
@@ -5530,6 +5533,9 @@ OSDefineMetaClassWithInit(NativeLegacyDisplay, IOMobileFramebufferLegacy, ) Nati
 OSDefineDefaultStructors(NativeLegacyDisplay,
                          IOMobileFramebufferLegacy) NativeLegacyDisplay *NativeLegacyDisplay::primaryDisplay;
 constinit uint32_t NativeLegacyDisplay::stPlaneNative = 0;
+constinit uint32_t NativeLegacyDisplay::stPlaneGpuStreamed = 0;
+constinit uint32_t NativeLegacyDisplay::stPlaneGpuByCpu = 0;
+constinit uint32_t NativeLegacyDisplay::stPlaneGpuStreamRefused = 0;
 constinit switch_display::VerdictRing<NativeLegacyDisplay::Verdict, 32> NativeLegacyDisplay::verdicts;
 constinit NativeLegacyDisplay::LandscapeState NativeLegacyDisplay::landscapeState;
 #if SWITCH_FRAME_TIMELINE

@@ -95,6 +95,15 @@ struct Display {
         return 0x80000000;
     }
 
+    uint32_t planeBridgeArmed = 0;
+    unsigned bridgeWorks = 0, bridgeWorkCount = 0;
+
+    void planeBridgeWork(const switch_gpu_backing_token *, unsigned count)
+    {
+        ++bridgeWorks;
+        bridgeWorkCount = count;
+    }
+
 #include "../SwitchPlaneFenceAdmission.h"
 };
 
@@ -114,6 +123,20 @@ protected:
         display.planeFenceQueued = true;
     }
 };
+
+// A set whose flip the gate armed for a stream goes to the bridge and the stream (SwitchGpuPlaneStream.h), with its
+// producers, and never to the bridge fence's CPU completion.
+TEST_F(PlaneFenceAdmission, AnArmedGpuSetGoesToItsStreamNotTheBridgeFence)
+{
+    display.planeBridgeArmed = 7;
+    display.snapshot[0].view.producer = {12, 1, SWITCH_GPU_ENGINE_GM20B, 3};
+    display.planeFenceWork();
+    EXPECT_EQ(display.bridgeWorks, 1u);
+    EXPECT_EQ(display.bridgeWorkCount, 1u);
+    EXPECT_EQ(submissions, 0u);
+    EXPECT_EQ(completions, 0u);
+    EXPECT_FALSE(display.planeFenceQueued);
+}
 
 TEST_F(PlaneFenceAdmission, DispatchPreservesExactProducerAndDoesNotWaitForCompletion)
 {
