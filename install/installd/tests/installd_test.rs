@@ -15,6 +15,10 @@ fn build() -> String {
     std::env::var("SWITCH_INSTALLD_BUILD").expect("SWITCH_INSTALLD_BUILD is set by the BUILD file")
 }
 
+fn pretranslate() -> bool {
+    std::env::var("SWITCH_INSTALLD_PRETRANSLATE").expect("SWITCH_INSTALLD_PRETRANSLATE is set by the BUILD file") == "1"
+}
+
 fn first_difference(a: &[u8], b: &[u8]) -> Option<usize> {
     a.iter()
         .zip(b)
@@ -25,7 +29,7 @@ fn first_difference(a: &[u8], b: &[u8]) -> Option<usize> {
 #[test]
 fn installd_matches_the_build() {
     let (original, system_version, built) = (read("INSTALLD"), read("SYSTEM_VERSION"), read("INSTALLD_BUILT"));
-    let signed = prepare(&original, &system_version, &build()).unwrap();
+    let signed = prepare(&original, &system_version, &build(), pretranslate()).unwrap();
 
     let ours = embedded_entitlements(&signed.bytes)
         .unwrap()
@@ -76,7 +80,7 @@ fn universal(image: &[u8]) -> Vec<u8> {
 fn a_universal_installd_gives_the_build_s_file() {
     let (original, system_version, built) = (read("INSTALLD"), read("SYSTEM_VERSION"), read("INSTALLD_BUILT"));
     let thin = switch_installd::arm64_slice(&original).unwrap();
-    let signed = prepare(&universal(thin), &system_version, &build()).unwrap();
+    let signed = prepare(&universal(thin), &system_version, &build(), pretranslate()).unwrap();
     assert!(
         signed.bytes == built,
         "the universal installd's result differs from the build's"
@@ -89,7 +93,9 @@ fn another_builds_system_version_is_refused() {
     version.insert("ProductBuildVersion".into(), "99Z999".into());
     let mut other = Vec::new();
     plist::to_writer_xml(&mut other, &version).unwrap();
-    let error = prepare(&read("INSTALLD"), &other, &build()).err().expect("refused");
+    let error = prepare(&read("INSTALLD"), &other, &build(), pretranslate())
+        .err()
+        .expect("refused");
     println!("{error}");
     assert!(matches!(error, Error::Build { found: Some(ref f), .. } if f == "99Z999"));
 }

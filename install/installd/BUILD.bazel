@@ -26,6 +26,7 @@ rust_library(
     deps = [
         "//install/plistlib:switch_plistlib",
         "//install/sign:switch_sign",
+        "//install/translate:switch_translate",
         "@installer_crates//:plist",
         "@installer_crates//:thiserror",
     ],
@@ -51,7 +52,10 @@ rust_test(
         "@ipsw//:os_system_version",
     ],
     env = select({
-        "//ipsw:" + kind: {"SWITCH_INSTALLD_BUILD": IPSWS[kind]["build"]}
+        "//ipsw:" + kind: {
+            "SWITCH_INSTALLD_BUILD": IPSWS[kind]["build"],
+            "SWITCH_INSTALLD_PRETRANSLATE": "1" if IPSWS[kind].get("derived", {}).get("pretranslated") else "0",
+        }
         for kind in pinned_kinds()
     }) | {
         "INSTALLD": "$(rootpath @ipsw//:os_installd)",

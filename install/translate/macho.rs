@@ -17,6 +17,7 @@ pub fn is_macho(head: &[u8]) -> bool {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Slice {
     pub translated: bool,
+    pub fallback: bool,
     pub cdhash_in: [u8; ffi::CDHASH],
     pub cdhash_out: [u8; ffi::CDHASH],
 }
@@ -62,9 +63,17 @@ pub fn translate(path: &str, input: &[u8], edits: &[Edit]) -> Result<Translated,
         .iter()
         .map(|s| Slice {
             translated: s.status == ffi::SLICE_TRANSLATED,
+            fallback: s.status == ffi::SLICE_FALLBACK,
             cdhash_in: s.cdhash_in,
             cdhash_out: s.cdhash_out,
         })
         .collect();
     Ok(Translated { bytes: out, slices })
+}
+
+/// Translates one standalone Mach-O buffer (aligning `input` if needed) with no byte edits.
+pub fn translate_macho(path: &str, input: Vec<u8>) -> Result<(Vec<u8>, Vec<Slice>), Error> {
+    let aligned = Buffer::from_vec(input);
+    let translated = translate(path, &aligned, &[])?;
+    Ok((translated.bytes.to_vec(), translated.slices))
 }

@@ -55,7 +55,7 @@ pub struct Job<'a> {
 pub fn translate(job: &Job) -> Result<Caches, Error> {
     let mut caches = Caches::default();
     for (idx, (dir, infix)) in CACHES.into_iter().enumerate() {
-        if job.volume.is_dir(dir)? {
+        if job.volume.file(&format!("{dir}/{MAIN}"))?.is_some() {
             translate_dir(job, idx, dir, infix, &mut caches)?;
         }
     }

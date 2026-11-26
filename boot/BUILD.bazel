@@ -357,6 +357,7 @@ pkg_tar(
     srcs = [":boot_asset_files"],
     tags = ["manual"],
 )
+
 # The staged kernel window decodes (lz4 -d, block by block from the table the loader compiles in) to exactly the image
 # the layout made: the compression changes the staged bytes, never the kernel the loader copies into place.
 filegroup(

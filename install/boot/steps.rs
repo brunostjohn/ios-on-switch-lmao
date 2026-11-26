@@ -103,6 +103,7 @@ pub fn adt(
         boot_manifest_hash: build.steps.boot_manifest_hash,
         launchd_catalog_sha256: launchd.map(|c| &c.digest),
         a64x_cache_pretranslated: assets.get(member::PRETRANSLATED_CACHE_LIST),
+        pretranslated_updates: assets.get(member::PRETRANSLATED_UPDATES),
         trust_modules: TrustModules {
             os_cryptex: &os_cryptex,
             app_cryptex: &app_cryptex,

@@ -100,7 +100,12 @@ pub fn boot_files(build: &Build, assets: &Assets, members: &Members) -> Result<P
         || -> Result<_, Error> {
             let apple = steps::apple(build, members)?;
             let launchd = steps::launchd(build, assets, members.launchd_catalog.as_ref())?;
-            let installd = switch_installd::prepare(members.installd, members.system_version, build.build())?;
+            let installd = switch_installd::prepare(
+                members.installd,
+                members.system_version,
+                build.build(),
+                build.steps.pretranslate,
+            )?;
             let adt = steps::adt(build, assets, &apple, launchd.as_ref())?;
             let trust = steps::trust(assets, &apple, launchd.as_ref(), installd.cdhash)?;
             Ok((launchd, installd, adt, trust))

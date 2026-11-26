@@ -101,6 +101,7 @@ fn kind<'a>() -> Finish<'a> {
         boot_manifest_hash: false,
         launchd_catalog_sha256: None,
         a64x_cache_pretranslated: None,
+        pretranslated_updates: None,
         trust_modules: TrustModules::default(),
     }
 }
@@ -345,4 +346,76 @@ fn finish_refuses_what_the_layout_step_cannot_read() {
     ));
     let no_compatible = named("device-tree", &[], &[]);
     assert!(matches!(finish(&no_compatible, &apple(), &k), Err(Error::NoCompatible)));
+}
+
+#[test]
+fn finish_writes_and_validates_pretranslated_updates() {
+    let pt = module(&[3, 5, 9]);
+    let pt_modules = [pt.as_slice()];
+    let updates = format!(
+        r#"{{"/usr/libexec/locationd":"{}","/usr/bin/a":"{}"}}"#,
+        "09".repeat(20),
+        "03".repeat(20),
+    );
+    let adt = finish(
+        &base(),
+        &apple(),
+        &Finish {
+            pretranslated_updates: Some(updates.as_bytes()),
+            trust_modules: TrustModules {
+                pretranslated: &pt_modules,
+                ..TrustModules::default()
+            },
+            ..kind()
+        },
+    )
+    .unwrap();
+    let tree = parsed(&adt);
+    let raw = find(&tree, "chosen")
+        .first("switch-pretranslated-updates")
+        .expect("switch-pretranslated-updates");
+    let strings = b"/usr/bin/a\0/usr/libexec/locationd\0";
+    let mut expected = Vec::new();
+    expected.extend_from_slice(b"SWUP");
+    expected.extend_from_slice(&1u32.to_le_bytes());
+    expected.extend_from_slice(&2u32.to_le_bytes());
+    expected.extend_from_slice(&(strings.len() as u32).to_le_bytes());
+    expected.extend_from_slice(&0u32.to_le_bytes());
+    expected.extend_from_slice(&[3u8; 20]);
+    expected.extend_from_slice(&11u32.to_le_bytes());
+    expected.extend_from_slice(&[9u8; 20]);
+    expected.extend_from_slice(strings);
+    assert_eq!(raw, expected.as_slice());
+
+    let untrusted = format!(r#"{{"/usr/libexec/locationd":"{}"}}"#, "04".repeat(20));
+    let err = finish(
+        &base(),
+        &apple(),
+        &Finish {
+            pretranslated_updates: Some(untrusted.as_bytes()),
+            trust_modules: TrustModules {
+                pretranslated: &pt_modules,
+                ..TrustModules::default()
+            },
+            ..kind()
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(err, Error::PretranslatedUpdates(ref m) if m.contains("/usr/libexec/locationd")));
+
+    let bad_path = format!(r#"{{"relative/path":"{}"}}"#, "03".repeat(20));
+    let err = finish(
+        &base(),
+        &apple(),
+        &Finish {
+            pretranslated_updates: Some(bad_path.as_bytes()),
+            trust_modules: TrustModules {
+                pretranslated: &pt_modules,
+                ..TrustModules::default()
+            },
+            ..kind()
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(err, Error::PretranslatedUpdates(_)));
 }

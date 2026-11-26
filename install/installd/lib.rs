@@ -35,6 +35,8 @@ pub enum Error {
     Entitlements(String),
     #[error(transparent)]
     Sign(#[from] switch_sign::Error),
+    #[error("installd pretranslate: {0}")]
+    Pretranslate(String),
 }
 
 fn product_build(system_version: &[u8]) -> Result<Option<String>, Error> {
@@ -57,8 +59,8 @@ fn entitlements_xml(macho: &[u8]) -> Result<Vec<u8>, Error> {
 }
 
 /// `installd.py prepare_files`: the OS volume's `installd` for `build` (its `SystemVersion.plist` must say so),
-/// patched and signed. The Python's `codesign --verify` and re-reads of what it signed stay in CI.
-pub fn prepare(installd: &[u8], system_version: &[u8], build: &str) -> Result<Signed, Error> {
+/// patched, signed, and (when `pretranslate` is set, matching `--arm64e`) pretranslated.
+pub fn prepare(installd: &[u8], system_version: &[u8], build: &str, pretranslate: bool) -> Result<Signed, Error> {
     let found = product_build(system_version)?;
     if found.as_deref() != Some(build) {
         return Err(Error::Build {
@@ -72,5 +74,19 @@ pub fn prepare(installd: &[u8], system_version: &[u8], build: &str) -> Result<Si
         metadata: Metadata::Preserve,
         entitlements: Some(&xml),
     };
-    Ok(sign_macho(&patched, &options)?)
+    let signed = sign_macho(&patched, &options)?;
+    if !pretranslate {
+        return Ok(signed);
+    }
+    let (bytes, slices) =
+        switch_translate::translate_macho(PATH, signed.bytes).map_err(|e| Error::Pretranslate(e.to_string()))?;
+    if slices.len() != 1 || slices[0].fallback {
+        return Err(Error::Pretranslate("fallback or unexpected slice count".into()));
+    }
+    let cdhash = if slices[0].translated {
+        slices[0].cdhash_out
+    } else {
+        signed.cdhash
+    };
+    Ok(Signed { bytes, cdhash })
 }

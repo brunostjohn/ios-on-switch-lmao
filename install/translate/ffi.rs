@@ -8,6 +8,7 @@ pub const SLICES: usize = 16;
 pub const ERR_LEN: usize = 256;
 
 pub const SLICE_TRANSLATED: u32 = 1;
+pub const SLICE_FALLBACK: u32 = 2;
 
 #[repr(C)]
 pub struct Edit {

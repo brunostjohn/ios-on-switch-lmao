@@ -41,7 +41,7 @@ fn u64_at(data: &[u8], at: usize) -> u64 {
 }
 
 pub fn valid_window(size: u64) -> Result<(), Error> {
-    if !(MIN_WINDOW..=MAX_WINDOW).contains(&size) || size % BLOCK != 0 {
+    if !(MIN_WINDOW..=MAX_WINDOW).contains(&size) || !size.is_multiple_of(BLOCK) {
         return Err(refused("window must be 256 MiB..8 GiB in 2 MiB steps"));
     }
     Ok(())

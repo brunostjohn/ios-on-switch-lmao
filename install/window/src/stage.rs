@@ -101,7 +101,7 @@ pub fn bl33(window: &Window, boot: &Boot) -> Result<Vec<u8>, Error> {
         "loader was not built for the bl33-staged window",
     )?;
     require(
-        staged % PAGE == 0 && stream_bytes as usize <= staged && staged < stream_bytes as usize + PAGE,
+        staged.is_multiple_of(PAGE) && stream_bytes as usize <= staged && staged < stream_bytes as usize + PAGE,
         "staged window must be its stream padded to 4 KiB",
     )?;
     check_exporter(boot.exporter)?;

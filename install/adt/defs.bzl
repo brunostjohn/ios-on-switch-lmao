@@ -23,6 +23,7 @@ def _finish_case_impl(ctx):
     optional = {
         "launchd_catalog_sha256": _named(ctx.files.launchd_catalog, "launchd.sha256"),
         "a64x_cache_pretranslated": [pretranslated.cache_list] if pretranslated.cache_list else [],
+        "pretranslated_updates": [pretranslated.updates] if pretranslated.updates else [],
     }
     case = {
         "kind": kind,

@@ -37,6 +37,7 @@ fn finish_of_the_base_is_the_boot_packages_adt() {
     let launchd: Option<[u8; 64]> =
         optional(&case, "launchd_catalog_sha256").map(|d| d.try_into().expect("two SHA-256 digests"));
     let cache = optional(&case, "a64x_cache_pretranslated");
+    let updates = optional(&case, "pretranslated_updates");
     let (os_cryptex, app_cryptex, pretranslated) = (
         modules(&case, "os_cryptex"),
         modules(&case, "app_cryptex"),
@@ -48,6 +49,7 @@ fn finish_of_the_base_is_the_boot_packages_adt() {
         boot_manifest_hash: case["boot_manifest_hash"].as_bool().unwrap(),
         launchd_catalog_sha256: launchd.as_ref(),
         a64x_cache_pretranslated: cache.as_deref(),
+        pretranslated_updates: updates.as_deref(),
         trust_modules: TrustModules {
             os_cryptex: &os_cryptex,
             app_cryptex: &app_cryptex,

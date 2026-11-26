@@ -85,7 +85,7 @@ pub fn arm64_slice(data: &[u8]) -> Result<&[u8], Error> {
         let a = arch(data, (8 + index * entry) as usize, endian, wide);
         let (start, stop) = (a.offset, u128::from(a.offset) + u128::from(a.size));
         if a.align > 63
-            || a.offset % (1u64 << a.align) != 0
+            || !a.offset.is_multiple_of(1u64 << a.align)
             || a.offset < end
             || a.size < 32
             || stop > u128::from(length)

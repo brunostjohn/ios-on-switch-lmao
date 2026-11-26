@@ -51,6 +51,8 @@ pub enum Error {
     TrustModule(#[from] switch_trustcache::Error),
     #[error("switch-{0}-cdhashes: no CDHashes")]
     NoCdhashes(&'static str),
+    #[error("switch-pretranslated-updates: {0}")]
+    PretranslatedUpdates(String),
     #[error("the finished ADT: {0}")]
     Invalid(&'static str),
 }
@@ -85,6 +87,8 @@ pub struct Finish<'a> {
     pub launchd_catalog_sha256: Option<&'a [u8; 64]>,
     /// iOS 27: the pretranslated dyld cache files' CDHashes.
     pub a64x_cache_pretranslated: Option<&'a [u8]>,
+    /// iOS 27: JSON map of `{System path: CDHash hex}` for deploy-time pretranslated updates.
+    pub pretranslated_updates: Option<&'a [u8]>,
     pub trust_modules: TrustModules<'a>,
 }
 

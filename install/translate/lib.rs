@@ -23,6 +23,7 @@ use std::io;
 
 pub use edits::Edit;
 pub use ffi::CdhashPair;
+pub use macho::{Slice as MachoSlice, translate_macho};
 pub use role::{Delta, Inputs, Role, pair_lines, parse_pairs, translate, translate_file};
 pub use trust::Pins;
 

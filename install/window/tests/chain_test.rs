@@ -27,6 +27,7 @@ fn finished_adt(case: &Value) -> Vec<u8> {
     let optional = |key: &str| case[key].as_str().map(read);
     let launchd: Option<[u8; 64]> = optional("launchd_catalog_sha256").map(|d| d.try_into().expect("two digests"));
     let cache = optional("a64x_cache_pretranslated");
+    let updates = optional("pretranslated_updates");
     let (os, app, pretranslated) = (
         files(case, "os_cryptex"),
         files(case, "app_cryptex"),
@@ -38,6 +39,7 @@ fn finished_adt(case: &Value) -> Vec<u8> {
         boot_manifest_hash: case["boot_manifest_hash"].as_bool().unwrap(),
         launchd_catalog_sha256: launchd.as_ref(),
         a64x_cache_pretranslated: cache.as_deref(),
+        pretranslated_updates: updates.as_deref(),
         trust_modules: TrustModules {
             os_cryptex: &os,
             app_cryptex: &app,

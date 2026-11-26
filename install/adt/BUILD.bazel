@@ -16,6 +16,7 @@ rust_library(
     deps = [
         "//install/trustcache:switch_trustcache",
         "//install/window:switch_loader_abi",
+        "@installer_crates//:serde_json",
         "@installer_crates//:thiserror",
     ],
 )

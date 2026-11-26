@@ -28,7 +28,7 @@ pub(crate) fn require(condition: bool, why: &str) -> Result<(), Error> {
 fn check_layout(m: &Layout) -> Result<(), Error> {
     let len = m.image.len() as u64;
     require(
-        0 < len && len <= WINDOW_BYTES_MAX && len % 8 == 0,
+        0 < len && len <= WINDOW_BYTES_MAX && len.is_multiple_of(8),
         "image exceeds the bounded window",
     )?;
     require(
@@ -41,12 +41,12 @@ fn check_layout(m: &Layout) -> Result<(), Error> {
             && m.virt_base.checked_add(WINDOW_SIZE).is_some()
             && WINDOW_BASE <= m.kernel_phys_base
             && m.kernel_phys_base % KERNEL_ALIGN == m.virt_base % KERNEL_ALIGN
-            && m.boot_args_pa % XNU_PAGE == 0
+            && m.boot_args_pa.is_multiple_of(XNU_PAGE)
             && m.adt_pa == m.boot_args_pa + 0x1000
             && m.adt_size > 0
             && m.adt_pa + m.adt_size <= m.used_end
             && m.boot_args_pa + BOOT_ARGS_SIZE <= m.used_end
-            && m.entry_pa % 4 == 0
+            && m.entry_pa.is_multiple_of(4)
             && len <= WINDOW_SIZE - KERNEL_ALIGN,
         "inconsistent fixed-layout relationships",
     )?;
@@ -148,7 +148,7 @@ fn check_native_profile(m: &Layout, kind: &Kind) -> Result<(), Error> {
         &format!("native staging or display contract mismatch (window {len:#x} bytes)"),
     )?;
     require(
-        len % 0x1000 == 0,
+        len.is_multiple_of(0x1000),
         "native cacheable copy requires a page-aligned payload",
     )
 }
