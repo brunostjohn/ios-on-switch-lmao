@@ -3,6 +3,7 @@
 #include "SwitchGpuShaderCompiler.h"
 #include <IOKit/IOMemoryDescriptor.h>
 #include <pexpert/pexpert.h>
+#include "SwitchGpuCompilerScope.h"
 #include "SwitchGpuShaderCompilerPolicy.h"
 #include "SwitchGpuShaderCompilerQueue.h"
 #include "TegraGM20BCompilerABI.h"
@@ -32,6 +33,8 @@ bool compilerMayCome()
 
 IOReturn info(TegraGM20BAbiCompilerInfoReply *out)
 {
+	TegraGM20BAbiCompilerScope scope;
+	switch_gpu_compiler_scope(scope);
 	IOLockLock(gBroker.lock);
 	*out = {gBroker.store ? gBroker.storeBytes : 0, gBroker.stack,
 		TegraGM20BCompilerCapable | TegraGM20BCompilerLibraries |
@@ -39,7 +42,7 @@ IOReturn info(TegraGM20BAbiCompilerInfoReply *out)
 			(gBroker.store ? uint32_t(TegraGM20BCompilerStore) : 0u) |
 			(compilerMayCome() ? uint32_t(TegraGM20BCompilerExpected) : 0u) |
 			(gBroker.declined ? uint32_t(TegraGM20BCompilerDeclined) : 0u),
-		gBroker.generation};
+		gBroker.generation, scope};
 	IOLockUnlock(gBroker.lock);
 	return kIOReturnSuccess;
 }
@@ -119,6 +122,7 @@ IOReturn compile(const void *owner, task_t task, const TegraGM20BAbiCompile *in,
 	request->qos = in->qos;
 	request->flags = in->flags;
 	request->pid = proc_selfpid();
+	switch_gpu_compiler_scope(request->scope);
 	request->async = async;
 	request->waiters = async ? 0u : 1u;
 	IOLockLock(gBroker.lock);
@@ -218,7 +222,8 @@ IOReturn take(const void *owner, task_t task, const TegraGM20BAbiCompilerTake *i
 		request->qos,
 		request->flags,
 		request->pid,
-		0};
+		0,
+		request->scope};
 	if (request->size > in->buffer_bytes) {
 		out->id = 0;
 		IOLockUnlock(gBroker.lock);

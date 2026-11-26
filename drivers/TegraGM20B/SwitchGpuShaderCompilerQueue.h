@@ -30,6 +30,8 @@ struct Request {
 	switch_user_turnstile turnstile;
 	TegraGM20BAbiCompileTimes times;  // the compiler's, at its Complete
 	OSAsyncReference64 reference;
+	TegraGM20BAbiCompilerScope
+		scope;  // the asking process's, read in its own context at Compile
 };
 
 struct Client {

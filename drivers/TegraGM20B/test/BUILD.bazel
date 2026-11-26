@@ -3125,6 +3125,7 @@ host_library(
     ],
     hdrs = [
         "//drivers/TegraGM20B:SwitchGpuAsyncReference.h",
+        "//drivers/TegraGM20B:SwitchGpuCompilerScope.h",
         "//drivers/TegraGM20B:SwitchGpuShaderCompiler.h",
         "//drivers/TegraGM20B:SwitchGpuShaderCompilerPolicy.h",
         "//drivers/TegraGM20B:SwitchGpuShaderCompilerQueue.h",

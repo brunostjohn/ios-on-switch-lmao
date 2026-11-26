@@ -180,6 +180,7 @@ kernel_driver(
         "SwitchGpuShaderCompiler.cpp",
         "SwitchGpuShaderCompilerQueue.cpp",
         "SwitchGpuShaderCompilerSysctl.cpp",
+        "SwitchGpuCompilerScope.cpp",
         "SwitchGpuEventChannel.cpp",
         "SwitchGpuEventJob.cpp",
         "SwitchGpuSharedEventNative.cpp",
