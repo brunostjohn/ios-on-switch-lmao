@@ -4,83 +4,17 @@
 // the device opens and counts each first touch.
 #include "facade_harness.h"
 #include "pack_fixture_image.h"
+#include "pack_page_touches.h"
 #include "../pack_window.h"
 
 #include <gtest/gtest.h>
-#include <signal.h>
-#include <sys/mman.h>
-#include <unistd.h>
 #include <array>
-#include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <string>
 #include <vector>
 
 namespace {
-
-std::atomic<uintptr_t> gBegin{0}, gEnd{0};
-std::atomic<uint32_t> gTouches{0};
-uintptr_t gPage = 0;
-struct sigaction gPreviousBus, gPreviousSegv;
-
-void onFault(int sig, siginfo_t *info, void *)
-{
-    const uintptr_t at = uintptr_t(info->si_addr);
-    if (at >= gBegin.load() && at < gEnd.load()) {
-        gTouches.fetch_add(1);
-        mprotect(reinterpret_cast<void *>(at & ~(gPage - 1)), gPage, PROT_READ);
-        return;
-    }
-    sigaction(sig, sig == SIGBUS ? &gPreviousBus : &gPreviousSegv, nullptr);
-}
-
-// Counts the CPU's first touch of each page of [begin, end) from its making to its end
-class HeapTouches {
-public:
-    HeapTouches(const uint8_t *begin, const uint8_t *end)
-    {
-        gPage = uintptr_t(getpagesize());
-        const uintptr_t from = (uintptr_t(begin) + gPage - 1) & ~(gPage - 1);
-        const uintptr_t to = uintptr_t(end) & ~(gPage - 1);
-        from_ = from;
-        bytes_ = to > from ? to - from : 0;
-        gTouches = 0;
-        gBegin = from;
-        gEnd = from + bytes_;
-        struct sigaction a = {};
-        a.sa_sigaction = onFault;
-        a.sa_flags = SA_SIGINFO;
-        sigemptyset(&a.sa_mask);
-        sigaction(SIGBUS, &a, &gPreviousBus);
-        sigaction(SIGSEGV, &a, &gPreviousSegv);
-        if (bytes_)
-            mprotect(reinterpret_cast<void *>(from_), bytes_, PROT_NONE);
-    }
-
-    ~HeapTouches()
-    {
-        if (bytes_)
-            mprotect(reinterpret_cast<void *>(from_), bytes_, PROT_READ);
-        gBegin = gEnd = 0;
-        sigaction(SIGBUS, &gPreviousBus, nullptr);
-        sigaction(SIGSEGV, &gPreviousSegv, nullptr);
-    }
-
-    uint64_t bytes() const
-    {
-        return bytes_;
-    }
-
-    uint32_t touches() const
-    {
-        return gTouches.load();
-    }
-
-private:
-    uintptr_t from_ = 0;
-    uint64_t bytes_ = 0;
-};
 
 constexpr std::array<const char *, 6> kTier0Keys = {
     "samples=1 topo=0 ds=0/0 c0=80:15:0:1:0:0:1:0:0  | v v  | f f",
@@ -111,7 +45,7 @@ TEST(PackHeapReads, ATier0FirstHitAndItsVariantsReadNoHeapPage)
     std::vector<gm20b::Pipeline *> made;
     uint32_t touches = 0;
     {
-        HeapTouches watch(heap, heap + pack.bytes(gm20b::PackHeap));
+        pack_touches::PageTouches watch(heap, heap + pack.bytes(gm20b::PackHeap));
         ASSERT_GT(watch.bytes(), 0u);
         for (const char *key : kTier0Keys) {
             const uint64_t h = gm20b::Pack::fnv(key, strlen(key));

@@ -20,6 +20,14 @@ namespace gm20b {
 
 // The device's own state a harness reads (Device declares it a friend in the harness builds, SWITCH_METAL_HARNESS_MARKS)
 struct DeviceHarness {
+    // Record `pp` placed as Device::placePackedRecord places one outside tier 0, under Device::lock_, without the pre-read
+    // the creating thread makes before it
+    static Pipeline *placeUnderLock(Device &d, const PackPipeline &pp)
+    {
+        std::lock_guard<gm20b::Mutex> l(d.lock_);
+        return d.placeRecord(pp, false);
+    }
+
     // What the GPU's root table holds at push word `word` after everything submitted
     static uint32_t rootPush(const Device &d, uint32_t word)
     {

@@ -7015,6 +7015,7 @@ host_test(
         "kernel_model.h",
         "made_metallib.h",
         "pack_fixture_image.h",
+        "pack_page_touches.h",
         "translate_absent.cpp",
     ] + METAL_HOST_HEADERS,
     copts = [
@@ -7032,6 +7033,17 @@ host_test(
         "//kits/SwitchGM20BEmit/test:method_checks",
         "//kits/SwitchRefusal:switch_refusal",
     ] + METAL_HOST_DEPS,
+)
+
+device_test(
+    name = "device_pack_tier1_preread_test",
+    size = "small",
+    srcs = [
+        "device_pack_tier1_preread_test.cpp",
+        "pack_fixture_image.h",
+        "pack_page_touches.h",
+    ],
+    data = [":pack_v34_fixture"],
 )
 
 [host_test(
