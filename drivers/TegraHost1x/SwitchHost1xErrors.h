@@ -4,10 +4,14 @@
 // its reset 0 (14.9.10) the channel stops there, and its bit may latch again for as long as it stays stopped, so the
 // filter masks a channel's bit when it takes its error and the channel's restart unmasks it. The channel's jobs fail at
 // once (SwitchHost1xChannels.h switch_host1x_channels_failed) instead of at their bound, 2 to 30 s later.
-// Only the illegal opcodes reach the line: IP_BUSY_TIMEOUT is 0, so the IP read and write timeouts never fire, and
-// configure sets HINTMASK to the EXT enable alone and clears INTC0MASK (the module interrupts), whatever the boot chain
-// left there. A line that still fires with none of them pending is a source this driver does not know: the filter turns
-// the master enable off rather than let a level line fire forever, and the action says so once.
+// Four masks stand between a channel's illegal opcode and the CPU: its HINTMASK_EXT bit, HINTMASK's EXT enable, then
+// INTC0MASK's HOST_INT bit (14.9.3: host1x's own interrupt is a "module" of CPU0's signal, as L4T's t20_intr_resume
+// sets it) and INTMASK's CPU0 master. Only the illegal opcodes reach the line: IP_BUSY_TIMEOUT is 0, so the IP read and
+// write timeouts never fire; configure sets HINTMASK to the EXT enable alone and INTC0MASK to HOST_INT alone, whatever
+// the boot chain left there. The other INTC0MASK bits are the engines' interrupts, which reach the GIC on lines of
+// their own (14.4.6.1) and can only be cleared in the engine (14.9.1). A line that still fires with none of ours
+// pending is a source this driver does not know: the filter turns the master enable off rather than let a level line
+// fire forever, and the action says so once.
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
@@ -19,7 +23,17 @@ namespace switch_host1x_errors {
 // Sync-unit registers (TRM 14.9.2, 14.9.5-14.9.8, 14.9.11).
 constexpr uint32_t kIntStatus = 0x000, kIntMask = 0x004, kIntC0Mask = 0x008, kHintStatus = 0x020, kHintMask = 0x024,
                    kHintStatusExt = 0x028, kHintMaskExt = 0x02c, kCmdprocStat = 0x0a8;
-constexpr uint32_t kCpu0All = 1u << 0, kExtEnable = 1u << 31, kChannels = 14, kIllegalAll = (1u << kChannels) - 1;
+constexpr uint32_t kCpu0All = 1u << 0, kHostInt = 1u << 0, kExtEnable = 1u << 31, kChannels = 14,
+                   kIllegalAll = (1u << kChannels) - 1;
+
+// What configure found and what read back after it wrote.
+struct Configured {
+    uint32_t latched;      // illegal opcodes latched before (cleared)
+    uint32_t intc0Was;     // INTC0MASK as the boot chain or SC7 left it
+    uint32_t intc0;        // read back after HOST_INT alone was written
+    uint32_t intmask;      // read back after CPU0's master enable was set
+    uint32_t hintmaskExt;  // read back after every channel's illegal opcode was unmasked
+};
 
 // Registers: read(offset), write(offset, value), sync-unit relative. The caller serialises take() (the filter) and
 // rearm() (a restart) against each other.
@@ -27,23 +41,23 @@ template <class Registers> struct Unit {
     uint32_t masked = 0;  // channels whose error was taken and whose restart has not come yet
 
     // After the sync unit came out of reset (boot, SC7), every channel freshly programmed: what latched before is
-    // returned in *latched and cleared, the module interrupts' mask (*intc0 as it was) cleared, HINTMASK set to the EXT
-    // enable alone, every channel's illegal opcode unmasked, then the master enable set (INTMASK's other bits kept:
-    // bit 4 resets to 1). *hintmaskExt: HINTMASK_EXT as read back. False: CPU0's master enable did not read back, so
-    // nothing reaches the CPU.
-    bool configure(Registers &r, uint32_t *latched, uint32_t *intc0, uint32_t *hintmaskExt)
+    // cleared, every channel's illegal opcode unmasked, HINTMASK set to the EXT enable alone and INTC0MASK to HOST_INT
+    // alone, then the master enable set (INTMASK's other bits kept: bit 4 resets to 1).
+    Configured configure(Registers &r)
     {
-        *latched = r.read(kHintStatusExt) & kIllegalAll;
-        r.write(kHintStatusExt, *latched);
+        Configured c = {};
+        c.latched = r.read(kHintStatusExt) & kIllegalAll;
+        r.write(kHintStatusExt, c.latched);
         masked = 0;
-        *intc0 = r.read(kIntC0Mask);
-        if (*intc0)
-            r.write(kIntC0Mask, 0);
         r.write(kHintMaskExt, kIllegalAll);
         r.write(kHintMask, kExtEnable);
+        c.intc0Was = r.read(kIntC0Mask);
+        r.write(kIntC0Mask, kHostInt);
         r.write(kIntMask, r.read(kIntMask) | kCpu0All);
-        *hintmaskExt = r.read(kHintMaskExt);
-        return (r.read(kIntMask) & kCpu0All) != 0;
+        c.hintmaskExt = r.read(kHintMaskExt);
+        c.intc0 = r.read(kIntC0Mask);
+        c.intmask = r.read(kIntMask);
+        return c;
     }
 
     // The filter, interrupts off: the channels whose illegal opcode is pending and unmasked, masked and their status
@@ -81,7 +95,7 @@ template <class Registers> struct Unit {
 }  // namespace switch_host1x_errors
 
 // Thread context, once the channels are programmed: the interrupt attached on host1x's work loop and unmasked. One that
-// cannot be attached, or an INTMASK that does not take CPU0's enable, panics (here and at the SC7 resume).
+// cannot be attached, or an INTMASK or INTC0MASK that does not take its enable, panics (here and at the SC7 resume).
 void switch_host1x_errors_start(IOWorkLoop *loop, volatile uint8_t *sync);
 // SC7: off before the sync unit powers down, configured and on again once it is back and the channels programmed.
 void switch_host1x_errors_stop();

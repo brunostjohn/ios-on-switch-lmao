@@ -118,24 +118,25 @@ void errorsOccurred(OSObject *, IOInterruptEventSource *, int)
 
 void errorsConfigure()
 {
-    uint32_t latched = 0, intc0 = 0, hintmaskExt = 0;
-    IOInterruptState state = IOSimpleLockLockDisableInterrupt(gErrorsLock);
-    const bool on = gErrorsUnit.configure(gErrorRegisters, &latched, &intc0, &hintmaskExt);
+    const IOInterruptState state = IOSimpleLockLockDisableInterrupt(gErrorsLock);
+    const Configured c = gErrorsUnit.configure(gErrorRegisters);
     IOSimpleLockUnlockEnableInterrupt(gErrorsLock, state);
-    if (!on)
+    if (!(c.intmask & kCpu0All))
         panic("TegraHost1x: general interrupt (INTID %u) not enabled: INTMASK reads %#x after CPU0's enable was "
               "written",
-              kGeneralIntid, gErrorRegisters.read(kIntMask));
-    if (intc0)
-        IOLog("TegraHost1x: the module interrupts' mask (INTC0MASK) read %#x: cleared, they do not reach host1x's "
-              "general interrupt\n",
-              intc0);
-    if (latched)
+              kGeneralIntid, c.intmask);
+    if (!(c.intc0 & kHostInt))
+        panic("TegraHost1x: general interrupt (INTID %u) not enabled: INTC0MASK reads %#x after HOST_INT was written",
+              kGeneralIntid, c.intc0);
+    if (c.intc0Was & ~kHostInt)
+        IOLog("TegraHost1x: INTC0MASK read %#x: the engines' bits cleared (each has its own line), HOST_INT kept\n",
+              c.intc0Was);
+    if (c.latched)
         IOLog("TegraHost1x: illegal opcodes latched before the general interrupt was on: channels %#x (cleared)\n",
-              latched);
+              c.latched);
     // The emulator's host1x model does not store HINTMASK_EXT, so this one stays a line.
-    if (hintmaskExt != kIllegalAll)
-        IOLog("TegraHost1x: general interrupt: HINTMASK_EXT reads %#x after %#x was written\n", hintmaskExt,
+    if (c.hintmaskExt != kIllegalAll)
+        IOLog("TegraHost1x: general interrupt: HINTMASK_EXT reads %#x after %#x was written\n", c.hintmaskExt,
               kIllegalAll);
 }
 }  // namespace

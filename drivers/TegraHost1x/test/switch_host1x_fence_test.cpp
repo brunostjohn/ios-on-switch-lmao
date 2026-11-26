@@ -639,6 +639,7 @@ TEST_F(Host1xFence, TheGeneralInterruptIsOnWithEveryChannelsIllegalOpcodeUnmaske
     EXPECT_TRUE(general()->enabled);
     EXPECT_EQ(syncReg(0x02c), 0x3fffu);
     EXPECT_EQ(syncReg(0x024) & (1u << 31), 1u << 31);
+    EXPECT_EQ(syncReg(0x008), 1u) << "INTC0MASK: host1x's own HOST_INT reaches CPU0";
     EXPECT_EQ(syncReg(0x004) & 1u, 1u);
 }
 

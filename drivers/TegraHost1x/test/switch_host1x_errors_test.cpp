@@ -12,7 +12,7 @@
 namespace {
 constexpr uintptr_t kSync = 0x50002100;
 std::map<uint32_t, uint32_t> gRegs;
-bool gIntmaskStuck, gNoNub;
+bool gIntmaskStuck, gIntc0Stuck, gNoNub;
 std::vector<uint32_t> gFailedChannels;
 
 uint32_t &reg(uint32_t offset)
@@ -33,10 +33,19 @@ IOFilterInterruptEventSource *source()
     return IOFilterInterruptEventSource::made().empty() ? nullptr : IOFilterInterruptEventSource::made().back();
 }
 
+// CPU0's line (TRM 14.9.2-14.9.8): an unmasked HINTSTATUS_EXT bit, HINTMASK's EXT enable, INTC0MASK's HOST_INT and
+// INTMASK's CPU0 master, all four.
+bool lineAsserted()
+{
+    return (reg(kHintStatusExt) & reg(kHintMaskExt)) && (reg(kHintMask) & kExtEnable) && (reg(kIntC0Mask) & kHostInt) &&
+           (reg(kIntMask) & kCpu0All);
+}
+
+// The channel's illegal opcode latches; true when the line delivered it to the filter and the action.
 bool fire(uint32_t channel)
 {
     reg(kHintStatusExt) |= 1u << channel;
-    if (!source()->filter(nullptr, source()))
+    if (!lineAsserted() || !source()->filter(nullptr, source()))
         return false;
     source()->action(nullptr, source(), 1);
     return true;
@@ -46,7 +55,7 @@ struct Host1xErrors : testing::Test {
     void SetUp() override
     {
         gRegs = {{kIntMask, 0x10}};
-        gIntmaskStuck = gNoNub = false;
+        gIntmaskStuck = gIntc0Stuck = gNoNub = false;
         gFailedChannels.clear();
         switch_test_iolog.clear();
         switch_test_sleep = nullptr;
@@ -82,6 +91,8 @@ void switch_mmio_model_write32(uintptr_t address, uint32_t value)
     const auto offset = static_cast<uint32_t>(address - kSync);
     if (offset == kHintStatusExt)
         gRegs[offset] &= ~value;
+    else if (offset == kIntC0Mask)
+        gRegs[offset] = gIntc0Stuck ? 0 : value;
     else if (offset != kIntMask || !gIntmaskStuck)
         gRegs[offset] = value;
 }
@@ -110,6 +121,7 @@ TEST_F(Host1xErrors, TheAttachUnmasksEveryChannelKeepsIntmaskBit4AndClearsWhatLa
     ASSERT_TRUE(start());
     EXPECT_TRUE(source()->enabled);
     EXPECT_EQ(reg(kIntMask), 0x11u) << "CPU0's master enable, bit 4 kept";
+    EXPECT_EQ(reg(kIntC0Mask), 1u) << "HOST_INT reaches CPU0";
     EXPECT_EQ(reg(kHintMask), 1u << 31);
     EXPECT_EQ(reg(kHintMaskExt), 0x3fffu);
     EXPECT_EQ(reg(kHintStatusExt), 0u);
@@ -123,6 +135,14 @@ TEST_F(Host1xErrors, AnIntmaskThatDoesNotTakePanics)
     EXPECT_EQ(panicOf(&start), "TegraHost1x: general interrupt (INTID 99) not enabled: INTMASK reads 0x10 after CPU0's "
                                "enable was written");
     EXPECT_FALSE(source()->enabled);
+}
+
+TEST_F(Host1xErrors, AnIntc0maskThatDoesNotTakeHostIntPanics)
+{
+    gIntc0Stuck = true;
+    EXPECT_EQ(panicOf(&start),
+              "TegraHost1x: general interrupt (INTID 99) not enabled: INTC0MASK reads 0 after HOST_INT "
+              "was written");
 }
 
 TEST_F(Host1xErrors, NoInterruptNubPanics)
@@ -168,15 +188,23 @@ TEST_F(Host1xErrors, AStoppedChannelIsTakenOnceItsJobsFailAndItsRestartUnmasksIt
     EXPECT_EQ(gFailedChannels.size(), 3u);
 }
 
-// Whatever the boot chain left in the module interrupts' mask and HINTMASK, only the illegal opcodes reach the line.
+// Whatever the boot chain left in INTC0MASK and HINTMASK, only the illegal opcodes reach the line: the engines' bits go
+// (each engine has its own GIC line), host1x's own HOST_INT stays.
 TEST_F(Host1xErrors, TheAttachLeavesOnlyTheIllegalOpcodesOnTheLine)
 {
     reg(kHintMask) = 1u << 16 | 1u << 29;
-    reg(kIntC0Mask) = 0x5;
+    reg(kIntC0Mask) = 0x2004;
     ASSERT_TRUE(start());
     EXPECT_EQ(reg(kHintMask), 1u << 31);
-    EXPECT_EQ(reg(kIntC0Mask), 0u);
-    EXPECT_TRUE(anyLine("INTC0MASK) read 0x5: cleared"));
+    EXPECT_EQ(reg(kIntC0Mask), 1u);
+    EXPECT_TRUE(anyLine("INTC0MASK read 0x2004: the engines' bits cleared (each has its own line), HOST_INT kept"));
+}
+
+TEST_F(Host1xErrors, AnIntc0maskWithOnlyHostIntSaysNothing)
+{
+    reg(kIntC0Mask) = 1;
+    ASSERT_TRUE(start());
+    EXPECT_FALSE(anyLine("INTC0MASK"));
 }
 
 // A level line that fires with none of ours pending would fire forever: the master enable goes off, with one line.
@@ -214,7 +242,9 @@ TEST_F(Host1xErrors, SleepTurnsItOffAndTheResumeConfiguresItAgain)
     switch_host1x_errors_resume();
     EXPECT_TRUE(source()->enabled);
     EXPECT_EQ(reg(kHintMaskExt), 0x3fffu);
+    EXPECT_EQ(reg(kIntC0Mask), 1u);
     EXPECT_EQ(reg(kIntMask), 0x11u);
+    EXPECT_TRUE(fire(5)) << "delivered after the resume";
 }
 
 // The illegal-opcode probe's error: taken by the filter, delivered to the probe, no job failed, no line.
@@ -222,7 +252,11 @@ TEST_F(Host1xErrors, AnExpectedErrorWakesTheProbeAndFailsNothing)
 {
     ASSERT_TRUE(start());
     switch_host1x_errors_expect(13);
+    static int sleeps;
+    sleeps = 0;
     switch_test_sleep = [](uint64_t) {
+        if (sleeps++)
+            return THREAD_TIMED_OUT;
         EXPECT_TRUE(fire(13));
         return THREAD_AWAKENED;
     };
