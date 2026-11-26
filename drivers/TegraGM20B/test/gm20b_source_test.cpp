@@ -1908,6 +1908,8 @@ TEST(GM20BSparesSource, ARefilledSparesPagesComeFromItsDescriptor)
 		"bool switch_gpu_cached_buffer_units(uint64_t bytes, SwitchGpuCachedBuffer *out)");
 	EXPECT_TRUE(units.has("createMappingInTask(kernel_task, 0, kIOMapAnywhere)"));
 	EXPECT_FALSE(units.has("kIOMapPrefault"));
+	// the view's first touch is here, with no lock held, not the zeroing queue's cache maintenance under its lock
+	EXPECT_TRUE(units.has("(void)bytesOf[off];"));
 }
 
 // Every sleep on the submit gate's event goes through the gate, whose sleeper count decides whether a mutation's end

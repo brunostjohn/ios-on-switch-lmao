@@ -41,16 +41,19 @@ bool switch_gpu_cached_buffer_units(uint64_t bytes, SwitchGpuCachedBuffer *out)
 		multi->release();
 		return false;
 	}
-	// Not prefaulted: its PTEs come at the first touch (the scrub's cache maintenance by VA, on the zeroing thread), as
-	// they did through 23 Nov. A kernel-map prefault asserts a VM page for every entry in DEVELOPMENT kernels
-	// (vm_map_enter_mem_object: "no VM page"), which this view's memory entries are not proven to give. Nothing reads
-	// the page list through it (switch_gpu_cached_buffer_page_list).
+	// Not prefaulted: a kernel-map prefault asserts a VM page for every entry in DEVELOPMENT kernels
+	// (vm_map_enter_mem_object: "no VM page"), which this view's memory entries are not proven to give. Its PTEs come
+	// from a read of each page here, on the refill thread with no lock held, as IOBufferMemoryDescriptor does for a
+	// cache-mode buffer: the scrub's cache maintenance by VA, later under the zeroing queue's lock, then faults nothing.
 	IOMemoryMap *map = multi->createMappingInTask(kernel_task, 0, kIOMapAnywhere);
 	if (!map) {
 		multi->complete();
 		multi->release();
 		return false;
 	}
+	const volatile uint8_t *bytesOf = reinterpret_cast<const volatile uint8_t *>(map->getVirtualAddress());
+	for (uint64_t off = 0; off < bytes; off += PAGE_SIZE)
+		(void)bytesOf[off];
 	*out = {multi, map, reinterpret_cast<void *>(map->getVirtualAddress())};
 	return true;
 }
