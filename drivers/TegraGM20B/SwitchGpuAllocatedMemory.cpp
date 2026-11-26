@@ -21,6 +21,7 @@ struct RetiredBatch {
 	switch_gpu_backing *backings;
 	RetiredBatch *next;
 };
+
 RetiredBatch *gParked;
 
 void flushed(void *arg, int status)
@@ -42,8 +43,14 @@ void submitParked()
 {
 	if (!gParked)
 		return;
-	if (!switch_gpu_copy_l2_flush(flushed, gParked))
-		gParked = nullptr;
+	const int result = switch_gpu_copy_l2_flush(flushed, gParked);
+	// -16 and -11 pass (a later retirement pass asks again); any other refusal is the CPU path now
+	if (result == -16 || result == -11)
+		return;
+	RetiredBatch *batches = gParked;
+	gParked = nullptr;
+	if (result)
+		flushed(batches, result);
 }
 
 int allocatedMemoryCreate(const uint64_t *pages, uint32_t count, void **out, uint32_t *flags)
