@@ -69,7 +69,8 @@ static inline uint64_t switch_sched_take_longest(struct switch_sched_window *w, 
     const uint64_t began_ms = longest & UINT32_MAX;
 
     w->max_us = longest >> 32;
-    w->max_before_ms = w->max_us != 0 && began_ms < start_ms ? start_ms - began_ms : 0;
+    /* A start past 2^32 ms (49.7 days of uptime) saturated: it says nothing about when the wait began. */
+    w->max_before_ms = w->max_us != 0 && began_ms < start_ms && began_ms != UINT32_MAX ? start_ms - began_ms : 0;
     return now_us / 1000;
 }
 

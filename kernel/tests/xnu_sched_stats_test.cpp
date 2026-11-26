@@ -137,6 +137,8 @@ TEST(XnuSchedStats, TheLongestWordSaturatesAndOrdersByWait)
     xnu_sched_take_longest(1ULL << 40, 5, 10);
     EXPECT_EQ(xnu_sched_max(), UINT32_MAX);
     EXPECT_EQ(xnu_sched_before_ms(), 5u);
+    xnu_sched_take_longest(900, UINT64_MAX, 1ULL << 33);
+    EXPECT_EQ(xnu_sched_before_ms(), 0u) << "a start saturated after 49.7 days of uptime places nothing";
 }
 
 TEST(XnuSchedStats, EntryStaysInsideItsBuffer)
