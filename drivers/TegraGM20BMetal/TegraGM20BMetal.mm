@@ -277,7 +277,16 @@ static void observeBackground()
                             object:nil
                              queue:nil
                         usingBlock:^(NSNotification *) {
+#if SWITCH_METAL_DIAGNOSTICS
+                            const uint64_t began = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+#endif
                             gRawRelease.backgrounded();
+#if SWITCH_METAL_DIAGNOSTICS
+                            // the release runs on the posting thread (UIKit's main), ahead of the app's snapshot
+                            os_log(gm20bLog(), "SwitchMetal: background release %llu us on %s thread",
+                                   (clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - began) / 1000,
+                                   pthread_main_np() ? "the main" : "another");
+#endif
                         }];
     for (NSString *name in
          @[ @"UIApplicationWillEnterForegroundNotification", @"NSExtensionHostWillEnterForegroundNotification" ])
