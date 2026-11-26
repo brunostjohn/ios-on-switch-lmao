@@ -5,8 +5,10 @@
 #include "gpu.h"
 #include "surface_view.h"
 #include "TegraGM20BLayout.h"
+#include "grow_ahead.h"
 
 #include <CoreFoundation/CoreFoundation.h>
+#include <mach/mach.h>
 #include <os/log.h>
 #include <pthread.h>
 #include <stdlib.h>
@@ -92,6 +94,51 @@ bool Device::newChunk(uint64_t size, bool dedicated, std::unique_lock<gm20b::Mut
     return true;
 }
 
+// The next chunk the grower makes: the render server's chunk; a client's next chunk of its own size (chunkSize), so a
+// client's chunk ahead is no bigger than the one it would stall for
+uint64_t Device::growChunk(const std::vector<Chunk> &chunks, uint64_t cap, uint64_t align) const
+{
+    return role_ == Role::Client ? chunkSize(chunks, cap, 0, align) : cap;
+}
+
+bool Device::growAheadRoom(uint64_t chunk)
+{
+    if (role_ != Role::Client)
+        return true;
+    uint64_t footprint = 0, available = 0;
+    return footprintProbe(footprint, available) && clientGrowAhead(footprint, available, chunk);
+}
+
+bool Device::readFootprint(uint64_t &footprint, uint64_t &available)
+{
+    task_vm_info_data_t info = {};
+    mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+    if (task_info(mach_task_self(), TASK_VM_INFO, reinterpret_cast<task_info_t>(&info), &count) != KERN_SUCCESS ||
+        count < TASK_VM_INFO_REV4_COUNT)
+        return false;
+    footprint = info.phys_footprint;
+    available = info.limit_bytes_remaining;
+    return true;
+}
+
+// lock_ held: a client's grower, at its kClientGrowerStall-th stall. The thread takes lock_ first, so it runs once this
+// allocation lets go of it.
+void Device::clientStalled()
+{
+    if (role_ == Role::Client && ++clientStalls_ == kClientGrowerStall && !grower_.joinable())
+        startGrower();
+}
+
+void Device::startGrower()
+{
+    grower_ = std::thread([this] {
+        pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+        pthread_setname_np("com.brunostjohn.switch.gm20b.pool");
+        followers().join();
+        growLoop();
+    });
+}
+
 void Device::growLoop()
 {
     std::unique_lock<gm20b::Mutex> l(lock_);
@@ -106,13 +153,13 @@ void Device::growLoop()
         uint32_t c;
         if (growing_) {
             bool resident = false;
+            const uint64_t size = growChunk(chunks_, sizes_.chunk, pageSize());
             while (!stopping_ && !closing_ &&
-                   tryUnparkChunk(l, ChunkVec::Pool, 0, sizes_.chunk, false, 0, TegraGM20BSurfaceRead, c, resident,
-                                  sizes_.chunk) &&
+                   tryUnparkChunk(l, ChunkVec::Pool, 0, size, false, 0, TegraGM20BSurfaceRead, c, resident, size) &&
                    !resident) {
             }
             if (!resident && !stopping_ && !closing_)
-                newChunk(sizes_.chunk, false, l, c);  // failing, the render thread's next allocation tries itself
+                newChunk(size, false, l, c);  // failing, the render thread's next allocation tries itself
             growing_ = false;
         } else {
             // the want stays listed while it is made, so an allocation that finds no room waits for it
@@ -198,7 +245,9 @@ bool Device::poolAlloc(std::unique_lock<gm20b::Mutex> &l, uint64_t bytes, Span &
                 ch.used += bytes;
                 poolFree_ -= bytes;
                 s = {c, offset, bytes, ch.bo.va + offset, static_cast<uint8_t *>(ch.memory) + offset};
-                if (poolFree_ < sizes_.chunk && !growing_ && grower_.joinable()) {  // the next chunk, off this thread
+                const uint64_t next = growChunk(chunks_, sizes_.chunk, pageSize());
+                if (poolFree_ < next && !growing_ && grower_.joinable() &&
+                    growAheadRoom(next)) {  // the next chunk, off this thread
                     growing_ = true;
                     grow_.notify_one();
                 }
@@ -213,6 +262,7 @@ bool Device::poolAlloc(std::unique_lock<gm20b::Mutex> &l, uint64_t bytes, Span &
         if (closing_ || ++pass == 3)
             break;
         SWITCH_METAL_DIAGNOSTIC(stats.poolStalls++);
+        clientStalled();
         if (growing_) {  // the grower is making one: wait for it rather than wire a second
             // bounded, as every wait of the plugin's: a chunk not wired in 20 s is a stuck kernel import, said once and
             // stopped for the stack (a wait with no bound froze r7p8's compositor with nothing in the log)
@@ -249,12 +299,7 @@ void Device::warm()
         }  // and of block-linear images: the first frames' memoryless backings find room before the grower runs
     }
     if (!grower_.joinable())
-        grower_ = std::thread([this] {
-            pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
-            pthread_setname_np("com.brunostjohn.switch.gm20b.pool");
-            followers().join();
-            growLoop();
-        });
+        startGrower();
 }
 
 void Device::poolFree(Span &s, DeferredFrees &deferred)
@@ -624,7 +669,9 @@ bool Device::tiledAlloc(std::unique_lock<gm20b::Mutex> &l, std::vector<Chunk> &c
                     ch.free[at + bytes] = start + len - at - bytes;
                 ch.used += bytes;
                 s = {c, at, bytes, ch.bo.va + at, static_cast<uint8_t *>(ch.memory) + at};
-                if (grower_.joinable() && !tiledWanted(chunks) && tiledFreeBytes(chunks) < sizes_.blChunk) {
+                const uint64_t next = growChunk(chunks, sizes_.blChunk, kBlAlign);
+                if (grower_.joinable() && !tiledWanted(chunks) && tiledFreeBytes(chunks) < next &&
+                    growAheadRoom(next)) {
                     tiledWanted_.push_back({&chunks, kind});  // the next chunk, off this thread
                     grow_.notify_one();
                 }
@@ -639,6 +686,7 @@ bool Device::tiledAlloc(std::unique_lock<gm20b::Mutex> &l, std::vector<Chunk> &c
         if (closing_ || ++pass == 3)
             break;
         SWITCH_METAL_DIAGNOSTIC(stats.poolStalls++);
+        clientStalled();
         if (tiledWanted(chunks)) {  // the grower is making one: wait for it rather than wire a second
             // bounded, as the pool's wait (a chunk not wired in 20 s is a stuck kernel import)
             ++offLockChunkOps_;

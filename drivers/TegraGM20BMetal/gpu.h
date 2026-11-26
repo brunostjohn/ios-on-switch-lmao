@@ -627,6 +627,15 @@ public:
     uint64_t blChunkFreeBytes();
     // The thread importing surface `id` at `base` (its mach port name), 0 when none is (test/device_import_test.cpp)
     uint32_t surfaceImporter(uint64_t id, void *base, uint64_t bytes);
+    // This process's footprint and its bytes to its memorystatus limit, for a client's grow-ahead (grow_ahead.h); a test
+    // gives its own
+    std::function<bool(uint64_t &footprint, uint64_t &available)> footprintProbe = readFootprint;
+
+    bool growerRunning()
+    {
+        std::lock_guard<gm20b::Mutex> l(lock_);
+        return grower_.joinable();
+    }
 
     // the shader heap's bound bytes of host memory (the programs copied so far, in steps)
     uint64_t heapBytes() const
@@ -2119,8 +2128,14 @@ private:
     uint32_t offLockChunkOps_ = 0;
     gm20b::CondVar grow_, grown_, chunkReady_;
     std::thread grower_;
+    uint32_t clientStalls_ = 0;
     bool newChunk(uint64_t size, bool dedicated, std::unique_lock<gm20b::Mutex> &l, uint32_t &index);
     void growLoop();
+    void startGrower();
+    void clientStalled();
+    uint64_t growChunk(const std::vector<Chunk> &chunks, uint64_t cap, uint64_t align) const;
+    bool growAheadRoom(uint64_t chunk);
+    static bool readFootprint(uint64_t &footprint, uint64_t &available);
     // Written by the submitting thread alone (the submit worker, which runs every move too), each a load and a store; a
     // command buffer's backings are marked used before closedCount_ moves
     std::atomic<uint64_t> commitCount_{0};
