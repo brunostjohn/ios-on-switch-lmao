@@ -8248,6 +8248,11 @@ ReScan:
 #endif /* MACH_ASSERT */
 #if CONFIG_IOSCHED
 
+#if DEVELOPMENT || DEBUG
+/* Busy-page raises XNU queued for the device (kernel/switch/vm/prefetch.c's debug line) */
+uint64_t switch_reprio_requested;
+#endif
+
 void
 vm_page_request_reprioritize(vm_object_t o, uint64_t blkno, uint32_t len, int prio)
 {
@@ -8274,6 +8279,9 @@ vm_page_request_reprioritize(vm_object_t o, uint64_t blkno, uint32_t len, int pr
 
 	/* Insert request into the reprioritization list */
 	mpsc_daemon_enqueue(&io_reprioritize_q, &req->iorr_elm, MPSC_QUEUE_DISABLE_PREEMPTION);
+#if DEVELOPMENT || DEBUG
+	os_atomic_inc(&switch_reprio_requested, relaxed);
+#endif
 
 	return;
 }
@@ -8381,6 +8389,9 @@ vm_decmp_upl_reprioritize(upl_t upl, int prio)
 
 			/* Insert request into the reprioritization list */
 			mpsc_daemon_enqueue(&io_reprioritize_q, &req->iorr_elm, MPSC_QUEUE_DISABLE_PREEMPTION);
+#if DEVELOPMENT || DEBUG
+			os_atomic_inc(&switch_reprio_requested, relaxed);
+#endif
 
 			offset += len;
 		} else {
