@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <vector>
 #include "push.h"
+#include "stats.h"
 #include "zcull.h"
 
 namespace gm20b {
@@ -105,7 +106,7 @@ public:
             return;
         for (auto it = stored_.begin(); it != stored_.end(); ++it)
             if (it->zetaVa == s.zetaVa) {
-                unstored_ += it->store != nullptr;
+                SWITCH_METAL_DIAGNOSTIC(unstored_ += it->store != nullptr);
                 stored_.erase(it);
                 break;
             }
@@ -147,7 +148,7 @@ public:
         if (pick == stored_.end())
             return -1;
         const int slot = pick->slot;
-        unstored_ += pick->store != nullptr;
+        SWITCH_METAL_DIAGNOSTIC(unstored_ += pick->store != nullptr);
         stored_.erase(pick);
         return slot;
     }
@@ -164,7 +165,7 @@ public:
                 ++it;
                 continue;
             }
-            unstored_ += it->store != nullptr;
+            SWITCH_METAL_DIAGNOSTIC(unstored_ += it->store != nullptr);
             released(it->slot);
             it = stored_.erase(it);
         }
@@ -203,7 +204,7 @@ private:
             return;
         *s.store = kZcullStoreWord;
         s.store = nullptr;
-        stores_++;
+        SWITCH_METAL_DIAGNOSTIC(stores_++);
     }
 
     std::vector<ZcullStored> stored_;
