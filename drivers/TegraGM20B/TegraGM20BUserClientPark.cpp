@@ -70,6 +70,8 @@ bool AGXDeviceUserClient::boGpuBusyLocked(const Bo *bo) const
 	if (liveBinds != bo->bindings)
 		return true;
 	for (uint32_t slot = 0; slot < kMaxChannels; ++slot) {
+		if (retiringChans_[slot].active)
+			return true;
 		if (chans_[slot] && !tgm_chan_error(chans_[slot]) &&
 		    int32_t(tgm_chan_completed(chans_[slot]) - tgm_chan_submitted(chans_[slot])) <
 			    0)

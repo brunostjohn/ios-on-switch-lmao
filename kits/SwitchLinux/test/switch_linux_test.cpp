@@ -86,6 +86,16 @@ TEST_F(SwitchLinux, IrqSaveReturnsWhatItFound)
     EXPECT_FALSE(switch_linux_irqs_disabled());
 }
 
+TEST_F(SwitchLinux, CanSleepRequiresInterruptsAndPreemption)
+{
+    EXPECT_TRUE(switch_linux_can_sleep());
+    switch_linux_stub_preemption = 1;
+    EXPECT_FALSE(switch_linux_can_sleep());
+    switch_linux_stub_preemption = 0;
+    switch_linux_stub_interrupts = FALSE;
+    EXPECT_FALSE(switch_linux_can_sleep());
+}
+
 TEST_F(SwitchLinux, TimeIsMachAbsoluteTimeInNanoseconds)
 {
     switch_linux_stub_now = 9000;

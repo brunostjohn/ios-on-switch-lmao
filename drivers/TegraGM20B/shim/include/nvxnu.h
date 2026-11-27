@@ -83,6 +83,11 @@ static inline int nvxnu_irqs_enabled(void)  // NOLINT(modernize-redundant-void-a
 	return switch_linux_irqs_disabled() ? 0 : 1;
 }
 
+static inline int nvxnu_can_sleep(void)  // NOLINT(modernize-redundant-void-arg): a C header
+{
+	return switch_linux_can_sleep() ? 1 : 0;
+}
+
 static inline nvxnu_u64 nvxnu_nanotime(void)  // NOLINT(modernize-redundant-void-arg): a C header
 {
 	return switch_linux_nanotime();

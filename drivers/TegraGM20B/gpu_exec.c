@@ -664,15 +664,16 @@ chan_sibling_waits(struct tgm_chan *chan, const struct switch_gpu_sibling_wait *
 
 	for (i = 0; i < count; ++i) {
 		const struct tgm_chan *source = siblings[i].source;
+		const u64 fence_gpu = source ? source->fence_gpu : siblings[i].fence_gpu;
 		/* nouveau's NVDEF/NVVAL/PUSH_* macros compute in int and repeat their branches. */
 		/* NOLINTBEGIN(bugprone-signed-bitwise,bugprone-branch-clone) */
-		PUSH_MTHD(&chan->chan.push, NV906F, SEMAPHOREA, upper_32_bits(source->fence_gpu),
-			  SEMAPHOREB, lower_32_bits(source->fence_gpu), SEMAPHOREC,
+		PUSH_MTHD(&chan->chan.push, NV906F, SEMAPHOREA, upper_32_bits(fence_gpu),
+			  SEMAPHOREB, lower_32_bits(fence_gpu), SEMAPHOREC,
 			  siblings[i].seqno, SEMAPHORED,
 			  NVDEF(NV906F, SEMAPHORED, OPERATION, ACQ_GEQ) |
 				  NVDEF(NV906F, SEMAPHORED, ACQUIRE_SWITCH, ENABLED));
 		/* NOLINTEND(bugprone-signed-bitwise,bugprone-branch-clone) */
-		if (chan->high)
+		if (chan->high && source)
 			tgm_hold_need(tgm_gpu.device, source->chid);
 	}
 }

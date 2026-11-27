@@ -3833,3 +3833,25 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BComp.h",
     ],
 )
+
+genrule(
+    name = "timer_wait_source",
+    testonly = True,
+    srcs = ["//drivers/TegraGM20B:nouveau/nvkm/subdev/timer/base.c"],
+    outs = ["timer_wait_source.h"],
+    cmd = """
+set -e
+awk '/^#define NVKM_WAIT_SPIN_NS / { on = 1 } on { print } on && /^}$$/ { count++; if (count == 2) on = 0 } END { if (count != 2) exit 1 }' $< > $@
+grep -q 'nvkm_timer_wait_test(' $@
+grep -q 'usleep_range(' $@
+""",
+)
+
+host_test(
+    name = "gm20b_timer_wait_test",
+    srcs = [
+        "gm20b_timer_wait_test.cpp",
+        ":timer_wait_source",
+    ],
+    cxx_std = "c++17",
+)

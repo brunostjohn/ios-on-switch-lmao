@@ -44,7 +44,9 @@ void AGXDeviceUserClient::releasePromises(bool all)
 		auto &slot = promises_[i];
 		const bool kept = slot.state == SWITCH_GPU_PROMISE_KEPT;
 		const bool released = kept && int32_t(*promiseWord(i) - slot.value) >= 0;
-		const bool running = chans_[slot.channel] && !tgm_chan_error(chans_[slot.channel]);
+		const bool running =
+			(chans_[slot.channel] && !tgm_chan_error(chans_[slot.channel])) ||
+			retiringChans_[slot.channel].active;
 		if (slot.state == SWITCH_GPU_PROMISE_FREE ||
 		    (!all && (!kept || (!released && running))))
 			continue;

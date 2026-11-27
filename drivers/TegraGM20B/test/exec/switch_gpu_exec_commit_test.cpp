@@ -509,7 +509,7 @@ TEST_F(ExecCommit, ForcedEmptyWaitJobsTakeNoOwnershipOrder)
 		if (mode < 2)
 			words = {{0x100, 1, 0x120}};
 		else
-			siblings = {{switch_exec_chan_tgm(source), 1}};
+			siblings = {{switch_exec_chan_tgm(source), 1, 0}};
 		switch_exec_chan_high(consumer, mode == 1);
 		const uint64_t own = ioLockTakes().load(), live = switch_exec_mutex_takes();
 		ASSERT_EQ(exec(nullptr, 0, kJob | SWITCH_GPU_SUBMIT_FORCE_FENCE), 0);
@@ -538,7 +538,7 @@ TEST_F(ExecCommit, CombinedWaitsReadEachDependencyOnceUnderOneLiveHold)
 		dependencies[dependency_count++] = {1, 1, SWITCH_GPU_ENGINE_PROMISE, pool};
 	for (uint32_t id : {7u, 8u})
 		dependencies[dependency_count++] = {3, 1, SWITCH_GPU_ENGINE_VIC, id};
-	siblings = {{switch_exec_chan_tgm(second), 2}};
+	siblings = {{switch_exec_chan_tgm(second), 2, 0}};
 	words = {{0x108, 5, 0x103}};
 	switch_exec_chan_high(consumer, 1);
 	const uint64_t status = switch_exec_backing::status_reads(),

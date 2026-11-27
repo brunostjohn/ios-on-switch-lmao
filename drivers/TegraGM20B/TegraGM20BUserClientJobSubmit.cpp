@@ -87,11 +87,16 @@ IOReturn AGXDeviceUserClient::takeJob(const TegraGM20BAbiSubmitAddress *in,
 				admitted = submitGate_.enterSlow(lock_);
 				IOLockUnlock(lock_);
 			}
+			job.gateHeld = admitted;
+			job.pushesPrepared = false;
+			job.carryHostWritten = false;
 			result = admitted ? runJob(record, job, out, why)
 					  : switch_gpu_refuse(why, SwitchGpuRefusal::Closing,
 							      kIOReturnNotOpen);
-			if (admitted)
+			if (job.gateHeld) {
+				job.gateHeld = false;
 				submitGate_.leaveFast(lock_);
+			}
 		}
 		job.events->clear();
 	}
@@ -117,6 +122,55 @@ SwitchGpuRefusal AGXDeviceUserClient::useRefusal(const Bo *bo, const BindingTabl
 	return SwitchGpuRefusal::None;
 }
 
+void AGXDeviceUserClient::leaveSubmitGateForWait(JobScratch &job, switch_gpu_resource_set *set)
+{
+	if (set)
+		switch_gpu_set_leave(set);
+	if (job.gateHeld) {
+		job.gateHeld = false;
+		submitGate_.leaveFast(lock_);
+	}
+}
+
+bool AGXDeviceUserClient::reenterSubmitGate(JobScratch &job)
+{
+	bool admitted = submitGate_.enterFast();
+	if (!admitted) {
+		IOLockLock(lock_);
+		admitted = submitGate_.enterSlow(lock_);
+		IOLockUnlock(lock_);
+	}
+	job.gateHeld = admitted;
+	return admitted;
+}
+
+uint32_t AGXDeviceUserClient::collectSiblings(const switch_gpu_resource_set *set, uint32_t slot,
+					      switch_gpu_sibling_wait *siblings) const
+{
+	static_assert(kMaxChannels == SWITCH_GPU_SET_SLOTS, "a set slot per channel");
+	const uint32_t used = switch_gpu_set_used(set) & ~(1u << slot);
+	uint32_t live = 0, completed[kMaxChannels] = {};
+	for (uint32_t other = 0; other < kMaxChannels; ++other) {
+		if (chans_[other] && !tgm_chan_error(chans_[other])) {
+			live |= 1u << other;
+			completed[other] = tgm_chan_completed(chans_[other]);
+		} else if (!chans_[other] && (used & (1u << other)) &&
+			   __atomic_load_n(&retiringChans_[other].active, __ATOMIC_ACQUIRE)) {
+			live |= 1u << other;
+			completed[other] = __atomic_load_n(
+				fence_va_ + static_cast<size_t>(other) * 16, __ATOMIC_ACQUIRE);
+		}
+	}
+	switch_gpu_set_wait waits[SWITCH_GPU_SET_SLOTS];
+	const uint32_t count = switch_gpu_set_waits(set, slot, live, completed, waits);
+	for (uint32_t i = 0; i < count; ++i) {
+		const uint32_t other = waits[i].slot;
+		siblings[i] = {chans_[other], waits[i].seqno,
+			       chans_[other] ? 0u : fence_gpu_ + uint64_t(other) * 64};
+	}
+	return count;
+}
+
 // Inside the submit gate (channels and sets stay as they are) and the channel's submit lock, which keeps every BO and
 // binding table it finds published or not yet freed (retireBatch's passSubmitters).
 IOReturn AGXDeviceUserClient::runJob(const SwitchGpuJobRecord &record, JobScratch &job,
@@ -124,59 +178,68 @@ IOReturn AGXDeviceUserClient::runJob(const SwitchGpuJobRecord &record, JobScratc
 {
 	const TegraGM20BAbiJob &head = *record.job;
 	const uint32_t slot = head.channel - 1;
-	tgm_chan *chan = chans_[slot];
-	if (!chan)
-		return switch_gpu_refuse(why, SwitchGpuRefusal::NoChannel, kIOReturnBadArgument);
-	const bool background = clientHasPrivilege(current_task(), kIOClientPrivilegeForeground) !=
-				kIOReturnSuccess;
-	if (background != backgroundRole_ || channelLevels_[slot] != level_) {
-		IOLockLock(lock_);
-		if (background != backgroundRole_) {
-			backgroundRole_ = background;
-			applyLevel(false);
-		}
-		if (channelLevels_[slot] != level_) {
-			tgm_chan_set_level(chan, level_, static_cast<int>(critical_));
-			channelLevels_[slot] = level_;
-		}
-		IOLockUnlock(lock_);
-	}
-	switch_gpu_resource_set *set = head.set ? sets_[head.set - 1] : nullptr;
-	if (head.set && !set)
-		return switch_gpu_refuse(why, SwitchGpuRefusal::NoSet, kIOReturnBadArgument,
-					 head.set);
-	if (set && !switch_gpu_set_enter(set, head.set_generation)) {
-		switch_gpu_job_stale();
-		switch_gpu_path_taken(SWITCH_GPU_PATH_STALE_SET, 1);
-		return switch_gpu_refuse(why, SwitchGpuRefusal::StaleSet, kIOReturnNotReady,
-					 head.set, head.set_generation);
-	}
-	switch_gpu_sibling_wait siblings[SWITCH_GPU_SET_SLOTS];
-	uint32_t siblingCount = 0;
-	if (set) {
-		static_assert(kMaxChannels == SWITCH_GPU_SET_SLOTS, "a set slot per channel");
-		uint32_t live = 0, completed[kMaxChannels] = {};
-		for (uint32_t other = 0; other < kMaxChannels; ++other)
-			if (chans_[other] && !tgm_chan_error(chans_[other])) {
-				live |= 1u << other;
-				completed[other] = tgm_chan_completed(chans_[other]);
+	for (;;) {
+		if (!job.gateHeld)
+			return switch_gpu_refuse(why, SwitchGpuRefusal::Closing, kIOReturnNotOpen);
+		tgm_chan *chan = chans_[slot];
+		if (!chan)
+			return switch_gpu_refuse(why, SwitchGpuRefusal::NoChannel,
+						 kIOReturnBadArgument);
+		const bool background =
+			clientHasPrivilege(current_task(), kIOClientPrivilegeForeground) !=
+			kIOReturnSuccess;
+		if (background != backgroundRole_ || channelLevels_[slot] != level_) {
+			if (background != backgroundRole_) {
+				IOLockLock(lock_);
+				if (background != backgroundRole_) {
+					backgroundRole_ = background;
+					applyLevel();
+				}
+				IOLockUnlock(lock_);
 			}
-		switch_gpu_set_wait waits[SWITCH_GPU_SET_SLOTS];
-		siblingCount = switch_gpu_set_waits(set, slot, live, completed, waits);
-		for (uint32_t i = 0; i < siblingCount; ++i)
-			siblings[i] = {chans_[waits[i].slot], waits[i].seqno};
+			syncChannelLevel(slot, chan, false);
+		}
+		switch_gpu_resource_set *set = head.set ? sets_[head.set - 1] : nullptr;
+		if (head.set && !set)
+			return switch_gpu_refuse(why, SwitchGpuRefusal::NoSet, kIOReturnBadArgument,
+						 head.set);
+		if (set && !switch_gpu_set_enter(set, head.set_generation)) {
+			switch_gpu_job_stale();
+			switch_gpu_path_taken(SWITCH_GPU_PATH_STALE_SET, 1);
+			return switch_gpu_refuse(why, SwitchGpuRefusal::StaleSet, kIOReturnNotReady,
+						 head.set, head.set_generation);
+		}
+		job.setHeld = set != nullptr;
+		job.roomRetry = false;
+		switch_gpu_sibling_wait siblings[SWITCH_GPU_SET_SLOTS];
+		const uint32_t siblingCount = set ? collectSiblings(set, slot, siblings) : 0;
+		const IOReturn result =
+			runJobUses(record, job, out, set, siblings, siblingCount, why);
+		if (set && job.setHeld) {
+			switch_gpu_set_leave(set);
+			job.setHeld = false;
+		}
+		if (job.roomRetry) {
+			job.roomRetry = false;
+			if (record.promises && record.promises->count)
+				reholdPromises(record.promises);
+			const int prepared = job.events->prepare(events_, record.events,
+								 record.releases, head.channel);
+			if (prepared)
+				return switch_gpu_refuse(why, SwitchGpuRefusal::EventPrepare,
+							 ioreturn(prepared),
+							 switch_gpu_refusal_errno(prepared));
+			continue;
+		}
+		if (result != kIOReturnSuccess && record.promises && record.promises->count)
+			reholdPromises(record.promises);
+		return result;
 	}
-	const IOReturn result = runJobUses(record, job, out, set, siblings, siblingCount, why);
-	if (set)
-		switch_gpu_set_leave(set);
-	if (result != kIOReturnSuccess && record.promises && record.promises->count)
-		reholdPromises(record.promises);
-	return result;
 }
 
 IOReturn AGXDeviceUserClient::runJobUses(const SwitchGpuJobRecord &record, JobScratch &job,
 					 TegraGM20BAbiExecReply *out, switch_gpu_resource_set *set,
-					 const switch_gpu_sibling_wait *siblings,
+					 switch_gpu_sibling_wait *siblings,
 					 uint32_t siblingCount, SwitchGpuRefusalNote &why)
 {
 	const TegraGM20BAbiJob &head = *record.job;
@@ -196,22 +259,27 @@ IOReturn AGXDeviceUserClient::runJobUses(const SwitchGpuJobRecord &record, JobSc
 			      offsetof(tgm_push, no_prefetch) == offsetof(TegraGM20BAbiPush, flags),
 		      "push layouts");
 	auto *pushes = reinterpret_cast<tgm_push *>(record.pushes);
-	constexpr uint32_t kPushFlags =
-		TegraGM20BPushNoPrefetch | TegraGM20BPushIncomplete | TegraGM20BPushFence;
-	for (uint32_t i = 0; i < count; ++i) {
-		const TegraGM20BAbiPush &p = record.pushes[i];
-		if ((p.va & 3) || !p.dwords || p.dwords >= (1u << 21) || (p.flags & ~kPushFlags) ||
-		    ((p.flags & TegraGM20BPushIncomplete) &&
-		     (i + 1 == count ||
-		      !(record.pushes[i + 1].flags & TegraGM20BPushNoPrefetch))) ||
-		    p.va < TGM_USER_VA_START || p.va + uint64_t(p.dwords) * 4 > TGM_KERNEL_VA)
-			return switch_gpu_refuse(why, SwitchGpuRefusal::Push, kIOReturnBadArgument,
-						 i, p.va, p.dwords);
-		const uint32_t flags = p.flags;
-		pushes[i].no_prefetch = (flags & TegraGM20BPushNoPrefetch) ? 1u : 0u;
-		pushes[i].incomplete = (flags & TegraGM20BPushIncomplete) ? 1u : 0u;
-		pushes[i].fence = (flags & TegraGM20BPushFence) ? 1u : 0u;
-		pushes[i].reserved = 0;
+	if (!job.pushesPrepared) {
+		constexpr uint32_t kPushFlags =
+			TegraGM20BPushNoPrefetch | TegraGM20BPushIncomplete | TegraGM20BPushFence;
+		for (uint32_t i = 0; i < count; ++i) {
+			const TegraGM20BAbiPush &p = record.pushes[i];
+			if ((p.va & 3) || !p.dwords || p.dwords >= (1u << 21) ||
+			    (p.flags & ~kPushFlags) ||
+			    ((p.flags & TegraGM20BPushIncomplete) &&
+			     (i + 1 == count ||
+			      !(record.pushes[i + 1].flags & TegraGM20BPushNoPrefetch))) ||
+			    p.va < TGM_USER_VA_START ||
+			    p.va + uint64_t(p.dwords) * 4 > TGM_KERNEL_VA)
+				return switch_gpu_refuse(why, SwitchGpuRefusal::Push,
+							 kIOReturnBadArgument, i, p.va, p.dwords);
+			const uint32_t flags = p.flags;
+			pushes[i].no_prefetch = (flags & TegraGM20BPushNoPrefetch) ? 1u : 0u;
+			pushes[i].incomplete = (flags & TegraGM20BPushIncomplete) ? 1u : 0u;
+			pushes[i].fence = (flags & TegraGM20BPushFence) ? 1u : 0u;
+			pushes[i].reserved = 0;
+		}
+		job.pushesPrepared = true;
 	}
 	uint32_t fences = 0;
 	if (switch_gpu_job_fences(pushes, count, &fences))
@@ -225,8 +293,9 @@ IOReturn AGXDeviceUserClient::runJobUses(const SwitchGpuJobRecord &record, JobSc
 #endif
 	uint32_t useTotal = 0, writeCount = 0, surfaceCount = 0, nativeGuardCount = 0,
 		 writtenCount = 0, nativeWrittenCount = 0, rangedUses = 0, nativeReads = 0;
-	bool hostWritten = (head.flags & TegraGM20BJobHostWritten) ||
+	bool hostWritten = job.carryHostWritten || (head.flags & TegraGM20BJobHostWritten) ||
 			   (set && switch_gpu_set_take_host_written(set));
+	job.carryHostWritten = hostWritten;
 	bool unlockedWrites = false, scanoutWrites = false;
 	constexpr uint32_t kUseAccess = TegraGM20BSurfaceRead | TegraGM20BSurfaceWrite;
 	constexpr uint32_t kUseFlags = kUseAccess | TegraGM20BSurfaceHostWritten |
@@ -389,7 +458,9 @@ IOReturn AGXDeviceUserClient::runJobUses(const SwitchGpuJobRecord &record, JobSc
 	switch_gpu_backing_transaction transaction = {};
 	switch_gpu_backing_token completion = {};
 	uint32_t seqno = 0, dependencies = 0, jobVisibility = 0, leaseCount = 0;
-	bool ownershipBusy = false, ownershipFailed = false, semanticBound = false;
+	const uint64_t prevAdmissionCookie = lastAdmissionCookies_[slot];
+	bool ownershipBusy = false, ownershipFailed = false, semanticBound = false,
+	     channelGone = false;
 	SwitchGpuRefusal stage = SwitchGpuRefusal::Refresh;
 refresh:
 	stage = SwitchGpuRefusal::Refresh;
@@ -516,11 +587,49 @@ refresh:
 			break;
 		switch_gpu_backing_abort(&transaction);
 		stage = SwitchGpuRefusal::Room;
+		// Release submitGate_ (and set) across the bounded GPFIFO room sleep so unrelated
+		// mutations in the process are not stalled; submitLocks_[slot] keeps chan alive
+		// against retireChannels().
+		leaveSubmitGateForWait(job, job.setHeld ? set : nullptr);
+		job.setHeld = false;
 		error = switch_gpu_chan_wait_submission_room(
 			chan, pushes, count, dependencies + siblingCount + wordCount, profile);
 		job.phases.end(TGM_SUBMIT_ROOM);
+		if (!reenterSubmitGate(job)) {
+			useTotal = 0;
+			error = -19;
+			break;
+		}
+		const bool gensChanged =
+			__atomic_load_n(&boGen_, __ATOMIC_ACQUIRE) != snapBoGen ||
+			__atomic_load_n(&bindGen_, __ATOMIC_ACQUIRE) != snapBindGen;
+		if (gensChanged) {
+			job.useCache.invalidate();
+			useTotal = 0;
+		}
+		if (chans_[slot] != chan) {
+			channelGone = true;
+			error = -19;
+			break;
+		}
 		if (error)
 			break;
+		if (set) {
+			if (sets_[head.set - 1] != set ||
+			    !switch_gpu_set_enter(set, head.set_generation)) {
+				job.roomRetry = true;
+				error = -11;
+				break;
+			}
+			job.setHeld = true;
+		}
+		if (gensChanged) {
+			job.roomRetry = true;
+			error = -11;
+			break;
+		}
+		if (set)
+			siblingCount = collectSiblings(set, slot, siblings);
 	}
 	if (error)
 		switch_gpu_backing_abort(&transaction);
@@ -537,6 +646,16 @@ refresh:
 	}
 	switch_gpu_chan_submit_leave();
 	SwitchGpuSurfaceRefresh::release(job.surfaces, surfaceCount);
+	if (job.roomRetry) {
+		if (admissionBegin && admission.active() &&
+		    admissionCookies_[slot] == record.admission) {
+			admission.end();
+			admissionCookies_[slot] = 0;
+			lastAdmissionCookies_[slot] = prevAdmissionCookie;
+		}
+		constexpr IOReturn kRoomRetry = kIOReturnSuccess;
+		return kRoomRetry;
+	}
 	if (error == SWITCH_GPU_BACKING_STALE && !nativeGuardCount && !admission.active())
 		goto refresh;
 	if (admission.active() && admissionCookies_[slot] == record.admission &&
@@ -544,6 +663,12 @@ refresh:
 		admission.end();
 		admissionCookies_[slot] = 0;
 	}
+	if (!job.gateHeld)
+		return refuseWrites(
+			switch_gpu_refuse(why, SwitchGpuRefusal::Closing, kIOReturnNotOpen));
+	if (channelGone)
+		return refuseWrites(switch_gpu_refuse(why, SwitchGpuRefusal::NoChannel,
+						      kIOReturnNotResponding));
 	if (!ownershipFailed && ownershipBusy)
 		return switch_gpu_refuse(why, SwitchGpuRefusal::Busy, kIOReturnCannotLock);
 	if (ownershipFailed || error) {

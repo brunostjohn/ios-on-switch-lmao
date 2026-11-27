@@ -2175,3 +2175,37 @@ TEST(GM20BPresentSource, LargeFenceOnlyPresentAndDisplayOwnerTracking)
 		Block(SourceText("../TegraGM20BReadback.cpp"), "uint32_t tgm_readback_take(");
 	EXPECT_TRUE(take.has("(direct && !source)"));
 }
+
+TEST(GM20BChannelLockSource, ChannelLifecycleAndPriorityStayOffConnectionLock)
+{
+	const CodeText run = Block(client(), "IOReturn AGXDeviceUserClient::run(");
+	EXPECT_TRUE(run.before("return channelCreate(", "switch_gpu_method_closes_gate(method)"));
+	EXPECT_TRUE(run.before("return channelDestroy(", "switch_gpu_method_closes_gate(method)"));
+	EXPECT_TRUE(run.before("return setPriority(", "switch_gpu_method_closes_gate(method)"));
+
+	const CodeText create = Block(client(), "IOReturn AGXDeviceUserClient::channelCreate(");
+	EXPECT_TRUE(create.before("create(vm_, this,", "submitGate_.beginMutation(lock_)"));
+	EXPECT_TRUE(create.before("IOLockUnlock(lock_);", "create(vm_, this,"));
+
+	const CodeText destroy = Block(client(), "IOReturn AGXDeviceUserClient::channelDestroy(");
+	EXPECT_FALSE(destroy.has("tgm_chan_del("));
+	EXPECT_TRUE(destroy.before("submitGate_.endMutation(lock_);",
+				   "thread_call_enter(chanRetireCall_);"));
+	EXPECT_TRUE(destroy.before("IOLockUnlock(lock_);",
+				   "thread_call_enter(chanRetireCall_);"));
+
+	const CodeText retire = Block(client(), "void AGXDeviceUserClient::retireChannels()");
+	EXPECT_TRUE(retire.before("IOLockUnlock(lock_);", "tgm_chan_del(&chan);"));
+
+	const CodeText apply = Block(client(), "void AGXDeviceUserClient::applyLevel()");
+	EXPECT_FALSE(apply.has("tgm_chan_set_level("));
+	const CodeText sync = Block(client(), "void AGXDeviceUserClient::syncChannelLevel(");
+	EXPECT_TRUE(sync.before("IOLockUnlock(lock_);", "tgm_chan_set_level("));
+
+	const CodeText uses = Block(client(), "IOReturn AGXDeviceUserClient::runJobUses(");
+	EXPECT_TRUE(uses.before("leaveSubmitGateForWait(", "switch_gpu_chan_wait_submission_room("));
+	EXPECT_TRUE(uses.before("switch_gpu_chan_wait_submission_room(", "reenterSubmitGate("));
+
+	const CodeText cut = Block(client(), "IOReturn AGXDeviceUserClient::cutOverlaps(");
+	EXPECT_TRUE(cut.has("if (now && replace)"));
+}

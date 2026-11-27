@@ -132,6 +132,11 @@ extern "C" bool switch_linux_irqs_disabled(void)
     return ml_get_interrupts_enabled() == FALSE;
 }
 
+extern "C" bool switch_linux_can_sleep(void)
+{
+    return ml_get_interrupts_enabled() && get_preemption_level() == 0;
+}
+
 extern "C" int switch_linux_cpu(void)
 {
     return cpu_number();

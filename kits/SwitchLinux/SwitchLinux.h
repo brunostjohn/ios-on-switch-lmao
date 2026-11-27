@@ -28,6 +28,7 @@ uint64_t switch_linux_malloc_size(const void *block);
 unsigned long switch_linux_irq_save(void);
 void switch_linux_irq_restore(unsigned long flags);
 bool switch_linux_irqs_disabled(void);
+bool switch_linux_can_sleep(void);
 int switch_linux_cpu(void);
 
 uint64_t switch_linux_nanotime(void);

@@ -71,19 +71,66 @@ void AGXDeviceUserClient::retirementWork(thread_call_param_t owner, thread_call_
 	static_cast<AGXDeviceUserClient *>(owner)->retireBatch();
 }
 
+void AGXDeviceUserClient::chanRetireWork(thread_call_param_t owner, thread_call_param_t)
+{
+	static_cast<AGXDeviceUserClient *>(owner)->retireChannels();
+}
+
+// Detached channels tear down off lock_ and submitGate_. Taking submitLocks_[slot] first
+// waits out any room wait that dropped submitGate_ while still referencing the channel.
+void AGXDeviceUserClient::retireChannels()
+{
+	for (;;) {
+		tgm_chan *chan = nullptr;
+		uint32_t slot = kMaxChannels;
+		IOLockLock(lock_);
+		for (uint32_t i = 0; i < kMaxChannels; ++i) {
+			if (retiringChans_[i].chan) {
+				chan = retiringChans_[i].chan;
+				retiringChans_[i].chan = nullptr;
+				slot = i;
+				break;
+			}
+		}
+		IOLockUnlock(lock_);
+		if (!chan)
+			return;
+		IOLockLock(submitLocks_[slot]);
+		IOLockUnlock(submitLocks_[slot]);
+		tgm_chan_del(&chan);
+		IOLockLock(lock_);
+		__atomic_store_n(&retiringChans_[slot].active, false, __ATOMIC_RELEASE);
+		retiringChans_[slot].queue = 0;
+		retiringChans_[slot].resetGeneration = 0;
+		if (!__atomic_load_n(&retirementStopped_, __ATOMIC_ACQUIRE)) {
+			releasePromises(false);
+			scheduleRetirement();
+		}
+		IOLockWakeup(lock_, &retiringChans_, false);
+		IOLockUnlock(lock_);
+	}
+}
+
 bool AGXDeviceUserClient::bindingIdle(const RetiredBinding *binding) const
 {
 	for (uint32_t slot = 0; slot < kMaxChannels; ++slot) {
 		const auto &snapshot = binding->snapshots[slot];
-		if (!snapshot.engine || !chans_[slot])
+		if (!snapshot.engine)
 			continue;
-		switch_gpu_backing_token current = {};
-		switch_gpu_chan_next_token(chans_[slot], &current);
-		if (snapshot.queue == current.queue &&
-		    snapshot.reset_generation == current.reset_generation &&
-		    !tgm_chan_error(chans_[slot]) &&
-		    int32_t(tgm_chan_completed(chans_[slot]) - uint32_t(snapshot.value)) < 0)
+		if (chans_[slot]) {
+			switch_gpu_backing_token current = {};
+			switch_gpu_chan_next_token(chans_[slot], &current);
+			if (snapshot.queue == current.queue &&
+			    snapshot.reset_generation == current.reset_generation &&
+			    !tgm_chan_error(chans_[slot]) &&
+			    int32_t(tgm_chan_completed(chans_[slot]) - uint32_t(snapshot.value)) <
+				    0)
+				return false;
+		} else if (retiringChans_[slot].active &&
+			   snapshot.queue == retiringChans_[slot].queue &&
+			   snapshot.reset_generation == retiringChans_[slot].resetGeneration) {
 			return false;
+		}
 	}
 	return true;
 }
@@ -307,6 +354,10 @@ void AGXDeviceUserClient::retire(RetiredBinding *record)
 			record->snapshots[slot].value = uint32_t(record->snapshots[slot].value - 1);
 			// its retirement (and the bind epoch behind it) waits for that seqno's interrupt
 			tgm_chan_need(chans_[slot], uint32_t(record->snapshots[slot].value));
+		} else if (retiringChans_[slot].active) {
+			record->snapshots[slot] = {0, retiringChans_[slot].resetGeneration,
+						   SWITCH_GPU_ENGINE_GM20B,
+						   retiringChans_[slot].queue};
 		}
 	}
 	record->next = nullptr;
@@ -378,6 +429,13 @@ void AGXDeviceUserClient::drainResources()
 	hangHolder_ = nullptr;
 	IOLockUnlock(lock_);
 	// Channel destruction drains the callbacks before their preallocated work is cancelled.
+	if (chanRetireCall_)
+		thread_call_cancel_wait(chanRetireCall_);
+	for (auto &retiring : retiringChans_) {
+		if (retiring.chan)
+			tgm_chan_del(&retiring.chan);
+		retiring = {};
+	}
 	if (retireCall_)
 		thread_call_cancel_wait(retireCall_);
 	if (wakeCall_)

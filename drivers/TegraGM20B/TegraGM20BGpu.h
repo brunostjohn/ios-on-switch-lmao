@@ -305,6 +305,7 @@ enum {
 struct switch_gpu_sibling_wait {
 	struct tgm_chan *source;
 	uint32_t seqno;
+	uint64_t fence_gpu;
 };
 
 /* A word the job's fence push sets to `value` after the job (a writer promise it keeps, SwitchGpuWriterPromise.h) */

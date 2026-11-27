@@ -109,7 +109,9 @@ OSDefineMetaClassAndStructors(AGXDeviceUserClient, IOUserClient)
 						      THREAD_CALL_OPTIONS_ONCE);
 	releaseCall_ = thread_call_allocate_with_options(
 		releaseWork, this, THREAD_CALL_PRIORITY_KERNEL, THREAD_CALL_OPTIONS_ONCE);
-	if (!retireCall_ || !wakeCall_ || !releaseCall_)
+	chanRetireCall_ = thread_call_allocate_with_options(
+		chanRetireWork, this, THREAD_CALL_PRIORITY_KERNEL, THREAD_CALL_OPTIONS_ONCE);
+	if (!retireCall_ || !wakeCall_ || !releaseCall_ || !chanRetireCall_)
 		return false;
 	if (tgm_vm_new(&vm_))
 		return false;
@@ -153,6 +155,8 @@ void AGXDeviceUserClient::free()
 			thread_call_free(wakeCall_);
 		if (releaseCall_)
 			thread_call_free(releaseCall_);
+		if (chanRetireCall_)
+			thread_call_free(chanRetireCall_);
 		if (binds_)
 			IODelete(binds_, Binding, cap_binds_);
 		for (auto &job : channelJobs_)

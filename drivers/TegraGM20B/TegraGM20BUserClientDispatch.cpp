@@ -45,14 +45,21 @@ static void probeSyncptsLine(char *line, size_t size)
 // IOGPUFamily's for a queue's MTLGPUPriorityRealTime (the same string in 21H461's and 24B119's)
 static constexpr char kRealTimeEntitlement[] = "com.apple.private.agx.rt-priority-spi";
 
-// lock_ held. Method 18: the asked priority schedules the connection's channels as IOGPUFamily's setter would; the
-// compositor is the one at the top that also holds the UI-critical marker (applyLevel).
+// Method 18: updates connection priority under lock_, then updates each live channel off lock_
+// and without closing submitGate_.
 IOReturn AGXDeviceUserClient::setPriority(const TegraGM20BAbiPriority &asked,
 					  TegraGM20BAbiPriorityReply *reply)
 {
 	const int granted = tgm_priority_granted(asked.priority);
 	if (granted < 0)
 		return kIOReturnBadArgument;
+	uint32_t liveSlots = 0;
+	bool criticalChanged = false;
+	IOLockLock(lock_);
+	if (submitGate_.closed()) {
+		IOLockUnlock(lock_);
+		return kIOReturnNotOpen;
+	}
 	if (!entitlementsRead_) {
 		entitlementsRead_ = true;
 		realTimeEntitled_ = switch_gpu_task_entitled(task_, kRealTimeEntitlement);
@@ -70,12 +77,37 @@ IOReturn AGXDeviceUserClient::setPriority(const TegraGM20BAbiPriority &asked,
 		      "compositor\n",
 		      owner_, ownerPid_);
 	}
+	const bool wasCritical = critical_;
 	priority_ = uint32_t(granted);
 	backgroundPriority_ = asked.background_priority;
 	applyLevel();
+	criticalChanged = critical_ != wasCritical;
+	for (uint32_t i = 0; i < kMaxChannels; ++i)
+		if (chans_[i])
+			liveSlots |= 1u << i;
 	if (reply) {
 		reply->flags = critical_ ? TegraGM20BPriorityCritical : 0u;
 		reply->reserved = 0;
+	}
+	IOLockUnlock(lock_);
+	while (liveSlots) {
+		const uint32_t slot = uint32_t(__builtin_ctz(liveSlots));
+		liveSlots &= liveSlots - 1;
+		IOLockLock(submitLocks_[slot]);
+		bool admitted = submitGate_.enterFast();
+		if (!admitted) {
+			IOLockLock(lock_);
+			admitted = submitGate_.enterSlow(lock_);
+			IOLockUnlock(lock_);
+		}
+		if (admitted) {
+			if (chans_[slot])
+				syncChannelLevel(slot, chans_[slot], criticalChanged);
+			submitGate_.leaveFast(lock_);
+		}
+		IOLockUnlock(submitLocks_[slot]);
+		if (!admitted)
+			break;
 	}
 	return kIOReturnSuccess;
 }
@@ -402,6 +434,15 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 				static_cast<TegraGM20BAbiBoUnparkReply *>(out));
 	if (method == TegraGM20BMethodBoFree)
 		return boFreeMethod(static_cast<const TegraGM20BAbiBoFree *>(in));
+	if (method == TegraGM20BMethodChannelCreate)
+		return channelCreate(static_cast<const TegraGM20BAbiChannelCreate *>(in),
+				     static_cast<TegraGM20BAbiChannelCreateReply *>(out));
+	if (method == TegraGM20BMethodChannelDestroy)
+		return channelDestroy(static_cast<const TegraGM20BAbiChannel *>(in));
+	if (method == TegraGM20BMethodPriority)
+		return setPriority(*static_cast<const TegraGM20BAbiPriority *>(in),
+				   wantOut ? static_cast<TegraGM20BAbiPriorityReply *>(out)
+					   : nullptr);
 	if (method == TegraGM20BMethodMap) {
 		return mapToken(static_cast<const TegraGM20BAbiMap *>(in),
 				static_cast<TegraGM20BAbiMapReply *>(out));
@@ -533,13 +574,6 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		if (!ret)
 			ret = vmBind(static_cast<const TegraGM20BAbiVmBind *>(in), count);
 		break;
-	case TegraGM20BMethodChannelCreate:
-		ret = channelCreate(static_cast<const TegraGM20BAbiChannelCreate *>(in),
-				    static_cast<TegraGM20BAbiChannelCreateReply *>(out));
-		break;
-	case TegraGM20BMethodChannelDestroy:
-		ret = channelDestroy(static_cast<const TegraGM20BAbiChannel *>(in));
-		break;
 	case TegraGM20BMethodGetStatus:
 		ret = getStatus(static_cast<const TegraGM20BAbiChannel *>(in),
 				static_cast<TegraGM20BAbiStatus *>(out));
@@ -573,11 +607,6 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		break;
 	case TegraGM20BMethodResourceSetRelease:
 		ret = resourceSetRelease(static_cast<const TegraGM20BAbiResourceSetRelease *>(in));
-		break;
-	case TegraGM20BMethodPriority:
-		ret = setPriority(*static_cast<const TegraGM20BAbiPriority *>(in),
-				  wantOut ? static_cast<TegraGM20BAbiPriorityReply *>(out)
-					  : nullptr);
 		break;
 #if TGM_DEBUG_PROBES
 	case TegraGM20BMethodGrPreempt: {

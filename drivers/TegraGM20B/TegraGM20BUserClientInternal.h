@@ -480,6 +480,7 @@ class AGXDeviceUserClient : public IOUserClient
 		SwitchGpuEventJob *events;
 		SubmitPhases phases;
 		SwitchGpuUseCache<KernelMemory> useCache;
+		bool gateHeld, setHeld, roomRetry, pushesPrepared, carryHostWritten;
 	};
 
 	SwitchGpuEventClient events_;
@@ -516,7 +517,16 @@ class AGXDeviceUserClient : public IOUserClient
 	uint64_t fence_pa_ = 0, fence_gpu_ = 0;
 	tgm_mem *fence_mem_ = nullptr;
 	IOMemoryDescriptor *fence_view_ = nullptr;
+	struct RetiringChannel {
+		tgm_chan *chan;
+		uint32_t queue;
+		uint64_t resetGeneration;
+		bool active;
+	};
+
 	tgm_chan *chans_[kMaxChannels] = {};
+	RetiringChannel retiringChans_[kMaxChannels] = {};
+	bool slotCreating_[kMaxChannels] = {};
 	uint32_t channelLevels_[kMaxChannels] = {};
 	bool leanChannels_[kMaxChannels] = {};
 	Bo *bos_ = nullptr, *zombies_ = nullptr, *readyBos_ = nullptr;
@@ -536,6 +546,7 @@ class AGXDeviceUserClient : public IOUserClient
 	uint32_t reclaimDeferredCount_ = 0;
 	uint64_t reclaimSeq_ = 0;
 	thread_call_t releaseCall_ = nullptr;
+	thread_call_t chanRetireCall_ = nullptr;
 	RetiredBinding *retired_ = nullptr, **retiredTail_ = &retired_, *unmapping_ = nullptr;
 	// a retired binding's PTEs go under it (retireBatch, takeRetiredOverlaps)
 	IOLock *unmapLock_ = nullptr;
@@ -617,6 +628,7 @@ class AGXDeviceUserClient : public IOUserClient
 	void accountRelease(Bo *bo);
 	void drainResources();
 	void retireBatch();
+	void retireChannels();
 	void scheduleRetirement();
 	bool bindingIdle(const RetiredBinding *binding) const;
 	void takeRetiredOverlaps(uint64_t va, uint64_t bytes);
@@ -630,6 +642,7 @@ class AGXDeviceUserClient : public IOUserClient
 	void installPendingBinds();
 	void logFaultBindings();
 	static void retirementWork(thread_call_param_t, thread_call_param_t);
+	static void chanRetireWork(thread_call_param_t, thread_call_param_t);
 	static void retirementFence(void *owner);
 	static void wakeAsked(void *owner, uint32_t slot);
 	static void wakeWork(thread_call_param_t owner, thread_call_param_t);
@@ -722,7 +735,8 @@ class AGXDeviceUserClient : public IOUserClient
 			       TegraGM20BAbiSurfaceLayoutReply *out);
 	IOReturn surfaceLayoutInfo(const TegraGM20BAbiSurfaceLayout *in,
 				   TegraGM20BAbiSurfaceLayoutInfo *out, bool canonical);
-	void applyLevel(bool allChannels = true);
+	void applyLevel();
+	void syncChannelLevel(uint32_t slot, tgm_chan *chan, bool force);
 	IOReturn setPriority(const TegraGM20BAbiPriority &asked, TegraGM20BAbiPriorityReply *reply);
 	IOReturn resourceSetCreate(const TegraGM20BAbiResourceSetCreate *in,
 				   TegraGM20BAbiResourceSetCreateReply *out);
@@ -757,11 +771,15 @@ class AGXDeviceUserClient : public IOUserClient
 	void reholdPromises(const TegraGM20BAbiJobPromises *promises);
 	void keptPromises(const TegraGM20BAbiJobPromises *promises, uint32_t slot,
 			  const switch_gpu_backing_token &job);
+	void leaveSubmitGateForWait(JobScratch &job, switch_gpu_resource_set *set);
+	bool reenterSubmitGate(JobScratch &job);
+	uint32_t collectSiblings(const switch_gpu_resource_set *set, uint32_t slot,
+				 switch_gpu_sibling_wait *siblings) const;
 	IOReturn runJob(const SwitchGpuJobRecord &record, JobScratch &job,
 			TegraGM20BAbiExecReply *out, SwitchGpuRefusalNote &why);
 	IOReturn runJobUses(const SwitchGpuJobRecord &record, JobScratch &job,
 			    TegraGM20BAbiExecReply *out, switch_gpu_resource_set *set,
-			    const switch_gpu_sibling_wait *siblings, uint32_t siblingCount,
+			    switch_gpu_sibling_wait *siblings, uint32_t siblingCount,
 			    SwitchGpuRefusalNote &why);
 	void destroySets();
 	IOReturn unmapToken(const TegraGM20BAbiUnmap *in);
