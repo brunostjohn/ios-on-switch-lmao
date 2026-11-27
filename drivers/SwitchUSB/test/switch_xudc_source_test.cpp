@@ -154,12 +154,22 @@ TEST(SwitchXudcSource, NothingPolls)
     const std::string hardware = SourceText("../XudcHardware.cpp");
     EXPECT_THAT(hardware, Not(HasSubstr("switch_mmio_wait32(xudc"))) << "no XUDC register is spun on";
     const std::string settle = switch_ios::test::Body(hardware, "bool Hardware::settled(");
-    EXPECT_THAT(settle, HasSubstr("IOSleep(kStateChangeMs);"));
-    EXPECT_EQ(Count(settle, "xr("), 1u) << "one read after the sleep";
+    EXPECT_THAT(settle, HasSubstr("settleRegister("));
+    EXPECT_THAT(settle, HasSubstr("kFastSettleUs, kStateChangeMs"));
+    EXPECT_THAT(settle, HasSubstr("settleSleep(settleContext, mask, remainingNs);"));
     EXPECT_THAT(settle, HasSubstr("IOLog(\"SwitchUSB: DCI bits %#x: %s reads %#x, not %#x"));
-    EXPECT_THAT(settle, Not(HasSubstr("while")));
-    EXPECT_THAT(hardware, HasSubstr("constexpr uint32_t kStateChangeMs = 1;"));
+    EXPECT_THAT(settle, Not(HasSubstr("IOSleep(kStateChangeMs);")));
+    const std::string settleHdr = SourceText("../XudcSettle.h");
+    EXPECT_THAT(settleHdr, HasSubstr("constexpr uint32_t kFastSettleUs = 20;"));
+    EXPECT_THAT(settleHdr, HasSubstr("constexpr uint32_t kStateChangeMs = 1;"));
     EXPECT_THAT(hardware, Not(HasSubstr("IODelay(kStateChange")));
+    const std::string sleepForSettle = switch_ios::test::Body(driver, "void SwitchXUDC::sleepForSettle(");
+    EXPECT_THAT(sleepForSettle, HasSubstr("settleTimer->wakeAtTime(deadline);"));
+    EXPECT_THAT(sleepForSettle, HasSubstr("settleGate->commandSleep(&settleEvent, deadline, THREAD_UNINT);"));
+    EXPECT_THAT(switch_ios::test::Body(driver, "void SwitchXUDC::settleTimerFired("),
+                HasSubstr("self->settleGate->commandWakeup(&self->settleEvent, false);"));
+    EXPECT_THAT(switch_ios::test::Body(driver, "void SwitchXUDC::serviceEvents("),
+                HasSubstr("if (settlingDcis && !hw.nextTransferEventReady(settlingDcis))"));
     EXPECT_EQ(Count(hardware, "settled(EP_"), 6u)
         << "reload, an enable's reload, a halt or pause change, a removal's reload, thread idle, babble's stop";
     const std::string babble = switch_ios::test::Body(hardware, "void Hardware::haltAfterBabble(");

@@ -1319,10 +1319,16 @@ static void dockAltMode()
     gPd.unplug();
     gPd.status1 = 0x1280;
     gPd.status2 = 0x2000;
+    const uint64_t sleptBeforeResume = gSleptMS;
     switch_pd_sleep(false);
-    check(observed.plugged && !observed.settled && observed.contractMillivolts == 0 && gPd.vdmsSent == 2 &&
-              chgConfig() == 2 && gOutputs[TEGRA_GPIO(X, 3)] && gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 0,
-          "resume consumes dock removal and enters WaitSource with boost, rails and switches armed");
+    check(gSleptMS == sleptBeforeResume && observed.plugged && !observed.settled && observed.contractMillivolts == 0 &&
+              gPd.vdmsSent == 2 && chgConfig() == 2 && gOutputs[TEGRA_GPIO(X, 3)] && !gOutputs[TEGRA_GPIO(K, 5)] &&
+              (gPd.config1 >> 14) == 3,
+          "resume consumes dock removal and enters WaitSource with boost and PX3 up without sleeping");
+    advance(10);
+    check(gSleptMS == sleptBeforeResume && gOutputs[TEGRA_GPIO(X, 3)] && gOutputs[TEGRA_GPIO(K, 5)] &&
+              (gPd.config1 >> 14) == 0,
+          "VCONN and SPDSRC switches come up after the 10 ms non-blocking rail ramp timer");
     gPd.status1 = 0x9680;
     gPd.status2 = 0x2000;
     gPd.alert |= 1u << 13;
@@ -1497,11 +1503,16 @@ static void resetAtStart()
 {
     gPd.status1 = 0x0280;  // INSERT, DFP
     gPd.vendor = 0x4;      // OCP off
+    const uint64_t sleptBefore = gSleptMS;
     if (switch_battery_start())
         check(false, "switch_battery_start");
     advance(10);
+    check(gSleptMS == sleptBefore, "startup SYS_RESET uses a timer instead of IOSleep");
     check(!gPd.commands.empty() && gPd.commands.front() == "0d0d", "SYS_RESET first");
     check(logHas("SwitchPD: BM92T36 SYS_RESET: found plugged as DFP"), "one line");
+    check((gPd.vendor & 0x4) == 0x4, "OCP waits for the 100 ms startup reset timer");
+    advance(100);
+    check(gSleptMS == sleptBefore, "startup reset timer completes without IOSleep");
     check((gPd.vendor & 0x4) == 0, "OCP on after the reset");
 }
 
