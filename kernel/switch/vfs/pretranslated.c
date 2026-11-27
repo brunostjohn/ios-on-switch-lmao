@@ -44,6 +44,7 @@
 #include <sys/ubc_internal.h>
 #include <kern/clock.h>
 #include <kern/kalloc.h>
+#include <kern/locks.h>
 #include <mach/machine.h>
 #include <os/atomic_private.h>
 #include <pexpert/device_tree.h>
@@ -57,8 +58,81 @@
 #define SWITCH_PT_INDEX          ".index"
 #define SWITCH_PT_TRUST_PROPERTY "switch-pretranslated-cdhashes"
 #define SWITCH_PT_MAX_SIGNATURE  (40u << 20)
+#define SWITCH_PT_CACHE_SIZE     2048u
+#define SWITCH_PT_CACHE_SHARDS   16u
+#define SWITCH_PT_CACHE_VALID    0x01u
+#define SWITCH_PT_CACHE_IN_TREE  0x02u
 
 bool switch_pretranslated_on = false;
+
+struct switch_pt_cache_slot {
+    uint32_t seq;
+    uint32_t vid;
+    vnode_t vp;
+    uint64_t data_id;
+    uint64_t system_id;
+    uint8_t flags;
+};
+
+static LCK_GRP_DECLARE(switch_pt_lck_grp, "switch-pretranslated");
+static lck_spin_t switch_pt_cache_locks[SWITCH_PT_CACHE_SHARDS];
+static struct switch_pt_cache_slot switch_pt_cache[SWITCH_PT_CACHE_SIZE];
+
+static inline uint32_t switch_pt_cache_index(vnode_t vp)
+{
+    const uintptr_t bits = (uintptr_t)vp;
+    return (uint32_t)(((bits >> 8) ^ (bits >> 19)) & (SWITCH_PT_CACHE_SIZE - 1u));
+}
+
+static bool switch_pt_cache_get(vnode_t vp, bool *in_tree, uint64_t *data_id, uint64_t *system_id)
+{
+    const uint32_t vid = vnode_vid(vp);
+    const struct switch_pt_cache_slot *slot = &switch_pt_cache[switch_pt_cache_index(vp)];
+    const uint32_t seq1 = __atomic_load_n(&slot->seq, __ATOMIC_ACQUIRE);
+    if ((seq1 & 1u) != 0u) {
+        return false;
+    }
+    const vnode_t cached_vp = __atomic_load_n(&slot->vp, __ATOMIC_RELAXED);
+    const uint32_t cached_vid = __atomic_load_n(&slot->vid, __ATOMIC_RELAXED);
+    const uint8_t flags = __atomic_load_n(&slot->flags, __ATOMIC_RELAXED);
+    const uint64_t cached_data_id = __atomic_load_n(&slot->data_id, __ATOMIC_RELAXED);
+    const uint64_t cached_system_id = __atomic_load_n(&slot->system_id, __ATOMIC_RELAXED);
+    __atomic_thread_fence(__ATOMIC_ACQUIRE);
+    if (__atomic_load_n(&slot->seq, __ATOMIC_RELAXED) != seq1 || cached_vp != vp || cached_vid != vid ||
+        (flags & SWITCH_PT_CACHE_VALID) == 0u) {
+        return false;
+    }
+    if (in_tree) {
+        *in_tree = (flags & SWITCH_PT_CACHE_IN_TREE) != 0u;
+    }
+    if (data_id) {
+        *data_id = cached_data_id;
+    }
+    if (system_id) {
+        *system_id = cached_system_id;
+    }
+    return true;
+}
+
+static void switch_pt_cache_put(vnode_t vp, bool in_tree, uint64_t data_id, uint64_t system_id)
+{
+    const uint32_t idx = switch_pt_cache_index(vp);
+    lck_spin_t *lock = &switch_pt_cache_locks[idx & (SWITCH_PT_CACHE_SHARDS - 1u)];
+    struct switch_pt_cache_slot *slot = &switch_pt_cache[idx];
+    const uint32_t vid = vnode_vid(vp);
+    const uint8_t flags = SWITCH_PT_CACHE_VALID | (in_tree ? SWITCH_PT_CACHE_IN_TREE : 0u);
+    lck_spin_lock(lock);
+    const uint32_t seq = slot->seq;
+    __atomic_store_n(&slot->seq, seq + 1u, __ATOMIC_RELAXED);
+    __atomic_thread_fence(__ATOMIC_RELEASE);
+    __atomic_store_n(&slot->vp, vp, __ATOMIC_RELAXED);
+    __atomic_store_n(&slot->vid, vid, __ATOMIC_RELAXED);
+    __atomic_store_n(&slot->data_id, data_id, __ATOMIC_RELAXED);
+    __atomic_store_n(&slot->system_id, system_id, __ATOMIC_RELAXED);
+    __atomic_store_n(&slot->flags, flags, __ATOMIC_RELAXED);
+    __atomic_store_n(&slot->seq, seq + 2u, __ATOMIC_RELEASE);
+    lck_spin_unlock(lock);
+}
 
 static struct {
     mount_t system;
@@ -323,6 +397,9 @@ void switch_pretranslated_capture(void)
         switch_pt_release();
         return;
     }
+    for (uint32_t i = 0; i < SWITCH_PT_CACHE_SHARDS; ++i) {
+        lck_spin_init(&switch_pt_cache_locks[i], &switch_pt_lck_grp, LCK_ATTR_NULL);
+    }
     const fsid_t fsid = vfs_statfs(switch_pt.data)->f_fsid;
     printf("SwitchPretranslated: %u files from /private/var/" SWITCH_PT_TREE " (fsid %x:%x)\n",
            switch_pt.tables.index.count, (uint32_t)fsid.val[0], (uint32_t)fsid.val[1]);
@@ -361,7 +438,7 @@ void switch_pretranslated_redirect(struct nameidata *ndp)
 {
     struct componentname *cnp = &ndp->ni_cnd;
     vnode_t vp = ndp->ni_vp;
-    if (!os_atomic_load(&switch_pretranslated_on, acquire) || vp == NULLVP || vp->v_type != VREG ||
+    if (!switch_pretranslated_on || vp == NULLVP || vp->v_type != VREG ||
         vp->v_mount != switch_pt.system || cnp->cn_nameiop != LOOKUP || (cnp->cn_flags & CN_WANTSRSRCFORK) ||
         vnode_isnamedstream(vp) || cnp->cn_namelen <= 0) {
         return;
@@ -407,22 +484,30 @@ void switch_pretranslated_redirect(struct nameidata *ndp)
  * the caller's attributes, which may already hold the file id. */
 static uint64_t switch_pt_system_id_of(vnode_t vp, const struct vnode_attr *known, uint64_t *data_id)
 {
-    if (!os_atomic_load(&switch_pretranslated_on, acquire) || vp == NULLVP || vp->v_mount != switch_pt.data ||
+    if (!switch_pretranslated_on || vp == NULLVP || vp->v_mount != switch_pt.data ||
         vp->v_type != VREG) {
         return 0;
     }
     if (known != NULL && VATTR_IS_SUPPORTED(known, va_fileid)) {
         *data_id = known->va_fileid;
-    } else {
-        struct vnode_attr id;
-        VATTR_INIT(&id);
-        VATTR_WANTED(&id, va_fileid);
-        if (vnode_getattr(vp, &id, vfs_context_kernel()) || !VATTR_IS_SUPPORTED(&id, va_fileid)) {
-            return 0;
-        }
-        *data_id = id.va_fileid;
+        return switch_pt_system_id(&switch_pt.tables, *data_id);
     }
-    return switch_pt_system_id(&switch_pt.tables, *data_id);
+    uint64_t system_id = 0;
+    if (switch_pt_cache_get(vp, NULL, data_id, &system_id)) {
+        return system_id;
+    }
+    struct vnode_attr id;
+    VATTR_INIT(&id);
+    VATTR_WANTED(&id, va_fileid);
+    if (vnode_getattr(vp, &id, vfs_context_kernel()) || !VATTR_IS_SUPPORTED(&id, va_fileid)) {
+        return 0;
+    }
+    uint32_t entry = SWITCH_PT_PROTECTED;
+    const bool in_tree = switch_pt_map_get(&switch_pt.tables.data, id.va_fileid, &entry);
+    system_id = (in_tree && entry < SWITCH_PT_PROTECTED) ? switch_pt_file_at(&switch_pt.tables.index, entry).system_id : 0;
+    switch_pt_cache_put(vp, in_tree, id.va_fileid, system_id);
+    *data_id = id.va_fileid;
+    return system_id;
 }
 
 /* stat and getattrlist: the System file's device and id, so dev and ino stay one file's (identity.c says why statfs
@@ -492,18 +577,27 @@ static bool switch_pt_in_tree(vnode_t vp)
     if (vp == NULLVP || vp->v_mount != switch_pt.data) {
         return false;
     }
+    bool in_tree = false;
+    if (switch_pt_cache_get(vp, &in_tree, NULL, NULL)) {
+        return in_tree;
+    }
     struct vnode_attr va;
     VATTR_INIT(&va);
     VATTR_WANTED(&va, va_fileid);
     if (vnode_getattr(vp, &va, vfs_context_kernel()) || !VATTR_IS_SUPPORTED(&va, va_fileid)) {
         return true;
     }
-    return switch_pt_map_get(&switch_pt.tables.data, va.va_fileid, NULL);
+    uint32_t entry = SWITCH_PT_PROTECTED;
+    in_tree = switch_pt_map_get(&switch_pt.tables.data, va.va_fileid, &entry);
+    const uint64_t system_id =
+        (in_tree && entry < SWITCH_PT_PROTECTED) ? switch_pt_file_at(&switch_pt.tables.index, entry).system_id : 0;
+    switch_pt_cache_put(vp, in_tree, va.va_fileid, system_id);
+    return in_tree;
 }
 
 int switch_pretranslated_refuse(enum switch_pt_op op, vnode_t v0, vnode_t v1, vnode_t v2, vnode_t v3, uint32_t intent)
 {
-    if (!os_atomic_load(&switch_pretranslated_on, acquire) || !switch_pt_denied(op, SWITCH_PT_ANY_VNODE, intent)) {
+    if (!switch_pretranslated_on || !switch_pt_denied(op, SWITCH_PT_ANY_VNODE, intent)) {
         return 0;
     }
     const vnode_t vnodes[4] = {v0, v1, v2, v3};
@@ -542,7 +636,7 @@ static bool switch_pt_signed_as(vnode_t vp, const uint8_t *cdhash)
  */
 bool switch_pretranslated_authentic(vnode_t vp)
 {
-    if (!os_atomic_load(&switch_pretranslated_on, acquire) || vp == NULLVP || vp->v_mount != switch_pt.data ||
+    if (!switch_pretranslated_on || vp == NULLVP || vp->v_mount != switch_pt.data ||
         !vnode_isreg(vp)) {
         return false;
     }
@@ -612,7 +706,7 @@ static int switch_pt_load_signature(vnode_t vp, off_t slice_offset, off_t signat
 vnode_t switch_pretranslated_translation(vnode_t vp, off_t slice_offset, off_t signature_offset,
                                          uint32_t signature_size)
 {
-    if (!os_atomic_load(&switch_pretranslated_on, acquire) || !switch_pt.originals.count || vp == NULLVP ||
+    if (!switch_pretranslated_on || !switch_pt.originals.count || vp == NULLVP ||
         vp->v_mount != switch_pt.data) {
         return NULLVP;
     }

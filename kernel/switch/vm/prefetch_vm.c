@@ -154,6 +154,7 @@ void switch_vm_prefetch_wait_inflight_drain(void)
         }
         assert_wait((event_t)&g_pace_event, THREAD_UNINT);
         __atomic_store_n(&g_pace.waiting, 1u, __ATOMIC_SEQ_CST);
+        __atomic_thread_fence(__ATOMIC_SEQ_CST);
         if (switch_pace_inflight_bytes(&g_pace) == 0u) {
             __atomic_store_n(&g_pace.waiting, 0u, __ATOMIC_RELAXED);
             clear_wait(current_thread(), THREAD_AWAKENED);
@@ -185,6 +186,7 @@ bool switch_vm_prefetch_wait_can_issue(void)
         }
         assert_wait((event_t)&g_pace_event, THREAD_UNINT);
         __atomic_store_n(&g_pace.waiting, 1u, __ATOMIC_SEQ_CST);
+        __atomic_thread_fence(__ATOMIC_SEQ_CST);
         if (switch_pace_replay_stop_reason(&g_pace) != SWITCH_PREFETCH_STOP_NONE || switch_pace_can_issue(&g_pace)) {
             __atomic_store_n(&g_pace.waiting, 0u, __ATOMIC_RELAXED);
             clear_wait(current_thread(), THREAD_AWAKENED);
@@ -225,6 +227,7 @@ uint32_t switch_vm_prefetch_wait_stop(void)
         }
         assert_wait((event_t)&g_pace_event, THREAD_UNINT);
         __atomic_store_n(&g_pace.waiting, 1u, __ATOMIC_SEQ_CST);
+        __atomic_thread_fence(__ATOMIC_SEQ_CST);
         if (switch_pace_boot_stop_reason(&g_pace) != SWITCH_PREFETCH_STOP_NONE) {
             __atomic_store_n(&g_pace.waiting, 0u, __ATOMIC_RELAXED);
             clear_wait(current_thread(), THREAD_AWAKENED);
