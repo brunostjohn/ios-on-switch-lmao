@@ -6,7 +6,7 @@ use std::sync::atomic::AtomicBool;
 
 use clap::Parser;
 use sha2::{Digest, Sha256};
-use switch_seed::{SeedInputs, SeedOptions, build_seed, read_bundle_stack_key};
+use switch_seed::{SeedInputs, SeedOptions, build_seed, read_bundle_stack_key, run_seed_repro_smoke};
 use switch_seed_plan::Depth;
 
 #[derive(Debug, Parser)]
@@ -15,18 +15,21 @@ use switch_seed_plan::Depth;
     about = "Build Switch GPU pipeline pack and native shader seed"
 )]
 struct Cli {
+    /// Run an IPSW-free cross-OS shader seed reproducibility smoke check from this seed tar alone.
     #[arg(long)]
-    build: String,
+    smoke_seed_tar: Option<PathBuf>,
     #[arg(long)]
-    qc_sha256: String,
+    build: Option<String>,
     #[arg(long)]
-    seed_tar: PathBuf,
+    qc_sha256: Option<String>,
     #[arg(long)]
-    os: PathBuf,
+    seed_tar: Option<PathBuf>,
     #[arg(long)]
-    system_cryptex: PathBuf,
+    os: Option<PathBuf>,
     #[arg(long)]
-    app_cryptex: PathBuf,
+    system_cryptex: Option<PathBuf>,
+    #[arg(long)]
+    app_cryptex: Option<PathBuf>,
     #[arg(long)]
     work_dir: PathBuf,
     #[arg(long, default_value = "deep")]
@@ -57,20 +60,31 @@ fn sha256_path(path: &PathBuf) -> Result<String, Box<dyn std::error::Error>> {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
+    if let Some(smoke_tar) = &cli.smoke_seed_tar {
+        let report = run_seed_repro_smoke(smoke_tar, &cli.work_dir, cli.threads)?;
+        print!("{}", report.format_manifest());
+        return Ok(());
+    }
+    let build = cli.build.as_deref().ok_or("--build is required")?;
+    let qc_sha256 = cli.qc_sha256.as_deref().ok_or("--qc-sha256 is required")?;
+    let seed_tar = cli.seed_tar.as_ref().ok_or("--seed-tar is required")?;
+    let os = cli.os.as_ref().ok_or("--os is required")?;
+    let system_cryptex = cli.system_cryptex.as_ref().ok_or("--system-cryptex is required")?;
+    let app_cryptex = cli.app_cryptex.as_ref().ok_or("--app-cryptex is required")?;
     let depth = Depth::parse(&cli.depth)?;
-    let seed_tar_sha256 = sha256_path(&cli.seed_tar)?;
+    let seed_tar_sha256 = sha256_path(seed_tar)?;
     let bundle_stack = match &cli.bundle_plist {
         Some(p) => read_bundle_stack_key(&fs::read(p)?)?,
         None => None,
     };
     let inputs = SeedInputs {
-        build: &cli.build,
-        qc_sha256: &cli.qc_sha256,
-        seed_tar: &cli.seed_tar,
+        build,
+        qc_sha256,
+        seed_tar,
         seed_tar_sha256: &seed_tar_sha256,
-        os_container: &cli.os,
-        system_cryptex: &cli.system_cryptex,
-        app_cryptex: &cli.app_cryptex,
+        os_container: os,
+        system_cryptex,
+        app_cryptex,
         os_sha256: None,
         system_cryptex_sha256: None,
         app_cryptex_sha256: None,

@@ -18,6 +18,7 @@ rust_library(
         "src/fsutil.rs",
         "src/lib.rs",
         "src/pipeline.rs",
+        "src/smoke.rs",
         "src/stages.rs",
     ],
     crate_root = "src/lib.rs",

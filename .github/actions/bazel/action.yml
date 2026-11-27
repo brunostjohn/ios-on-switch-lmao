@@ -40,11 +40,13 @@ runs:
         repository-cache: |
           - MODULE.bazel
           - MODULE.bazel.lock
+          - bazel/desktop/repos.bzl
           - bazel/lint/tools.bzl
           - bazel/llvm/llvm.bzl
           - bazel/python/requirements_lock.txt
           - bazel/rust/crates.lock.json
           - gpu/deps.bzl
+          - install/crates/crates.lock.json
           - ipsw/pins.bzl
           - third_party/mesa/bazel/repos.bzl
         cache-save: ${{ inputs.upload }}

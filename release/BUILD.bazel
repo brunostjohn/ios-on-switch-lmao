@@ -118,6 +118,12 @@ ipsw_free(
     tags = ["manual"],
 )
 
+ipsw_free(
+    name = "seed_smoke_binaries",
+    src = "//install/seed:desktop",
+    tags = ["manual"],
+)
+
 ipsw_free_tests(
     name = "ipsw_free_test",
     bindings = "//kernel:prelink_bindings_12377",

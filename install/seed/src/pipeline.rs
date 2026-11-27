@@ -195,7 +195,7 @@ fn compute_run_id(seed_tar_sha: &str, crawl_id: &str, depth: Depth) -> String {
     format!("{}-{}", &digest[..32], depth.as_str())
 }
 
-fn build_thread_pool(threads: Option<usize>) -> Result<rayon::ThreadPool> {
+pub(crate) fn build_thread_pool(threads: Option<usize>) -> Result<rayon::ThreadPool> {
     let n = threads.unwrap_or_else(|| {
         std::thread::available_parallelism()
             .map(std::num::NonZeroUsize::get)

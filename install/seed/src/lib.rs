@@ -4,14 +4,17 @@ pub mod error;
 pub mod ffi;
 mod fsutil;
 pub mod pipeline;
+pub mod smoke;
 mod stages;
 
 pub use asset::{
     EXPECTED_SPLIT_BUCKETS, MANIFEST_FORMAT, SeedAppLibrary, SeedAssetFile, SeedAssetManifest, SeedBucketCounts,
-    UnpackedSeedAsset, is_seed_asset_tar, parse_stack_key_hex, read_bundle_stack_key, unpack_seed_asset,
+    UnpackedSeedAsset, is_seed_asset_tar, parse_stack_key_hex, read_bundle_stack_key, read_seed_asset_manifest,
+    unpack_seed_asset,
 };
 pub use error::{Result, SeedError};
 pub use pipeline::{QC_REL_PATH, SeedInputs, SeedOptions, SeedOutput, StagedSeedFile, build_seed};
+pub use smoke::{SeedSmokeEntry, SeedSmokeReport, run_seed_repro_smoke};
 pub use switch_seed_plan::Depth;
 
 #[cfg(test)]

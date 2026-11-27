@@ -127,6 +127,18 @@ pub fn is_seed_asset_tar(path: &Path) -> Result<bool> {
     Ok(false)
 }
 
+pub fn read_seed_asset_manifest(tar_path: &Path) -> Result<SeedAssetManifest> {
+    let bytes = read_manifest_from_tar(tar_path)?;
+    let manifest: SeedAssetManifest = serde_json::from_slice(&bytes)?;
+    if manifest.format != MANIFEST_FORMAT {
+        return Err(SeedError::Asset(format!(
+            "unsupported seed asset manifest format {}",
+            manifest.format
+        )));
+    }
+    Ok(manifest)
+}
+
 fn read_manifest_from_tar(tar_path: &Path) -> Result<Vec<u8>> {
     let file = File::open(tar_path).map_err(|e| SeedError::io_path(tar_path, e))?;
     let mut archive = tar::Archive::new(BufReader::new(file));
