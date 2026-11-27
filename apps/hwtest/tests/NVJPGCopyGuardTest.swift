@@ -54,11 +54,9 @@ struct NVJPGCopyGuardTest: HWTest {
         rows.indices.filter { rows[$0] != clear[$0 % 4] }.count
     }
 
-    /// A BGRA surface a GPU pass clears, so GM20B lays it out block-linear, and the texture that cleared it
+    /// A BGRA surface decided uncompressed block-linear first, then cleared on the GPU
     static func cleared(_ gpu: GPU) async throws -> (IOSurface, MTLTexture) {
-        guard let surface = IOSurface(properties: NVJPGTileProbeTest.properties) else {
-            throw TestFailure("IOSurface \(size) not made")
-        }
+        let (surface, sampler) = try await NVJPGTileProbeTest.blockLinear(gpu)
         let d = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .bgra8Unorm, width: size, height: size, mipmapped: false
         )
@@ -77,6 +75,7 @@ struct NVJPGCopyGuardTest: HWTest {
             pass.colorAttachments[0].storeAction = .store
             commands.makeRenderCommandEncoder(descriptor: pass)!.endEncoding()
         }
+        withExtendedLifetime(sampler) { _ = $0 }
         return (surface, texture)
     }
 }

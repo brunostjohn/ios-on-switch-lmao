@@ -37,6 +37,12 @@ uint32_t switch_exec_syncpt_marked(void)
 	return test_syncpt_marked;
 }
 
+int switch_gpu_timeline_has_syncpt(const struct switch_gpu_timeline *timeline)
+{
+	(void)timeline;
+	return test_syncpt != 0;
+}
+
 uint32_t switch_gpu_timeline_syncpt_next(struct switch_gpu_timeline *timeline, uint32_t first,
 					 uint32_t last)
 {

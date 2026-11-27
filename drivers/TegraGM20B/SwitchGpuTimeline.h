@@ -39,6 +39,7 @@ void switch_gpu_timeline_token(struct switch_gpu_timeline *timeline, uint32_t va
  * FB_FLUSH): the syncpoint to increment right after that drain and ahead of the job's fence release, for the job
  * [first, last], its threshold recorded; 0 when the timeline has none. */
 #define SWITCH_GPU_TIMELINE_SYNCPTS 8u
+int switch_gpu_timeline_has_syncpt(const struct switch_gpu_timeline *timeline);
 uint32_t switch_gpu_timeline_syncpt_next(struct switch_gpu_timeline *timeline, uint32_t first,
 					 uint32_t last);
 /* 1: the token is in a drained job whose last seqno is `last`; once host1x syncpoint `id` reaches `threshold`, that

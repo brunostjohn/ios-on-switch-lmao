@@ -30,7 +30,7 @@ struct StorageIOTest: HWTest {
         guard case .value(let boot) = read, boot != "down" else {
             var metrics = Metrics()
             metrics.set("sysctl", KernelSysctl.code(read.error))
-            return .skip(KernelSysctl.unreadable(Self.sysctl, read.error), metrics)
+            return .skip(KernelSysctl.unreadable(Self.sysctl, read.error, flag: "--//bazel:stats_io"), metrics)
         }
         let url = Disk.file("io.bin")
         defer { try? FileManager.default.removeItem(at: url) }

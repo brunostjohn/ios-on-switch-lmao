@@ -3,6 +3,7 @@ import HWTestCommon
 import HWTestCore
 import HWTestGPU
 import HWTestKit
+import HWTestShared
 import Metal
 
 /// The kernel makes its spares from fresh pages without zeroing them on the CPU: their pages keep what their last owner
@@ -44,7 +45,10 @@ struct FreshSparePathTest: GPUPathTest {
         }
         switch seeded {
         case nil:
-            failures.append("the kernel's paths line is unreadable: whether a record seeded the class is unknown")
+            let why = KernelSysctl.isReleaseKernel()
+                ? "no path counters: a release kernel"
+                : "no path counters (build with --//bazel:stats_gpu)"
+            PathParts.current?.skip(why, counters: [])
         case 0:
             PathParts.current?.skip(
                 "no demand record seeded the write-combined 24 MiB class this boot (\(madeUs) us): this ask "

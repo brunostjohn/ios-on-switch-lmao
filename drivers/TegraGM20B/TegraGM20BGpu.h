@@ -602,6 +602,7 @@ int tegra_gm20b_iosurface_view(void *client, uint32_t index, uint32_t surface_id
  * until it is done, on the fence interrupt (a wait that runs long recovers what the GPU is stuck on, as
  * tegra_gm20b_sync_for_cpu's does); all, every live channel's submissions so far. */
 uint32_t tgm_chan_uid(struct tgm_chan *chan);
+int switch_gpu_chan_has_syncpt(const struct tgm_chan *chan);
 int tgm_writer_done(uint32_t uid, uint32_t seqno);
 void tgm_writer_wait(uint32_t uid, uint32_t seqno);
 /* The hang rule's check (tgm_chan_check_progress) of the channel of `uid` for a waiter on `seqno` that holds nothing on

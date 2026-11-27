@@ -24,7 +24,9 @@ public struct PlanesTest: HWTest {
         guard !before.isEmpty else {
             var metrics = Metrics()
             metrics.set("sysctl", KernelSysctl.code(unread))
-            return .skip(KernelSysctl.unreadable("kern.switch_planes_*", unread), metrics)
+            return .skip(
+                KernelSysctl.unreadable("kern.switch_planes_*", unread, flag: "--//bazel:stats_frame"), metrics
+            )
         }
         guard let clip = Clip.all.first(where: { $0.codec == .h264 && $0.height == 1080 }) else {
             return .skip("no H.264 1080p clip")

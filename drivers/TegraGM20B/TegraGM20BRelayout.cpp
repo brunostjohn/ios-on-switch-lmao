@@ -337,6 +337,11 @@ extern "C" int tgm_relayout(const struct tgm_relayout_pages *surface,
 {
 	if (!gRelayout.lock || !surface || !rows || !layout)
 		return -22;
+	// Wait for this surface's own GPU writers before entering the shared relayout channel so a slow writer cannot
+	// head-of-line block unrelated surfaces' CPU locks.
+	for (uint32_t i = 0; i < nwriters; ++i)
+		if (!tgm_writer_done(writers[i].uid, writers[i].seqno))
+			tgm_writer_wait(writers[i].uid, writers[i].seqno);
 	IOLockLock(gRelayout.lock);
 	const int ret = move(*surface, *rows, *layout, bytes_per_row, tgm_relayout_op(op), writers,
 			     nwriters);

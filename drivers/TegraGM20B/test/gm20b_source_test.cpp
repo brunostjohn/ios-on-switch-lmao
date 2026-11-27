@@ -1013,7 +1013,8 @@ TEST(GM20BVisibilitySource, AJobWritingAScannedBackingIsExternal)
 			       "scanoutWrites |= switch_gpu_backing_scanned(bo->backing) != 0;"));
 	EXPECT_TRUE(job.has(
 		"switch_gpu_job_visibility(head.flags, events->signals(), unlockedWrites || "
-		"scanoutWrites, hostWritten || transaction.host_written)"));
+		"scanoutWrites || (writeCount && switch_gpu_chan_has_syncpt(chan)), "
+		"hostWritten || transaction.host_written)"));
 	EXPECT_TRUE(
 		Block(SourceText("../SwitchGpuBacking.cpp"),
 		      "extern \"C\" int switch_gpu_backing_scanned(")

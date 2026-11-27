@@ -5,6 +5,7 @@ import HWTestCommon
 import HWTestCore
 import HWTestGPU
 import HWTestKit
+import HWTestShared
 import HWTestVideo
 import IOSurface
 import Metal
@@ -256,7 +257,10 @@ struct UseRangesPathTest: GPUPathTest {
             if route == "unread" { failures.append("the facade did not say which route the Shared buffers took") }
         } else {
             metrics.set("shared_use_adds", "unread")
-            failures.append("the facade's encode profile has no use_adds (a release build)")
+            let why = KernelSysctl.isReleaseKernel()
+                ? "the facade's encode profile has no use_adds (a release build)"
+                : "no encode profile (build with --//bazel:prof_gpu)"
+            PathParts.current?.skip(why, counters: counters)
         }
         if sharedWrong > 0 { failures.append("\(sharedWrong) bytes wrong across Shared buffers that share chunks") }
         if heapWrong > 0 { failures.append("\(heapWrong) bytes wrong across a Shared heap's buffers") }

@@ -32,6 +32,27 @@ bool stage(gm20b::Reader &r, uint32_t type, const std::string &key, gm20b::Captu
     return true;
 }
 
+bool decodeEntryCompat(std::string entry, const gm20b::CacheKey &cache, gm20b::RuntimeRecord &record,
+                       std::string &refusal)
+{
+    // Staged 24B119 .swab fixtures embed format 19 records (identical to format 20 plus a trailing 8-byte FNV-1a sum).
+    if (entry.size() >= sizeof(gm20b::kEntryMagic) + 12 &&
+        memcmp(entry.data(), gm20b::kEntryMagic, sizeof(gm20b::kEntryMagic)) == 0) {
+        uint32_t format = 0;
+        memcpy(&format, entry.data() + sizeof(gm20b::kEntryMagic), sizeof(format));
+        if (format == 19 && gm20b::kEntryFormat == 20) {
+            uint64_t sum = 0;
+            memcpy(&sum, entry.data() + entry.size() - sizeof(sum), sizeof(sum));
+            if (sum != gm20b::Pack::fnv(entry.data(), entry.size() - sizeof(sum)))
+                return false;
+            entry.resize(entry.size() - sizeof(sum));
+            const uint32_t current = gm20b::kEntryFormat;
+            memcpy(entry.data() + sizeof(gm20b::kEntryMagic), &current, sizeof(current));
+        }
+    }
+    return gm20b::decodeEntry(entry, cache, record, refusal) == gm20b::RecordCache::Found::Record;
+}
+
 bool decode(const std::string &bytes, const char *key, Input &in)
 {
     gm20b::Reader r(bytes);
@@ -41,7 +62,7 @@ bool decode(const std::string &bytes, const char *key, Input &in)
     gm20b::CacheKey cache{};
     cache.key = in.key;
     std::string refusal;
-    if (gm20b::decodeEntry(r.text(), cache, in.nak, refusal) != gm20b::RecordCache::Found::Record)
+    if (!decodeEntryCompat(r.text(), cache, in.nak, refusal))
         return false;
     in.samples = r.value<uint32_t>();
     in.depth = r.value<uint32_t>();

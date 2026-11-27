@@ -255,6 +255,10 @@ TEST(DisplayPlanesSource, RefusedLayoutsLoggedOnlyByDebugKernels)
     EXPECT_TRUE(
         release.has("static void planeNoteRefused(unsigned, uint32_t, const bool *, const native_planes::Layer *, "
                     "uint32_t, uint32_t, const native_planes::Limits &) {}"));
+    const CodeText statsOn(Configured(totals, "SWITCH_FRAME_TIMELINE", true));
+    const CodeText statsOff(Configured(totals, "SWITCH_FRAME_TIMELINE", false));
+    EXPECT_TRUE(statsOn.has("sysctl_register_oid(&planeTotalOids[i]);"));
+    EXPECT_FALSE(statsOff.has("sysctl_register_oid(&planeTotalOids[i]);"));
 }
 
 // Window B changes whose surface the GPU renders follow NativePlaneFence.h: they ride on the window A frame's present,

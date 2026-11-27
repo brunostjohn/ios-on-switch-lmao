@@ -28,7 +28,7 @@ public struct PromiseTotals {
                 directGivenUp: fields["direct_given_up"] ?? -1
             )
         case .failed(let error):
-            throw TestFailure(KernelSysctl.unreadable("kern.switch_gpu_promises", error))
+            throw TestFailure(KernelSysctl.unreadable("kern.switch_gpu_promises", error, flag: "--//bazel:stats_gpu"))
         }
     }
 }

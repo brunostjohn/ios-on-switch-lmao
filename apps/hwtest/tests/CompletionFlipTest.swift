@@ -38,7 +38,7 @@ struct CompletionFlipTest: HWTest {
         guard !before.isEmpty else {
             var metrics = Metrics()
             metrics.set("sysctl", KernelSysctl.code(unread))
-            return .skip(KernelSysctl.unreadable("kern.switch_flips_*", unread), metrics)
+            return .skip(KernelSysctl.unreadable("kern.switch_flips_*", unread, flag: "--//bazel:stats_frame"), metrics)
         }
         let done = Waiter<Bool>()
         let recorder = await context.onStage(fullScreen: true) { stage -> PacingRecorder in
