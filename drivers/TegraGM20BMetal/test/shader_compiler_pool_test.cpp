@@ -460,4 +460,99 @@ TEST(ShaderCompilerPool, JoiningARunningWarmOrSameBandJobCallsServeWithItsWorker
     EXPECT_EQ(h.completed[202], 2);
 }
 
+TEST(ShaderCompilerPool, LiveClientAsyncCompileBypassesRunningBootReplay)
+{
+    Harness h;
+    {
+        auto work = std::make_unique<Item>();
+        work->n = 1;
+        EXPECT_TRUE(h.pool->submit(nameOf(1), std::move(work), Waiter{0, 0, Band::Background, false, false, true}));
+    }
+    h.waitRunning(1);
+
+    EXPECT_TRUE(h.submit(2, 201, Band::Background, false, 42));
+    h.waitStarted(2);
+    h.release(2);
+    {
+        std::unique_lock<std::mutex> l(h.lock);
+        h.changed.wait(l, [&] {
+            return h.completed.count(201) != 0;
+        });
+        EXPECT_EQ(h.completed[201], 2);
+        EXPECT_EQ(h.running, 1u) << "boot replay still running while live client async compile finished";
+    }
+
+    h.release(1);
+    h.pool->drain();
+}
+
+TEST(ShaderCompilerPool, BootReplayYieldsWhileLiveClientCompilesAreActive)
+{
+    Harness h;
+    EXPECT_TRUE(h.submit(1, 101, Band::Background, false, 10));
+    h.waitRunning(1);
+
+    {
+        auto replay = std::make_unique<Item>();
+        replay->n = 2;
+        EXPECT_TRUE(h.pool->submit(nameOf(2), std::move(replay), Waiter{0, 0, Band::Background, false, false, true}));
+    }
+    EXPECT_TRUE(h.submit(3, 102, Band::Background, false, 11));
+    h.release(1);
+    h.waitStarted(2);
+    {
+        std::lock_guard<std::mutex> l(h.lock);
+        ASSERT_GE(h.started.size(), 2u);
+        EXPECT_EQ(h.started[1], 3u) << "live client async compile must preempt queued boot replay";
+    }
+    h.release(3);
+    h.waitStarted(3);
+    {
+        std::lock_guard<std::mutex> l(h.lock);
+        ASSERT_GE(h.started.size(), 3u);
+        EXPECT_EQ(h.started[2], 2u) << "boot replay runs once live client work finishes";
+    }
+    h.release(2);
+    h.pool->drain();
+    EXPECT_EQ(h.completed[101], 1);
+    EXPECT_EQ(h.completed[102], 3);
+}
+
+TEST(ShaderCompilerPool, LiveClientAsyncJoinPromotesRunningAndQueuedBootReplay)
+{
+    Harness h;
+    {
+        auto replay = std::make_unique<Item>();
+        replay->n = 1;
+        EXPECT_TRUE(h.pool->submit(nameOf(1), std::move(replay), Waiter{0, 0, Band::Background, false, false, true}));
+    }
+    h.waitRunning(1);
+    EXPECT_FALSE(h.submit(1, 301, Band::Background, false, 50));
+    EXPECT_FALSE(h.submit(1, 302, Band::Background, false, 51));
+    {
+        std::lock_guard<std::mutex> l(h.lock);
+        ASSERT_EQ(h.raises.size(), 1u);
+        EXPECT_EQ(h.raises[0], Band::Utility);
+    }
+    h.release(1);
+    h.pool->drain();
+    EXPECT_EQ(h.completed[301], 1);
+    EXPECT_EQ(h.completed[302], 1);
+
+    EXPECT_TRUE(h.submit(10, 401, Band::Interactive, false, 60));
+    h.waitRunning(1);
+    {
+        auto replay = std::make_unique<Item>();
+        replay->n = 11;
+        EXPECT_TRUE(h.pool->submit(nameOf(11), std::move(replay), Waiter{0, 0, Band::Background, false, false, true}));
+    }
+    EXPECT_FALSE(h.submit(11, 402, Band::Background, false, 61));
+    h.waitRunning(2);
+    h.release(10);
+    h.release(11);
+    h.pool->drain();
+    EXPECT_EQ(h.completed[401], 10);
+    EXPECT_EQ(h.completed[402], 11);
+}
+
 }  // namespace

@@ -68,6 +68,8 @@ TEST(CompilerRefusals, ARefusalIsThisBuildsAtItsCompileAndTheWarmUpMakesAnotherB
                 HasSubstr("if (result == TegraGM20BCompileRefused)\n        refusals_->confirm(asked.prepared.name);"));
     EXPECT_THAT(kept, HasSubstr("(result == TegraGM20BCompileMade || result == TegraGM20BCompileRefused) && "
                                 "!asked.request.empty()"));
+    EXPECT_THAT(kept, HasSubstr("asked.prepared.request.kind != gm20b::RequestKind::Library"));
+    EXPECT_THAT(warm, HasSubstr("prepared.request.kind == gm20b::RequestKind::Library"));
 }
 
 // A compile's result keeps a made entry of its content already stored (compiler_store.h Store::put's `keep`), and a

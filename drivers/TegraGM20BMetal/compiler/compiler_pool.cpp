@@ -58,9 +58,19 @@ Pool::~Pool()
         idleWorker_.join();
 }
 
+namespace {
+
+bool isReplayWaiter(const Waiter &w)
+{
+    return w.replay || (!w.id && !w.client);
+}
+
+}  // namespace
+
 bool Pool::submit(const Name &name, std::unique_ptr<Work> work, const Waiter &asked)
 {
     Waiter waiter = asked;
+    const bool replay = isReplayWaiter(waiter);
     std::unique_lock<std::mutex> l(lock_);
     Name key = name;
     auto found = jobs_.find(key);
@@ -75,7 +85,8 @@ bool Pool::submit(const Name &name, std::unique_ptr<Work> work, const Waiter &as
         job->name = key;
         job->work = std::move(work);
         job->waiters.push_back(waiter);
-        job->band = waiter.split ? Band::Background : waiter.band;
+        job->replay = replay;
+        job->band = (replay || waiter.split) ? Band::Background : waiter.band;
         job->order = ++arrivals_;
         job->client = waiter.client;
         jobs_.emplace(key, job);
@@ -93,18 +104,31 @@ bool Pool::submit(const Name &name, std::unique_ptr<Work> work, const Waiter &as
         hooks_.complete(waiter, result);
         return false;
     }
+    const bool promotedFromReplay = job.replay && !replay;
+    if (promotedFromReplay)
+        job.replay = false;
     job.waiters.push_back(waiter);
     const uint32_t serveSlot = job.running && !job.primaryDone && waiter.id ? job.workerSlot : 0;
-    const Band band = waiter.split ? Band::Background : waiter.band;
-    if (band > job.band) {
+    const Band band = (replay || waiter.split) ? Band::Background : waiter.band;
+    const Band prevBand = job.band;
+    const bool raisedBand = band > job.band;
+    if (raisedBand)
         job.band = band;
-        if (job.running && !job.primaryDone) {
+    const bool wake = !job.running && (promotedFromReplay || raisedBand);
+    if (job.running && !job.primaryDone) {
+        if (raisedBand) {
             if (void *token = hooks_.raise(job.worker, band))
+                job.raises.push_back(token);
+            stats_.raised++;
+        } else if (promotedFromReplay && prevBand == Band::Background) {
+            if (void *token = hooks_.raise(job.worker, Band::Utility))
                 job.raises.push_back(token);
             stats_.raised++;
         }
     }
     l.unlock();
+    if (wake)
+        work_.notify_one();
     if (serveSlot && hooks_.serve)
         hooks_.serve(waiter.id, serveSlot);
     return false;
@@ -119,23 +143,58 @@ std::shared_ptr<Pool::Job> Pool::next()
                 return true;
         return false;
     };
+    bool liveActive = foregroundRunning_ > 0 || backgroundStarting_ > 0;
+    if (!liveActive) {
+        for (const auto &[name, job] : jobs_)
+            if (!job->running && !job->replay) {
+                liveActive = true;
+                break;
+            }
+    }
     std::shared_ptr<Job> best;
     bool bestBusy = false;
     for (const auto &[name, job] : jobs_) {
         if (job->running)
             continue;
-        const bool foreground = job->band > Band::Background;
-        if (foreground ? foregroundRunning_ >= kForeground : backgroundStarting_ >= kBackgroundStarts)
-            continue;
-        const bool clientBusy = busy(job->client);
-        if (!best || job->band > best->band ||
-            (job->band == best->band &&
-             (bestBusy > clientBusy || (bestBusy == clientBusy && job->order < best->order)))) {
+        if (job->replay) {
+            if (liveActive || replayStarting_ >= kReplayStarts)
+                continue;
+        } else if (job->band > Band::Background) {
+            if (foregroundRunning_ >= kForeground)
+                continue;
+        } else {
+            if (backgroundStarting_ >= kBackgroundStarts)
+                continue;
+        }
+        const bool clientBusy = !job->replay && busy(job->client);
+        if (!best || (best->replay && !job->replay) ||
+            (job->replay == best->replay &&
+             (job->band > best->band ||
+              (job->band == best->band &&
+               (bestBusy > clientBusy || (bestBusy == clientBusy && job->order < best->order)))))) {
             best = job;
             bestBusy = clientBusy;
         }
     }
     return best;
+}
+
+void Pool::releaseLane(Job &job)
+{
+    switch (job.lane) {
+    case Job::Lane::Foreground:
+        foregroundRunning_--;
+        break;
+    case Job::Lane::Background:
+        backgroundStarting_--;
+        break;
+    case Job::Lane::Replay:
+        replayStarting_--;
+        break;
+    case Job::Lane::None:
+        break;
+    }
+    job.lane = Job::Lane::None;
 }
 
 void Pool::workerLoop(unsigned slot)
@@ -154,8 +213,16 @@ void Pool::workerLoop(unsigned slot)
         job->running = true;
         job->worker = pthread_self();
         job->workerSlot = slot;
-        job->foreground = job->band > Band::Background;
-        (job->foreground ? foregroundRunning_ : backgroundStarting_)++;
+        if (job->replay) {
+            job->lane = Job::Lane::Replay;
+            replayStarting_++;
+        } else if (job->band > Band::Background) {
+            job->lane = Job::Lane::Foreground;
+            foregroundRunning_++;
+        } else {
+            job->lane = Job::Lane::Background;
+            backgroundStarting_++;
+        }
         const Band band = job->band;
         std::vector<uint64_t> ids;
         if (hooks_.serve) {
@@ -193,12 +260,7 @@ void Pool::primary(const std::shared_ptr<Job> &job, int32_t result)
         job->waiters.erase(split, job->waiters.end());
         splitWaited = !job->waiters.empty();
         raises.swap(job->raises);
-        if (job->foreground) {
-            foregroundRunning_--;
-            job->foreground = false;
-        } else {
-            backgroundStarting_--;
-        }
+        releaseLane(*job);
         job->band = Band::Background;
     }
     work_.notify_all();
@@ -215,35 +277,32 @@ void Pool::finish(const std::shared_ptr<Job> &job, int32_t splitResult)
     std::vector<Waiter> answered;
     std::vector<void *> raises;
     int32_t primaryResult = splitResult;
-    bool idle = false;
     {
         std::lock_guard<std::mutex> l(lock_);
-        if (!job->primaryDone) {
-            if (job->foreground)
-                foregroundRunning_--;
-            else
-                backgroundStarting_--;
-        }
+        if (!job->primaryDone)
+            releaseLane(*job);
         primaryResult = job->primaryDone ? job->primaryResult : splitResult;
         answered.swap(job->waiters);
         raises.swap(job->raises);
         jobs_.erase(job->name);
-        idle = jobs_.empty();
+        finishing_++;
     }
     work_.notify_all();
-    idle_.notify_all();
     for (const Waiter &w : answered)
         hooks_.complete(w, w.split ? splitResult : primaryResult);
     for (void *token : raises)
         hooks_.lower(token);
-    if (idle && hooks_.idle) {
-        {
-            std::lock_guard<std::mutex> l(lock_);
-            if (jobs_.empty())
-                ++idleEpoch_;
-        }
-        idleWork_.notify_one();
+    bool idle = false;
+    {
+        std::lock_guard<std::mutex> l(lock_);
+        finishing_--;
+        idle = jobs_.empty() && finishing_ == 0;
+        if (idle && hooks_.idle)
+            ++idleEpoch_;
     }
+    idle_.notify_all();
+    if (idle && hooks_.idle)
+        idleWork_.notify_one();
 }
 
 void Pool::idleLoop()
@@ -252,7 +311,7 @@ void Pool::idleLoop()
     std::unique_lock<std::mutex> l(lock_);
     for (;;) {
         idleWork_.wait(l, [&] {
-            return stopping_ || (idleEpoch_ != idleHandled_ && jobs_.empty());
+            return stopping_ || (idleEpoch_ != idleHandled_ && jobs_.empty() && finishing_ == 0);
         });
         if (stopping_)
             return;
@@ -268,7 +327,7 @@ void Pool::drain()
 {
     std::unique_lock<std::mutex> l(lock_);
     idle_.wait(l, [&] {
-        return jobs_.empty();
+        return jobs_.empty() && finishing_ == 0;
     });
 }
 

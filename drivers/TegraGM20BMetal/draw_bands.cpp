@@ -23,8 +23,9 @@ BandGrid RenderEncoder::drawBands(uint32_t vertices, uint32_t instances, uint64_
     if (!hasProgress && cb_->bands >= kBandsPerCommandBuffer)
         return {};
     const bool unmeasured = units >= kMeasureUnits && !measuredOnce(pl.bandRate);
+    const uint32_t staticInstructions = std::min(pl.fragmentInstructions, kMaxStaticInstructions);
     BandDraw d;
-    d.fragmentNs = estimatedNs(pl.bandRate, units, workNs(laneWork(units, pl.fragmentInstructions)));
+    d.fragmentNs = estimatedNs(pl.bandRate, units, workNs(laneWork(units, staticInstructions)));
     // what each band repeats: its vertices at their static price, or what its banded draws were measured to repeat
     d.vertexNs = std::max<uint64_t>(workNs(laneWork(laneWork(vertices, instances), pl.vertexInstructions)),
                                     pl.bandRate.nsPerBand.load(std::memory_order_relaxed));
@@ -33,7 +34,12 @@ BandGrid RenderEncoder::drawBands(uint32_t vertices, uint32_t instances, uint64_
     d.unmeasured = unmeasured;
     const uint32_t maxBands = hasProgress ? kMaxTileBands : kMaxBands;
     const uint32_t left = hasProgress ? kMaxTileBands : kBandsPerCommandBuffer - cb_->bands;
-    return bandGrid(d, budget, left, maxBands);
+    const BandGrid grid = bandGrid(d, budget, left, maxBands);
+    const uint32_t total = grid.total();
+    const uint32_t probed = probeBands(pl.bandRate, units, total, passDraws_ == 1);
+    if (probed == total)
+        return grid;
+    return bandGridFor(d, probed, left, unmeasured ? std::min(maxBands, kMaxUnmeasuredBands) : maxBands);
 }
 
 // The pass's first draw, the one a pass of one draw measures at its end (measurePass): the render server is never banded,
@@ -84,6 +90,7 @@ bool RenderEncoder::measurePass(bool drained)
     if (!drained || passDraws_ != 1 || !candidate_.rate || cb_->timings.size() >= kMeasuredPerCommandBuffer ||
         !measure(*candidate_.rate, candidate_.units))
         return false;
+    noteProbeBands(*candidate_.rate, candidate_.bands);
     const uint32_t n = dev_->drawStamps_++;
     candidate_.slot = n % kDrawStampSlots;
     candidate_.payload = n + 1 ? n + 1 : 1;
@@ -139,6 +146,7 @@ void RenderEncoder::emitDraw(bool indexed, uint32_t first, uint32_t count, uint3
     DrawTiming selfTiming;
     if (!dev_->compositorClass() && cb_->timings.size() < kMeasuredPerCommandBuffer &&
         measure(emitted_->bandRate, units)) {
+        noteProbeBands(emitted_->bandRate, bands);
         selfMeasured = true;
         const uint32_t n = dev_->drawStamps_++;
         selfTiming = {&emitted_->bandRate,

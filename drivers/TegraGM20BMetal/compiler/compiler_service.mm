@@ -326,9 +326,11 @@ void Service::remember(const Asked &asked, int32_t ran)
     const int32_t result = ran & 0xff;
     if (ran & kStoredBit)
         return;
-    // a scoped request's scope is not logged with it, so a replay could file it under none: its app asks it again
+    // Scoped requests omit their scope from the log; front-end library requests are compiled by Apple's MTLCompiler
+    // (already persisted across builds in msl/*.reply), so logging them would reload MTLCompiler and re-run syntax
+    // errors on every boot.
     if ((result == TegraGM20BCompileMade || result == TegraGM20BCompileRefused) && !asked.request.empty() &&
-        !gm20b::scoped(asked.prepared.request)) {
+        asked.prepared.request.kind != gm20b::RequestKind::Library && !gm20b::scoped(asked.prepared.request)) {
         log_.add(asked.prepared.name, asked.request);
         persister_.soon();
     }
@@ -515,8 +517,10 @@ void Service::warm(uint64_t stack)
     log_.replay([&](const std::string &request, gm20b::Digest &name) {
         Prepared prepared;
         std::string why;
-        // a request naming a library off the system volume was filed under its asker's scope, which the log does not keep
-        if (!prepare(restacked(request, stack), stack, system_, prepared, why) || gm20b::scoped(prepared.request)) {
+        // Drop requests that no longer prepare, scoped requests (scope not in log), and front-end library requests
+        // (compiled by Apple's MTLCompiler; replaying them loads MTLCompiler and re-runs syntax errors every boot).
+        if (!prepare(restacked(request, stack), stack, system_, prepared, why) ||
+            prepared.request.kind == gm20b::RequestKind::Library || gm20b::scoped(prepared.request)) {
             dropped++;
             return false;
         }
@@ -529,7 +533,7 @@ void Service::warm(uint64_t stack)
             if (unconfirmed)
                 store_.retire(name, prepared.content);
             (unconfirmed ? refusals : again)++;
-            if (submit(std::move(prepared), std::string(), {0, 0, Band::Background, false}, 0, ran))
+            if (submit(std::move(prepared), std::string(), {0, 0, Band::Background, false, false, true}, 0, ran))
                 dispatch_semaphore_wait(ran, DISPATCH_TIME_FOREVER);
         } else if (stored == TegraGM20BCompileMade && !publish(nullptr, prepared.content, bytes, true, false, why)) {
             os_log_error(logger(), "SwitchShaderCompiler: a stored record's program slots not kept: %{public}s",
@@ -575,9 +579,15 @@ void Service::serve()
         });
     Pool::Hooks hooks;
     hooks.run = [this](Work &work, const std::function<void(int32_t)> &primary) {
+        const Asked &asked = static_cast<Asked &>(work);
+        // Keep live client async/background compiles out of DarwinBG priority 4 while staying in the background lane.
+        const bool lifted = asked.pid != 0 && qos_class_self() == QOS_CLASS_BACKGROUND;
+        if (lifted)
+            pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
         const int32_t result = run(work);
         primary(result);
-        const Asked &asked = static_cast<Asked &>(work);
+        if (lifted)
+            pthread_set_qos_class_self_np(QOS_CLASS_BACKGROUND, 0);
         remember(asked, result);
         if (asked.done)
             dispatch_semaphore_signal(asked.done);

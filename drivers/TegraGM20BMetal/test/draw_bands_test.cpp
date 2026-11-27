@@ -153,19 +153,40 @@ TEST(BandGrid, LongDrawOn720RowsSplitsInto2DTilesUnderBudgetWithNo64Cap)
     EXPECT_LE(d.fragmentNs / g.total(), TGM_APP_BAND_NS);
 }
 
-TEST(BandGrid, UnmeasuredLargeDrawGoesInMaxBandsAndRespectsVertexRule)
+TEST(BandGrid, UnmeasuredDrawsStayWholeUnderBudgetAndCapHugeEstimates)
 {
     BandDraw d;
-    d.fragmentNs = 10'000;  // tiny mispriced static estimate
+    d.fragmentNs = 10'000;
     d.vertexNs = 200;
     d.rows = 720;
     d.cols = 1280;
     d.unmeasured = true;
-    const gm20b::BandGrid g = gm20b::bandGrid(d, TGM_APP_BAND_NS, gm20b::kMaxTileBands, gm20b::kMaxTileBands);
-    EXPECT_EQ(g.total(), gm20b::kMaxBands);
+    EXPECT_EQ(gm20b::bandGrid(d, TGM_APP_BAND_NS, gm20b::kMaxTileBands, gm20b::kMaxTileBands).total(), 1u);
+
+    const auto staticBands = [](uint32_t w, uint32_t h, uint32_t instances, uint32_t instr) {
+        BandDraw draw;
+        const uint64_t units = gm20b::laneWork(uint64_t(w) * h, instances);
+        const uint32_t capped = std::min(instr, gm20b::kMaxStaticInstructions);
+        draw.fragmentNs = gm20b::workNs(gm20b::laneWork(units, capped));
+        draw.rows = h;
+        draw.cols = w;
+        draw.unmeasured = true;
+        return gm20b::bandGrid(draw, TGM_APP_BAND_NS, gm20b::kMaxTileBands, gm20b::kMaxTileBands).total();
+    };
+    EXPECT_EQ(staticBands(512, 512, 1, 64), 1u);
+    EXPECT_EQ(staticBands(1280, 720, 1, 208), 1u);
+    EXPECT_EQ(staticBands(520, 520, 1, 240), 1u);
+    EXPECT_EQ(staticBands(1280, 720, 1, 240), 2u);
+    EXPECT_EQ(staticBands(520, 520, 1, 15152), 6u);
+    EXPECT_EQ(staticBands(520, 520, 10, 15152), gm20b::kMaxUnmeasuredBands);
+    EXPECT_EQ(staticBands(1280, 720, 1, 4000), gm20b::kMaxUnmeasuredBands);
+
+    d.fragmentNs = milliseconds(248);
+    EXPECT_EQ(gm20b::bandGrid(d, TGM_APP_BAND_NS, gm20b::kMaxTileBands, gm20b::kMaxTileBands).total(),
+              gm20b::kMaxUnmeasuredBands);
     EXPECT_EQ(gm20b::bandGrid(d, 0, gm20b::kMaxTileBands, gm20b::kMaxTileBands).total(), 1u);
 
-    // Massive vertex work still stays bounded by the 1/8 rule.
+    d.fragmentNs = milliseconds(4);
     d.vertexNs = milliseconds(1);
     EXPECT_EQ(gm20b::bandGrid(d, TGM_APP_BAND_NS, gm20b::kMaxTileBands, gm20b::kMaxTileBands).total(), 1u);
 }

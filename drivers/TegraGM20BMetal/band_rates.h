@@ -31,6 +31,8 @@ struct BandRate {
     std::atomic<uint32_t> nsPerBand{0};
     std::atomic<uint32_t> samples{0};
     std::atomic<uint32_t> picks{0};
+    std::atomic<uint32_t> firstBands{0};
+    std::atomic<bool> separated{false};
     // learn()'s fit, written by the learning thread alone: moving averages of bands per unit (x) and picoseconds per unit
     // (y) of its samples, a quarter a sample, and of x x x and x x y. Atomic for a copy made on another thread.
     std::atomic<double> x{0}, y{0}, xx{0}, xy{0};
@@ -48,6 +50,8 @@ struct BandRate {
         nsPerBand.store(o.nsPerBand.load(std::memory_order_relaxed), std::memory_order_relaxed);
         samples.store(o.samples.load(std::memory_order_relaxed), std::memory_order_relaxed);
         picks.store(o.picks.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        firstBands.store(o.firstBands.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        separated.store(o.separated.load(std::memory_order_relaxed), std::memory_order_relaxed);
         for (auto [to, from] : {std::pair{&x, &o.x}, {&y, &o.y}, {&xx, &o.xx}, {&xy, &o.xy}})
             to->store(from->load(std::memory_order_relaxed), std::memory_order_relaxed);
         return *this;
@@ -94,6 +98,35 @@ inline bool wouldMeasure(const BandRate &r, uint64_t units)
     return units >= kMeasureUnits && picked(r.picks.load(std::memory_order_relaxed));
 }
 
+inline void noteProbeBands(BandRate &r, uint32_t bands)
+{
+    uint32_t expected = 0;
+    r.firstBands.compare_exchange_strong(expected, std::max<uint32_t>(bands, 1u), std::memory_order_relaxed);
+}
+
+// Before learn() has seen nonzero spread in bands/unit, perturb a repeated measured band count so the fit separates
+// per-band WFI/vertex overhead from psPerUnit instead of locking at spread == 0.
+inline uint32_t probeBands(const BandRate &r, uint64_t units, uint32_t bands, bool allowWhole = true)
+{
+    if (bands < 2 || units < kMeasureUnits || r.separated.load(std::memory_order_relaxed))
+        return bands;
+    if (!picked(r.picks.load(std::memory_order_relaxed)))
+        return bands;
+    const uint32_t first = r.firstBands.load(std::memory_order_relaxed);
+    if (!first)
+        return bands;
+    const uint32_t margin = first / 5;
+    if (bands < first - margin || bands > first + margin)
+        return bands;
+    if (bands >= 8)
+        return (bands * 3) / 4;
+    if (bands >= 4)
+        return bands / 2;
+    if (bands == 3)
+        return 2;
+    return allowWhole ? 1u : 3u;
+}
+
 // A measured draw: `ns` of GPU time over `units`, drawn in `bands` (1: whole). Each band repeats the draw's vertices and
 // drains at its end, so a draw takes units x a pixel rate plus bands x a band's cost: booked as pixel cost, the repeat
 // priced the state's next draw longer and banded it more (25 Nov: VectorKit's ground draws of 48-208 instructions took
@@ -105,7 +138,9 @@ inline void learn(BandRate &r, uint64_t ns, uint64_t units, uint32_t bands = 1)
 {
     if (!units || !ns)
         return;
-    const double x = double(std::max<uint32_t>(bands, 1)) / double(units), y = double(ns) * 1000.0 / double(units);
+    const uint32_t b = std::max<uint32_t>(bands, 1u);
+    noteProbeBands(r, b);
+    const double x = double(b) / double(units), y = double(ns) * 1000.0 / double(units);
     const bool first = r.samples.load(std::memory_order_relaxed) == 0;
     const double keep = first ? 0.0 : double(kRateWeight - 1) / kRateWeight, take = 1.0 - keep;
     const auto average = [keep, take](std::atomic<double> &m, double sample) {
@@ -116,8 +151,12 @@ inline void learn(BandRate &r, uint64_t ns, uint64_t units, uint32_t bands = 1)
     const double mx = average(r.x, x), my = average(r.y, y), mxx = average(r.xx, x * x), mxy = average(r.xy, x * y);
     const double spread = mxx - mx * mx;
     double band = double(r.nsPerBand.load(std::memory_order_relaxed)) * 1000.0;  // picoseconds a band
-    if (spread > 1e-6 * mxx)
-        band = std::max(0.0, (mxy - mx * my) / spread);
+    if (spread > 1e-6 * mxx) {
+        const double slope = (mxy - mx * my) / spread;
+        const double maxBand = mx > 0.0 ? my / mx : 0.0;
+        band = std::clamp(slope, 0.0, maxBand);
+        r.separated.store(true, std::memory_order_relaxed);
+    }
     const double pixel = my - band * mx;
     r.psPerUnit.store(uint32_t(std::clamp(pixel, 1.0, double(UINT32_MAX))), std::memory_order_relaxed);
     r.nsPerBand.store(uint32_t(std::min(band / 1000.0, double(UINT32_MAX))), std::memory_order_relaxed);

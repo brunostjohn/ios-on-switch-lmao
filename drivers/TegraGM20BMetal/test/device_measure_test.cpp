@@ -160,16 +160,31 @@ TEST_F(DeviceMeasure, OnlyALearnedWholeDrawAloneInItsPassIsMeasured)
     EXPECT_EQ(pass(1).stamps.size(), 2u);
 }
 
-TEST_F(DeviceMeasure, UnmeasuredLargeDrawInSecondSlotOfPassGoesInMaxBandsAndTeachesState)
+TEST_F(DeviceMeasure, SmallUnmeasuredDrawInSecondSlotStaysWholeWhileHeavyOneBandsAndTeaches)
 {
     std::string why;
     gm20b::Pipeline *fast = dev.addRecord(plainRecord(0x3e02), false, why);
     ASSERT_NE(fast, nullptr) << why;
     gm20b::learn(fast->bandRate, 100'000, uint64_t(kSide) * kSide);
+
+    const uint64_t smallBandsBefore = dev.stats.bands.load();
+    const Words smallWords = passOn(target, 2, fast);
+    EXPECT_EQ(dev.stats.bands.load(), smallBandsBefore);
+    EXPECT_EQ(smallWords.progressReleases, 0u);
+    EXPECT_TRUE(smallWords.stamps.empty());
+
+    gm20b::RuntimeRecord heavyRec = plainRecord(0x3e04);
+    heavyRec.programs[1].id = "fs_heavy";
+    heavyRec.programs[1].image.assign(128 + 4096 * 8, 0);
+    gm20b::Pipeline *heavy = dev.addRecord(heavyRec, false, why);
+    ASSERT_NE(heavy, nullptr) << why;
+    pl = heavy;
+
     const uint64_t bandsBefore = dev.stats.bands.load();
     const Words w = passOn(target, 2, fast);
-    EXPECT_EQ(dev.stats.bands.load() - bandsBefore, gm20b::kMaxBands);
-    EXPECT_EQ(w.progressReleases, gm20b::kMaxBands + 1);
+    const uint64_t emittedBands = dev.stats.bands.load() - bandsBefore;
+    EXPECT_EQ(emittedBands, 6u);
+    EXPECT_EQ(w.progressReleases, emittedBands + 1);
     EXPECT_EQ(w.internalFences, 0u);
     EXPECT_EQ(w.jobs, 1u);
     ASSERT_EQ(w.stamps.size(), 2u);
@@ -181,6 +196,36 @@ TEST_F(DeviceMeasure, UnmeasuredLargeDrawInSecondSlotOfPassGoesInMaxBandsAndTeac
     dev.learnCompleted();
     EXPECT_EQ(pl->bandRate.samples.load(), 1u);
     EXPECT_EQ(pl->bandRate.psPerUnit.load(), 20'000'000'000ull / (uint64_t(kSide) * kSide));
+}
+
+TEST_F(DeviceMeasure, BackToBackHeavyUnmeasuredDrawsVaryBandCountAndSeparateOverhead)
+{
+    std::string why;
+    gm20b::RuntimeRecord uberRec = plainRecord(0x3e05);
+    uberRec.programs[1].id = "fs_uber";
+    uberRec.programs[1].image.assign(128 + 15152 * 8, 0);
+    gm20b::Pipeline *uber = dev.addRecord(uberRec, false, why);
+    ASSERT_NE(uber, nullptr) << why;
+    pl = uber;
+
+    const uint64_t bandsBefore = dev.stats.bands.load();
+    const Words w = passOn(target, 2);
+    const uint64_t totalBands = dev.stats.bands.load() - bandsBefore;
+    EXPECT_EQ(totalBands, 9u);
+    ASSERT_EQ(w.stamps.size(), 4u);
+    const uint32_t bandsPerDraw[2] = {6, 3};
+    for (size_t d = 0; d < 2; d++) {
+        const uint64_t msTicks = (1 + bandsPerDraw[d] * 2) * 614'400ull;  // 1 ms pixels + 2 ms/band
+        const uint64_t ticks[2] = {1000 + d * 10'000'000, 1000 + d * 10'000'000 + msTicks};
+        for (size_t i = 0; i < 2; i++) {
+            const gm20b::StampRelease r{w.stamps[d * 2 + i].second, 0, ticks[i]};
+            memcpy(kernel_model::model.host(w.stamps[d * 2 + i].first), &r, sizeof r);
+        }
+    }
+    dev.learnCompleted();
+    EXPECT_TRUE(pl->bandRate.separated.load());
+    EXPECT_NEAR(double(pl->bandRate.nsPerBand.load()), 2'000'000.0, 200'000.0);
+    EXPECT_NEAR(double(gm20b::estimatedNs(pl->bandRate, uint64_t(kSide) * kSide, 0)), 1'000'000.0, 150'000.0);
 }
 
 // The bench's case: nothing ever teaches the state, which is measured at its warm picks and then one in kRemeasureEvery

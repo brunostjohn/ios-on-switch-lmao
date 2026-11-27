@@ -754,15 +754,22 @@ bool ComputeEncoder::dispatchRegion(const ComputeRegion &part, const std::array<
     // copies end the batches between them
     const bool looping = cb_.loops_.open();
     const uint64_t progressVa = dev_.channelProgressVa();
-    const bool unmeasured = units >= kMeasureUnits && state_->rate.psPerUnit.load(std::memory_order_relaxed) == 0;
+    const bool unmeasured = units >= kMeasureUnits && !measuredOnce(state_->rate);
+    const uint32_t staticInstructions = std::min(state_->instructions, kMaxStaticInstructions);
     const uint32_t maxPieces = progressVa ? kMaxTileBands : kMaxBands;
     const uint32_t left =
         progressVa ? kMaxTileBands : (cb_.bands < kBandsPerCommandBuffer ? kBandsPerCommandBuffer - cb_.bands : 0);
-    const uint32_t pieces =
+    uint32_t pieces =
         dev_.compositorClass() || looping
             ? 1
-            : pieceCount(estimatedNs(state_->rate, units, workNs(laneWork(units, state_->instructions))),
-                         dev_.bandBudgetNs(), grid[axis], left, maxPieces, unmeasured);
+            : pieceCount(estimatedNs(state_->rate, units, workNs(laneWork(units, staticInstructions))),
+                         dev_.bandBudgetNs(), grid[axis], left, maxPieces, unmeasured,
+                         state_->rate.nsPerBand.load(std::memory_order_relaxed));
+    if (pieces > 1) {
+        const uint32_t pieceCap =
+            std::min<uint32_t>({grid[axis], left, unmeasured ? std::min(maxPieces, kMaxUnmeasuredBands) : maxPieces});
+        pieces = std::min(probeBands(state_->rate, units, pieces, first && last && dispatches_ == 0), pieceCap);
+    }
     emitKindSwitch();
     if (serial_ && dispatched_ && first)
         barrier();
@@ -781,6 +788,7 @@ bool ComputeEncoder::dispatchRegion(const ComputeRegion &part, const std::array<
     if (pieces > 1 && first && last && !looping && !dev_.compositorClass()) {
         dispatches_++;
         if (cb_.timings.size() < kMeasuredPerCommandBuffer && measure(state_->rate, units)) {
+            noteProbeBands(state_->rate, pieces);
             selfMeasured = true;
             const uint32_t n = dev_.drawStamps_++;
             selfTiming = {&state_->rate,        units, n % kDrawStampSlots, n + 1 ? n + 1 : 1, state_->rec->keyHash,
@@ -952,6 +960,7 @@ void ComputeEncoder::end()
 {
     room(8 + kStampWords);
     if (dispatches_ == 1 && candidate_.rate && measure(*candidate_.rate, candidate_.units) && candidate_.payload) {
+        noteProbeBands(*candidate_.rate, candidate_.bands);
         emitStamp(p_, dev_.stamps_.va + drawStampOffset(candidate_.slot, true), candidate_.payload);
         cb_.timings.push_back(candidate_);
     }

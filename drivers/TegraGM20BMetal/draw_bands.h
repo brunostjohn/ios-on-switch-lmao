@@ -34,6 +34,11 @@ constexpr uint64_t kLaneInstructionsPerUs = 256ull * 768;
 constexpr uint32_t kBandsPerCommandBuffer = 64;
 constexpr uint32_t kMaxBands = kBandsPerCommandBuffer;
 constexpr uint32_t kMaxTileBands = 4096;
+constexpr uint32_t kMaxUnmeasuredBands = 16;
+// Branching uber-shaders (e.g. RenderBox 15K+ instr) execute one branch per pixel; cap unmeasured static pricing until measured.
+constexpr uint32_t kMaxStaticInstructions = 4096;
+// Floor per-band WFI drain and relaunch cost on GM20B so banding overhead stays bounded before nsPerBand is learned.
+constexpr uint64_t kBandWfiNs = 80'000;
 constexpr uint32_t kMinBandRows = 16;
 constexpr uint32_t kMinBandCols = 16;
 // A band's scissor, draw words and progress release, plus the scissor put back after the last
@@ -96,33 +101,8 @@ struct BandGrid {
     }
 };
 
-// Into how many row-by-column tiles a draw goes: {1, 1} draws it whole. Cuts rows first, then splits columns once
-// rows hit kMinBandRows. An unmeasured large draw starts at least at kMaxBands rather than trusting the static estimate.
-inline BandGrid bandGrid(const BandDraw &d, uint64_t budgetNs, uint32_t left, uint32_t maxBands = kMaxBands)
+inline BandGrid bandGridLayout(uint64_t want, uint32_t maxRows, uint32_t maxCols, uint64_t cap)
 {
-    if (!budgetNs || !d.rows || left <= 1 || maxBands <= 1)
-        return {};
-    const uint64_t ns = d.fragmentNs;
-    if (!d.unmeasured && ns <= budgetNs)
-        return {};
-    const uint32_t maxRows = std::max<uint32_t>(d.rows / kMinBandRows, 1u);
-    const uint32_t maxCols = d.cols >= kMinBandCols ? d.cols / kMinBandCols : 1u;
-    const uint64_t maxGeom = uint64_t(maxRows) * maxCols;
-    if (maxGeom <= 1)
-        return {};
-    uint64_t want = (ns + budgetNs - 1) / budgetNs;
-    if (d.unmeasured)
-        want = std::max<uint64_t>(want, kMaxBands);
-    uint64_t cap = std::min<uint64_t>({maxGeom, maxBands, left});
-    if (d.vertexNs) {
-        if (d.unmeasured && d.vertexNs >= budgetNs)
-            return {};
-        const uint64_t refNs = d.unmeasured ? std::max(ns, budgetNs * std::min(want, cap)) : ns;
-        const uint64_t vertexCap = (refNs / 8) / d.vertexNs + 1;
-        cap = std::min(cap, vertexCap);
-    }
-    if (cap <= 1)
-        return {};
     want = std::min(want, cap);
     if (want <= 1)
         return {};
@@ -138,6 +118,44 @@ inline BandGrid bandGrid(const BandDraw &d, uint64_t budgetNs, uint32_t left, ui
         }
     }
     return rows * cols > 1 ? BandGrid{rows, cols} : BandGrid{};
+}
+
+// Into how many row-by-column tiles a draw goes: {1, 1} draws it whole. Cuts rows first, then splits columns once
+// rows hit kMinBandRows. Unmeasured draws stay whole when priced within budget and cap at kMaxUnmeasuredBands until measured.
+inline BandGrid bandGrid(const BandDraw &d, uint64_t budgetNs, uint32_t left, uint32_t maxBands = kMaxBands)
+{
+    if (!budgetNs || !d.rows || left <= 1 || maxBands <= 1)
+        return {};
+    const uint64_t ns = d.fragmentNs;
+    if (ns <= budgetNs)
+        return {};
+    const uint32_t maxRows = std::max<uint32_t>(d.rows / kMinBandRows, 1u);
+    const uint32_t maxCols = d.cols >= kMinBandCols ? d.cols / kMinBandCols : 1u;
+    const uint64_t maxGeom = uint64_t(maxRows) * maxCols;
+    if (maxGeom <= 1)
+        return {};
+    if (d.unmeasured)
+        maxBands = std::min<uint32_t>(maxBands, kMaxUnmeasuredBands);
+    const uint64_t want = (ns + budgetNs - 1) / budgetNs;
+    uint64_t cap = std::min<uint64_t>({maxGeom, maxBands, left});
+    const uint64_t perBandNs = std::max(d.vertexNs, std::min<uint64_t>(kBandWfiNs, budgetNs / 10));
+    if (perBandNs) {
+        const uint64_t overheadCap = (ns / 8) / perBandNs + 1;
+        cap = std::min(cap, overheadCap);
+    }
+    if (cap <= 1)
+        return {};
+    return bandGridLayout(want, maxRows, maxCols, cap);
+}
+
+inline BandGrid bandGridFor(const BandDraw &d, uint32_t want, uint32_t left, uint32_t maxBands = kMaxBands)
+{
+    if (want <= 1 || !d.rows || left <= 1 || maxBands <= 1)
+        return {};
+    const uint32_t maxRows = std::max<uint32_t>(d.rows / kMinBandRows, 1u);
+    const uint32_t maxCols = d.cols >= kMinBandCols ? d.cols / kMinBandCols : 1u;
+    const uint64_t cap = std::min<uint64_t>({uint64_t(maxRows) * maxCols, maxBands, left});
+    return bandGridLayout(want, maxRows, maxCols, cap);
 }
 
 // Into how many bands a draw goes: 1 draws it whole. `left`: the bands its command buffer may still take.
