@@ -46,9 +46,13 @@ IOReturn AGXDeviceUserClient::takeJob(const TegraGM20BAbiSubmitAddress *in,
 	IOReturn result = switch_gpu_refuse(why, SwitchGpuRefusal::JobScratch, kIOReturnNoMemory);
 	if (reserveJob(job, TegraGM20BMaxJobUses + TegraGM20BMaxJobPushes)) {
 		why = {};
-		const auto record = copyin(in->address, job.bytes, in->bytes)
-					    ? SwitchGpuJobRecord{}
-					    : SwitchGpuJobRecord::parse(job.bytes, in->bytes);
+		memcpy(job.bytes, &header, sizeof(header));
+		const uint32_t tail = in->bytes - sizeof(header);
+		const auto record =
+			tail && copyin(in->address + sizeof(header), job.bytes + sizeof(header),
+				       tail)
+				? SwitchGpuJobRecord{}
+				: SwitchGpuJobRecord::parse(job.bytes, in->bytes);
 		const bool parsed = record.valid() && record.job->channel == header.channel;
 		result = parsed ? kIOReturnSuccess
 				: switch_gpu_refuse(why, SwitchGpuRefusal::JobParse,
@@ -81,10 +85,10 @@ IOReturn AGXDeviceUserClient::takeJob(const TegraGM20BAbiSubmitAddress *in,
 							   switch_gpu_refusal_errno(prepared));
 		}
 		if (!result) {
-			bool admitted = submitGate_.enterFast();
+			bool admitted = submitGate_.enterFast(slot);
 			if (!admitted) {
 				IOLockLock(lock_);
-				admitted = submitGate_.enterSlow(lock_);
+				admitted = submitGate_.enterSlow(slot, lock_);
 				IOLockUnlock(lock_);
 			}
 			job.gateHeld = admitted;
@@ -95,7 +99,7 @@ IOReturn AGXDeviceUserClient::takeJob(const TegraGM20BAbiSubmitAddress *in,
 							      kIOReturnNotOpen);
 			if (job.gateHeld) {
 				job.gateHeld = false;
-				submitGate_.leaveFast(lock_);
+				submitGate_.leaveFast(slot, lock_);
 			}
 		}
 		job.events->clear();
@@ -122,22 +126,23 @@ SwitchGpuRefusal AGXDeviceUserClient::useRefusal(const Bo *bo, const BindingTabl
 	return SwitchGpuRefusal::None;
 }
 
-void AGXDeviceUserClient::leaveSubmitGateForWait(JobScratch &job, switch_gpu_resource_set *set)
+void AGXDeviceUserClient::leaveSubmitGateForWait(uint32_t slot, JobScratch &job,
+						 switch_gpu_resource_set *set)
 {
 	if (set)
-		switch_gpu_set_leave(set);
+		switch_gpu_set_leave_slot(set, slot);
 	if (job.gateHeld) {
 		job.gateHeld = false;
-		submitGate_.leaveFast(lock_);
+		submitGate_.leaveFast(slot, lock_);
 	}
 }
 
-bool AGXDeviceUserClient::reenterSubmitGate(JobScratch &job)
+bool AGXDeviceUserClient::reenterSubmitGate(uint32_t slot, JobScratch &job)
 {
-	bool admitted = submitGate_.enterFast();
+	bool admitted = submitGate_.enterFast(slot);
 	if (!admitted) {
 		IOLockLock(lock_);
-		admitted = submitGate_.enterSlow(lock_);
+		admitted = submitGate_.enterSlow(slot, lock_);
 		IOLockUnlock(lock_);
 	}
 	job.gateHeld = admitted;
@@ -185,25 +190,30 @@ IOReturn AGXDeviceUserClient::runJob(const SwitchGpuJobRecord &record, JobScratc
 		if (!chan)
 			return switch_gpu_refuse(why, SwitchGpuRefusal::NoChannel,
 						 kIOReturnBadArgument);
-		const bool background =
-			clientHasPrivilege(current_task(), kIOClientPrivilegeForeground) !=
-			kIOReturnSuccess;
-		if (background != backgroundRole_ || channelLevels_[slot] != level_) {
-			if (background != backgroundRole_) {
+		const uint32_t roleGen = __atomic_load_n(&tgm_uc::appRoleGen, __ATOMIC_ACQUIRE);
+		if (roleGen != __atomic_load_n(&roleGen_, __ATOMIC_RELAXED) ||
+		    (++job.roleChecks & 63u) == 0u) {
+			const bool background =
+				clientHasPrivilege(current_task(), kIOClientPrivilegeForeground) !=
+				kIOReturnSuccess;
+			if (background != backgroundRole_ ||
+			    roleGen != __atomic_load_n(&roleGen_, __ATOMIC_RELAXED)) {
 				IOLockLock(lock_);
+				__atomic_store_n(&roleGen_, roleGen, __ATOMIC_RELEASE);
 				if (background != backgroundRole_) {
 					backgroundRole_ = background;
 					applyLevel();
 				}
 				IOLockUnlock(lock_);
 			}
-			syncChannelLevel(slot, chan, false);
 		}
+		if (channelLevels_[slot] != level_)
+			syncChannelLevel(slot, chan, false);
 		switch_gpu_resource_set *set = head.set ? sets_[head.set - 1] : nullptr;
 		if (head.set && !set)
 			return switch_gpu_refuse(why, SwitchGpuRefusal::NoSet, kIOReturnBadArgument,
 						 head.set);
-		if (set && !switch_gpu_set_enter(set, head.set_generation)) {
+		if (set && !switch_gpu_set_enter_slot(set, slot, head.set_generation)) {
 			switch_gpu_job_stale();
 			switch_gpu_path_taken(SWITCH_GPU_PATH_STALE_SET, 1);
 			return switch_gpu_refuse(why, SwitchGpuRefusal::StaleSet, kIOReturnNotReady,
@@ -216,7 +226,7 @@ IOReturn AGXDeviceUserClient::runJob(const SwitchGpuJobRecord &record, JobScratc
 		const IOReturn result =
 			runJobUses(record, job, out, set, siblings, siblingCount, why);
 		if (set && job.setHeld) {
-			switch_gpu_set_leave(set);
+			switch_gpu_set_leave_slot(set, slot);
 			job.setHeld = false;
 		}
 		if (job.roomRetry) {
@@ -577,10 +587,10 @@ refresh:
 				(quietEnd ? uint32_t(SWITCH_GPU_SUBMIT_QUIET) : 0u);
 			if (events->released())
 				switch_gpu_chan_event_releases(chan, uint32_t(completion.value));
-			error = switch_gpu_chan_exec_events(
-				chan, pushes, count, job.dependencies, dependencies, siblings,
-				siblingCount, words, wordCount, &seqno, profile, jobVisibility,
-				releases, keptCount, &transaction);
+			error = switch_gpu_chan_exec_events_validated(
+				chan, pushes, count, fences, job.dependencies, dependencies,
+				siblings, siblingCount, words, wordCount, &seqno, profile,
+				jobVisibility, releases, keptCount, &transaction);
 			job.phases.end(TGM_SUBMIT_EXEC);
 		}
 		if (error != -11)
@@ -590,12 +600,12 @@ refresh:
 		// Release submitGate_ (and set) across the bounded GPFIFO room sleep so unrelated
 		// mutations in the process are not stalled; submitLocks_[slot] keeps chan alive
 		// against retireChannels().
-		leaveSubmitGateForWait(job, job.setHeld ? set : nullptr);
+		leaveSubmitGateForWait(slot, job, job.setHeld ? set : nullptr);
 		job.setHeld = false;
 		error = switch_gpu_chan_wait_submission_room(
 			chan, pushes, count, dependencies + siblingCount + wordCount, profile);
 		job.phases.end(TGM_SUBMIT_ROOM);
-		if (!reenterSubmitGate(job)) {
+		if (!reenterSubmitGate(slot, job)) {
 			useTotal = 0;
 			error = -19;
 			break;
@@ -616,7 +626,7 @@ refresh:
 			break;
 		if (set) {
 			if (sets_[head.set - 1] != set ||
-			    !switch_gpu_set_enter(set, head.set_generation)) {
+			    !switch_gpu_set_enter_slot(set, slot, head.set_generation)) {
 				job.roomRetry = true;
 				error = -11;
 				break;

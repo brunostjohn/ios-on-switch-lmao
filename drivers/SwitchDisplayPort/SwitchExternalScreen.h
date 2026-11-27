@@ -179,7 +179,6 @@ private:
     int front[kWindows] = {-1, -1, -1}, drawing[kWindows] = {-1, -1, -1};
     int64_t harmonyMatrix[9] = {};
     int64_t accessibilityMatrix[9] = {};
-    uint32_t accessibilityScale = 0x10000u;
     uint64_t slotUses = 0, refreshPeriod = 0, interval = 0, linkGeneration = 0, gpuGeneration = 0;
     uint64_t activeGeometry = 0, selectionGeneration = 0;
     int selectedMode = -1;

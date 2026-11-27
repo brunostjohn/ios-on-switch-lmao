@@ -27,8 +27,8 @@ TEST(GM20BQuietSource, TheFenceInterruptsOnlyWhenItAnnounces)
 		fence.before("switch_gpu_quiet_announces(&chan->quiet, quiet)", "if (announce) {"));
 	EXPECT_EQ(fence.count("NON_STALL_INTERRUPT"), 1u);
 	EXPECT_TRUE(fence.before("if (announce) {", "NON_STALL_INTERRUPT"));
-	EXPECT_TRUE(
-		fence.before("switch_gpu_quiet_announce(&chan->quiet, next);", "PUSH_KICK(push);"));
+	EXPECT_TRUE(fence.before("switch_gpu_quiet_announce(&chan->quiet, next);",
+				 "chan_push_nopost(chan);"));
 	const CodeText exec =
 		Block(unit("gpu_exec.c"),
 		      "static inline __attribute__((always_inline)) int chan_exec_body(");
@@ -130,8 +130,9 @@ TEST(GM20BQuietSource, WakeEntriesKeepTheSubmissionOrder)
 {
 	const CodeText wake = Block(unit("TegraGM20BUserClientWake.cpp"),
 				    "void AGXDeviceUserClient::pushWakes()");
-	EXPECT_TRUE(wake.before("IOLockLock(submitLocks_[slot]);", "submitGate_.enterFast()"));
-	EXPECT_TRUE(wake.before("submitGate_.enterFast()", "tgm_chan_quiet_wake(chans_[slot]);"));
+	EXPECT_TRUE(wake.before("IOLockLock(submitLocks_[slot]);", "submitGate_.enterFast(slot)"));
+	EXPECT_TRUE(
+		wake.before("submitGate_.enterFast(slot)", "tgm_chan_quiet_wake(chans_[slot]);"));
 	const std::string quiet = unit("gpu_quiet.c");
 	EXPECT_TRUE(Block(quiet, "void tgm_chan_quiet_wake(")
 			    .before("tgm_gate_enter();", "tgm_chan_wake_push(chan);"));
@@ -177,7 +178,7 @@ TEST(GM20BPromiseSource, PresentsAndJobsOrderBehindWriterPromises)
 		"switch_gpu_backing_promise_dependencies(&transaction, job.dependencies,"));
 	EXPECT_TRUE(job.before(
 		"switch_gpu_backing_promise_dependencies(&transaction, job.dependencies,",
-		"switch_gpu_chan_exec_events("));
+		"switch_gpu_chan_exec_events_validated("));
 	// between begin and commit the transaction holds every use's backing lock: a promise read that takes one again
 	// (switch_gpu_backing_promise_tokens) never returns on XNU
 	EXPECT_FALSE(job.has("switch_gpu_backing_promise_tokens("));

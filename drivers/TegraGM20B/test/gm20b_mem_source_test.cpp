@@ -64,7 +64,7 @@ TEST(GM20BMemSource, TheRetirementFlushIsDocumentedInTheOrderItIsEmitted)
 		header.find("WFI, FB_FLUSH, L2_FLUSH_DIRTY, FB_FLUSH\n * and L2_SYSMEM_INVALIDATE"),
 		std::string::npos);
 	const std::string exec = SourceText("../gpu_exec.c");
-	const size_t acquire = exec.find("if ((l2_on() && host_written) || tlb) {");
+	const size_t acquire = exec.find("if (l2_inval) {");
 	ASSERT_NE(acquire, std::string::npos);
 	const size_t flush = exec.find("NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY", acquire);
 	const size_t invalidate =

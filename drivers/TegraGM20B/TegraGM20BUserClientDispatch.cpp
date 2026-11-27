@@ -80,6 +80,9 @@ IOReturn AGXDeviceUserClient::setPriority(const TegraGM20BAbiPriority &asked,
 	const bool wasCritical = critical_;
 	priority_ = uint32_t(granted);
 	backgroundPriority_ = asked.background_priority;
+	roleGen_ = __atomic_load_n(&tgm_uc::appRoleGen, __ATOMIC_ACQUIRE);
+	backgroundRole_ =
+		clientHasPrivilege(task_, kIOClientPrivilegeForeground) != kIOReturnSuccess;
 	applyLevel();
 	criticalChanged = critical_ != wasCritical;
 	for (uint32_t i = 0; i < kMaxChannels; ++i)
@@ -94,16 +97,16 @@ IOReturn AGXDeviceUserClient::setPriority(const TegraGM20BAbiPriority &asked,
 		const uint32_t slot = uint32_t(__builtin_ctz(liveSlots));
 		liveSlots &= liveSlots - 1;
 		IOLockLock(submitLocks_[slot]);
-		bool admitted = submitGate_.enterFast();
+		bool admitted = submitGate_.enterFast(slot);
 		if (!admitted) {
 			IOLockLock(lock_);
-			admitted = submitGate_.enterSlow(lock_);
+			admitted = submitGate_.enterSlow(slot, lock_);
 			IOLockUnlock(lock_);
 		}
 		if (admitted) {
 			if (chans_[slot])
 				syncChannelLevel(slot, chans_[slot], criticalChanged);
-			submitGate_.leaveFast(lock_);
+			submitGate_.leaveFast(slot, lock_);
 		}
 		IOLockUnlock(submitLocks_[slot]);
 		if (!admitted)

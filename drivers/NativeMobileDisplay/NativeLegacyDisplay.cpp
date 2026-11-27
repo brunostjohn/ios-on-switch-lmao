@@ -1062,7 +1062,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     SwitchMMIOWords dc;
     uint32_t dcEnable = 0, dcMask = 0;  // INT_ENABLE and INT_MASK as found, restored on stop
     // INT_MASK is written from outside the gate too (frame-end holds), so every write of it takes this lock.
-    IOSimpleLock *intMaskLock = nullptr;
+    IOLock *intMaskLock = nullptr;
     bool intMaskLive = false;     // dc mapped and clocked: a hold may write INT_MASK
     bool scanoutStopped = false;  // display power off (setScanout): no frame ends or vblanks are expected
     uint64_t vblankTime = 0, vblankContinuous = 0, vblankLast = 0, frameEnds = 0;
@@ -1664,9 +1664,9 @@ public:
     // TegraPanel's contract (native_legacy_frame_end_held): a hold made FRAME_END reach the CPU.
     bool frameEndRouted()
     {
-        const IOInterruptState state = IOSimpleLockLockDisableInterrupt(intMaskLock);
+        IOLockLock(intMaskLock);
         const bool routed = intMaskLive && ((dc[kDcIntEnable] & dc[kDcIntMask] & kFrameEndInt) != 0u);
-        IOSimpleLockUnlockEnableInterrupt(intMaskLock, state);
+        IOLockUnlock(intMaskLock);
         return routed;
     }
 
@@ -3482,7 +3482,7 @@ public:
         if (planeSpace.used)
             IODelete(planeSpace.used, uint32_t, kPlaneSpaceWords);
         if (intMaskLock)
-            IOSimpleLockFree(intMaskLock);
+            IOLockFree(intMaskLock);
         removeSwapSubmitFilter();
         IOMobileFramebufferLegacy::free();
     }
@@ -3553,7 +3553,7 @@ public:
             return false;
         }
         setEdrScalingEnabled(true);
-        intMaskLock = IOSimpleLockAlloc();
+        intMaskLock = IOLockAlloc();
         if (intMaskLock == nullptr) {
             return false;
         }
@@ -5419,6 +5419,7 @@ public:
     void publishRefreshProperties()
     {
         setInternalDisplay(true);
+        setProperty("IOMFBDisplayExternal", kOSBooleanFalse);
         IOWorkLoop *loop = getWorkLoop();
         if (!loop || loop->runAction(&publishRefreshGated, this) != kIOReturnSuccess) {
             IOLog("SwitchDisplay: IOMobileFramebufferLegacy::setDisplayRefreshProperties failed: no "

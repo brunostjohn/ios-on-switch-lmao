@@ -51,6 +51,7 @@ static struct {
 	/* outside the gate */
 	struct switch_gpu_chan_table
 		chans; /* nvkm's channel: set by its first submission, cleared in the gate */
+	DECLARE_BITMAP(asked_mask, HOLD_CHIDS); /* channels with a pending ask to clear/sample */
 	u64 asked_pt[HOLD_CHIDS],
 		asked_ns[HOLD_CHIDS]; /* our ask to leave the GPU not yet sampled: PTIMER, kernel clock */
 	u64 need_ns[HOLD_CHIDS];  /* high work waits for it, since then (tgm_hold_need) */
@@ -268,6 +269,16 @@ void tgm_hold_track(struct nvkm_device *device, unsigned int chid, int on)
 		settle_now(chid);
 }
 
+static void asked_clear(unsigned int chid)
+{
+	const unsigned long bit = 1UL << (chid % BITS_PER_LONG);
+
+	__atomic_store_n(&hold.asked_pt[chid], 0, __ATOMIC_RELAXED);
+	__atomic_fetch_and(&hold.asked_mask[chid / BITS_PER_LONG], ~bit, __ATOMIC_RELEASE);
+	if (__atomic_load_n(&hold.asked_pt[chid], __ATOMIC_ACQUIRE))
+		__atomic_fetch_or(&hold.asked_mask[chid / BITS_PER_LONG], bit, __ATOMIC_RELEASE);
+}
+
 static void forget(void *arg)
 {
 	const unsigned int chid = *(const unsigned int *)arg;
@@ -277,7 +288,7 @@ static void forget(void *arg)
 	__clear_bit(chid, hold.turned);
 	__clear_bit(chid, hold.hopeless);
 	WRITE_ONCE(hold.latency[chid], TGM_PREEMPT_MIN_NS);
-	__atomic_store_n(&hold.asked_pt[chid], 0, __ATOMIC_RELAXED);
+	asked_clear(chid);
 	__atomic_store_n(&hold.isolating[chid], 0, __ATOMIC_RELAXED);
 	if (TGM_DEBUG_PROBES)
 		tgm_hold_progress(chid, NULL);
@@ -407,6 +418,8 @@ static void ask(unsigned int chid, u64 pt)
 		return;
 	__atomic_store_n(&hold.asked_ns[chid], nvxnu_nanotime(), __ATOMIC_RELAXED);
 	__atomic_store_n(&hold.asked_pt[chid], pt, __ATOMIC_RELEASE);
+	__atomic_fetch_or(&hold.asked_mask[chid / BITS_PER_LONG], 1UL << (chid % BITS_PER_LONG),
+			  __ATOMIC_RELEASE);
 }
 
 int tgm_hold_preempt(struct nvkm_device *device, unsigned int chid)
@@ -458,7 +471,7 @@ void tgm_hold_sampled(unsigned int chid, uint64_t asked_pt, uint64_t start_pt)
 	if (!sample)
 		return;
 	latency_set(chid, tgm_preempt_sampled(hold.latency[chid], sample, HOLD_LATENCY_MAX));
-	__atomic_store_n(&hold.asked_pt[chid], 0, __ATOMIC_RELAXED);
+	asked_clear(chid);
 	if (TGM_STATS)
 		WRITE_ONCE(hold.samples, hold.samples + 1);
 	if (TGM_DEBUG_PROBES)
@@ -475,7 +488,7 @@ void tgm_hold_check(struct nvkm_device *device, unsigned int chid)
 	if (resident == (int)chid || resident == TGM_VICTIM_SWITCHING)
 		return;
 	latency_set(chid, tgm_preempt_left_early(hold.latency[chid]));
-	__atomic_store_n(&hold.asked_pt[chid], 0, __ATOMIC_RELAXED);
+	asked_clear(chid);
 	if (TGM_STATS)
 		WRITE_ONCE(hold.checks, hold.checks + 1);
 }
@@ -508,11 +521,19 @@ void tgm_hold_release(struct nvkm_device *device, uint64_t now)
 	bitmap_zero(hold.turned, HOLD_CHIDS);
 	bitmap_zero(hold.hopeless, HOLD_CHIDS);
 	/* an ask no submission queued behind (the channel left before the compositor came): no sample is coming for it */
-	for (chid = 0; chid < HOLD_CHIDS; chid++) {
-		if (__atomic_load_n(&hold.asked_pt[chid], __ATOMIC_RELAXED) &&
-		    now - __atomic_load_n(&hold.asked_ns[chid], __ATOMIC_RELAXED) >
-			    TGM_INTERVAL_MAX_NS)
-			__atomic_store_n(&hold.asked_pt[chid], 0, __ATOMIC_RELAXED);
+	for (unsigned int w = 0; w < BITS_TO_LONGS(HOLD_CHIDS); w++) {
+		unsigned long bits = __atomic_load_n(&hold.asked_mask[w], __ATOMIC_ACQUIRE);
+
+		while (bits) {
+			const unsigned int c =
+				w * BITS_PER_LONG + (unsigned int)__builtin_ctzl(bits);
+
+			bits &= bits - 1;
+			if (!__atomic_load_n(&hold.asked_pt[c], __ATOMIC_RELAXED) ||
+			    now - __atomic_load_n(&hold.asked_ns[c], __ATOMIC_RELAXED) >
+				    TGM_INTERVAL_MAX_NS)
+				asked_clear(c);
+		}
 	}
 	hold.closed = now;
 }

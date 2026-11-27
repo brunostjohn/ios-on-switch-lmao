@@ -19,7 +19,10 @@ static int scrub_submit(u64 pa, u64 bytes)
 	u64 rest = bytes % SCRUB_LINE;
 	u32 slot = 0;
 	u32 seqno = 0;
-	int ret = chan_wait_room(chan, 4, 32 + CHAN_FENCE_DWORDS);
+	int ret = 0;
+
+	idle_wake();
+	ret = chan_wait_room(chan, 4, 32 + CHAN_FENCE_DWORDS);
 
 	if (ret)
 		return ret;

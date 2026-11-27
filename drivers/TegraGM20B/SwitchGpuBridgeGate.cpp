@@ -25,7 +25,7 @@ constexpr uint32_t kGateDwords = 5;
 struct Gate {
 	volatile uint32_t *word;  // published last: a close before it finds no bridge job to hold
 	uint64_t va;              // in the bridge channel's address space
-	IOSimpleLock *lock;       // serialises closes against a pass's reopen
+	IOLock *lock;             // serialises closes against a pass's reopen
 	uint32_t closes;          // under `lock`
 	thread_call_t pass;
 } bridgeGate;
@@ -46,9 +46,9 @@ void gatePass(thread_call_param_t, thread_call_param_t)
 	};
 
 	IOLockLock(queue.lock);
-	IOInterruptState state = IOSimpleLockLockDisableInterrupt(bridgeGate.lock);
+	IOLockLock(bridgeGate.lock);
 	const uint32_t seen = bridgeGate.closes;
-	IOSimpleLockUnlockEnableInterrupt(bridgeGate.lock, state);
+	IOLockUnlock(bridgeGate.lock);
 	// Cancelling a bridge's waiters may fail a VIC or NVDEC job that another active bridge waits on; repeat until
 	// a pass finds none so transitive chains are cancelled before the gate reopens.
 	for (;;) {
@@ -70,11 +70,11 @@ void gatePass(thread_call_param_t, thread_call_param_t)
 			tegra_host1x_syncpt_cancel_waiters(cancels[i].syncpoint,
 							   cancels[i].threshold);
 	}
-	state = IOSimpleLockLockDisableInterrupt(bridgeGate.lock);
+	IOLockLock(bridgeGate.lock);
 	const bool closedSince = bridgeGate.closes != seen;
 	if (!closedSince)
 		writeGate(bridgeGate.word, kOpen);
-	IOSimpleLockUnlockEnableInterrupt(bridgeGate.lock, state);
+	IOLockUnlock(bridgeGate.lock);
 	IOLockUnlock(queue.lock);
 	if (closedSince)
 		thread_call_enter(bridgeGate.pass);
@@ -84,7 +84,7 @@ void gatePass(thread_call_param_t, thread_call_param_t)
 bool gateOpen(tgm_vm *vm)
 {
 	if (!bridgeGate.lock)
-		bridgeGate.lock = IOSimpleLockAlloc();
+		bridgeGate.lock = IOLockAlloc();
 	if (!bridgeGate.pass)
 		bridgeGate.pass = thread_call_allocate_with_options(
 			gatePass, nullptr, THREAD_CALL_PRIORITY_KERNEL, THREAD_CALL_OPTIONS_ONCE);
@@ -126,9 +126,9 @@ extern "C" void switch_gpu_bridge_gate_close(void)
 	volatile uint32_t *word = __atomic_load_n(&bridgeGate.word, __ATOMIC_ACQUIRE);
 	if (!word)
 		return;
-	const IOInterruptState state = IOSimpleLockLockDisableInterrupt(bridgeGate.lock);
+	IOLockLock(bridgeGate.lock);
 	++bridgeGate.closes;
 	writeGate(word, kClosed);
-	IOSimpleLockUnlockEnableInterrupt(bridgeGate.lock, state);
+	IOLockUnlock(bridgeGate.lock);
 	thread_call_enter(bridgeGate.pass);
 }

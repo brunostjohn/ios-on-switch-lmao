@@ -99,21 +99,32 @@ void switch_gpu_backing_prune_locked(switch_gpu_backing *backing)
 		}
 	}
 	bool pending = false;
-	for (uint32_t i = 0; i < backing->access_count; ++i)
-		pending |= switch_gpu_backing_access_status(backing->accesses[i]) == 0;
-	for (uint32_t i = 0; i < backing->access_count;) {
+	bool droppable = false;
+	for (uint32_t i = 0; i < backing->access_count; ++i) {
 		auto &access = backing->accesses[i];
 		const int status = switch_gpu_backing_access_status(access);
-		if (status < 0)
-			switch_gpu_backing_note_failure_locked(backing, access, status);
-		// Pending consumers may still have a hardware acquire referencing a completed producer's fence allocation.
-		const bool current_writer = (access.access & SWITCH_GPU_BACKING_WRITE) &&
-					    access.content == backing->content;
-		if (status != 0 && !pending && !current_writer) {
-			switch_gpu_backing_drop_token(access.token);
-			backing->accesses[i] = backing->accesses[--backing->access_count];
+		if (status == 0) {
+			pending = true;
 		} else {
-			++i;
+			if (status < 0)
+				switch_gpu_backing_note_failure_locked(backing, access, status);
+			const bool current_writer = (access.access & SWITCH_GPU_BACKING_WRITE) &&
+						    access.content == backing->content;
+			droppable |= !current_writer;
+		}
+	}
+	// Pending consumers may still have a hardware acquire referencing a completed producer's fence allocation.
+	if (!pending && droppable) {
+		for (uint32_t i = 0; i < backing->access_count;) {
+			auto &access = backing->accesses[i];
+			const bool current_writer = (access.access & SWITCH_GPU_BACKING_WRITE) &&
+						    access.content == backing->content;
+			if (!current_writer) {
+				switch_gpu_backing_drop_token(access.token);
+				backing->accesses[i] = backing->accesses[--backing->access_count];
+			} else {
+				++i;
+			}
 		}
 	}
 }
@@ -301,6 +312,9 @@ int begin(switch_gpu_backing_use *uses, uint32_t count, switch_gpu_cpu_lease *co
 			result = ops->retain_token(completion);
 		if (result)
 			break;
+		if (slot < (1u << (32 - kUseSlotShift)))
+			uses[i].reserved = (uses[i].reserved & ((1u << kUseSlotShift) - 1u)) |
+					   kUseHasSlot | (slot << kUseSlotShift);
 		refs += fresh + host_acquire_wanted(*backing, *completion);
 		++transaction->prepared;
 		if (uses[i].access & SWITCH_GPU_BACKING_WRITE)

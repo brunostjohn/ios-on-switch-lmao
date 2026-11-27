@@ -146,13 +146,19 @@ uint64_t presentSurface(IOMemoryDescriptor *memory, uint64_t bytes, bool blockLi
 			switch_gpu_backing **backing)
 {
 	bytes = (bytes + 0xfff) & ~0xfffULL;
-	const uint32_t compKind = blockLinear ? presentCompressedKind(memory) : 0u;
-	bool compressed = compKind != 0u;
-	uint32_t kind = compressed ? compKind : (blockLinear ? TGM_LAYOUT_KIND : 0);
 	unsigned slot = 0;
 	bool replaceSlot = false;
 	for (unsigned i = 0; i < kPresentSurfaces; i++) {
 		if (gSurfaces[i].memory == memory) {
+			const uint32_t rawKind =
+				blockLinear && gSurfaces[i].pas
+					? tegra_gm20b_surface_kind(gSurfaces[i].pas[0] & ~0xfffULL)
+					: 0u;
+			const uint32_t cachedCompKind =
+				switch_gpu_surface_kind_compressed(rawKind) ? rawKind : 0u;
+			const uint32_t cachedKind =
+				cachedCompKind ? cachedCompKind
+					       : (blockLinear ? TGM_LAYOUT_KIND : 0u);
 			bool staleAlias = false;
 			if (gSurfaces[i].ownsMemory && gSurfaces[i].backing) {
 				tgm_mem *canonical = nullptr;
@@ -160,7 +166,7 @@ uint64_t presentSurface(IOMemoryDescriptor *memory, uint64_t bytes, bool blockLi
 					gSurfaces[i].backing, gSurfaces[i].npages, &canonical);
 				staleAlias = found == 0 && canonical != gSurfaces[i].mem;
 			}
-			if (gSurfaces[i].bytes >= bytes && gSurfaces[i].kind == kind &&
+			if (gSurfaces[i].bytes >= bytes && gSurfaces[i].kind == cachedKind &&
 			    !staleAlias) {
 				gSurfaces[i].used = ++gSurfaceUses;
 				*pa = gSurfaces[i].pas[0];
@@ -178,6 +184,9 @@ uint64_t presentSurface(IOMemoryDescriptor *memory, uint64_t bytes, bool blockLi
 	const uint64_t fullBytes = (memory->getLength() + 0xfff) & ~0xfffULL;
 	if (bytes > kPresentSurfaceSpan || bytes > fullBytes)
 		return 0;
+	const uint32_t compKind = blockLinear ? presentCompressedKind(memory) : 0u;
+	bool compressed = compKind != 0u;
+	uint32_t kind = compressed ? compKind : (blockLinear ? TGM_LAYOUT_KIND : 0);
 	PresentSurface &s = gSurfaces[slot];
 	dropSurface(s);
 	if (memory->prepare(kIODirectionOut) != kIOReturnSuccess)

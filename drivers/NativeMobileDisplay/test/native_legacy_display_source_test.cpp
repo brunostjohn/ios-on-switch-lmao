@@ -256,7 +256,7 @@ TEST(FrameEndSource, MaskedWhileNothingWaits)
     EXPECT_EQ(code().count("dc[kDcIntMask] ="), 3u);
     for (const char *helper :
          {"void writeIntMask(uint32_t clear, uint32_t set)", "void unmaskFrameEnd()", "void maskIdleFrameEnd()"})
-        EXPECT_TRUE(method(helper).has("IOSimpleLockLockDisableInterrupt(intMaskLock)")) << helper;
+        EXPECT_TRUE(method(helper).has("IOLockLock(intMaskLock)")) << helper;
     EXPECT_TRUE(method("void kickSwapQueue() override").startsWith("if (primary) kickUnmaskFrameEnd();"));
     EXPECT_TRUE(method("void vblankTick()")
                     .endsWith("if ((status & kFrameEndInt) && !frameEndNeeded() && tegra_panel_holds_frame_end()) { "

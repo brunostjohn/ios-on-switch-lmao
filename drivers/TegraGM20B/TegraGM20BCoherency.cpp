@@ -116,7 +116,7 @@ void idUnlink(const tgm_coh *c)
 	for (tgm_coh **p = idBucket(c->surfaceId); *p; p = &(*p)->idNext) {
 		if (*p == c) {
 			*p = c->idNext;
-			__atomic_sub_fetch(&gWithId, 1, __ATOMIC_RELAXED);
+			__atomic_store_n(&gWithId, gWithId - 1, __ATOMIC_RELAXED);
 			return;
 		}
 	}
@@ -158,7 +158,7 @@ bool defer(tgm_coh *c, void **surface, void (**releaseSurface)(void *))
 	if (!c->record || !c->surface || c->parked)
 		return false;
 	c->deferred = true;
-	__atomic_add_fetch(&gDeferred, 1, __ATOMIC_RELAXED);
+	__atomic_store_n(&gDeferred, gDeferred + 1, __ATOMIC_RELAXED);
 	tgm_record_park(c->record, c);
 	*surface = c->surface;
 	*releaseSurface = c->releaseSurface;
@@ -354,7 +354,7 @@ extern "C" struct tgm_coh *tgm_coherency_add(uint64_t pa, uint32_t surface_id, c
 			c->parked = false;
 		} else if (c->deferred) {
 			c->deferred = false;
-			__atomic_sub_fetch(&gDeferred, 1, __ATOMIC_RELAXED);
+			__atomic_store_n(&gDeferred, gDeferred - 1, __ATOMIC_RELAXED);
 			tgm_record_take(c->record);
 		} else {
 			c->refs++;
@@ -368,7 +368,7 @@ extern "C" struct tgm_coh *tgm_coherency_add(uint64_t pa, uint32_t surface_id, c
 			tgm_coh **b = idBucket(surface_id);
 			c->idNext = *b;
 			*b = c;
-			__atomic_add_fetch(&gWithId, 1, __ATOMIC_RELAXED);
+			__atomic_store_n(&gWithId, gWithId + 1, __ATOMIC_RELAXED);
 		}
 	}
 	IOLockUnlock(gRegistryLock);
@@ -899,7 +899,7 @@ extern "C" void tgm_coh_undefer(struct tgm_coh *c)
 	const bool deferred = c->deferred;
 	if (deferred) {
 		c->deferred = false;
-		__atomic_sub_fetch(&gDeferred, 1, __ATOMIC_RELAXED);
+		__atomic_store_n(&gDeferred, gDeferred - 1, __ATOMIC_RELAXED);
 		tgm_record_take(c->record);
 	}
 	IOLockUnlock(gRegistryLock);
@@ -961,7 +961,7 @@ extern "C" void tgm_coherency_record_gone(struct tgm_record *record)
 	bool dead = false;
 	if (c && c->deferred) {
 		c->deferred = false;
-		__atomic_sub_fetch(&gDeferred, 1, __ATOMIC_RELAXED);
+		__atomic_store_n(&gDeferred, gDeferred - 1, __ATOMIC_RELAXED);
 		c->record = nullptr;
 		dead = release(c);
 	}

@@ -214,7 +214,7 @@ void release_one(void *client, uint32_t id, uint32_t options, bool failed)
 		!lease->pending[0] && !lease->pending[1] && !lease->held[0] && !lease->held[1];
 	if (last) {
 		*at = lease->next;
-		__atomic_sub_fetch(&lease_count, 1u, __ATOMIC_RELEASE);
+		__atomic_store_n(&lease_count, lease_count - 1u, __ATOMIC_RELEASE);
 	}
 	IOLockUnlock(lock);
 	if (backing) {
@@ -307,7 +307,7 @@ extern "C" void switch_gpu_surface_sweep(void)
 			continue;
 		}
 		*at = lease->next;
-		__atomic_sub_fetch(&lease_count, 1u, __ATOMIC_RELEASE);
+		__atomic_store_n(&lease_count, lease_count - 1u, __ATOMIC_RELEASE);
 		lease->next = dead;
 		dead = lease;
 		for (auto **item = &pending; *item;) {
@@ -451,7 +451,7 @@ acquire_backing:
 			if (backing)
 				switch_gpu_backing_retain(backing);
 			leases = lease;
-			__atomic_add_fetch(&lease_count, 1u, __ATOMIC_RELEASE);
+			__atomic_store_n(&lease_count, lease_count + 1u, __ATOMIC_RELEASE);
 		}
 	}
 	if (!result) {

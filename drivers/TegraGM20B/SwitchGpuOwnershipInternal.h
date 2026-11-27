@@ -52,8 +52,8 @@ inline bool host_acquire_wanted(const switch_gpu_backing &backing,
 	       backing.host_visible_epoch != backing.host_epoch && !backing.host_acquire.engine;
 }
 
-// An ordered transaction's marks in its uses' reserved words (zero again when it ends).
-constexpr uint32_t kUseLocked = 1, kUseCleaned = 8;
+// Marks in a transaction's uses' reserved words (zero again when it ends): lock/clean state and cached prepare slot.
+constexpr uint32_t kUseLocked = 1, kUseHasSlot = 2, kUseCleaned = 8, kUseSlotShift = 4;
 
 void hold_ordered(switch_gpu_backing_transaction *transaction);
 void hold_claimed(switch_gpu_backing_transaction *transaction);

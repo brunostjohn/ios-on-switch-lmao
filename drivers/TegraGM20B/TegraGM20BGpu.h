@@ -288,6 +288,8 @@ enum {
 	SWITCH_GPU_SUBMIT_QUIET = 1u << 4,
 	/* volatile-mapped GPU writes: WFI + FB_FLUSH, no L2_FLUSH_DIRTY, does not advance visible_cpu */
 	SWITCH_GPU_SUBMIT_VOLATILE_VISIBILITY = 1u << 5,
+	/* explicit L2 write-back before invalidate (retirement flush), without a TLB drain */
+	SWITCH_GPU_SUBMIT_L2_FLUSH_INVALIDATE = 1u << 6,
 };
 
 int switch_gpu_chan_exec_visibility(struct tgm_chan *chan, const struct tgm_push *push,
@@ -339,6 +341,13 @@ int switch_gpu_chan_exec_events(struct tgm_chan *chan, const struct tgm_push *pu
 				uint32_t visibility, const struct switch_gpu_release *releases,
 				uint32_t release_count,
 				struct switch_gpu_backing_transaction *owned);
+int switch_gpu_chan_exec_events_validated(
+	struct tgm_chan *chan, const struct tgm_push *push, uint32_t count, uint32_t fences,
+	const struct switch_gpu_backing_token *dependencies, uint32_t dependency_count,
+	const struct switch_gpu_sibling_wait *siblings, uint32_t sibling_count,
+	const struct switch_gpu_word_wait *words, uint32_t word_count, uint32_t *seqno,
+	const struct tgm_prof *prof, uint32_t visibility, const struct switch_gpu_release *releases,
+	uint32_t release_count, struct switch_gpu_backing_transaction *owned);
 /* The channel's jobs through `seqno` release event signals mid-job: their nonstall interrupts run event retirement. */
 void switch_gpu_chan_event_releases(struct tgm_chan *chan, uint32_t seqno);
 struct TegraGM20BAbiFenceSemantic;

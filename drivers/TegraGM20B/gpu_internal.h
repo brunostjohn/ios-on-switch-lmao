@@ -177,6 +177,8 @@ struct tgm_vm {
 	u64 bind_va;
 	const volatile u32 *bind_cpu;
 	u32 bind_target;
+	/* Cached PDB_ONE MEM_OP_C/D pair for per-VM GMMU TLB invalidation (0 when unset). */
+	u32 tlb_mem_op_c, tlb_mem_op_d;
 };
 
 struct switch_gpu_memory_view {
