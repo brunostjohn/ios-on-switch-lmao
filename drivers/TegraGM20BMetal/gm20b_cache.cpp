@@ -2,13 +2,26 @@
 // See gm20b_cache.h.
 #include "gm20b_cache.h"
 #include "cache_io.h"
-#include "../../kits/SwitchSeedPack/SwitchSeedPack.h"
+#ifdef _WIN32
+namespace switch_seed_pack {
+class Seed {};
+}  // namespace switch_seed_pack
 
+#include "utf8_path.h"
+#include <process.h>
+#include <chrono>
+#include <cstdio>
+#include <filesystem>
+#include <fstream>
+#else
+#include "../../kits/SwitchSeedPack/SwitchSeedPack.h"
 #include <dirent.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+#include <cstdio>
+#endif
 #include <algorithm>
 #include <atomic>
 #include <cstring>
@@ -54,6 +67,20 @@ CapturedProgram readProgram(Reader &r)
 
 bool readFile(const std::string &path, std::string &out)
 {
+#ifdef _WIN32
+    const auto wp = fsPathUtf8(path);
+    if (wp.empty())
+        return false;
+    std::ifstream in(wp, std::ios::binary | std::ios::ate);
+    if (!in)
+        return false;
+    const std::streamoff size = in.tellg();
+    if (size < 0 || uint64_t(size) > kSizeLimit)
+        return false;
+    out.resize(size_t(size));
+    in.seekg(0);
+    return size == 0 || bool(in.read(&out[0], size));
+#else
     const int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
     if (fd < 0)
         return false;
@@ -70,8 +97,10 @@ bool readFile(const std::string &path, std::string &out)
     }
     close(fd);
     return ok;
+#endif
 }
 
+#ifndef _WIN32
 bool writeAll(int fd, const std::string &bytes)
 {
     for (size_t at = 0; at < bytes.size();) {
@@ -82,6 +111,7 @@ bool writeAll(int fd, const std::string &bytes)
     }
     return true;
 }
+#endif
 
 struct File {
     std::string path;
@@ -92,6 +122,27 @@ struct File {
 std::vector<File> files(const std::string &dir, const char *suffix)
 {
     std::vector<File> out;
+#ifdef _WIN32
+    std::error_code ec;
+    const auto wdir = fsPathUtf8(dir);
+    if (wdir.empty())
+        return out;
+    const size_t slen = std::strlen(suffix);
+    for (const auto &entry : std::filesystem::directory_iterator(wdir, ec)) {
+        if (ec || !entry.is_regular_file(ec) || ec)
+            continue;
+        const std::string name = pathToUtf8(entry.path().filename());
+        if (name.size() <= slen || name.compare(name.size() - slen, slen, suffix) != 0)
+            continue;
+        const auto sz = entry.file_size(ec);
+        if (ec)
+            continue;
+        const auto wt = entry.last_write_time(ec);
+        const auto secs =
+            ec ? time_t(0) : time_t(std::chrono::duration_cast<std::chrono::seconds>(wt.time_since_epoch()).count());
+        out.push_back({pathToUtf8(entry.path()), uint64_t(sz), secs});
+    }
+#else
     DIR *d = opendir(dir.c_str());
     if (!d)
         return out;
@@ -105,12 +156,42 @@ std::vector<File> files(const std::string &dir, const char *suffix)
             out.push_back({path, uint64_t(st.st_size), st.st_mtime});
     }
     closedir(d);
+#endif
     return out;
 }
 
 // Another build's entries (raw-<16 hex digits> but ours) and what a writer that died left half written
 void removeStale(const std::string &parent, const std::string &ours)
 {
+#ifdef _WIN32
+    std::error_code ec;
+    const auto wparent = fsPathUtf8(parent);
+    if (wparent.empty())
+        return;
+    std::vector<std::filesystem::path> stale;
+    for (const auto &entry : std::filesystem::directory_iterator(wparent, ec)) {
+        if (ec)
+            break;
+        const std::string name = pathToUtf8(entry.path().filename());
+        if (name.size() == 20 && !name.compare(0, 4, "rec-") && name != ours &&
+            name.find_first_not_of("0123456789abcdef", 4) == std::string::npos)
+            stale.push_back(entry.path());
+    }
+    for (const auto &dir : stale) {
+        const std::string dirUtf8 = pathToUtf8(dir);
+        for (const char *kind : {".rec", ".tmp"})
+            for (const File &f : files(dirUtf8, kind))
+                std::filesystem::remove(fsPathUtf8(f.path), ec);
+        std::filesystem::remove(dir, ec);
+    }
+    const auto now = std::filesystem::file_time_type::clock::now();
+    for (const File &f : files(parent + "/" + ours, ".tmp")) {
+        const auto fp = fsPathUtf8(f.path);
+        const auto wt = std::filesystem::last_write_time(fp, ec);
+        if (!ec && std::chrono::duration_cast<std::chrono::seconds>(now - wt).count() > kStaleTemporarySeconds)
+            std::filesystem::remove(fp, ec);
+    }
+#else
     if (DIR *d = opendir(parent.c_str())) {
         std::vector<std::string> stale;
         while (const dirent *e = readdir(d)) {
@@ -131,6 +212,7 @@ void removeStale(const std::string &parent, const std::string &ours)
     for (const File &f : files(parent + "/" + ours, ".tmp"))
         if (now - f.mtime > kStaleTemporarySeconds)
             unlink(f.path.c_str());
+#endif
 }
 
 }  // namespace
@@ -306,8 +388,20 @@ bool RecordCache::attach(const std::string &dir, uint64_t stack, uint64_t capByt
 {
     std::lock_guard<std::mutex> l(lock_);
     const std::string mine = dir + "/rec-" + hex16(stack);
+#ifdef _WIN32
+    if (dir.empty())
+        return false;
+    const auto wmine = fsPathUtf8(mine);
+    if (wmine.empty())
+        return false;
+    std::error_code ec;
+    std::filesystem::create_directory(wmine, ec);
+    if (ec && !std::filesystem::is_directory(wmine, ec))
+        return false;
+#else
     if (dir.empty() || (mkdir(mine.c_str(), 0700) != 0 && errno != EEXIST) || access(mine.c_str(), W_OK) != 0)
         return false;
+#endif
     parent_ = dir;
     dir_ = mine;
     if (stack_ != stack)
@@ -320,6 +414,11 @@ bool RecordCache::attach(const std::string &dir, uint64_t stack, uint64_t capByt
 
 bool RecordCache::attachSeed(const std::string &dir, uint64_t stack)
 {
+#ifdef _WIN32
+    (void)dir;
+    (void)stack;
+    return false;
+#else
     std::lock_guard<std::mutex> l(lock_);
     if (dir.empty() || (!dir_.empty() && stack_ != stack))
         return false;
@@ -331,11 +430,19 @@ bool RecordCache::attachSeed(const std::string &dir, uint64_t stack)
     stack_ = stack;
     seed_ = std::move(seed);
     return true;
+#endif
 }
 
 const uint8_t *RecordCache::findSeedSlot(const uint8_t *slot, size_t size, const uint8_t *&mapping,
                                          uint64_t &bytes) const
 {
+#ifdef _WIN32
+    (void)slot;
+    (void)size;
+    (void)mapping;
+    (void)bytes;
+    return nullptr;
+#else
     const uint64_t value = seedSlotName(slot, size);
     uint8_t name[sizeof value];
     for (unsigned i = 0; i < sizeof name; ++i)
@@ -347,6 +454,7 @@ const uint8_t *RecordCache::findSeedSlot(const uint8_t *slot, size_t size, const
     mapping = pack.data;
     bytes = pack.size;
     return found.data;
+#endif
 }
 
 void RecordCache::tidy()
@@ -372,6 +480,9 @@ bool RecordCache::loadBytes(bool seed, const CacheKey &k, std::string &bytes) co
         return false;
     if (!seed)
         return !dir_.empty() && readFile(path(k), bytes);
+#ifdef _WIN32
+    return false;
+#else
     const uint64_t value = k.name();
     uint8_t name[sizeof value];
     for (unsigned i = 0; i < sizeof name; ++i)
@@ -381,6 +492,7 @@ bool RecordCache::loadBytes(bool seed, const CacheKey &k, std::string &bytes) co
         return false;
     bytes.assign(reinterpret_cast<const char *>(found.data), found.size);
     return true;
+#endif
 }
 
 RecordCache::Found RecordCache::load(const CacheKey &k, RuntimeRecord &record, std::string &refusal, bool *seeded)
@@ -425,6 +537,31 @@ bool RecordCache::storeBytes(const CacheKey &k, const std::string &bytes)
         return false;
     if (cap_ && bytes_ + bytes.size() > cap_)
         evict(bytes.size());
+#ifdef _WIN32
+    const std::string temporary = dir_ + "/" + std::to_string(_getpid()) + "-" + std::to_string(serial++) + ".tmp";
+    const auto wtmp = fsPathUtf8(temporary);
+    const auto wfinal = fsPathUtf8(final);
+    if (wtmp.empty() || wfinal.empty())
+        return false;
+    bool written = false;
+    {
+        std::ofstream out(wtmp, std::ios::binary | std::ios::trunc);
+        if (out) {
+            out.write(bytes.data(), std::streamsize(bytes.size()));
+            out.flush();
+            written = bool(out);
+        }
+    }
+    std::error_code ec;
+    const uint64_t replaced =
+        std::filesystem::is_regular_file(wfinal, ec) && !ec ? std::filesystem::file_size(wfinal, ec) : 0;
+    if (!written || !moveFileReplaceUtf8(temporary, final)) {
+        std::filesystem::remove(wtmp, ec);
+        return false;
+    }
+    bytes_ = bytes_ - std::min(bytes_, replaced) + bytes.size();
+    return true;
+#else
     const std::string temporary = dir_ + "/" + std::to_string(getpid()) + "-" + std::to_string(serial++) + ".tmp";
     const int fd = ::open(temporary.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
     if (fd < 0)
@@ -440,6 +577,7 @@ bool RecordCache::storeBytes(const CacheKey &k, const std::string &bytes)
     }
     bytes_ = bytes_ - std::min(bytes_, replaced) + bytes.size();
     return true;
+#endif
 }
 
 // lock_ held: the oldest entries removed until `room` more bytes leave the cache at three quarters of its cap
@@ -455,8 +593,14 @@ void RecordCache::evict(uint64_t room)
     for (const File &f : all) {
         if (bytes_ + room <= cap_ / 4 * 3)
             break;
+#ifdef _WIN32
+        std::error_code ec;
+        if (std::filesystem::remove(fsPathUtf8(f.path), ec) && !ec)
+            bytes_ -= f.bytes;
+#else
         if (unlink(f.path.c_str()) == 0)
             bytes_ -= f.bytes;
+#endif
     }
 }
 

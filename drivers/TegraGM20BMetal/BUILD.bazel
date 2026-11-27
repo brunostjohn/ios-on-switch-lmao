@@ -91,6 +91,7 @@ filegroup(
         "pack.h",
         "set_entries.h",
         "TegraGM20BMetalPipelineKey.h",  # the runtime's key of a state, which probe_states.h files records under
+        "pipeline_key.h",
         "pipeline_fields.h",  # the descriptor fields that key reads
     ],
 )
@@ -103,12 +104,15 @@ filegroup(
         "precompile/PrecompileInputs.h",
         "TegraGM20BMetalDirect.h",
         "TegraGM20BMetalDirect.mm",
+        "direct_core.h",
+        "direct_core.cpp",
         "TegraGM20BMetalOffline.h",
         "TegraGM20BMetalOffline.mm",
         "TegraGM20BMetalOfflineReflection.mm",
         "TegraGM20BMetalRenderKey.h",
         "TegraGM20BMetalRenderKey.mm",
         "TegraGM20BMetalPipelineKey.h",
+        "pipeline_key.h",
         "pipeline_fields.h",
         "render_key.h",
         "gm20b_cache.cpp",
@@ -162,6 +166,7 @@ filegroup(
         "slot_mask.h",
         "stage_textures.h",
         "set_reads.h",
+        "utf8_path.h",
         "written_textures.h",
         "xr.h",
         "xr_pass.h",

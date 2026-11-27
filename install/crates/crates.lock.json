@@ -1,5 +1,5 @@
 {
-  "checksum": "cac6c768b89b67f5dead1fce2ddebd7b73ebfa0ba280bb81d131f999beeba5a5",
+  "checksum": "f99e4f16babe06297cb236cfaeb2328328d1945769303b6e24d6cad79b7bed42",
   "conditions": {
     "aarch64-apple-darwin": [
       "aarch64-apple-darwin"
@@ -909,6 +909,52 @@
         }
       ],
       "version": "0.5.5"
+    },
+    "ash 0.38.0+1.3.281": {
+      "build_script_attrs": {
+        "build_script_env_files": [
+          "@@//bazel/desktop:build_script_env"
+        ]
+      },
+      "common_attrs": {
+        "crate_features": [
+          "std"
+        ],
+        "edition": "2021",
+        "extra_deps": [
+          ":build_script_build"
+        ]
+      },
+      "library_target_name": "ash",
+      "license": "MIT OR Apache-2.0",
+      "license_file": "LICENSE-APACHE",
+      "license_ids": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "name": "ash",
+      "package_url": "https://github.com/ash-rs/ash",
+      "repository": {
+        "Http": {
+          "sha256": "0bb44936d800fea8f016d7f2311c6a4f97aebd5dc86f09906139ec848cf3a46f",
+          "url": "https://static.crates.io/crates/ash/0.38.0+1.3.281/download"
+        }
+      },
+      "targets": [
+        {
+          "Library": {
+            "crate_name": "ash",
+            "crate_root": "src/lib.rs"
+          }
+        },
+        {
+          "BuildScript": {
+            "crate_name": "build_script_build",
+            "crate_root": "build.rs"
+          }
+        }
+      ],
+      "version": "0.38.0+1.3.281"
     },
     "async-trait 0.1.92": {
       "common_attrs": {
@@ -15196,6 +15242,10 @@
               "target": "aes"
             },
             {
+              "id": "ash 0.38.0+1.3.281",
+              "target": "ash"
+            },
+            {
               "id": "base64 0.22.1",
               "target": "base64"
             },
@@ -15306,6 +15356,11 @@
             {
               "id": "sha1 0.11.0",
               "target": "sha1"
+            },
+            {
+              "alias": "sha2_0_10",
+              "id": "sha2 0.10.9",
+              "target": "sha2"
             },
             {
               "id": "sha2 0.11.2",
@@ -20923,6 +20978,7 @@
   "direct_deps": [
     "aea-tools 0.1.1",
     "aes 0.9.4",
+    "ash 0.38.0+1.3.281",
     "aws-lc-rs 1.19.0",
     "base64 0.22.1",
     "clap 4.6.10",
@@ -20956,6 +21012,7 @@
     "serde 1.0.229",
     "serde_json 1.0.154",
     "sha1 0.11.0",
+    "sha2 0.10.9",
     "sha2 0.11.2",
     "tar 0.4.46",
     "thiserror 2.0.21",

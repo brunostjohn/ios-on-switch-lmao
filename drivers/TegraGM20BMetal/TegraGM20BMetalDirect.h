@@ -7,11 +7,7 @@
 #include <map>
 #include <string>
 #include <vector>
-#include "direct_abi.h"
-#include "compute_record.h"
-#include "cubic.h"
-#include "direct.h"
-#include "written_textures.h"
+#include "direct_core.h"
 
 namespace gm20b {
 
@@ -28,9 +24,7 @@ public:
     const NmbDirectDispatch &dispatch();
 
 private:
-    NmbDirectDispatch dispatch_ = {};
-    std::vector<NmbDirectBoundTexture> textures_;
-    std::vector<NmbDirectBoundSampler> samplers_;
+    KernelDispatchCore core_;
 };
 
 // The textures a state is planned for, as the probe binds them (pack/probe.mm: BGRA8 but for the driver's own states that
@@ -56,15 +50,6 @@ struct DirectTranslator {
                     void *ctx, const char **why) = nullptr;
 };
 
-// m2v's own instantiation of a state's probe draw that binds every buffer slot at its probe offset (pack/probe_bind.h,
-// NmbDirectState draws[3]): its root push words and each stage's argument table, what a host check (harness/boundcheck.py)
-// compares the words the driver writes for that draw with
-struct BoundDraw {
-    uint32_t pushMask = 0;
-    uint32_t push[32] = {};
-    std::vector<uint32_t> spill[2];
-};
-
 class Direct {
 public:
     // Records under `rules` alone, translated by `translator`
@@ -81,43 +66,43 @@ public:
     // The shader compiler's: a stage compiled from the same inputs as an earlier one is that one (StageCompile::memo)
     void keepStages(StageMemo *memo)
     {
-        compile_.memo = memo;
+        core_.keepStages(memo);
     }
 
     // The pack generator's: records also hold the program variants directRecord makes (`variants`)
     void makeVariants(bool on)
     {
-        variants_ = on;
+        core_.makeVariants(on);
     }
 
     // Why the last make's storage form was refused where it made the barrier form instead; empty where it made none
     const std::string &storageRefusal() const
     {
-        return storageRefusal_;
+        return core_.storageRefusal();
     }
 
     // Whether the last make's state is one directRecord splits (splitsFragment)
     bool splittable() const
     {
-        return splittable_;
+        return core_.splittable();
     }
 
     // The pack generator's: each make keeps m2v's bound probe draw of the state it made (boundDraw)
     void keepBoundDraws(bool on)
     {
-        keepBound_ = on;
+        core_.keepBoundDraws(on);
     }
 
     const BoundDraw &boundDraw() const
     {
-        return bound_;
+        return core_.boundDraw();
     }
 
     // The pack generator's: the registers of the last make's stride twin (RuntimeRecord::strideTwin), as `registers`
     // holds the record's
     const std::map<uint32_t, uint32_t> &strideTwinRegisters() const
     {
-        return twinRegisters_;
+        return core_.strideTwinRegisters();
     }
 
     // The record of `descriptor`'s kernel at a dispatch of `dispatch`'s shape and bindings, whose compute key is `key`
@@ -126,22 +111,8 @@ public:
                           const std::string &key, ComputeRecord &out, std::string &why);
 
 private:
-    PackRules rules_;
     DirectTranslator translator_;
-    StageCompile compile_;
-    bool variants_ = false;
-    std::string storageRefusal_;
-    bool splittable_ = false;
-    bool keepBound_ = false;
-    BoundDraw bound_;
-    std::map<uint32_t, uint32_t> twinRegisters_;
-
-    CompileOutcome form(MTLRenderPipelineDescriptor *descriptor, bool barrier, ProbeTextures textures,
-                        const std::string &key, const std::vector<uint32_t> &attributes, RuntimeRecord &out,
-                        std::string &why, std::map<uint32_t, uint32_t> *registers, bool split);
-    CompileOutcome strideTwin(MTLRenderPipelineDescriptor *descriptor, ProbeTextures textures, const std::string &key,
-                              const std::vector<uint32_t> &attributes, RuntimeRecord &out, std::string &why,
-                              bool split);
+    DirectCore core_;
 };
 
 }  // namespace gm20b

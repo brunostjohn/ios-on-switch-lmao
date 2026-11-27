@@ -127,3 +127,74 @@ metal_airs = rule(
     },
     doc = "The .air files rules_apple's MetalCompile actions write for the apps' shaders.",
 )
+
+_METAL_COMPILE_SHELL = """\
+set -euo pipefail
+DEVELOPER_DIR="$(/usr/bin/sed -n 's/^DEVELOPER_DIR=//p' "$1")"
+export DEVELOPER_DIR
+src="$2"
+shift 2
+{ printf '#line 1 "%s"\\n' "$src"; cat "$src"; } | /usr/bin/xcrun "$@" -x metal -
+"""
+
+_METALLIB_LINK_SHELL = """\
+set -euo pipefail
+DEVELOPER_DIR="$(/usr/bin/sed -n 's/^DEVELOPER_DIR=//p' "$1")"
+export DEVELOPER_DIR
+shift
+exec /usr/bin/xcrun "$@"
+"""
+
+def _hwtest_metallib_impl(ctx):
+    target = "air64-apple-ios" + ctx.attr.minimum_os_version
+    env = {"LC_ALL": "C", "PATH": "/usr/bin:/bin", "TZ": "UTC"}
+    xcode_inputs = [ctx.file._xcode_env, ctx.file._xcode_identity]
+    airs = []
+    for src in sorted(ctx.files.srcs, key = lambda f: f.path):
+        stem = src.basename.removesuffix(".metal")
+        air = ctx.actions.declare_file("{}_airs/{}.air".format(ctx.label.name, stem))
+        args = ctx.actions.args()
+        args.add(ctx.file._xcode_env)
+        args.add(src)
+        args.add_all(["--sdk", "iphoneos", "metal", "-c", "-target", target, "-ffast-math", "-o", air])
+        args.add_all(["-Xclang", "-main-file-name", "-Xclang", src])
+        args.add("-iquote", src.dirname)
+        ctx.actions.run_shell(
+            command = _METAL_COMPILE_SHELL,
+            arguments = [args],
+            inputs = [src] + xcode_inputs,
+            outputs = [air],
+            env = env,
+            mnemonic = "HwtestMetalCompile",
+            progress_message = "Compiling {} ({})".format(src.basename, target),
+            execution_requirements = {"requires-darwin": ""},
+        )
+        airs.append(air)
+
+    out = ctx.actions.declare_file("{}/default.metallib".format(ctx.label.name))
+    link_args = ctx.actions.args()
+    link_args.add(ctx.file._xcode_env)
+    link_args.add_all(["--sdk", "iphoneos", "metallib", "-o", out])
+    link_args.add_all(airs)
+    ctx.actions.run_shell(
+        command = _METALLIB_LINK_SHELL,
+        arguments = [link_args],
+        inputs = airs + xcode_inputs,
+        outputs = [out],
+        env = env,
+        mnemonic = "HwtestMetallibLink",
+        progress_message = "Linking {} ({})".format(out.basename, target),
+        execution_requirements = {"requires-darwin": ""},
+    )
+    return [DefaultInfo(files = depset([out]))]
+
+hwtest_metallib = rule(
+    implementation = _hwtest_metallib_impl,
+    attrs = {
+        "srcs": attr.label_list(allow_files = [".metal"], mandatory = True),
+        "minimum_os_version": attr.string(mandatory = True),
+        "_xcode_env": attr.label(default = "@xcode//:xcode.env", allow_single_file = True),
+        "_xcode_identity": attr.label(default = "@xcode//:identity", allow_single_file = True),
+    },
+    doc = "Compiles the HW Test app's Metal shaders into default.metallib without IPSW inputs.",
+)

@@ -31,7 +31,8 @@ TEST(GM20BLinkedSource, TheRawRecordIsTheLinkedFunctionsToo)
     EXPECT_THAT(Body(library, "NSString *metal_pipeline_key("),
                 HasSubstr("gm20b::pipelineKey(d, vf ? &vertex : nullptr, ff ? &fragment : nullptr, linked,"));
     EXPECT_THAT(Body(SourceText("../TegraGM20BMetalPipelineKey.h"), "inline std::string pipelineKey("),
-                HasSubstr("key += linked;"));
+                HasSubstr("pipelineKey(fieldsOf(d), vertex, fragment, linked, framework)"));
+    EXPECT_THAT(Body(SourceText("../pipeline_key.h"), "inline std::string pipelineKey("), HasSubstr("key += linked;"));
 
     EXPECT_THAT(Body(SourceText("../TegraGM20BMetalComplete.mm"), "bool Completion::keyOf(Ask &a, CacheKey &k)"),
                 HasSubstr("renderCacheKey(a.facade, a.key, a.own, stack_, k, gm20bFunctionSource)"));
