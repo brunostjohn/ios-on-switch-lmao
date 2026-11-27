@@ -13,10 +13,75 @@ on:
     secrets:
       BUILDBUDDY_API_KEY:
         required: false
+      TS_OAUTH_CLIENT_ID:
+        required: false
+      TS_OAUTH_SECRET:
+        required: false
 permissions:
   contents: read
+  actions: read
 jobs:
+  rbe-prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      enabled: ${{ steps.check.outputs.enabled }}
+      cluster-id: ${{ steps.check.outputs.cluster-id }}
+    steps:
+      - name: Check Tailscale RBE credentials
+        id: check
+        env:
+          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+        run: |
+          if [ -n "$TS_OAUTH_CLIENT_ID" ] && [ -n "$TS_OAUTH_SECRET" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "cluster-id=rel-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+  rbe-bins:
+    needs: rbe-prepare
+    if: needs.rbe-prepare.outputs.enabled == 'true'
+    runs-on: xcode-27
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Restore or cache Buildbarn binaries
+        id: bb-cache
+        uses: actions/cache@v6.1.0
+        with:
+          path: ~/Library/Caches/switch-ios-buildbarn-bin
+          key: buildbarn-darwin-arm64-${{ hashFiles('tools/remote/bb_worker-clonefile.diff', 'tools/remote/bb_worker-slots.diff', 'tools/remote/ci/build-buildbarn.sh') }}
+      - name: Build patched Buildbarn binaries
+        if: steps.bb-cache.outputs.cache-hit != 'true'
+        run: ./tools/remote/ci/build-buildbarn.sh ~/Library/Caches/switch-ios-buildbarn-bin
+  rbe-worker:
+    needs: [rbe-prepare, rbe-bins]
+    if: needs.rbe-prepare.outputs.enabled == 'true'
+    continue-on-error: true
+    runs-on: xcode-27
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        worker: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/cache/restore@v6.1.0
+        with:
+          path: ~/Library/Caches/switch-ios-buildbarn-bin
+          key: buildbarn-darwin-arm64-${{ hashFiles('tools/remote/bb_worker-clonefile.diff', 'tools/remote/bb_worker-slots.diff', 'tools/remote/ci/build-buildbarn.sh') }}
+          fail-on-cache-miss: true
+      - name: Run ephemeral Buildbarn worker
+        env:
+          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./tools/remote/ci/run-worker.sh ~/Library/Caches/switch-ios-buildbarn-bin "${{ needs.rbe-prepare.outputs.cluster-id }}" "${{ matrix.worker }}" "build"
   build:
+    needs: [rbe-prepare, rbe-bins]
+    if: ${{ !cancelled() && (needs.rbe-bins.result == 'success' || needs.rbe-bins.result == 'skipped') }}
     runs-on: xcode-27
     timeout-minutes: 360
     steps:
@@ -26,6 +91,19 @@ jobs:
           cache: release
           buildbuddy-api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
           upload: ${{ inputs.upload }}
+      - name: Restore Buildbarn binaries
+        if: needs.rbe-prepare.outputs.enabled == 'true'
+        uses: actions/cache/restore@v6.1.0
+        with:
+          path: ~/Library/Caches/switch-ios-buildbarn-bin
+          key: buildbarn-darwin-arm64-${{ hashFiles('tools/remote/bb_worker-clonefile.diff', 'tools/remote/bb_worker-slots.diff', 'tools/remote/ci/build-buildbarn.sh') }}
+          fail-on-cache-miss: true
+      - name: Start ephemeral Buildbarn coordinator
+        if: needs.rbe-prepare.outputs.enabled == 'true'
+        env:
+          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+        run: ./tools/remote/ci/start-coordinator.sh ~/Library/Caches/switch-ios-buildbarn-bin "${{ needs.rbe-prepare.outputs.cluster-id }}" "${{ inputs.upload }}"
       - name: Read the version
         id: version
         env:
@@ -41,9 +119,12 @@ jobs:
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
-      - run: bazel build --config=release //:boot //:gpu //release:assets
-      - name: Build desktop installer binaries, seed smoke tools, and catalog tool
-        run: bazel build --config=release //release:installer_binaries //release:seed_smoke_binaries //install/catalog:switch_catalog_tool
+      - name: Build release, desktop installer, seed smoke, and catalog targets
+        run: |
+          bazel build --config=release \
+            //:boot //:gpu //release:assets \
+            //release:installer_binaries //release:seed_smoke_binaries \
+            //install/catalog:switch_catalog_tool //release:installer_kind_assets
       - name: Name the assets for the release
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -166,6 +247,9 @@ jobs:
         uses: ./.github/actions/bazel-save
         with:
           cache: release
+      - name: Stop ephemeral Buildbarn coordinator
+        if: always() && needs.rbe-prepare.outputs.enabled == 'true'
+        run: ./tools/remote/ci/stop-coordinator.sh
   bazelisk-only:
     needs: build
     runs-on: xcode-27

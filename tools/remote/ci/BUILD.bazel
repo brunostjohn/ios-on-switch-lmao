@@ -1,0 +1,11 @@
+load("@rules_python//python:defs.bzl", "py_binary")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+py_binary(
+    name = "sentinel",
+    srcs = ["sentinel.py"],
+)
