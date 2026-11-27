@@ -69,12 +69,15 @@
 // A 1 s watchdog, armed only while converting, panics if data-ready is raised but never arrives (lost at the GPIO
 // controller or the GIC); a part that raises none, or a line that stays high without new data, turns motion off with
 // one log line (giveUp). No polling anywhere.
+#include <IOKit/IOFilterInterruptEventSource.h>
 #include <IOKit/IOInterruptEventSource.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOService.h>
 #include <IOKit/IOTimerEventSource.h>
 #include <IOKit/IOWorkLoop.h>
+#if DEVELOPMENT || DEBUG || SWITCH_STATS_IO
 #include <os/log.h>
+#endif
 #include <string.h>
 #include "../SwitchTouch/SwitchHID.h"
 #include "../ArmGIC/SwitchInterrupts.h"
@@ -461,6 +464,21 @@ uint64_t msToAbs(uint32_t ms)
     nanoseconds_to_absolutetime(static_cast<uint64_t>(ms) * 1000000, &abs);
     return abs;
 }
+
+constexpr uint64_t packConfig(uint32_t intervalUS, uint32_t batchUS)
+{
+    return static_cast<uint64_t>(intervalUS) | (static_cast<uint64_t>(batchUS) << 32);
+}
+
+constexpr uint32_t configInterval(uint64_t packed)
+{
+    return static_cast<uint32_t>(packed);
+}
+
+constexpr uint32_t configBatch(uint64_t packed)
+{
+    return static_cast<uint32_t>(packed >> 32);
+}
 }  // namespace
 
 // NOLINTNEXTLINE(misc-use-internal-linkage): OSDefineMetaClassAndStructors needs the class's external linkage
@@ -475,19 +493,20 @@ class SwitchMotion : public IOService {
     };
 
     IOWorkLoop *loop = nullptr;
-    IOInterruptEventSource *irq = nullptr;   // PX2, data-ready
-    IOInterruptEventSource *kick = nullptr;  // no provider: a report interval changed (feature handler)
+    IOFilterInterruptEventSource *irq = nullptr;  // PX2, data-ready
+    IOInterruptEventSource *kick = nullptr;       // no provider: a report interval changed (feature handler)
     IOTimerEventSource *watchdog = nullptr;
     IOService *hid[2] = {}, *orientationHid = nullptr, *motionHid = nullptr;
     bool displayLit = true;  // the panel is on (switch_motion_display_power; atomics), so the detector runs
     Channel channels[3] = {};
     const Part *part = nullptr;
     const FamilyInfo *info = nullptr;
-    uint32_t intervalUS[3] = {};  // the clients' report intervals, written by the feature handler (atomics)
-    uint32_t batchUS[3] = {};     // and their batch intervals (BatchInterval, the Report Latency feature; atomics)
+    // Packed {intervalUS (low 32), batchUS (high 32)} per channel, written atomically by featureReceived.
+    uint64_t channelConfig[3] = {};
+    uint64_t irqStamp = 0;  // primary IRQ timestamp captured in interruptFilter
 
     // Work loop state.
-    bool converting = false, suspended = false, on[2] = {};
+    bool converting = false, suspended = false, on[2] = {}, stream[2] = {};
     bool broken = false;       // the part misbehaved on its first boots: logged once, motion off for this boot (giveUp)
     int busError = 0;          // the first failed SPI transfer's error (transferFailed); none is attempted after it
     bool firstLogged = false;  // the boot's first trusted accelerometer sample was logged (post)
@@ -504,6 +523,7 @@ class SwitchMotion : public IOService {
     uint64_t periodAbs = 0;       // one sample period at the current rate, in absolute time
     uint64_t lastPosted[2] = {};  // the last sample time posted per service (they only go forward)
 #if SWITCH_STATS_IO
+    uint32_t activeIntervalUS[3] = {}, activeBatchUS[2] = {};
     uint32_t drains = 0, records = 0, overflows = 0;
 #endif
     // Orientation detector (detectOrientation): its input decimated to kOrientationMilliHz, the filtered gravity
@@ -548,13 +568,14 @@ class SwitchMotion : public IOService {
 #endif
 #if DEVELOPMENT || DEBUG
         if (sensor == DeviceMotion)
-            __atomic_fetch_add(&motionReports, 1, __ATOMIC_RELAXED);
+            __atomic_store_n(&motionReports, motionReports + 1, __ATOMIC_RELAXED);
 #else
         (void)sensor;
 #endif
     }
 
     static void featureReceived(void *context, const uint8_t *report, size_t length);
+    static bool interruptFilter(OSObject *owner, IOFilterInterruptEventSource *sender);
     static void interruptOccurred(OSObject *owner, IOInterruptEventSource *sender, int count);
     static void kicked(OSObject *owner, IOInterruptEventSource *sender, int count);
     static void watchdogFired(OSObject *owner, IOTimerEventSource *sender);
@@ -582,7 +603,7 @@ public:
     void totals(uint64_t *reports, uint32_t *gyroIntervalUS) const
     {
         *reports = __atomic_load_n(&motionReports, __ATOMIC_RELAXED);
-        *gyroIntervalUS = __atomic_load_n(&intervalUS[Gyro], __ATOMIC_RELAXED);
+        *gyroIntervalUS = configInterval(__atomic_load_n(&channelConfig[Gyro], __ATOMIC_RELAXED));
     }
 #endif
     bool start(IOService *provider) override;
@@ -905,8 +926,17 @@ void SwitchMotion::apply()
     if (suspended || broken)
         return;
     uint32_t interval[2];
-    for (unsigned s = 0; s < 2; ++s)
-        interval[s] = __atomic_load_n(&intervalUS[s], __ATOMIC_ACQUIRE);
+    uint32_t channelBatch[2];
+    for (unsigned s = 0; s < 2; ++s) {
+        const uint64_t cfg = __atomic_load_n(&channelConfig[s], __ATOMIC_ACQUIRE);
+        interval[s] = configInterval(cfg);
+        channelBatch[s] = configBatch(cfg);
+        stream[s] = interval[s] != 0;
+#if SWITCH_STATS_IO
+        activeIntervalUS[s] = interval[s];
+        activeBatchUS[s] = channelBatch[s];
+#endif
+    }
     const bool detector = (orientationHid != nullptr) && __atomic_load_n(&displayLit, __ATOMIC_ACQUIRE);
     if (detector != detecting) {
         // Starts afresh each time: a new filter, nothing announced, so the first stable orientation is announced.
@@ -916,7 +946,10 @@ void SwitchMotion::apply()
         candidateCount = still = detectorCount = 0;
         announced = false;
     }
-    const uint32_t motionUS = __atomic_load_n(&intervalUS[DeviceMotion], __ATOMIC_ACQUIRE);
+    const uint32_t motionUS = configInterval(__atomic_load_n(&channelConfig[DeviceMotion], __ATOMIC_ACQUIRE));
+#if SWITCH_STATS_IO
+    activeIntervalUS[DeviceMotion] = motionUS;
+#endif
     if ((motionUS != 0) != fusing) {
         fusing = motionUS != 0;
         fusion.restart();
@@ -948,7 +981,7 @@ void SwitchMotion::apply()
         for (unsigned s = 0; s < 2; ++s) {
             if (!interval[s])
                 continue;
-            const uint32_t b = __atomic_load_n(&batchUS[s], __ATOMIC_ACQUIRE);
+            const uint32_t b = channelBatch[s];
             if (!seen || b < batch)
                 batch = b;
             seen = true;
@@ -964,7 +997,9 @@ void SwitchMotion::apply()
             irq->disable();
             watchdog->cancelTimeout();
             converting = false;
+#if DEVELOPMENT || DEBUG
             os_log(OS_LOG_DEFAULT, "SwitchMotion: off");
+#endif
         }
         on[Accel] = on[Gyro] = false;
         return;
@@ -989,16 +1024,19 @@ void SwitchMotion::apply()
             irq->enable();
             switch_check_after_ms(watchdog, kWatchdogMS);
         }
-        // Log only (not the console): one line per change of what the part converts.
+#if DEVELOPMENT || DEBUG
         os_log(OS_LOG_DEFAULT,
                "SwitchMotion: %u mHz, accel %d (%u us), gyro %d (%u us), motion %u us, batch %u us, FIFO watermark %u",
                info->rates[rate].milliHz, on[Accel], interval[Accel], on[Gyro], interval[Gyro], motionUS, batch,
                watermark);
+#endif
     } else if (part->family == Family::ICM42607 && fifoWatermark != watermark) {
         // Only the batch interval changed: the FIFO again from empty (route), the sensors untouched.
         writeRegister(icm42607::IntSource3, 0);
         route(true, fifoWatermark);
+#if DEVELOPMENT || DEBUG
         os_log(OS_LOG_DEFAULT, "SwitchMotion: batch %u us, FIFO watermark %u", batch, watermark);
+#endif
     }
     for (unsigned s = 0; s < 2; ++s) {
         const uint64_t perReport = static_cast<uint64_t>(info->rates[rate].milliHz) * interval[s] / 1000000000ULL;
@@ -1019,8 +1057,6 @@ void SwitchMotion::apply()
 // console's bottom).
 void SwitchMotion::post(Sensor sensor, const int16_t raw[3], uint64_t now)
 {
-    if (!fifoOn)
-        lastPosted[sensor] = now;
     if (now < settle[sensor])
         return;
     const SwitchMotionReport report = deviceReport(*info, sensor, raw);
@@ -1037,12 +1073,11 @@ void SwitchMotion::post(Sensor sensor, const int16_t raw[3], uint64_t now)
         const int32_t vector[3] = {report.x, report.y, report.z};
         detectOrientation(vector);
     }
-    if (!__atomic_load_n(&intervalUS[sensor], __ATOMIC_RELAXED) || ++count[sensor] < every[sensor])
+    if (!stream[sensor] || ++count[sensor] < every[sensor])
         return;
     count[sensor] = 0;
     statsPosted(sensor);
-    // Dropped until the event driver has opened it. A batched sample carries its own time, later than the last.
-    if (fifoOn) {
+    if (timedPosts) {
         if (now <= lastPosted[sensor])
             now = lastPosted[sensor] + 1;
         lastPosted[sensor] = now;
@@ -1150,10 +1185,12 @@ void SwitchMotion::detectOrientation(const int32_t accel[3])
     if (++candidateCount < kOrientationStable && (!first || next == Unknown))
         return;
     candidateCount = 0;
+#if DEVELOPMENT || DEBUG
     static const char *const names[] = {
         "unknown", "portrait", "portrait upside down", "landscape left", "landscape right", "face up", "face down"};
     // NOLINTNEXTLINE(clang-analyzer-security.ArrayBound): both hold one of the seven orientations
     os_log(OS_LOG_DEFAULT, "SwitchMotion: orientation %s (%u), was %s", names[next], next, names[orientation]);
+#endif
     orientation = next;
     announce(next);
 }
@@ -1186,7 +1223,9 @@ void SwitchMotion::announce(uint8_t which)
 // Work loop, PX2 masked until return: status and data, which releases the latched data-ready.
 void SwitchMotion::sample()
 {
-    const uint64_t now = mach_absolute_time();
+    uint64_t now = __atomic_load_n(&irqStamp, __ATOMIC_ACQUIRE);
+    if (!now)
+        now = mach_absolute_time();
     if (fifoOn) {
         drainFifo(now);
         return;
@@ -1335,6 +1374,14 @@ void SwitchMotion::drainFifo(uint64_t now)
 #endif
 }
 
+// Primary IRQ context: stamp PX2 before work loop scheduling jitter; PX2 stays masked until interruptOccurred returns.
+bool SwitchMotion::interruptFilter(OSObject *owner, IOFilterInterruptEventSource *)
+{
+    auto *self = static_cast<SwitchMotion *>(owner);
+    __atomic_store_n(&self->irqStamp, mach_absolute_time(), __ATOMIC_RELEASE);
+    return true;
+}
+
 void SwitchMotion::interruptOccurred(OSObject *owner, IOInterruptEventSource *, int)
 {
     auto *self = OSDynamicCast(SwitchMotion, owner);
@@ -1353,8 +1400,8 @@ void SwitchMotion::statsInterrupt()
     const SwitchMotionState state = {
         info->rates[rate].milliHz,
         {on[Accel], on[Gyro]},
-        {__atomic_load_n(&intervalUS[Accel], __ATOMIC_RELAXED), __atomic_load_n(&intervalUS[Gyro], __ATOMIC_RELAXED)},
-        {__atomic_load_n(&batchUS[Accel], __ATOMIC_RELAXED), __atomic_load_n(&batchUS[Gyro], __ATOMIC_RELAXED)},
+        {activeIntervalUS[Accel], activeIntervalUS[Gyro]},
+        {activeBatchUS[Accel], activeBatchUS[Gyro]},
         detecting,
         __atomic_load_n(&displayLit, __ATOMIC_RELAXED),
         fifoOn,
@@ -1362,7 +1409,7 @@ void SwitchMotion::statsInterrupt()
         drains,
         records,
         overflows,
-        __atomic_load_n(&intervalUS[DeviceMotion], __ATOMIC_RELAXED),
+        activeIntervalUS[DeviceMotion],
     };
     const uint64_t now = mach_absolute_time();
     if (!switchMotionInterrupt(stats, now, msToAbs(10000), msToAbs(2000), state))
@@ -1420,8 +1467,7 @@ void SwitchMotion::featureReceived(void *context, const uint8_t *report, size_t 
                               static_cast<uint32_t>(value[2]) << 16 | static_cast<uint32_t>(value[3]) << 24;
     const uint32_t batch = static_cast<uint32_t>(value[4]) | static_cast<uint32_t>(value[5]) << 8 |
                            static_cast<uint32_t>(value[6]) << 16 | static_cast<uint32_t>(value[7]) << 24;
-    __atomic_store_n(&channel->owner->batchUS[channel->sensor], batch, __ATOMIC_RELEASE);
-    __atomic_store_n(&channel->owner->intervalUS[channel->sensor], interval, __ATOMIC_RELEASE);
+    __atomic_store_n(&channel->owner->channelConfig[channel->sensor], packConfig(interval, batch), __ATOMIC_RELEASE);
     channel->owner->kick->interruptOccurred(nullptr, nullptr, 0);
 }
 
@@ -1445,7 +1491,8 @@ bool SwitchMotion::start(IOService *provider)
         panic("SwitchMotion: no interrupt nub for the IMU data-ready line (PX2): %s", state);
     }
     loop = IOWorkLoop::workLoop();
-    irq = IOInterruptEventSource::interruptEventSource(this, &SwitchMotion::interruptOccurred, nub, 0);
+    irq = IOFilterInterruptEventSource::filterInterruptEventSource(this, &SwitchMotion::interruptOccurred,
+                                                                   &SwitchMotion::interruptFilter, nub, 0);
     kick = IOInterruptEventSource::interruptEventSource(this, &SwitchMotion::kicked, nullptr, 0);
     watchdog = IOTimerEventSource::timerEventSource(this, &SwitchMotion::watchdogFired);
     if (!loop || !irq || !kick || !watchdog || loop->addEventSource(irq) != kIOReturnSuccess ||

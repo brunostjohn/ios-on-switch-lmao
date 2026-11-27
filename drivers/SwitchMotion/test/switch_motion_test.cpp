@@ -1168,10 +1168,12 @@ static void icm42607Fifo()
         expectOps({"W 2d 00", "W 28 01", "W 2d 08"}, "FIFO batch gone: FIFO bypassed, data-ready on INT2");
         expectLog("os_log: SwitchMotion: batch 0 us, FIFO watermark 1", "FIFO batch gone");
         gNow += 5000000;
+        const uint64_t drdyStamp = gNow;
         chip.produce(accel, gyro);
         check(deliver() == 1, "FIFO off: one interrupt per sample");
         expectOps({"R 39", "R 0b x12"}, "FIFO off: the data-ready path");
-        check(hid(kSwitchHIDGyro)->times.back() == 0, "FIFO off: posted as before");
+        check(hid(kSwitchHIDGyro)->times.back() == drdyStamp,
+              "FIFO off with timedPosts: carries primary IRQ timestamp via switch_hid_post_at");
 
         setInterval(kSwitchHIDGyro, 0);
         setInterval(kSwitchHIDAccelerometer, 0);
@@ -1212,8 +1214,24 @@ static void icm42607Fifo()
         expectLog("IOLog: SwitchMotion: ICM-42607-P FIFO batching off for this boot (FIFO count 65535 past its 144 "
                   "records (INT_STATUS 0x4)); data-ready per sample as before",
                   "count");
-        check(hid(kSwitchHIDGyro)->reports.size() == 1 && hid(kSwitchHIDGyro)->times.back() == 0,
-              "count: nothing posted from the FIFO, the data-ready sample as before");
+        check(hid(kSwitchHIDGyro)->reports.size() == 1 && hid(kSwitchHIDGyro)->times.back() == gNow,
+              "count: nothing posted from the FIFO, the data-ready sample timed at IRQ");
+        teardown();
+    }
+    {  // Primary IRQ filter captures timestamp before work loop scheduling delay on both data-ready and FIFO paths.
+        Icm42607 chip;
+        check(start(chip), "irqStamp: started");
+        setFeature(kSwitchHIDGyro, 5000, 0);
+        gNow += 80000000;
+        IOFilterInterruptEventSource::filterDelayNS = 2000000;  // 2 ms work loop wake latency
+        gNow += 5000000;
+        const uint64_t irqAt = gNow;
+        chip.produce(accel, gyro);
+        check(deliver() == 1, "irqStamp: delivered");
+        IOFilterInterruptEventSource::filterDelayNS = 0;
+        check(hid(kSwitchHIDGyro)->times.size() == 1 && hid(kSwitchHIDGyro)->times.back() == irqAt,
+              "irqStamp: non-FIFO report carries primary IRQ filter time, not deferred work loop time");
+        check(gNow == irqAt + 2000000, "irqStamp: work loop ran 2 ms after filter");
         teardown();
     }
     {  // HID reports without sample times: batching off from the start.

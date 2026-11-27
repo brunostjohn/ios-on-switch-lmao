@@ -18,6 +18,7 @@ lint_files()
 host_shims(
     name = "kernel",
     headers = [
+        "IOKit/IOFilterInterruptEventSource.h",
         "IOKit/IOInterruptEventSource.h",
         "IOKit/IOLib.h",
         "IOKit/IOReturn.h",

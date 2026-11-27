@@ -66,7 +66,32 @@ constexpr uint32_t kPmcIntrPolarity = 1u << 17;
 #if DEVELOPMENT || DEBUG
 constexpr uint32_t kWatchdogMS = 10000;  // with as much leeway (switch_check_after_ms): no wakeup of its own
 #endif
-constexpr unsigned kPmicBurst = 20;  // PMIC interrupts per second that mean the line is stuck
+constexpr unsigned kPmicBurst = 20;      // PMIC interrupts per second that mean the line is stuck
+constexpr uint32_t kBtClickHoldMS = 50;  // synthetic press duration for SpringBoard recognizers
+constexpr uint32_t kBtClickGapMS = 50;   // release gap between queued back-to-back clicks
+constexpr uint8_t kBtClickMaxQueue = 4;
+
+struct BtClickMap {
+    uint8_t bt, button;
+};
+
+constexpr BtClickMap kBtClicks[] = {
+    {SWITCH_BT_HOME, kSwitchButtonHome},
+    {SWITCH_BT_CAPTURE, kSwitchButtonSnapshot},
+};
+constexpr unsigned kBtClickCount = sizeof(kBtClicks) / sizeof(kBtClicks[0]);
+
+enum class BtClickPhase : uint8_t {
+    Idle,
+    Holding,
+    Gap,
+};
+
+struct BtClickSlot {
+    BtClickPhase phase = BtClickPhase::Idle;
+    uint8_t queued = 0;
+    uint64_t deadline = 0;
+};
 
 struct Volume {
     unsigned gpio;
@@ -100,7 +125,9 @@ class SwitchButtons : public IOService {
     IOInterruptEventSource *volume[kVolumeCount] = {};
     IOInterruptEventSource *pmic = nullptr;
     IOInterruptEventSource *home = nullptr;  // software source (no provider): switch_buttons_bt_click
+    IOTimerEventSource *btTimer = nullptr;   // synthetic hold/gap timer for Bluetooth clicks
     uint8_t clicks = 0;                      // SWITCH_BT_HOME | SWITCH_BT_CAPTURE asked for (atomics)
+    BtClickSlot btSlots[kBtClickCount] = {};
 #if DEVELOPMENT || DEBUG
     IOTimerEventSource *watchdog = nullptr;
 #endif
@@ -115,6 +142,8 @@ class SwitchButtons : public IOService {
     static void watchdogFired(OSObject *owner, IOTimerEventSource *sender);
 #endif
     static void btClicks(OSObject *owner, IOInterruptEventSource *sender, int count);
+    static void btTimerFired(OSObject *owner, IOTimerEventSource *sender);
+    void advanceBtClicks();
     bool setUpPmic();
     void powerKeyOff();
     void change(uint8_t button, bool pressed, bool pulse);
@@ -173,8 +202,11 @@ OSDefineMetaClassAndStructors(SwitchButtons, IOService)
     }
 
     home = IOInterruptEventSource::interruptEventSource(this, &SwitchButtons::btClicks);
-    if (!home || loop->addEventSource(home) != kIOReturnSuccess)
+    btTimer = IOTimerEventSource::timerEventSource(this, &SwitchButtons::btTimerFired);
+    if (!home || !btTimer || loop->addEventSource(home) != kIOReturnSuccess ||
+        loop->addEventSource(btTimer) != kIOReturnSuccess) {
         panic("SwitchButtons: click source setup failed");
+    }
 
     for (auto *source : volume)
         source->enable();
@@ -199,6 +231,10 @@ void SwitchButtons::free()
             loop->removeEventSource(pmic);
         if (home)
             loop->removeEventSource(home);
+        if (btTimer) {
+            btTimer->cancelTimeout();
+            loop->removeEventSource(btTimer);
+        }
 #if DEVELOPMENT || DEBUG
         if (watchdog)
             loop->removeEventSource(watchdog);
@@ -208,6 +244,7 @@ void SwitchButtons::free()
         OSSafeReleaseNULL(source);
     OSSafeReleaseNULL(pmic);
     OSSafeReleaseNULL(home);
+    OSSafeReleaseNULL(btTimer);
 #if DEVELOPMENT || DEBUG
     OSSafeReleaseNULL(watchdog);
 #endif
@@ -338,8 +375,56 @@ void SwitchButtons::pmicInterrupt(OSObject *owner, IOInterruptEventSource *, int
         switch_wake_event(SWITCH_WAKE_POWER_KEY);
 }
 
-// Work loop: one press and release of Menu (J120's Home button) and/or Snapshot per click asked for since the last
-// run, each its own report as for a real press.
+void SwitchButtons::advanceBtClicks()
+{
+    const uint64_t now = mach_absolute_time();
+    uint64_t holdAbs = 0;
+    uint64_t gapAbs = 0;
+    clock_interval_to_absolutetime_interval(kBtClickHoldMS, kMillisecondScale, &holdAbs);
+    clock_interval_to_absolutetime_interval(kBtClickGapMS, kMillisecondScale, &gapAbs);
+    bool changed = false;
+    uint64_t nextDeadline = 0;
+    for (unsigned i = 0; i < kBtClickCount; ++i) {
+        BtClickSlot &slot = btSlots[i];
+        const uint8_t bit = kBtClicks[i].button;
+        if (slot.phase == BtClickPhase::Holding && now >= slot.deadline) {
+            buttons &= static_cast<uint8_t>(~bit);
+            changed = true;
+            if (slot.queued) {
+                slot.phase = BtClickPhase::Gap;
+                slot.deadline = now + gapAbs;
+            } else {
+                slot.phase = BtClickPhase::Idle;
+                slot.deadline = 0;
+            }
+        } else if (slot.phase == BtClickPhase::Gap && now >= slot.deadline) {
+            slot.phase = BtClickPhase::Idle;
+            slot.deadline = 0;
+        }
+        if (slot.phase == BtClickPhase::Idle && slot.queued) {
+            --slot.queued;
+            buttons |= bit;
+            changed = true;
+            slot.phase = BtClickPhase::Holding;
+            slot.deadline = now + holdAbs;
+        }
+        if (slot.phase != BtClickPhase::Idle && (!nextDeadline || slot.deadline < nextDeadline))
+            nextDeadline = slot.deadline;
+    }
+    if (changed)
+        post();
+    if (nextDeadline)
+        btTimer->wakeAtTime(nextDeadline);
+}
+
+void SwitchButtons::btTimerFired(OSObject *owner, IOTimerEventSource *)
+{
+    if (auto *self = OSDynamicCast(SwitchButtons, owner))
+        self->advanceBtClicks();
+}
+
+// Work loop: press Menu (J120's Home button) and/or Snapshot and hold for kBtClickHoldMS via btTimer so SpringBoard's
+// press-duration recognizers see a real press without blocking the work loop.
 void SwitchButtons::btClicks(OSObject *owner, IOInterruptEventSource *, int)
 {
     auto *self = OSDynamicCast(SwitchButtons, owner);
@@ -351,19 +436,11 @@ void SwitchButtons::btClicks(OSObject *owner, IOInterruptEventSource *, int)
     if (which & SWITCH_BT_CAPTURE)
         switch_recorder_mark();
 #endif
-
-    const struct {
-        uint8_t bt, button;
-    } kClicks[] = {{SWITCH_BT_HOME, kSwitchButtonHome}, {SWITCH_BT_CAPTURE, kSwitchButtonSnapshot}};
-
-    for (const auto &c : kClicks) {
-        if (!(which & c.bt))
-            continue;
-        self->buttons |= c.button;
-        self->post();
-        self->buttons &= static_cast<uint8_t>(~c.button);
-        self->post();
+    for (unsigned i = 0; i < kBtClickCount; ++i) {
+        if ((which & kBtClicks[i].bt) && self->btSlots[i].queued < kBtClickMaxQueue)
+            ++self->btSlots[i].queued;
     }
+    self->advanceBtClicks();
 }
 
 #if DEVELOPMENT || DEBUG

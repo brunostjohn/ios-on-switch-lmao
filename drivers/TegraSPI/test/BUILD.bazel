@@ -11,3 +11,9 @@ host_test(
         "//drivers/TegraSPI:TegraSPIWords.h",
     ],
 )
+
+host_test(
+    name = "tegra_spi_source_test",
+    srcs = ["tegra_spi_source_test.cpp"],
+    data = ["//drivers/TegraSPI:TegraSPI.cpp"],
+)

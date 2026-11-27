@@ -281,9 +281,39 @@ public:
     }
 
     // The work loop runs the action at once (a disabled source's interrupt waits; none of these tests needs that).
-    void interruptOccurred(void *, IOService *, int)
+    virtual void interruptOccurred(void *, IOService *, int)
     {
-        if (enabled)
+        if (enabled && action)
+            action(owner, this, 1);
+    }
+};
+
+class IOFilterInterruptEventSource : public IOInterruptEventSource {
+public:
+    typedef bool (*Filter)(OSObject *owner, IOFilterInterruptEventSource *sender);
+    Filter filter = nullptr;
+    static inline uint64_t filterDelayNS = 0;
+
+    static IOFilterInterruptEventSource *filterInterruptEventSource(OSObject *owner, Action action, Filter filter,
+                                                                    IOService *provider = nullptr, int = 0)
+    {
+        auto *source = new IOFilterInterruptEventSource;
+        source->owner = owner;
+        source->action = action;
+        source->filter = filter;
+        source->provider = provider;
+        all.push_back(source);
+        return source;
+    }
+
+    void interruptOccurred(void *, IOService *, int) override
+    {
+        if (!enabled)
+            return;
+        if (filter && !filter(owner, this))
+            return;
+        gNow += filterDelayNS;
+        if (action)
             action(owner, this, 1);
     }
 };
