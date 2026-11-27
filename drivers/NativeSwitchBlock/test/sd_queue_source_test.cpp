@@ -39,9 +39,10 @@ TEST(SdQueueSource, MergeChains)
     EXPECT_THAT(pick, HasSubstr("if (first->write) {"));
     EXPECT_TRUE(Search(pick,
                        R"(switchGatherWrites\(head, first, limit, kMaxChain, kMergeScan, &start, &sectors,\s*)"
-                       R"(inFlight,\s*inFlightCount,\s*writes\(windowOf\(first->shared\)\)\.waiters != nullptr\))"));
+                       R"(inFlight,\s*inFlightCount,\s*writes\(windowOf\(first->shared\)\)\.waiters != nullptr,\s*)"
+                       R"(&bounds\))"));
     EXPECT_TRUE(Search(pick, R"(switchGatherReads\(head, first, maxSectors, kMaxChain, kMergeScan, &start, )"
-                             R"(&sectors,\s*maxGap,\s*gapBudget\))"));
+                             R"(&sectors,\s*maxGap,\s*gapBudget,\s*&bounds\))"));
     // r14-sdcq: gaps only on reads while gap reads are on, within the cost model's bounds.
     EXPECT_THAT(pick, HasSubstr("const uint32_t maxGap = gapsOn ? kGapSectors : 0;"));
     EXPECT_THAT(pick, HasSubstr("const uint32_t gapBudget = gapsOn ? kGapBudget : 0;"));
@@ -49,14 +50,16 @@ TEST(SdQueueSource, MergeChains)
         Search(source, R"(constexpr uint32_t kGapSectors = 32 \* 1024 / kSector, kGapBudget = 64 \* 1024 / kSector)"));
     // The scan reaches as far as a chain can hold: never fewer than the old rule's queue-adjacent requests.
     EXPECT_THAT(source, HasSubstr("constexpr unsigned kMergeScan = kMaxChain;"));
-    // Both chains are checked before unlinking; one that fails stays queued, the boot falls back to adjacent-only
-    // merging with one line, and nothing panics.
-    EXPECT_LT(Index(pick, "switchWriteChainTiles(head, start, sectors, count)"), Index(pick, "switchUnlinkChain("));
-    EXPECT_LT(Index(pick, "switchChainFits(head, start, sectors, count, maxGap, gapBudget)"),
-              Index(pick, "switchUnlinkChain("));
+    // Both chains are checked via O(1) incremental bounds before unlinking (and full chain order verified outside
+    // queueLock in prepareAndPublishSlot); one that fails stays queued and falls back to adjacent-only merging.
+    EXPECT_LT(Index(pick, "switchChainBoundsFit(bounds, 0, 0)"), Index(pick, "switchUnlinkChain("));
+    EXPECT_LT(Index(pick, "switchChainBoundsFit(bounds, maxGap, gapBudget)"), Index(pick, "switchUnlinkChain("));
     EXPECT_THAT(pick, HasSubstr("switchClearChain(head);"));
     EXPECT_THAT(pick, HasSubstr("mergeAnywhere = false;"));
     EXPECT_THAT(pick, Not(HasSubstr("panic(")));
+    const std::string prep = body("void NativeSwitchBlock::prepareAndPublishSlot(");
+    EXPECT_THAT(prep, HasSubstr("r->lba < prevEnd"));
+    EXPECT_THAT(prep, HasSubstr("prevEnd != first->lba + sectors"));
     // Fallback path keeps adjacent-only merging and checks active in-flight overlap for writes.
     EXPECT_THAT(pick, HasSubstr("last->next->lba == last->lba + last->sectors"));
     EXPECT_THAT(pick, HasSubstr("!overlapsInFlight(last->next)"));

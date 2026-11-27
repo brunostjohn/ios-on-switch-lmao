@@ -40,6 +40,11 @@ constexpr uint32_t kQueueMax = 16;  // decodes in flight: each holds a scan slot
 IOLock *gQueueLock;
 SwitchNVJPGScan gScans[kQueueMax];
 uint32_t gScansFree = (1u << kQueueMax) - 1;  // bit n: gScans[n]; gQueueLock
+uint32_t gScanWaiters;                        // gQueueLock
+Job gJobPool[kQueueMax];
+uint32_t gJobsFree = (1u << kQueueMax) - 1;  // bit n: gJobPool[n]; gQueueLock
+bool gEngineBusy;                            // gQueueLock: single engine owner (engineThread or direct sync caller)
+bool gEngineSleeping;                        // gQueueLock: engineThread asleep on &gHead
 
 IOReturn ioreturn(int err)
 {
@@ -73,15 +78,45 @@ void refused(const char *why, uint32_t format)
 
 Job *gHead, *gTail;
 
+Job *allocJob()
+{
+    IOLockLock(gQueueLock);
+    if (gJobsFree) {
+        const uint32_t slot = static_cast<uint32_t>(__builtin_ctz(gJobsFree));
+        gJobsFree &= ~(1u << slot);
+        IOLockUnlock(gQueueLock);
+        Job *job = &gJobPool[slot];
+        bzero(job, sizeof(*job));
+        job->pooled = true;
+        return job;
+    }
+    IOLockUnlock(gQueueLock);
+    return IONewZero(Job, 1);
+}
+
 SwitchNVJPGScan *takeScan(uint64_t bytes)
 {
     IOLockLock(gQueueLock);
-    while (!gScansFree)
-        IOLockSleep(gQueueLock, &gScansFree, THREAD_UNINT);
+    if (!gScansFree) {
+        ++gScanWaiters;
+        while (!gScansFree)
+            IOLockSleep(gQueueLock, &gScansFree, THREAD_UNINT);
+        --gScanWaiters;
+    }
     const uint32_t slot = switch_nvjpg_scan_pick(gScans, gScansFree, bytes);
     gScansFree &= ~(1u << slot);
     IOLockUnlock(gQueueLock);
     return &gScans[slot];
+}
+
+void giveScanLocked(Job *job)
+{
+    if (!job->scan)
+        return;
+    gScansFree |= 1u << (job->scan - gScans);
+    if (gScanWaiters)
+        IOLockWakeup(gQueueLock, &gScansFree, false);
+    job->scan = nullptr;
 }
 
 void giveScan(Job *job)
@@ -89,19 +124,27 @@ void giveScan(Job *job)
     if (!job->scan)
         return;
     IOLockLock(gQueueLock);
-    gScansFree |= 1u << (job->scan - gScans);
-    IOLockWakeup(gQueueLock, &gScansFree, false);
+    giveScanLocked(job);
     IOLockUnlock(gQueueLock);
-    job->scan = nullptr;
 }
 
 void dropJob(Job *job)
 {
-    giveScan(job);
-    if (job->backing)
+    if (job->backing) {
         switch_gpu_backing_release(job->backing);
+        job->backing = nullptr;
+    }
     tegra_vic_surface_release(&job->dst);
-    IODelete(job, Job, 1);
+    const bool pooled = job->pooled;
+    if (job->scan || pooled) {
+        IOLockLock(gQueueLock);
+        giveScanLocked(job);
+        if (pooled)
+            gJobsFree |= 1u << (job - gJobPool);
+        IOLockUnlock(gQueueLock);
+    }
+    if (!pooled)
+        IODelete(job, Job, 1);
 }
 
 // The CPU's part of a grey picture into '420f': neutral chroma over the picture's rows, written through the physical
@@ -206,14 +249,14 @@ IOReturn ended(Job *job, int error, const nvjpg_dec_status &status, uint64_t bus
     return ret;
 }
 
-// NVJPG's end of the decode in flight, from its fence's work loop or the falcon line's: the engine thread finishes it.
+// NVJPG's end of the decode in flight, from its fence's work loop or the falcon line's.
 void jobEngineEnded(void *context)
 {
     auto *job = static_cast<Job *>(context);
+    __atomic_store_n(&job->engineEnded, true, __ATOMIC_RELEASE);
     IOLockLock(gQueueLock);
-    job->engineEnded = true;
     job->woken = true;
-    IOLockWakeup(gQueueLock, &gHead, false);
+    IOLockWakeup(gQueueLock, job->directSync ? static_cast<void *>(job) : static_cast<void *>(&gHead), false);
     IOLockUnlock(gQueueLock);
 }
 
@@ -221,22 +264,33 @@ void jobEngineEnded(void *context)
 void jobRepackEnded(void *context)
 {
     auto *job = static_cast<Job *>(context);
+    __atomic_store_n(&job->repacked, true, __ATOMIC_RELEASE);
     IOLockLock(gQueueLock);
-    job->repacked = true;
     job->woken = true;
-    IOLockWakeup(gQueueLock, &gHead, false);
+    IOLockWakeup(gQueueLock, job->directSync ? static_cast<void *>(job) : static_cast<void *>(&gHead), false);
     IOLockUnlock(gQueueLock);
 }
 
-// Engine thread: whether the re-pack queued behind NVJPG has yet to signal its end.
+// Engine owner: whether the re-pack queued behind NVJPG has yet to signal its end.
 bool repackPending(Job *job)
 {
     if (!job->repack.queued)
         return false;
-    IOLockLock(gQueueLock);
-    const bool repacked = job->repacked;
-    IOLockUnlock(gQueueLock);
-    return !repacked;
+    return !__atomic_load_n(&job->repacked, __ATOMIC_ACQUIRE);
+}
+
+void directWritePages(const TegraNVJPGPlan &p, uint32_t totalPages, uint32_t *firstPage, uint32_t *pageCount)
+{
+    uint64_t firstByte = p.planes ? p.planeStart[0] : 0;
+    for (uint32_t i = 1; i < p.planes; ++i) {
+        if (p.planeStart[i] < firstByte)
+            firstByte = p.planeStart[i];
+    }
+    const uint32_t first = static_cast<uint32_t>(firstByte >> SWITCH_HW_PAGE_SHIFT);
+    const uint32_t end =
+        SWITCH_MIN(totalPages, static_cast<uint32_t>(switch_div_round_up(p.writeEnd, SWITCH_HW_PAGE_SIZE)));
+    *firstPage = first < end ? first : end;
+    *pageCount = end - *firstPage;
 }
 
 // Engine thread, once nothing is pending: a re-packed decode's result.
@@ -281,20 +335,25 @@ bool beginRepack(Job *job)
     return false;
 }
 
-// Engine thread: NVJPG's direct decode has ended and is finished.
+// Engine owner: NVJPG's direct decode has ended and is finished.
 IOReturn completeDirect(Job *job)
 {
     const TegraNVJPGPlan &p = job->plan;
-    // The CPU may have pulled destination lines in while NVJPG wrote: readers must see DRAM.
-    switch_dcache_hw_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, job->mapping->pages, job->mapping->count);
-    switch_dcache_sync();
+    uint32_t firstPage = 0, pageCount = 0;
+    directWritePages(p, job->mapping->count, &firstPage, &pageCount);
+    if (pageCount) {
+        // Drop any clean lines Cortex-A57 speculatively prefetched while NVJPG wrote DRAM; never clean-invalidate
+        // post-DMA.
+        switch_dcache_hw_pages(SWITCH_DCACHE_INVALIDATE, job->mapping->pages + firstPage, pageCount);
+        switch_dcache_sync();
+    }
     const nvjpg_dec_status &status = job->engineStatus;
     if (!job->engineResult && p.fillChroma && !status.error_status && status.bytes_offset)
         fillChroma(p, job->mapping->pages, job->mapping->count);
     return ended(job, job->engineResult, status, job->engineBusy);
 }
 
-// Engine thread: NVJPG straight into the destination's pages, started. True: in flight; false: ended (job->status).
+// Engine owner: NVJPG straight into the destination's pages, started. True: in flight; false: ended (job->status).
 bool beginDirect(Job *job, const SwitchNVJPGBacking &target, uint32_t extent)
 {
     const TegraNVJPGPlan &p = job->plan;
@@ -305,9 +364,22 @@ bool beginDirect(Job *job, const SwitchNVJPGBacking &target, uint32_t extent)
         job->status = kIOReturnUnsupported;
         return false;
     }
-    // NVJPG does not snoop the CPU's caches: no dirty line of the destination may be written back over the picture.
-    switch_dcache_hw_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, job->mapping->pages, job->mapping->count);
-    switch_dcache_sync();
+    bool needPreClean = true;
+    if (job->backing) {
+        switch_gpu_backing_info info = {};
+        switch_gpu_backing_describe(job->backing, &info);
+        needPreClean = (info.dirty & SWITCH_GPU_BACKING_CPU_DIRTY) != 0 || info.cpu_locks != 0;
+    }
+    if (needPreClean) {
+        uint32_t firstPage = 0, pageCount = 0;
+        directWritePages(p, job->mapping->count, &firstPage, &pageCount);
+        if (pageCount) {
+            // NVJPG does not snoop CPU caches: clean-invalidate CPU-dirty destination pages before DMA so no dirty
+            // line is evicted over NVJPG's writes.
+            switch_dcache_hw_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, job->mapping->pages + firstPage, pageCount);
+            switch_dcache_sync();
+        }
+    }
     job->engine.bitstream = job->scan->address;
     for (uint32_t i = 0; i < p.planes; i++)
         job->engine.plane[i] = job->mapping->address + p.planeStart[i];
@@ -350,12 +422,10 @@ bool beginJob(Job *job)
     return job->plan.repack ? beginRepack(job) : beginDirect(job, target, extent);
 }
 
-// Engine thread, after a signal: the decode in flight carried on. True: it has ended, job->status its result.
+// Engine owner, after a signal: the decode in flight carried on. True: it has ended, job->status its result.
 bool advanceJob(Job *job)
 {
-    IOLockLock(gQueueLock);
-    const bool engineEnded = job->engineEnded;
-    IOLockUnlock(gQueueLock);
+    const bool engineEnded = __atomic_load_n(&job->engineEnded, __ATOMIC_ACQUIRE);
     if (job->phase == Job::Phase::OnEngine) {
         if (!engineEnded)
             return false;
@@ -383,11 +453,8 @@ void giveHold(Job *job)
     }
 }
 
-// Engine thread: the ended decode's layout hold given back, its scan slot freed, its counts kept, its client told.
-void conclude(Job *job)
+void noteConcluded(const Job *job)
 {
-    giveHold(job);
-    giveScan(job);
 #if TEGRA_NVJPG_PROBES
     tegra_nvjpg_count_job(job->pid, job->plan.target.format, job->status != 0, job->engineUs, job->cpuUs,
                           static_cast<uint64_t>(job->plan.extent.width) * job->plan.extent.height,
@@ -407,6 +474,17 @@ void conclude(Job *job)
 #if TEGRA_NVJPG_STATS
     tegra_nvjpg_stats_line();
 #endif
+}
+
+// Engine thread: the ended decode's layout hold given back, its scan slot freed, its counts kept, its client told.
+void conclude(Job *job)
+{
+    giveHold(job);
+    noteConcluded(job);
+    IOLockLock(gQueueLock);
+    giveScanLocked(job);
+    gEngineBusy = false;
+    IOLockUnlock(gQueueLock);
     finish(job);
 }
 
@@ -419,8 +497,10 @@ void engineThread(void *, wait_result_t)
     for (;;) {
         Job *next = nullptr;
         IOLockLock(gQueueLock);
-        while (current ? !current->woken : !gHead)
+        gEngineSleeping = true;
+        while (current ? !current->woken : (gEngineBusy || !gHead))
             IOLockSleep(gQueueLock, &gHead, THREAD_UNINT);
+        gEngineSleeping = false;
         if (current) {
             current->woken = false;
         } else {
@@ -428,6 +508,7 @@ void engineThread(void *, wait_result_t)
             gHead = next->next;
             if (!gHead)
                 gTail = nullptr;
+            gEngineBusy = true;
         }
         IOLockUnlock(gQueueLock);
         if (next) {
@@ -442,9 +523,8 @@ void engineThread(void *, wait_result_t)
     }
 }
 
-void queueJob(Job *job)
+void pushQueuedLocked(Job *job)
 {
-    IOLockLock(gQueueLock);
     job->next = nullptr;
     if (gTail) {
         gTail->next = job;
@@ -452,8 +532,44 @@ void queueJob(Job *job)
         gHead = job;
     }
     gTail = job;
-    IOLockWakeup(gQueueLock, &gHead, false);
+    if (!gEngineBusy && gEngineSleeping)
+        IOLockWakeup(gQueueLock, &gHead, false);
+}
+
+void queueJob(Job *job)
+{
+    IOLockLock(gQueueLock);
+    pushQueuedLocked(job);
     IOLockUnlock(gQueueLock);
+}
+
+bool runSyncJob(Job *job)
+{
+    IOLockLock(gQueueLock);
+    if (gEngineBusy || gHead) {
+        pushQueuedLocked(job);
+        IOLockUnlock(gQueueLock);
+        return false;
+    }
+    gEngineBusy = true;
+    job->directSync = true;
+    IOLockUnlock(gQueueLock);
+    for (bool inFlight = beginJob(job); inFlight; inFlight = !advanceJob(job)) {
+        IOLockLock(gQueueLock);
+        while (!job->woken)
+            IOLockSleep(gQueueLock, job, THREAD_UNINT);
+        job->woken = false;
+        IOLockUnlock(gQueueLock);
+    }
+    giveHold(job);
+    noteConcluded(job);
+    IOLockLock(gQueueLock);
+    giveScanLocked(job);
+    gEngineBusy = false;
+    if (gHead && gEngineSleeping)
+        IOLockWakeup(gQueueLock, &gHead, false);
+    IOLockUnlock(gQueueLock);
+    return true;
 }
 
 }  // namespace tegra_nvjpg

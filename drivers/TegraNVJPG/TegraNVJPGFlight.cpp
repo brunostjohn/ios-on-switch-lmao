@@ -109,7 +109,7 @@ int cancelled(const TegraNVJPGJob *job, uint32_t fence, uint64_t us)
     const uint32_t next = tegra_host1x_syncpt_read(gSyncpt);
     lockState();
     gNext = next;
-    gWedged = !back;
+    __atomic_store_n(&gWedged, !back, __ATOMIC_RELEASE);
     IOLockUnlock(gStateLock);
     if (!back) {
         engineOff();
@@ -191,13 +191,9 @@ extern "C" int tegra_nvjpg_start(const TegraNVJPGJob *job, const TegraNVJPGSigna
         return -22;
     if (const int error = gGate.use())
         return error;
-    // The job's use of the gate keeps the engine as this finds it until finish: no lock is held across the job.
-    IOLockLock(gStateLock);
-    while (gSuspended)
-        IOLockSleep(gStateLock, &gSuspended, THREAD_UNINT);
-    const bool wedged = gWedged;
-    IOLockUnlock(gStateLock);
-    if (wedged) {
+    // gGate.use() returning 0 guarantees the engine is powered on and not suspended (gateOn/engineResume publish
+    // gWedged with release semantics before releasing the gate).
+    if (__atomic_load_n(&gWedged, __ATOMIC_ACQUIRE)) {
         gGate.done();
         return -19;
     }

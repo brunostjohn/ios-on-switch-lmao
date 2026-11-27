@@ -172,8 +172,14 @@ template <class Body> bool finishes(Body body)
         done.set_value();
     });
     const bool ended = finished.wait_for(std::chrono::seconds(5)) == std::future_status::ready;
-    if (!ended)
+    if (!ended) {
         gSleeping = true;
+        if (IOLock *q = __atomic_load_n(&gQueue, __ATOMIC_ACQUIRE)) {
+            IOLockLock(q);
+            IOLockWakeup(q, &gQueueEvent, false);
+            IOLockUnlock(q);
+        }
+    }
     worker.join();
     return ended;
 }
@@ -211,16 +217,35 @@ tegra_se_smmu_attach_result tegra_se_smmu_attach(unsigned engine, const switch_d
 int gSmmuHolds[kEngines];
 unsigned gReleasedBusy;
 
-bool tegra_se_smmu_hold(unsigned engine, const uint32_t *)
+bool tegra_se_smmu_hold_lists(unsigned engine, const uint32_t *a, const uint32_t *b)
 {
-    ++gSmmuHolds[engine];
+    if (a)
+        ++gSmmuHolds[engine];
+    if (b)
+        ++gSmmuHolds[engine];
     return true;
 }
 
-void tegra_se_smmu_release(unsigned engine, const uint32_t *)
+void tegra_se_smmu_release_lists(unsigned engine, const uint32_t *a, const uint32_t *b)
 {
-    --gSmmuHolds[engine];
-    gReleasedBusy += se_model::engines[engine].busyLeft != 0 ? 1u : 0u;
+    if (b) {
+        --gSmmuHolds[engine];
+        gReleasedBusy += se_model::engines[engine].busyLeft != 0 ? 1u : 0u;
+    }
+    if (a) {
+        --gSmmuHolds[engine];
+        gReleasedBusy += se_model::engines[engine].busyLeft != 0 ? 1u : 0u;
+    }
+}
+
+bool tegra_se_smmu_hold(unsigned engine, const uint32_t *list)
+{
+    return tegra_se_smmu_hold_lists(engine, list, nullptr);
+}
+
+void tegra_se_smmu_release(unsigned engine, const uint32_t *list)
+{
+    tegra_se_smmu_release_lists(engine, list, nullptr);
 }
 
 extern "C" {
