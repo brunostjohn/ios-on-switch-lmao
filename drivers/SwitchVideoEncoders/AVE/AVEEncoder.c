@@ -896,6 +896,18 @@ static OSStatus copyProperty(CMBaseObjectRef ref, CFStringRef key, CFAllocatorRe
     } else if (CFEqual(key, kVTCompressionPropertyKey_AllowTemporalCompression)) {
         *(CFTypeRef *)value = CFRetain(e->allowTemporal ? kCFBooleanTrue : kCFBooleanFalse);
         status = noErr;
+    } else if (CFEqual(key, kVTCompressionPropertyKey_RealTime)) {
+        *(CFTypeRef *)value = CFRetain(e->realTime ? kCFBooleanTrue : kCFBooleanFalse);
+        status = noErr;
+    } else if (CFEqual(key, kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality)) {
+        *(CFTypeRef *)value = CFRetain(e->prioritizeSpeed ? kCFBooleanTrue : kCFBooleanFalse);
+        status = noErr;
+    } else if (CFEqual(key, kVTCompressionPropertyKey_AllowFrameReordering)) {
+        *(CFTypeRef *)value = CFRetain(e->allowReordering ? kCFBooleanTrue : kCFBooleanFalse);
+        status = noErr;
+    } else if (CFEqual(key, kVTCompressionPropertyKey_MaxFrameDelayCount)) {
+        *(CFTypeRef *)value = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &e->maxFrameDelay);
+        status = noErr;
     } else if (CFEqual(key, kVTCompressionPropertyKey_ProfileLevel) && e->profileLevel) {
         *(CFTypeRef *)value = CFRetain(e->profileLevel);
         status = noErr;

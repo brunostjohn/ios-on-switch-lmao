@@ -64,7 +64,7 @@ int hevcnvenc_configure(HEVCEncConfig *c)
     // the MD control's tusize enables (SOURCE-H265). The stream must allow every TU the MD control enables, in every
     // preset: a 32x32 CU split to 4x4 TUs needs depth 3.
     c->max_tr_depth_inter = c->max_tr_depth_intra = 3;
-    c->amp = !c->fast;
+    c->amp = true;
     c->sao = c->temporal_mvp = c->strong_intra_smoothing = false;
     if (hevcenc_configure(c))
         return -1;
@@ -214,32 +214,11 @@ static void setup(const HEVCEncConfig *c, uint32_t layout, uint32_t chromaMode, 
     slice->slice_type = p->idr ? 2 : 0;
     slice->slice_loop_filter_across_slices_enabled_flag = 1;
     slice->qp_slice_max = 51;
+    // kMeControl and kMdControl are already T210 quality level 0 for both IDR and P pictures; clearing P-frame
+    // intra_mode_8x8_enable / luma8x8 modes while ip_search_mode keeps 8x8 active corrupts NVENC 5.0's P slices.
     memcpy(bytes + ME_OFF, kMeControl, sizeof(kMeControl));
     memcpy(bytes + MD_OFF, kMdControl, sizeof(kMdControl));
     memcpy(bytes + Q_OFF, kQuantControl, sizeof(kQuantControl));
-    if (c->fast) {
-        nvenc_h264_me_control_s *me = (nvenc_h264_me_control_s *)(bytes + ME_OFF);
-        me->shape1.bitmask[0] = me->shape0.bitmask[0];
-        me->shape1.bitmask[1] = me->shape0.bitmask[1];
-
-        nvenc_h265_md_control_s *md = (nvenc_h265_md_control_s *)(bytes + MD_OFF);
-        md->cu16x16_part_NxN_enable = 0;
-        md->cu32x32_part_2NxnU_enable = 0;
-        md->cu32x32_part_2NxnD_enable = 0;
-        md->cu32x32_part_nLx2N_enable = 0;
-        md->cu32x32_part_nRx2N_enable = 0;
-        md->chroma_eval_mode = 1;
-        md->h265_intra_luma_mode_enable_leftbits = 0;
-        if (p->idr) {
-            md->h265_intra_luma8x8_mode_enable = 0x11111117u;
-            md->h265_intra_luma16x16_mode_enable = 0x11111117u;
-        } else {
-            md->intra_mode_8x8_enable = 0;
-            md->h265_intra_luma8x8_mode_enable = 0;
-            md->h265_intra_luma16x16_mode_enable = 0x04040403u;
-            md->h265_intra_luma32x32_mode_enable = 0x04040403u;
-        }
-    }
 }
 
 void hevcnvenc_fill_submit(const HEVCEncConfig *c, uint32_t inputLayout, uint32_t chromaMode, const H264EncLayout *l,
@@ -256,6 +235,7 @@ void hevcnvenc_fill_submit(const HEVCEncConfig *c, uint32_t inputLayout, uint32_
 #define VALUE(m, v)              e[n++] = (TegraNVENCEntry){(uint16_t)(m), TEGRA_NVENC_ENTRY_VALUE, (v), 0}
 #define RELOC(m, handle, offset) e[n++] = (TegraNVENCEntry){(uint16_t)(m), TEGRA_NVENC_ENTRY_RELOC, (handle), (offset)}
     VALUE(NVC5B7_SET_APPLICATION_ID, NVC5B7_SET_APPLICATION_ID_ID_NVENC_H265);
+    // Bit 11 (SLICE_STAT_ON) only gates an unread 16-byte slice-stat DMA at slice end (nvenc.bin 0x21b0).
     const uint32_t control =
         NVC5B7_SET_CONTROL_PARAMS_CODEC_TYPE_H264 | (1u << 8) | (c->fast ? 0u : (1u << 11)) | (1u << 12);
     VALUE(NVC5B7_SET_CONTROL_PARAMS, control);

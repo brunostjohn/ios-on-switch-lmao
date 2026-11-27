@@ -35,7 +35,8 @@
 extern const CFStringRef kVTVideoEncoderSpecification_EncoderID;
 
 enum {
-    MAX_HANDLES = 64
+    MAX_HANDLES = 64,
+    HEVC_CAPTURE_MAX = 8
 };
 
 struct NVENCClient {
@@ -62,6 +63,9 @@ static const char *gRefusal;
 static TegraNVENCSubmit gFirstP;  // a good P submit, for the refusal cases
 static uint64_t gFirstPAvail[TEGRA_NVENC_MAX_ENTRIES];
 static bool gHaveP;
+static bool gHevcFrameCheck;
+static TegraNVENCSubmit gHevcSubmits[HEVC_CAPTURE_MAX];
+static int gHevcSubmitCount;
 
 static pthread_mutex_t gHoldLock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t gHoldCond = PTHREAD_COND_INITIALIZER;
@@ -421,6 +425,27 @@ static void queueCompletion(NVENCClient *c, const TegraNVENCSubmit *s, uint32_t 
     dispatch_async_f(c->queue, fc, deliverFakeCompletion);
 }
 
+static int hevcFrameEngine(NVENCClient *c, const TegraNVENCSubmit *s)
+{
+    const nvenc_h265_drv_pic_setup_s *p = (const nvenc_h265_drv_pic_setup_s *)s->setup;
+    const TegraNVENCEntry *bits = find(s, NVC5B7_SET_OUT_BITSTREAM);
+    const TegraNVENCEntry *status = find(s, NVC5B7_SET_OUT_ENC_STATUS);
+    if (!bits || !status)
+        return -1;
+    if (gHevcSubmitCount < HEVC_CAPTURE_MAX)
+        gHevcSubmits[gHevcSubmitCount++] = *s;
+    const uint8_t nal0 = (uint8_t)(p->pic_control.nal_unit_type << 1);
+    const uint8_t slice[] = {0, 0, 0, 1, nal0, 0x01, 0xaf, (uint8_t)p->pic_control.pic_order_cnt_lsb, 0x80};
+    memcpy(c->va[bits->value] + bits->offset, slice, sizeof(slice));
+    nvenc_pic_stat_s *stat = (nvenc_pic_stat_s *)(c->va[status->value] + status->offset);
+    memset(stat, 0, sizeof(*stat));
+    stat->error_status = 2;
+    stat->total_bit_count = sizeof(slice) * 8;
+    stat->num_slices = 1;
+    stat->pic_type = (unsigned short)p->pic_control.pic_type;
+    return 0;
+}
+
 int nvenc_submit(void *ctx, const TegraNVENCSubmit *s, uint32_t *fence, uint32_t *input)
 {
     NVENCClient *c = ctx;
@@ -450,7 +475,7 @@ int nvenc_submit(void *ctx, const TegraNVENCSubmit *s, uint32_t *fence, uint32_t
     if (input)
         *input = (uint32_t)route;
     if (s->codec == TEGRA_NVENC_CODEC_H265) {
-        if (tile_check_engine(s, c->va, gChroma))
+        if (gHevcFrameCheck ? hevcFrameEngine(c, s) : tile_check_engine(s, c->va, gChroma))
             return -1;
         *fence = (uint32_t)++gSubmits;
         queueCompletion(c, s, *fence);
@@ -1004,6 +1029,146 @@ static void offLockPropertyCheck(CFDictionaryRef spec)
            (int)copyStatus, readVal, emitted);
 }
 
+typedef struct {
+    CMSampleBufferRef samples[4];
+    int count, errors;
+} HevcOut;
+
+static void hevcFrameOutput(void *refcon, void *sourceRefCon, OSStatus status, VTEncodeInfoFlags flags,
+                            CMSampleBufferRef sample)
+{
+    (void)sourceRefCon, (void)flags;
+    HevcOut *o = refcon;
+    if (status || !sample || o->count >= 4) {
+        o->errors++;
+        return;
+    }
+    o->samples[o->count++] = (CMSampleBufferRef)CFRetain(sample);
+}
+
+static void hevcFrameSessionCheck(CFDictionaryRef spec, bool realTime)
+{
+    gLayout = TEGRA_NVENC_LAYOUT_TILED16;
+    gChroma = TEGRA_NVENC_CHROMA_OFFSET;
+    gSurfaceInput = true;
+    gRefuseSurfaces = 0;
+    gCompletionFeature = true;
+    gAsyncListen = true;
+    gHevcFrameCheck = true;
+    gHevcSubmitCount = 0;
+
+    const int refusedBefore = gRefused;
+    const int waitsBefore = gWaits;
+    HevcOut out = {0};
+    VTCompressionSessionRef session = NULL;
+    OSStatus status = VTCompressionSessionCreate(NULL, 1920, 1080, kCMVideoCodecType_HEVC, spec, NULL, NULL,
+                                                 hevcFrameOutput, &out, &session);
+    EXPECT(!status && session, "hevc %s: create session (%d)", realTime ? "realtime" : "quality", (int)status);
+    if (status || !session) {
+        gHevcFrameCheck = false;
+        return;
+    }
+    VTSessionSetProperty(session, kVTCompressionPropertyKey_RealTime, realTime ? kCFBooleanTrue : kCFBooleanFalse);
+    VTSessionSetProperty(session, kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality,
+                         realTime ? kCFBooleanTrue : kCFBooleanFalse);
+    VTSessionSetProperty(session, kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse);
+    VTSessionSetProperty(session, kVTCompressionPropertyKey_ProfileLevel, CFSTR("HEVC_Main_AutoLevel"));
+    const double fps = 60.0;
+    CFNumberRef fpsN = CFNumberCreate(NULL, kCFNumberDoubleType, &fps);
+    VTSessionSetProperty(session, kVTCompressionPropertyKey_ExpectedFrameRate, fpsN);
+    CFRelease(fpsN);
+    const int32_t bitrate = realTime ? 8000000 : 12000000;
+    CFNumberRef brN = CFNumberCreate(NULL, kCFNumberSInt32Type, &bitrate);
+    VTSessionSetProperty(session, kVTCompressionPropertyKey_AverageBitRate, brN);
+    CFRelease(brN);
+
+    CFTypeRef rtVal = NULL, speedVal = NULL, reorderVal = NULL, hwVal = NULL;
+    const OSStatus rtSt = VTSessionCopyProperty(session, kVTCompressionPropertyKey_RealTime, NULL, &rtVal);
+    const OSStatus spSt =
+        VTSessionCopyProperty(session, kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, NULL, &speedVal);
+    const OSStatus roSt =
+        VTSessionCopyProperty(session, kVTCompressionPropertyKey_AllowFrameReordering, NULL, &reorderVal);
+    const OSStatus hwSt =
+        VTSessionCopyProperty(session, kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder, NULL, &hwVal);
+    EXPECT(!rtSt && rtVal == (realTime ? kCFBooleanTrue : kCFBooleanFalse) && !spSt &&
+               speedVal == (realTime ? kCFBooleanTrue : kCFBooleanFalse) && !roSt && reorderVal == kCFBooleanFalse &&
+               !hwSt && hwVal == kCFBooleanTrue,
+           "hevc %s: property copy round-trip", realTime ? "realtime" : "quality");
+    if (rtVal)
+        CFRelease(rtVal);
+    if (speedVal)
+        CFRelease(speedVal);
+    if (reorderVal)
+        CFRelease(reorderVal);
+    if (hwVal)
+        CFRelease(hwVal);
+
+    CVPixelBufferPoolRef pool = VTCompressionSessionGetPixelBufferPool(session);
+    EXPECT(pool != NULL, "hevc %s: pixel buffer pool", realTime ? "realtime" : "quality");
+    int encodeErrors = 0;
+    for (int i = 0; i < 4; i++) {
+        CVPixelBufferRef image = NULL;
+        if (pool)
+            CVPixelBufferPoolCreatePixelBuffer(NULL, pool, &image);
+        if (!image ||
+            VTCompressionSessionEncodeFrame(session, image, CMTimeMake(i, 60), CMTimeMake(1, 60), NULL, NULL, NULL))
+            encodeErrors++;
+        if (image)
+            CVPixelBufferRelease(image);
+    }
+    VTCompressionSessionCompleteFrames(session, kCMTimeInvalid);
+    VTCompressionSessionInvalidate(session);
+    CFRelease(session);
+    gHevcFrameCheck = false;
+
+    EXPECT(!encodeErrors && out.count == 4 && !out.errors && gRefused == refusedBefore && gWaits == waitsBefore &&
+               gHevcSubmitCount == 4,
+           "hevc %s: 4 frames encoded async without refusal (out %d err %d encErr %d submits %d waits %d)",
+           realTime ? "realtime" : "quality", out.count, out.errors, encodeErrors, gHevcSubmitCount,
+           gWaits - waitsBefore);
+
+    for (int i = 0; i < gHevcSubmitCount; i++) {
+        const TegraNVENCSubmit *s = &gHevcSubmits[i];
+        const nvenc_h265_drv_pic_setup_s *setup = (const nvenc_h265_drv_pic_setup_s *)s->setup;
+        const nvenc_h265_md_control_s *md =
+            (const nvenc_h265_md_control_s *)(s->setup + setup->pic_control.md_control_offset);
+        const TegraNVENCEntry *ctrl = find(s, NVC5B7_SET_CONTROL_PARAMS);
+        const bool expectedSliceStat = !realTime;
+        EXPECT(setup->sps_data.amp_enabled_flag == 1 && setup->sps_data.max_transform_depth_inter == 3 &&
+                   setup->sps_data.max_transform_depth_intra == 3 && setup->pps_data.transform_skip_enabled_flag == 1 &&
+                   md->intra_mode_8x8_enable == 1 && (md->h265_intra_luma8x8_mode_enable & 0x3u) == 0x3u &&
+                   md->intra_mode_16x16_enable == 1 && (md->h265_intra_luma16x16_mode_enable & 0x3u) == 0x3u &&
+                   md->intra_mode_32x32_enable == 1 && (md->h265_intra_luma32x32_mode_enable & 0x3u) == 0x3u && ctrl &&
+                   ((ctrl->value & (1u << 11)) != 0) == expectedSliceStat,
+               "hevc %s frame %d: setup/MD/control invariants", realTime ? "realtime" : "quality", i);
+        EXPECT(setup->pic_control.pic_type == (i == 0 ? 3u : 0u), "hevc %s frame %d: pic_type %u",
+               realTime ? "realtime" : "quality", i, setup->pic_control.pic_type);
+        if (i > 0) {
+            const uint32_t expectedSlot = (uint32_t)((i - 1) & 1);
+            EXPECT(setup->pic_control.l0[0] == (char)(expectedSlot << 1) &&
+                       find(s, (uint16_t)(NVC5B7_SET_IN_REF_PIC0_LUMA + 4 * expectedSlot)) != NULL,
+                   "hevc %s frame %d: DPB reference slot %u", realTime ? "realtime" : "quality", i, expectedSlot);
+        }
+    }
+    for (int i = 0; i < out.count; i++) {
+        CMVideoFormatDescriptionRef fmt = CMSampleBufferGetFormatDescription(out.samples[i]);
+        size_t sets = 0;
+        int nalLength = 0;
+        if (i == 0) {
+            CMVideoFormatDescriptionGetHEVCParameterSetAtIndex(fmt, 0, NULL, NULL, &sets, &nalLength);
+            EXPECT(sets == 3 && nalLength == 4, "hevc %s: hvcC parameter sets %zu nalLen %d",
+                   realTime ? "realtime" : "quality", sets, nalLength);
+        }
+        CFArrayRef attachments = CMSampleBufferGetSampleAttachmentsArray(out.samples[i], false);
+        CFDictionaryRef a = attachments && CFArrayGetCount(attachments) ? CFArrayGetValueAtIndex(attachments, 0) : NULL;
+        const bool notSync = a && CFDictionaryGetValue(a, kCMSampleAttachmentKey_NotSync) == kCFBooleanTrue;
+        const bool depends = a && CFDictionaryGetValue(a, kCMSampleAttachmentKey_DependsOnOthers) == kCFBooleanTrue;
+        EXPECT(notSync == (i > 0) && depends == (i > 0), "hevc %s frame %d: sample sync attachments",
+               realTime ? "realtime" : "quality", i);
+        CFRelease(out.samples[i]);
+    }
+}
+
 int main(void)
 {
     gLog = os_log_create("com.brunostjohn.switch.ave", "host-test");
@@ -1174,6 +1339,9 @@ int main(void)
     EXPECT(gWaits == 0, "async completion mode used %d nvenc_wait calls, expected 0", gWaits);
     offLockPropertyCheck(spec);
     EXPECT(gWaits == 0, "off-lock async check used %d nvenc_wait calls, expected 0", gWaits);
+    hevcFrameSessionCheck(spec, true);
+    hevcFrameSessionCheck(spec, false);
+    EXPECT(gWaits == 0, "HEVC frame session checks used %d nvenc_wait calls, expected 0", gWaits);
 
     // Async tile pipelining: all 4 tiles submit concurrently with kVTEncodeInfo_Asynchronous before any completes.
     gLayout = TEGRA_NVENC_LAYOUT_TILED16;
