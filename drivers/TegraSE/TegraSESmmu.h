@@ -25,3 +25,5 @@ enum tegra_se_smmu_attach_result tegra_se_smmu_attach(unsigned engine, const str
 bool tegra_se_smmu_hold(unsigned engine, const uint32_t *list);
 // The same list's holds end, once the engine can no longer reach them; one with no hold panics.
 void tegra_se_smmu_release(unsigned engine, const uint32_t *list);
+bool tegra_se_smmu_hold_lists(unsigned engine, const uint32_t *a, const uint32_t *b);
+void tegra_se_smmu_release_lists(unsigned engine, const uint32_t *a, const uint32_t *b);

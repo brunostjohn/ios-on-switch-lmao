@@ -66,10 +66,10 @@ SwitchNVJPGMapping *mapped(switch_gpu_backing &backing, uint32_t extent, uint64_
 }
 
 // The GPU driver's retirement worker, run while the engine thread is inside a decode: the first time the decode takes
-// gStateLock with the job lock held.
+// gFlightLock with the job lock held.
 void retireDuringTheRun(IOLock *lock)
 {
-    if (lock != gStateLock || !gRetiring || !gJobLock->locked)
+    if (lock != gFlightLock || !gRetiring || !gJobLock->locked)
         return;
     switch_gpu_backing *backing = gRetiring;
     gRetiring = nullptr;

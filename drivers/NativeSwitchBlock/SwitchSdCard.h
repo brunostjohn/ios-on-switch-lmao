@@ -451,8 +451,8 @@ struct SwitchSdFlush {
     uint8_t flushCache;
 };
 
-// SD 6.00 4.17 / Table 5-30: set Flush Cache (byte 261 bit 0 = 1), wait for CMD49 busy end, then confirm bit 0
-// cleared (polling up to 1.5 s if the card clears the bit after releasing DAT0).
+// SD 6.00 4.17 / 5.7.2.2 / Table 5-30: set Flush Cache (byte 261 bit 0 = 1), wait for CMD49 DAT0 busy end, then
+// confirm bit 0 cleared via CMD48 (required by spec: cards may release DAT0 before flushing asynchronously).
 template <typename Bus>
 inline SwitchSdFlush switchSdFlushCache(bool havePerf, const SwitchSdExtFunction &perfFunc, Bus &bus)
 {
@@ -465,6 +465,7 @@ inline SwitchSdFlush switchSdFlushCache(bool havePerf, const SwitchSdExtFunction
     if (const int err = bus.writeByte(perfFunc.fno, flushAddress, kSdFlushCache, &r1); err || (r1 & kSdR1Errors))
         return {SwitchSdFlushStep::kFlushFailed, err, r1, 0};
     const uint64_t busyEndedNs = bus.nowNs();
+    uint32_t waitMs = kSdFlushCacheSleepMs;
     for (;;) {
         uint8_t status = 0;
         r1 = 0;
@@ -475,7 +476,9 @@ inline SwitchSdFlush switchSdFlushCache(bool havePerf, const SwitchSdExtFunction
         const uint64_t now = bus.nowNs();
         if (now >= busyEndedNs && now - busyEndedNs >= kSdFlushCacheLimitNs)
             return {SwitchSdFlushStep::kStillPending, 0, 0, status};
-        bus.sleepMs(kSdFlushCacheSleepMs);
+        bus.sleepMs(waitMs);
+        if (waitMs < 16u)
+            waitMs *= 2u;
     }
 }
 

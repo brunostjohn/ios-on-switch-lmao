@@ -529,8 +529,29 @@ extern "C" uint64_t tegra_nvjpg_pages_map(uint32_t window, const uint64_t *pages
     const uint64_t address = gSpaces[window].alloc(guardedBytes(count + sinkCount));
     if (address) {
         gDomain.map(address, pages, count, writable);
-        for (uint32_t i = 0; i < sinkCount; ++i)
-            gDomain.map(address + sinkAt + static_cast<uint64_t>(i) * SWITCH_HW_PAGE_SIZE, &gSink.pa, 1, writable);
+        if (sinkCount) {
+            const uint32_t sinkPte = TegraSMMUDomain::entry(gSink.pa, writable);
+            uint64_t at = address + sinkAt;
+            uint32_t left = sinkCount;
+            if (at < gDomain.iovaLow)
+                gDomain.iovaLow = at;
+            const uint64_t end = at + static_cast<uint64_t>(sinkCount) * SWITCH_HW_PAGE_SIZE;
+            if (end > gDomain.iovaHigh)
+                gDomain.iovaHigh = end;
+            while (left) {
+                uint32_t *t = gDomain.tableFor(at, true);
+                if (!t)
+                    break;
+                const uint32_t idx = static_cast<uint32_t>((at >> 12) & (TegraSMMUDomain::kEntries - 1));
+                const uint32_t room = TegraSMMUDomain::kEntries - idx;
+                const uint32_t chunk = left < room ? left : room;
+                for (uint32_t i = 0; i < chunk; ++i)
+                    t[idx + i] = sinkPte;
+                gDomain.touch(&t[idx], static_cast<uintptr_t>(chunk) * sizeof(uint32_t));
+                at += static_cast<uint64_t>(chunk) * SWITCH_HW_PAGE_SIZE;
+                left -= chunk;
+            }
+        }
         switch_smmu_publish(gDomain, kAsid, SWITCH_DCACHE_CLEAN);
     }
     IOLockUnlock(gMapLock);
@@ -576,7 +597,7 @@ int gateOn(void *)
                      tegra_host1x_syncpt_read(gSyncpt), switch_falcon_state(gJpg, state, sizeof(state)));
         }
     }
-    gWedged = !answered;
+    __atomic_store_n(&gWedged, !answered, __ATOMIC_RELEASE);
     if (answered) {
         gErrors.on();
     } else {
@@ -622,7 +643,7 @@ void engineResume()
     const bool attached = smmuAttach();
     if (!attached) {
         IOLockLock(gStateLock);
-        gWedged = true;
+        __atomic_store_n(&gWedged, true, __ATOMIC_RELEASE);
         gSuspended = false;
         IOLockWakeup(gStateLock, &gSuspended, false);
         IOLockUnlock(gStateLock);

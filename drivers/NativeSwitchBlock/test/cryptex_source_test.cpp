@@ -34,16 +34,24 @@ TEST(CryptexSource, ReadsGoToTheCardWithoutACopy)
 {
     const std::string read = body("IOReturn SwitchCryptexDevice::doAsyncReadWrite(");
     EXPECT_THAT(read,
+                HasSubstr("if (cacheHitInline(buffer, block, count, completion))\n        return kIOReturnSuccess;"));
+    EXPECT_LT(read.find("cacheHitInline("), read.find("takePending()"));
+    EXPECT_THAT(read,
                 HasSubstr("if (cacheRead(p, buffer, block, count, cachePriority))\n        return kIOReturnSuccess;"));
     EXPECT_THAT(read, HasSubstr("switchNextPiece(extents, extentCount, &at, start + done, length - done, maxPiece)"));
+    EXPECT_THAT(read, HasSubstr("if (done != 0 || piece.length != length)"));
     EXPECT_THAT(read, HasSubstr("IOSubMemoryDescriptor::withSubRange(buffer, done, piece.length, kIODirectionIn)"));
-    EXPECT_THAT(read, HasSubstr("sd->doAsyncReadWrite(sub, piece.disk / kSdSector, piece.length / kSdSector, "
-                                "attributes,"));
+    EXPECT_THAT(read, HasSubstr("sd->doAsyncReadWrite(target, piece.disk / kSdSector, piece.length / kSdSector,"));
     for (const char *copy : {"readBytes", "memcpy", "bcopy", "copypv", "VNOP_READ", "vn_rdwr"})
         EXPECT_THAT(read, Not(HasSubstr(copy)));
     EXPECT_EQ(Count(read, "writeBytes("), 1u);
     EXPECT_THAT(read, HasSubstr("buffer->writeBytes(done + k, gZeros, kImageBlock)"));
     EXPECT_THAT(read, HasSubstr("return kIOReturnNotWritable;"));
+    const std::string hit = body("bool SwitchCryptexDevice::cacheHitInline(");
+    EXPECT_THAT(hit, HasSubstr("gCache.cache.tryHit("));
+    EXPECT_THAT(hit, Not(HasSubstr("takePending")));
+    EXPECT_THAT(hit, Not(HasSubstr("thread_call_enter")));
+    EXPECT_LT(hit.find("IOLockUnlock(gCache.lock);"), hit.find("completion->action("));
     const std::string done = body("void pieceDone(void *, void *parameter, IOReturn status, UInt64 actualByteCount)");
     EXPECT_THAT(done, HasSubstr("thread_call_enter(p->call);"));
     EXPECT_THAT(done, Not(HasSubstr("client.action")));
@@ -61,7 +69,8 @@ TEST(CryptexSource, SmallReadsGoThroughTheCache)
     EXPECT_LT(plan.find("p->remaining = p->cache.waiting ? 2 : 1;"), plan.find("IOLockUnlock(gCache.lock);"));
     EXPECT_THAT(plan, HasSubstr("buffer->retain();"));
     const std::string issue = body("uint32_t SwitchCryptexDevice::issueRead(");
-    EXPECT_THAT(issue, HasSubstr("IOSubMemoryDescriptor::withSubRange(\n            memory,"));
+    EXPECT_THAT(issue, HasSubstr("if (read.first != 0 || done != 0 || piece.length != length)"));
+    EXPECT_THAT(issue, HasSubstr("IOSubMemoryDescriptor::withSubRange(memory,"));
     EXPECT_THAT(issue, HasSubstr("IOStorageCompletion pieceCompletion = {this, jobPieceDone, j};"));
     EXPECT_THAT(issue, HasSubstr("attrs.priority = priority;"));
     EXPECT_THAT(issue, HasSubstr("piece.length / kSdSector, &attrs, &pieceCompletion)"));
@@ -72,8 +81,8 @@ TEST(CryptexSource, SmallReadsGoThroughTheCache)
     const std::string finish = body("void finishRequest(thread_call_param_t parameter, thread_call_param_t)");
     EXPECT_LT(finish.find("copyOut(p)"), finish.find("gCache.cache.release(&p->cache, copied);"));
     EXPECT_LT(finish.find("gCache.cache.release(&p->cache, copied);"), finish.find("p->buffer->release();"));
-    const std::string copy = body("bool copyOut(const Pending *p)");
-    EXPECT_THAT(copy, HasSubstr("switchClientCopy(p->buffer, bytes,"));
+    const std::string copy = body("bool copyOutRange(");
+    EXPECT_THAT(copy, HasSubstr("switchClientCopy(buffer, bytes,"));
     EXPECT_THAT(copy, HasSubstr("copypv,"));
     const std::string job = body("void jobFinish(Job *j)");
     EXPECT_THAT(job, HasSubstr("gCache.cache.finished(j->window, j->first, j->count, j->status == kIOReturnSuccess)"));

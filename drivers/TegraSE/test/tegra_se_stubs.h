@@ -48,6 +48,9 @@ constexpr uint32_t kMillisecondScale = 1000000;
 void IOLog(const char *format, ...) __attribute__((format(printf, 1, 2)));
 void IOSleep(unsigned ms);
 
+inline void IODelay(unsigned)
+{}
+
 inline void *IOMalloc(size_t size)
 {
     return malloc(size);
@@ -122,10 +125,11 @@ inline int IOLockSleepDeadline(IOLock *lock, void *, uint64_t deadline, int)
 {
     const uint64_t now = mach_absolute_time();
     std::unique_lock held(lock->mutex, std::adopt_lock);
+    bool woke = false;
     if (deadline > now)
-        lock->changed.wait_for(held, std::chrono::nanoseconds(deadline - now));
+        woke = lock->changed.wait_for(held, std::chrono::nanoseconds(deadline - now)) == std::cv_status::no_timeout;
     held.release();
-    return THREAD_TIMED_OUT;
+    return woke ? THREAD_AWAKENED : THREAD_TIMED_OUT;
 }
 
 inline void IOLockWakeup(IOLock *lock, void *, bool)

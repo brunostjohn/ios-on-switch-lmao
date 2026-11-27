@@ -514,4 +514,60 @@ TEST(CryptexCache, RandomTrafficAgainstAModel)
     EXPECT_GT(refused, 0u);
 }
 
+TEST(CryptexCache, TryHitInlineAndLarge)
+{
+    Rig rig(8, 32, 64, 64);
+    SwitchCacheRead reads[kSwitchWindowReads];
+    uint32_t n = 0;
+    EXPECT_EQ(rig.cache.readAhead(0, 0, kSwitchWindowBlocks, rig.imageBlocks[0], reads, &n), kSwitchWindowBlocks);
+    for (uint32_t i = 0; i < n; ++i)
+        rig.finish(reads[i], true);
+    EXPECT_EQ(rig.cache.readAhead(0, kSwitchWindowBlocks, kSwitchWindowBlocks, rig.imageBlocks[0], reads, &n),
+              kSwitchWindowBlocks);
+    for (uint32_t i = 0; i < n; ++i)
+        rig.finish(reads[i], true);
+    ASSERT_EQ(rig.cache.check(), nullptr);
+
+    SwitchCacheRequest req = {};
+    bool copied = false;
+    uint32_t copiedBlocks = 0;
+    const int small = rig.cache.tryHit(
+        &req, 0, 6, 4, rig.imageBlocks[0], true,
+        [&](const SwitchWindow *w, uint64_t from, uint64_t to) {
+            copiedBlocks += static_cast<uint32_t>(to - from);
+            const uint64_t *slot = static_cast<const uint64_t *>(w->bytes);
+            for (uint64_t b = from; b < to; ++b) {
+                if (slot[b - w->tag] != content(0, b))
+                    return false;
+            }
+            return true;
+        },
+        &copied);
+    EXPECT_EQ(small, 1);
+    EXPECT_TRUE(copied);
+    EXPECT_EQ(copiedBlocks, 4u);
+    EXPECT_EQ(rig.cache.check(), nullptr);
+
+    const int large = rig.cache.tryHit(
+        &req, 0, 2, 12, rig.imageBlocks[0], false,
+        [](const SwitchWindow *, uint64_t, uint64_t) {
+            return false;
+        },
+        &copied);
+    EXPECT_EQ(large, 2);
+    EXPECT_EQ(req.windows, 2u);
+    EXPECT_TRUE(rig.copyOut(req, 0, 2, 12));
+    rig.cache.release(&req, true);
+    EXPECT_EQ(rig.cache.check(), nullptr);
+
+    EXPECT_EQ(rig.cache.tryHit(
+                  &req, 0, 32, 2, rig.imageBlocks[0], true,
+                  [](const SwitchWindow *, uint64_t, uint64_t) {
+                      return false;
+                  },
+                  &copied),
+              0);
+    EXPECT_EQ(rig.cache.check(), nullptr);
+}
+
 }  // namespace

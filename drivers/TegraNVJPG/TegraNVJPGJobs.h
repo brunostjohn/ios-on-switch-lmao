@@ -30,9 +30,11 @@ struct Job {
     uint64_t engineUs;
     int pid;
     bool done;
+    bool pooled;      // owned by gJobPool (TegraNVJPGJobs.cpp); false for heap-allocated test jobs
+    bool directSync;  // running inline on caller thread without bouncing through engineThread
     // The engine thread's decode of it (engineThread). NVJPG's part runs from its start (OnEngine) until its signal; a
     // re-pack queued behind it (Repacking) until the re-pack's. `woken`, `engineEnded` and `repacked` are the signals',
-    // set and read under gQueueLock; the rest is the engine thread's alone.
+    // with `woken` under gQueueLock and `engineEnded`/`repacked` published atomically.
     enum class Phase : uint8_t {
         OnEngine,
         Repacking
@@ -51,11 +53,9 @@ struct Job {
     uint64_t cancelsBefore;  // tegra_nvjpg_cancellations() as the job began
 #endif
 
-    union {
+    struct {
         TegraNVJPGDecodeRequest base;
-        TegraNVJPGDecodeRequestExt ext;
-        TegraNVJPGDecodeRequest2024 v2024;
-    } request;  // the caller's copy, in the job's one allocation
+    } request;
 };
 
 extern IOLock *gQueueLock;
@@ -64,10 +64,13 @@ extern IOLock *gQueueLock;
 // TEGRA_NVJPG_OUT_COUNT.
 void refused(const char *why, uint32_t format);
 TegraNVJPGSurface surfaceDesc(const TegraVICSurfaceDesc &v);
+Job *allocJob();
 // A free scan slot for a scan of `bytes`, waited for when every slot holds a queued decode
 SwitchNVJPGScan *takeScan(uint64_t bytes);
 void dropJob(Job *job);
 void queueJob(Job *job);
+// Returns true if completed inline; false if queued for engineThread (caller waits on job->done).
+bool runSyncJob(Job *job);
 void engineThread(void *, wait_result_t);
 // The ended job to its client (TegraNVJPGUserClient.cpp): an async one's completion, a sync caller woken
 void finish(Job *job);

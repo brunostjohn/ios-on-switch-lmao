@@ -343,11 +343,11 @@ void retire(switch_gpu_backing *backing)
         backing->releaseOwner(backing->owner);
 }
 
-// The retirement worker, run while the engine thread decodes: the first time the decode takes gStateLock with the job
+// The retirement worker, run while the engine thread decodes: the first time the decode takes gFlightLock with the job
 // lock held.
 void retireDuringTheRun(IOLock *lock)
 {
-    if (lock != gStateLock || !gRetiring || !gJobLock->locked)
+    if (lock != gFlightLock || !gRetiring || !gJobLock->locked)
         return;
     switch_gpu_backing *backing = gRetiring;
     gRetiring = nullptr;

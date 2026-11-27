@@ -93,50 +93,57 @@ enum RequestKind {
     kSelector7
 };
 
-// The source: wired for the copy, its headers parsed from a first chunk, the scan copied into a queue slot's buffer
-// (EOI appended when the file has none). The scan runs from the SOS header to EOI or the data's end (the source's size
-// may be its whole allocation: trailing bytes are cut at EOI).
+// The source: wired for the copy, its headers parsed directly from a queue slot's buffer, and the scan shifted into
+// place with any remaining bytes read once (EOI appended when the file has none).
 const char *readSource(TegraVICSurface *src, uint64_t size, TegraNVJPGImage *img, Job *job, IOReturn *ret)
 {
     *ret = kIOReturnBadArgument;
     if (size < 4 || size > src->desc.length)
         return "source size";
-    const uint32_t pageCount = static_cast<uint32_t>(switch_div_round_up(size, SWITCH_HW_PAGE_SIZE));
-    uint64_t *pages = IONewData(uint64_t, pageCount);
-    if (!pages) {
-        *ret = kIOReturnNoMemory;
-        return "no memory";
-    }
+    uint64_t firstPage = 0;
     uint32_t count = 0;
-    *ret = tegra_vic_surface_prepare(src, size, pages, pageCount, &count);
-    IODeleteData(pages, uint64_t, pageCount);
+    *ret = tegra_vic_surface_prepare(src, 1, &firstPage, 1, &count);
     if (*ret == kIOReturnNotAligned)
         *ret = kIOReturnUnsupported;  // never NotAligned: CMPhoto would copy and retry
     if (*ret)
         return "source not wired";
-    const char *why = nullptr;
-    uint32_t chunk = static_cast<uint32_t>(size < kHeaderChunk ? size : kHeaderChunk);
-    uint8_t *head = nullptr;
-    for (;;) {
-        head = IONewData(uint8_t, chunk);
-        if (!head || src->memory->readBytes(0, head, chunk) != chunk) {
-            *ret = kIOReturnNoMemory;
-            why = "source read";
-            break;
-        }
-        why = tegra_nvjpg_parse_headers(head, chunk, img);
-        if (!why || chunk == size || chunk >= kHeaderMax)
-            break;
-        IODeleteData(head, uint8_t, chunk);
-        head = nullptr;
-        // headers past the first chunk: read further
-        chunk = static_cast<uint32_t>(size < kHeaderMax ? size : kHeaderMax);
+    const uint64_t initial = size < kHeaderChunk ? size : kHeaderChunk;
+    const uint64_t initialWant = size + 2 <= kHeaderChunk ? size + 2 : initial;
+    job->scan = takeScan(initialWant);
+    int fit = switch_nvjpg_scan_fit(job->scan, initialWant);
+    if (fit) {
+        tegra_vic_surface_complete(src);
+        *ret = fit == -28 ? kIOReturnUnsupported : kIOReturnNoMemory;
+        return fit == -28 ? "input window full" : "scan copy";
     }
-    if (head)
-        IODeleteData(head, uint8_t, chunk);
+    uint64_t have = initial;
+    if (src->memory->readBytes(0, job->scan->buffer.va, have) != have) {
+        tegra_vic_surface_complete(src);
+        *ret = kIOReturnNoMemory;
+        return "source read";
+    }
+    const char *why = tegra_nvjpg_parse_headers(job->scan->buffer.va, have, img);
+    if (why && have < size && have < kHeaderMax) {
+        const uint64_t nextHave = size < kHeaderMax ? size : kHeaderMax;
+        if (nextHave <= job->scan->buffer.size) {
+            if (src->memory->readBytes(have, job->scan->buffer.va + have, nextHave - have) != nextHave - have) {
+                tegra_vic_surface_complete(src);
+                *ret = kIOReturnNoMemory;
+                return "source read";
+            }
+        } else {
+            fit = switch_nvjpg_scan_fit(job->scan, nextHave);
+            if (fit || src->memory->readBytes(0, job->scan->buffer.va, nextHave) != nextHave) {
+                tegra_vic_surface_complete(src);
+                *ret = fit == -28 ? kIOReturnUnsupported : kIOReturnNoMemory;
+                return fit == -28 ? "input window full" : "source read";
+            }
+        }
+        have = nextHave;
+        why = tegra_nvjpg_parse_headers(job->scan->buffer.va, have, img);
+    }
     if (why) {
-        if (*ret != kIOReturnNoMemory)
-            *ret = kIOReturnUnsupported;
+        *ret = kIOReturnUnsupported;
         tegra_vic_surface_complete(src);
         return why;
     }
@@ -146,15 +153,26 @@ const char *readSource(TegraVICSurface *src, uint64_t size, TegraNVJPGImage *img
         *ret = kIOReturnUnsupported;
         return "scan larger than 64 MiB";
     }
-    job->scan = takeScan(scan + 2);
-    const int fit = switch_nvjpg_scan_fit(job->scan, scan + 2);
-    if (fit || src->memory->readBytes(img->scanOffset, job->scan->buffer.va, scan) != scan) {
-        tegra_vic_surface_complete(src);
-        *ret = fit == -28 ? kIOReturnUnsupported : kIOReturnNoMemory;
-        return fit == -28 ? "input window full" : "scan copy";
+    uint8_t *bytes = job->scan->buffer.va;
+    if (scan + 2 <= job->scan->buffer.size) {
+        const uint64_t already = have - img->scanOffset;
+        if (already && img->scanOffset)
+            memmove(bytes, bytes + img->scanOffset, already);
+        if (size > have && src->memory->readBytes(have, bytes + already, size - have) != size - have) {
+            tegra_vic_surface_complete(src);
+            *ret = kIOReturnNoMemory;
+            return "scan copy";
+        }
+    } else {
+        fit = switch_nvjpg_scan_fit(job->scan, scan + 2);
+        if (fit || src->memory->readBytes(img->scanOffset, job->scan->buffer.va, scan) != scan) {
+            tegra_vic_surface_complete(src);
+            *ret = fit == -28 ? kIOReturnUnsupported : kIOReturnNoMemory;
+            return fit == -28 ? "input window full" : "scan copy";
+        }
+        bytes = job->scan->buffer.va;
     }
     tegra_vic_surface_complete(src);
-    uint8_t *bytes = job->scan->buffer.va;
     TegraNVJPGImage scanned = *img;
     scanned.scanOffset = 0;
     why = tegra_nvjpg_scan_end(bytes, scan, &scanned);
@@ -191,8 +209,10 @@ class AppleJPEGDriverUserClient : public IOUserClient {
     task_t task_ = nullptr;
     mach_port_t port_ = MACH_PORT_NULL;
     uint32_t pending_ = 0;
+    uint32_t closeWaiters_ = 0;
     bool counted_ = false, powerEntitled_ = false;
 
+    void leavePending();
     IOReturn decode(const void *in, uint32_t inSize, void *out, uint32_t *outSize, RequestKind kind);
 
 public:
@@ -226,6 +246,16 @@ bool AppleJPEGDriverUserClient::setUp(task_t task)
     return (lock_ = IOLockAlloc()) != nullptr;
 }
 
+void AppleJPEGDriverUserClient::leavePending()
+{
+    const uint32_t left = __atomic_sub_fetch(&pending_, 1, __ATOMIC_SEQ_CST);
+    if (!left && __atomic_load_n(&closeWaiters_, __ATOMIC_SEQ_CST)) {
+        IOLockLock(lock_);
+        IOLockWakeup(lock_, &pending_, false);
+        IOLockUnlock(lock_);
+    }
+}
+
 // Engine thread: a job is done. Async: the completion to the registered port; sync: wake the caller.
 void AppleJPEGDriverUserClient::finished(Job *job)
 {
@@ -233,10 +263,7 @@ void AppleJPEGDriverUserClient::finished(Job *job)
         io_user_reference_t argument = job->context;
         IOUserClient::sendAsyncResult64(job->ref, job->status, &argument, 1);
         dropJob(job);
-        IOLockLock(lock_);
-        pending_--;
-        IOLockWakeup(lock_, &pending_, false);
-        IOLockUnlock(lock_);
+        leavePending();
         release();
         return;
     }
@@ -250,30 +277,31 @@ IOReturn AppleJPEGDriverUserClient::decode(const void *in, uint32_t inSize, void
                                            RequestKind kind)
 {
     const uint64_t began = switch_now_us();
-    Job *job = IONewZero(Job, 1);
+    Job *job = allocJob();
     if (!job)
         return kIOReturnNoMemory;
-    memcpy(&job->request, in, inSize);
-    const auto *req = &job->request;
+    const auto *baseIn = static_cast<const TegraNVJPGDecodeRequest *>(in);
+    const auto *extIn = static_cast<const TegraNVJPGDecodeRequestExt *>(in);
+    const auto *v2024In = static_cast<const TegraNVJPGDecodeRequest2024 *>(in);
+    job->request.base = *baseIn;
 #if TEGRA_NVJPG_PROBES
-    if (kind == kSelector7 && req->v2024.rsvdcac == kTileProbeMagic) {
+    if (kind == kSelector7 && v2024In->rsvdcac == kTileProbeMagic) {
         job->tileProbe = true;
-        memcpy(&job->tileMode, req->v2024.rsvd, sizeof(job->tileMode));
-        memcpy(&job->tileGob, req->v2024.rsvd + 4, sizeof(job->tileGob));
+        memcpy(&job->tileMode, v2024In->rsvd, sizeof(job->tileMode));
+        memcpy(&job->tileGob, v2024In->rsvd + 4, sizeof(job->tileGob));
     }
-    job->guardProbe = kind == kSelector7 && req->v2024.rsvdcac == kGuardProbeMagic;
+    job->guardProbe = kind == kSelector7 && v2024In->rsvdcac == kGuardProbeMagic;
 #endif
-    const TegraNVJPGDecodeRequest &r = req->base;
+    const TegraNVJPGDecodeRequest &r = job->request.base;
     IOReturn ret = kIOReturnSuccess;
     const char *why = nullptr;
     TegraVICSurface src = {};
     TegraNVJPGImage img = {};
-    if ((kind == kSelector5 && req->ext.crop) || (kind == kSelector7 && req->v2024.crop)) {
+    if ((kind == kSelector5 && extIn->crop) || (kind == kSelector7 && v2024In->crop)) {
         ret = kIOReturnUnsupported;
         why = "cropped decode (crop rectangle)";
     }
-    if (!ret && kind == kSelector7 &&
-        (req->v2024.header_bytes || req->v2024.strip_index || req->v2024.strip_entropy_bytes)) {
+    if (!ret && kind == kSelector7 && (v2024In->header_bytes || v2024In->strip_index || v2024In->strip_entropy_bytes)) {
         ret = kIOReturnUnsupported;
         why = "strip decode (the service publishes one core)";
     }
@@ -351,32 +379,31 @@ IOReturn AppleJPEGDriverUserClient::decode(const void *in, uint32_t inSize, void
     job->pid = proc_selfpid();
     job->async = r.callback != 0;
     job->context = r.context;
-    IOLockLock(lock_);
-    const mach_port_t port = port_;
-    pending_++;
-    IOLockUnlock(lock_);
+    job->client = this;
+    __atomic_add_fetch(&pending_, 1, __ATOMIC_SEQ_CST);
     if (job->async) {
+        IOLockLock(lock_);
+        const mach_port_t port = port_;
+        IOLockUnlock(lock_);
         IOUserClient::setAsyncReference64(job->ref, port, r.callback, r.refcon, task_);
         retain();  // the job holds the connection until its completion is sent
-    }
-    job->client = this;
-    const bool async = job->async;
-    queueJob(job);
-    if (async)
+        queueJob(job);
         return kIOReturnSuccess;  // the job is the engine thread's now
-    IOLockLock(lock_);
-    while (!job->done)
-        IOLockSleep(lock_, job, THREAD_UNINT);
-    pending_--;
-    IOLockWakeup(lock_, &pending_, false);
-    IOLockUnlock(lock_);
+    }
+    if (!runSyncJob(job)) {
+        IOLockLock(lock_);
+        while (!job->done)
+            IOLockSleep(lock_, job, THREAD_UNINT);
+        IOLockUnlock(lock_);
+    }
+    leavePending();
     ret = job->status;
     // The output: the request back (CMPhoto reads Ext out+0x14/+0x18), with Apple's result words (startDecoder
     // 0x46330: +0x4c 0 for a decode, +0x50/+0x54 codec registers userland does not read); for selector 5 the engine's
     // time and cycles (startDecoderExt: +0x70 microseconds, +0x74 cycles); for selector 7 the region decoded at
     // +0x4c/+0x50 and the time at +0xc94 (startDecoder2024).
     if (out && *outSize >= inSize) {
-        memcpy(out, req, inSize);
+        memcpy(out, in, inSize);
         uint32_t *words = static_cast<uint32_t *>(out);
         words[0x4c / 4] = kind == kSelector7 ? r.width : 0;
         words[0x50 / 4] = kind == kSelector7 ? r.height : 0;
@@ -470,8 +497,10 @@ IOReturn AppleJPEGDriverUserClient::registerNotificationPort(mach_port_t port, U
 IOReturn AppleJPEGDriverUserClient::clientClose()
 {
     IOLockLock(lock_);
-    while (pending_)
+    __atomic_add_fetch(&closeWaiters_, 1, __ATOMIC_SEQ_CST);
+    while (__atomic_load_n(&pending_, __ATOMIC_ACQUIRE))
         IOLockSleep(lock_, &pending_, THREAD_UNINT);
+    __atomic_sub_fetch(&closeWaiters_, 1, __ATOMIC_RELAXED);
     IOLockUnlock(lock_);
     terminate();
     return kIOReturnSuccess;

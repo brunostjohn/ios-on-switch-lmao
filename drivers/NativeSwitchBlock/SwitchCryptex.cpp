@@ -290,20 +290,25 @@ void returnJob(Job *j)
 }
 
 // The request's blocks, out of its windows into its memory (the windows are held: their blocks do not change).
-bool copyOut(const Pending *p)
+bool copyOutRange(IOMemoryDescriptor *buffer, uint64_t start, uint64_t length, const SwitchCacheRequest &cache)
 {
-    const uint64_t first = p->start / kImageBlock;
-    const uint64_t end = first + p->length / kImageBlock;
-    for (uint32_t i = 0; i < p->cache.windows; ++i) {
-        const SwitchWindow *w = p->cache.window[i];
+    const uint64_t first = start / kImageBlock;
+    const uint64_t end = first + length / kImageBlock;
+    for (uint32_t i = 0; i < cache.windows; ++i) {
+        const SwitchWindow *w = cache.window[i];
         const uint64_t from = first > w->tag ? first : w->tag;
         const uint64_t to = end < w->tag + kSwitchWindowBlocks ? end : w->tag + kSwitchWindowBlocks;
         const uint8_t *bytes = static_cast<uint8_t *>(w->bytes) + (from - w->tag) * kImageBlock;
-        if (from >= to || !switchClientCopy(p->buffer, bytes, static_cast<uint32_t>((to - from) * kImageBlock), true,
+        if (from >= to || !switchClientCopy(buffer, bytes, static_cast<uint32_t>((to - from) * kImageBlock), true,
                                             copypv, static_cast<uint32_t>((from - first) * kImageBlock)))
             return false;
     }
     return true;
+}
+
+bool copyOut(const Pending *p)
+{
+    return copyOutRange(p->buffer, p->start, p->length, p->cache);
 }
 
 // The request's first error is its status.
@@ -534,6 +539,7 @@ private:
     IOBlockStorageDevice *sd = nullptr;
     uint64_t maxPiece = 0;  // bytes per SD read
     bool holes = false;     // some of the image reads as zeros (a sparse file)
+    bool cacheHitInline(IOMemoryDescriptor *buffer, uint64_t block, uint64_t count, IOStorageCompletion *completion);
     bool cacheRead(Pending *p, IOMemoryDescriptor *buffer, uint64_t block, uint64_t count, IOStoragePriority priority);
     uint32_t issueRead(const SwitchCacheRead &read, IOStoragePriority priority);
     void raiseQueuedReads(uint64_t block, uint64_t count, IOStoragePriority priority);
@@ -590,6 +596,8 @@ IOReturn SwitchCryptexDevice::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt6
     const uint64_t start = block * kImageBlock;
     if (buffer->getLength() < length)
         return kIOReturnBadArgument;
+    if (cacheHitInline(buffer, block, count, completion))
+        return kIOReturnSuccess;
     Pending *p = takePending();
     if (!p)
         return kIOReturnNoMemory;
@@ -636,14 +644,20 @@ IOReturn SwitchCryptexDevice::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt6
             done += piece.length;
             continue;
         }
-        IOSubMemoryDescriptor *sub = IOSubMemoryDescriptor::withSubRange(buffer, done, piece.length, kIODirectionIn);
-        if (!sub)
-            break;
+        IOSubMemoryDescriptor *sub = nullptr;
+        IOMemoryDescriptor *target = buffer;
+        if (done != 0 || piece.length != length) {
+            sub = IOSubMemoryDescriptor::withSubRange(buffer, done, piece.length, kIODirectionIn);
+            if (!sub)
+                break;
+            target = sub;
+        }
         __atomic_fetch_add(&p->remaining, 1, __ATOMIC_RELAXED);
         IOStorageCompletion pieceCompletion = {this, pieceDone, p};
-        const IOReturn issued =
-            sd->doAsyncReadWrite(sub, piece.disk / kSdSector, piece.length / kSdSector, attributes, &pieceCompletion);
-        sub->release();
+        const IOReturn issued = sd->doAsyncReadWrite(target, piece.disk / kSdSector, piece.length / kSdSector,
+                                                     attributes, &pieceCompletion);
+        if (sub)
+            sub->release();
         if (issued != kIOReturnSuccess)
             pieceDone(this, p, issued, 0);
         ++pieces;
@@ -657,6 +671,63 @@ IOReturn SwitchCryptexDevice::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt6
     reportDirect(length, pieces);
     pieceDone(this, p, kIOReturnSuccess, 0);  // the issuing reference
     return kIOReturnSuccess;
+}
+
+// IOBlockStorageDriver permits inline completion before doAsyncReadWrite returns kIOReturnSuccess.
+bool SwitchCryptexDevice::cacheHitInline(IOMemoryDescriptor *buffer, uint64_t block, uint64_t count,
+                                         IOStorageCompletion *completion)
+{
+    if (!__atomic_load_n(&gCache.on, __ATOMIC_ACQUIRE))
+        return false;
+    const uint64_t length = count * kImageBlock;
+    const uint64_t start = block * kImageBlock;
+    const bool smallHit = length <= kAroundBytes;
+    SwitchCacheRequest stackReq;
+    bool copied = false;
+#if SWITCH_STATS_IO
+    uint64_t copyAbs = 0;
+    const uint64_t copying = smallHit ? mach_absolute_time() : 0;
+#endif
+    IOLockLock(gCache.lock);
+    const int hit = gCache.cache.tryHit(
+        &stackReq, static_cast<uint8_t>(index), block, static_cast<uint32_t>(count), blocks, smallHit,
+        [&](const SwitchWindow *w, uint64_t from, uint64_t to) {
+            const uint8_t *bytes = static_cast<uint8_t *>(w->bytes) + (from - w->tag) * kImageBlock;
+            return switchClientCopy(buffer, bytes, static_cast<uint32_t>((to - from) * kImageBlock), true, copypv,
+                                    static_cast<uint32_t>((from - block) * kImageBlock));
+        },
+        &copied);
+    IOLockUnlock(gCache.lock);
+    if (!hit)
+        return false;
+    if (hit == 2) {
+#if SWITCH_STATS_IO
+        const uint64_t t0 = mach_absolute_time();
+#endif
+        copied = copyOutRange(buffer, start, length, stackReq);
+#if SWITCH_STATS_IO
+        copyAbs = mach_absolute_time() - t0;
+#endif
+        IOLockLock(gCache.lock);
+        gCache.cache.release(&stackReq, copied);
+        IOLockUnlock(gCache.lock);
+    }
+#if SWITCH_STATS_IO
+    else {
+        copyAbs = mach_absolute_time() - copying;
+    }
+#endif
+    reportDirect(length, 0);
+    const IOReturn status = copied ? kIOReturnSuccess : kIOReturnIOError;
+#if SWITCH_STATS_IO
+    const uint64_t completing = mach_absolute_time();
+#endif
+    if (completion->action)
+        completion->action(completion->target, completion->parameter, status, copied ? length : 0);
+#if SWITCH_STATS_IO
+    switch_cryptex_stats::note(length, false, copyAbs, mach_absolute_time() - completing);
+#endif
+    return true;
 }
 
 // True when the cache took the request (finishRequest completes it once its windows hold every block).
@@ -793,15 +864,21 @@ uint32_t SwitchCryptexDevice::issueRead(const SwitchCacheRead &read, IOStoragePr
             done += piece.length;
             continue;
         }
-        IOSubMemoryDescriptor *sub = IOSubMemoryDescriptor::withSubRange(
-            memory, static_cast<uint64_t>(read.first) * kImageBlock + done, piece.length, kIODirectionIn);
-        if (!sub)
-            break;
+        IOSubMemoryDescriptor *sub = nullptr;
+        IOMemoryDescriptor *target = memory;
+        if (read.first != 0 || done != 0 || piece.length != length) {
+            sub = IOSubMemoryDescriptor::withSubRange(memory, static_cast<uint64_t>(read.first) * kImageBlock + done,
+                                                      piece.length, kIODirectionIn);
+            if (!sub)
+                break;
+            target = sub;
+        }
         __atomic_fetch_add(&j->remaining, 1, __ATOMIC_RELAXED);
         IOStorageCompletion pieceCompletion = {this, jobPieceDone, j};
         const IOReturn issued =
-            sd->doAsyncReadWrite(sub, piece.disk / kSdSector, piece.length / kSdSector, &attrs, &pieceCompletion);
-        sub->release();
+            sd->doAsyncReadWrite(target, piece.disk / kSdSector, piece.length / kSdSector, &attrs, &pieceCompletion);
+        if (sub)
+            sub->release();
         if (issued != kIOReturnSuccess)
             jobPieceDone(this, j, issued, 0);
         ++pieces;

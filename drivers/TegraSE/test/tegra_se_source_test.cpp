@@ -68,23 +68,27 @@ TEST(TegraSESource, KnownAnswersWriteBuffersThatOutliveTheirEngine)
 }
 
 // SE1's MCCIF addresses reach only held pages (TegraSESmmu.h): each operation's lists held before the start and released
-// after it, on every path; the engine attached before its first DMA (the known answers).
+// after it in one batched SMMU hold/release, on every path; the engine attached before its first DMA (the known answers).
 TEST(TegraSESource, AnMccifOperationsPagesAreHeldOnlyWhileItRuns)
 {
     const std::string source = SourceText("../TegraSE.cpp");
     const std::string run = Body(source, "bool run(Engine &e, uint32_t in, uint32_t out)\n");
-    const size_t hold = run.find("tegra_se_smmu_hold(which, inList)");
+    const size_t hold = run.find("tegra_se_smmu_hold_lists(which, inList, outList)");
     const size_t start = run.find("start(e, in, out, &started)");
-    const size_t release = run.rfind("tegra_se_smmu_release(which, inList)");
+    const size_t release = run.rfind("tegra_se_smmu_release_lists(which, inList, outList)");
     ASSERT_NE(hold, std::string::npos);
     ASSERT_NE(start, std::string::npos);
+    ASSERT_NE(release, std::string::npos);
     EXPECT_LT(hold, start);
     EXPECT_LT(start, release);
     const size_t engineOff = run.find("if (!e.up && started)\n        return ran;");
     ASSERT_NE(engineOff, std::string::npos) << "an engine turned off mid-operation keeps its holds";
     EXPECT_LT(start, engineOff);
-    EXPECT_LT(engineOff, run.find("tegra_se_smmu_release(which, outList)"));
+    EXPECT_LT(engineOff, release);
     EXPECT_EQ(Count(source, "start(e, "), 1u) << "every operation starts through run()";
     EXPECT_THAT(source, HasSubstr("if (!engineUp(e) || !confine(e, which)) {"));
     EXPECT_THAT(source, Not(HasSubstr("kSmmuAsid")));
+    EXPECT_THAT(Body(source, "Engine *acquire()\n"), Not(HasSubstr("IOLockSleepDeadline")));
+    EXPECT_THAT(Body(source, "void forceOnly(const Engine *only)\n"), Not(HasSubstr("IOLockSleepDeadline")));
+    EXPECT_THAT(Body(source, "extern \"C\" int tegra_se_aes("), Not(HasSubstr("IOMalloc")));
 }

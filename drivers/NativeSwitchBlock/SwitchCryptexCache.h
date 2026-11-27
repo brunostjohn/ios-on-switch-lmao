@@ -195,6 +195,76 @@ public:
         return true;
     }
 
+    // Returns 0 on miss/in-progress, 1 if copied inline (outCopied set), 2 if pinned in `r` for unlocked copy+release.
+    template <typename CopyFn>
+    int tryHit(SwitchCacheRequest *r, uint8_t image, uint64_t first, uint32_t blocks, uint64_t imageBlocks,
+               bool inlineCopy, CopyFn &&copyFn, bool *outCopied)
+    {
+        *outCopied = false;
+        if (!blocks || first >= imageBlocks || blocks > imageBlocks - first)
+            return 0;
+        const uint64_t firstTag = first - first % kSwitchWindowBlocks;
+        const uint64_t last = first + blocks - 1;
+        const uint64_t lastTag = last - last % kSwitchWindowBlocks;
+        const uint32_t n = static_cast<uint32_t>((lastTag - firstTag) / kSwitchWindowBlocks + 1);
+        if (n > kSwitchSpanWindows)
+            return 0;
+        SwitchWindow *wins[kSwitchSpanWindows];
+        uint32_t needs[kSwitchSpanWindows];
+        for (uint32_t i = 0; i < n; ++i) {
+            const uint64_t tag = firstTag + static_cast<uint64_t>(i) * kSwitchWindowBlocks;
+            const uint64_t from = first > tag ? first : tag;
+            const uint64_t to = first + blocks < tag + kSwitchWindowBlocks ? first + blocks : tag + kSwitchWindowBlocks;
+            const uint32_t need = switchWindowMask(static_cast<uint32_t>(from - tag), static_cast<uint32_t>(to - tag));
+            SwitchWindow *w = lookup(image, tag);
+            if (!w || (need & ~w->valid) != 0u)
+                return 0;
+            wins[i] = w;
+            needs[i] = need;
+        }
+        ++st.requests;
+        ++st.ready;
+        if (inlineCopy && n <= kSwitchAroundWindows) {
+            bool ok = true;
+            for (uint32_t i = 0; i < n; ++i) {
+                SwitchWindow *w = wins[i];
+                const uint64_t from = first > w->tag ? first : w->tag;
+                const uint64_t to =
+                    first + blocks < w->tag + kSwitchWindowBlocks ? first + blocks : w->tag + kSwitchWindowBlocks;
+                if (ok && !copyFn(w, from, to))
+                    ok = false;
+            }
+            for (uint32_t i = 0; i < n; ++i) {
+                SwitchWindow *w = wins[i];
+                if (ok) {
+                    const uint32_t fresh = needs[i] & w->valid & ~w->served;
+#if !defined(KERNEL) || SWITCH_STATS_IO
+                    st.served += switchBlockCount(fresh);
+                    st.aheadServed += switchBlockCount(fresh & w->ahead);
+#endif
+                    w->served |= fresh;
+                }
+                if (w->idle) {
+                    unlinkIdle(w);
+                    linkIdle(w, (w->valid & ~w->served) == 0u);
+                }
+            }
+            *outCopied = ok;
+            return 1;
+        }
+        r->windows = n;
+        r->waiting = 0;
+        r->failed = false;
+        r->joined = false;
+        r->nextReady = nullptr;
+        for (uint32_t i = 0; i < n; ++i) {
+            pin(wins[i]);
+            r->window[i] = wins[i];
+            r->need[i] = needs[i];
+        }
+        return 2;
+    }
+
     // Reads blocks [first, first + blocks) of image `image` ahead into windows, for the requests to come: those of them
     // not held or being read, in the window holding `first` only (at most kSwitchWindowReads reads). Returns the
     // blocks it covered (to the window's end, or the range's), so a caller walks a range window by window; 0 when no

@@ -37,6 +37,18 @@ uint32_t entries(const uint32_t *list)
 {
     return list[0] + 1;
 }
+
+bool listAllOwned(unsigned engine, const uint32_t *list)
+{
+    if (!list)
+        return true;
+    const uint32_t n = entries(list);
+    for (uint32_t i = 0; i < n; ++i) {
+        if (!owned(engine, list[1 + 2 * i]))
+            return false;
+    }
+    return true;
+}
 }  // namespace
 
 tegra_se_smmu_attach_result tegra_se_smmu_attach(unsigned engine, const switch_dma_buffer *const *buffers,
@@ -74,42 +86,80 @@ tegra_se_smmu_attach_result tegra_se_smmu_attach(unsigned engine, const switch_d
     return TEGRA_SE_SMMU_ATTACHED;
 }
 
-bool tegra_se_smmu_hold(unsigned engine, const uint32_t *list)
+bool tegra_se_smmu_hold_lists(unsigned engine, const uint32_t *a, const uint32_t *b)
 {
     if (engine >= kEngines || !gAttached[engine])
         return true;
-    const uint32_t n = entries(list);
-    uint32_t held = 0;
+    if (listAllOwned(engine, a) && listAllOwned(engine, b))
+        return true;
+    const uint32_t *lists[2] = {a, b};
+    const uint32_t counts[2] = {a ? entries(a) : 0, b ? entries(b) : 0};
+    uint32_t held[2] = {0, 0};
+    bool ok = true;
     gView[engine].locked([&](auto &core) {
-        for (; held < n; ++held) {
-            const uint64_t pa = list[1 + 2 * held], bytes = list[2 + 2 * held];
-            if (!owned(engine, pa) && (pa + bytes > k4GiB || !core.hold(pa, bytes)))
-                break;
-        }
-        if (held < n) {
-            for (uint32_t i = 0; i < held; ++i) {
-                if (!owned(engine, list[1 + 2 * i]))
-                    (void)core.release(list[1 + 2 * i], list[2 + 2 * i]);
+        bool changed = false;
+        for (unsigned li = 0; li < 2 && ok; ++li) {
+            for (; held[li] < counts[li]; ++held[li]) {
+                const uint64_t pa = lists[li][1 + 2 * held[li]];
+                const uint64_t bytes = lists[li][2 + 2 * held[li]];
+                if (owned(engine, pa))
+                    continue;
+                if (pa + bytes > k4GiB || !core.hold(pa, bytes)) {
+                    ok = false;
+                    break;
+                }
+                changed = true;
             }
         }
-        core.commit();
+        if (!ok && changed) {
+            for (unsigned li = 0; li < 2; ++li) {
+                for (uint32_t i = 0; i < held[li]; ++i) {
+                    if (!owned(engine, lists[li][1 + 2 * i]))
+                        (void)core.release(lists[li][1 + 2 * i], lists[li][2 + 2 * i]);
+                }
+            }
+            changed = false;
+        }
+        if (changed)
+            core.commit();
     });
-    return held == n;
+    return ok;
+}
+
+void tegra_se_smmu_release_lists(unsigned engine, const uint32_t *a, const uint32_t *b)
+{
+    if (engine >= kEngines || !gAttached[engine])
+        return;
+    if (listAllOwned(engine, a) && listAllOwned(engine, b))
+        return;
+    const uint32_t *lists[2] = {b, a};
+    bool released = true;
+    gView[engine].locked([&](auto &core) {
+        bool changed = false;
+        for (const uint32_t *list : lists) {
+            if (!list)
+                continue;
+            const uint32_t n = entries(list);
+            for (uint32_t i = 0; i < n; ++i) {
+                if (!owned(engine, list[1 + 2 * i])) {
+                    released &= core.release(list[1 + 2 * i], list[2 + 2 * i]);
+                    changed = true;
+                }
+            }
+        }
+        if (changed)
+            core.commit();
+    });
+    if (!released)
+        panic("TegraSE: SE%u released a list entry its SMMU view had no hold on", engine + 1);
+}
+
+bool tegra_se_smmu_hold(unsigned engine, const uint32_t *list)
+{
+    return tegra_se_smmu_hold_lists(engine, list, nullptr);
 }
 
 void tegra_se_smmu_release(unsigned engine, const uint32_t *list)
 {
-    if (engine >= kEngines || !gAttached[engine])
-        return;
-    const uint32_t n = entries(list);
-    bool released = true;
-    gView[engine].locked([&](auto &core) {
-        for (uint32_t i = 0; i < n; ++i) {
-            if (!owned(engine, list[1 + 2 * i]))
-                released &= core.release(list[1 + 2 * i], list[2 + 2 * i]);
-        }
-        core.commit();
-    });
-    if (!released)
-        panic("TegraSE: SE%u released a list entry its SMMU view had no hold on", engine + 1);
+    tegra_se_smmu_release_lists(engine, list, nullptr);
 }

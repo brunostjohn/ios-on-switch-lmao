@@ -152,3 +152,36 @@ TEST(TegraSEBringUp, ACallersOperationThatNeverEndsOnAProvenEngineIsAPanic)
     switch_ios::test::ExpectExitInFreshProcess(callerOperationThatNeverEnds, 3,
                                                "panic: TegraSE: SE1 operation never ended");
 }
+
+namespace {
+void chunkedInPlaceAesAndConditionWakeup()
+{
+    ASSERT_TRUE(se_model::finishes([] {
+        seThread(nullptr, THREAD_AWAKENED);
+    }));
+    ASSERT_TRUE(gReady);
+    gAlg[CBC].on = true;
+    std::vector<uint8_t> buf(2 * kBounceBytes, 0x5a);
+    uint8_t iv[16] = {1, 2, 3, 4};
+    const unsigned before = se_model::engines[0].started + se_model::engines[1].started;
+    gForced[0] = current_thread();
+    const int rc = tegra_se_aes(TEGRA_SE_CBC, true, kKey, 16, iv, buf.data(), buf.data(), buf.size());
+    gForced[0] = nullptr;
+    EXPECT_EQ(rc, 0);
+    EXPECT_EQ(se_model::engines[0].started + se_model::engines[1].started - before, 2u);
+    EXPECT_EQ(gSmmuHolds[0], 0);
+    ASSERT_TRUE(tegra_se_claim(1, 0x1234, 100));
+    std::thread releaser([] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        tegra_se_release(1, 0x1234);
+    });
+    EXPECT_TRUE(tegra_se_claim(1, 0x5678, 1000));
+    tegra_se_release(1, 0x5678);
+    releaser.join();
+}
+}  // namespace
+
+TEST(TegraSEBringUp, ChunkedInPlaceAesAndConditionWakeup)
+{
+    switch_ios::test::ExpectPassesInFreshProcess(chunkedInPlaceAesAndConditionWakeup);
+}

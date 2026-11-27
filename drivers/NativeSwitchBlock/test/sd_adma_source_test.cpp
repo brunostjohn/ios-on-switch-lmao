@@ -127,16 +127,20 @@ TEST(SdAdmaSource, MinimalMaintenance)
 {
     const std::string &source = driver();
     const std::string prepare = body("void NativeSwitchBlock::prepareDirect(");
-    EXPECT_THAT(prepare, HasSubstr("syncLines(SWITCH_DCACHE_CLEAN, slot.table, slot.tableUncached);"));
-    EXPECT_THAT(prepare, HasSubstr("syncLines(SWITCH_DCACHE_INVALIDATE, slot.table, slot.tableUncached, sinkPA,"));
+    EXPECT_THAT(prepare,
+                HasSubstr("syncLines(SWITCH_DCACHE_CLEAN, slot.table, slot.tableUncached, slot.descUncached);"));
+    EXPECT_THAT(
+        prepare,
+        HasSubstr("syncLines(SWITCH_DCACHE_INVALIDATE, slot.table, slot.tableUncached, slot.descUncached, sinkPA,"));
     EXPECT_THAT(body("void NativeSwitchBlock::finishDirect("),
-                HasSubstr("syncLines(SWITCH_DCACHE_INVALIDATE, slot.table,"));
+                HasSubstr("syncLines(SWITCH_DCACHE_INVALIDATE, slot.table, slot.tableUncached, slot.descUncached,"));
     EXPECT_EQ(Count(source, "prepareDirect("), 4u);  // declaration, definition, prepareAndPublishSlot, worker stashed
     const std::string page = body("static DmaPage dmaPage(");
     EXPECT_THAT(page, HasSubstr("if (attributes == kWimgDefault)\n        return DmaPage::kCacheable;"));
     EXPECT_THAT(page, HasSubstr("(attributes & kWimgNotCacheable) != 0 ? DmaPage::kUncached : DmaPage::kRefused"));
     const std::string sync = body("static void syncLines(");
-    EXPECT_THAT(sync, HasSubstr("if (dmaPage(pa) == DmaPage::kCacheable)"));
+    EXPECT_THAT(sync, HasSubstr("uncachedBits[i >> 6]"));
+    EXPECT_THAT(sync, Not(HasSubstr("dmaPage(")));
     EXPECT_THAT(body("SwitchAdmaRefusal NativeSwitchBlock::buildTable("), HasSubstr("slot.tableUncached = false;"));
 }
 
