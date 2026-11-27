@@ -4,8 +4,22 @@
 #include <map>
 #include <utility>
 #include <vector>
-#define SWITCH_DCACHE_OP(op, address) ((void)(address))
-#define SWITCH_DCACHE_BARRIER()       ((void)0)
+static uint32_t dcacheOps = 0, dcacheBarriers = 0, dcacheUnderQueueLock = 0;
+static uint32_t cpuAcquires = 0, cpuPublishes = 0, cpuReleases = 0;
+#define SWITCH_DCACHE_OP(op, address) \
+    do {                              \
+        (void)(op);                   \
+        (void)(address);              \
+        ++dcacheOps;                  \
+        if (switch_test_queue_locked) \
+            ++dcacheUnderQueueLock;   \
+    } while (0)
+#define SWITCH_DCACHE_BARRIER()       \
+    do {                              \
+        ++dcacheBarriers;             \
+        if (switch_test_queue_locked) \
+            ++dcacheUnderQueueLock;   \
+    } while (0)
 #include "../SwitchNVDECJobs.cpp"
 #include "../TegraNVDECCancel.cpp"
 #include "../../../kits/SwitchEngineGate/SwitchEngineGate.h"
@@ -384,16 +398,22 @@ bool tegra_nvdec_ready()
 
 int switch_gpu_backing_cpu_acquire(switch_gpu_backing *, uint64_t, uint64_t, uint32_t)
 {
+    EXPECT_FALSE(switch_test_queue_locked);
+    ++cpuAcquires;
     return 0;
 }
 
 int switch_gpu_backing_cpu_publish(switch_gpu_backing *, uint64_t, uint64_t)
 {
+    EXPECT_FALSE(switch_test_queue_locked);
+    ++cpuPublishes;
     return 0;
 }
 
 int switch_gpu_backing_cpu_release(switch_gpu_backing *, uint64_t, uint64_t, uint32_t)
 {
+    EXPECT_FALSE(switch_test_queue_locked);
+    ++cpuReleases;
     return 0;
 }
 
@@ -615,6 +635,9 @@ protected:
         begins = aborts = commits = retained = bridges = released = roomWaits = submits = preparedBatches = 0;
         reservedWords = submittedSyncpt = submittedThreshold = arenaShort = arenaWaits = cancels = reservedCapacity = 0;
         powerUses = powerDones = 0;
+        dcacheOps = dcacheBarriers = dcacheUnderQueueLock = 0;
+        cpuAcquires = cpuPublishes = cpuReleases = 0;
+        switch_test_queue_locks = switch_test_ionew_zero_calls = 0;
         bridgeError = bridgeFailed = submitError = retainError = statusError = powerError = 0;
         semanticResult = batchSettled = 1;
         fences.clear();
@@ -630,6 +653,11 @@ protected:
         promiseTokens.clear();
         publishedWords.clear();
         gQueue = {};
+        gQueueWaiters = 0;
+        gSetupInUse = 0;
+        gSubmissionInUse = 0;
+        for (uint32_t &slot : gSlotSetup)
+            slot = kNoSetupSlot;
         nextTestSequence += 4096;
         gQueue.submitted = gQueue.completed = nextTestSequence;
         gCompleted = nextTestSequence;
@@ -1560,4 +1588,70 @@ TEST_F(SwitchNVDECSubmitTest, AFailedBridgeBetweenPassesRefusesSubmissionBeforeH
     EXPECT_EQ(gQueue.count, 0u);
     EXPECT_EQ(bridges, 1u);
     EXPECT_EQ(released, 1u);
+}
+
+TEST_F(SwitchNVDECSubmitTest, RunPoolsSubmissionBatchesCleanLinesAndDoesZeroDcacheUnderQueueLock)
+{
+    alignas(64) uint8_t bufferA[4096] = {};
+    alignas(64) uint8_t bufferB[4096] = {};
+    auto *backingA = reinterpret_cast<switch_gpu_backing *>(0x1000);
+    auto *backingB = reinterpret_cast<switch_gpu_backing *>(0x2000);
+
+    struct Context {
+        uint8_t *vaA, *vaB;
+        switch_gpu_backing *bA, *bB;
+    } ctx{bufferA, bufferB, backingA, backingB};
+
+    const TegraNVDECResolve resolve = [](void *c, uint32_t handle, TegraNVDECBlock *out) -> bool {
+        auto *x = static_cast<Context *>(c);
+        *out = {};
+        if (handle == 1) {
+            out->va = x->vaA;
+            out->iova = 0x40000000;
+            out->size = 4096;
+            out->backing = x->bA;
+            return true;
+        }
+        if (handle == 2) {
+            out->va = x->vaB;
+            out->iova = 0x50000000;
+            out->size = 4096;
+            out->backing = x->bB;
+            return true;
+        }
+        return false;
+    };
+    const Check check = [](const TegraNVDECSubmit *, const uint64_t *) -> const char * {
+        return nullptr;
+    };
+
+    TegraNVDECSubmit job = {};
+    job.entry_count = 1;
+    job.entries[0] = {NVC5B0_EXECUTE, TEGRA_NVDEC_ENTRY_VALUE, 0, 0};
+    job.setup_bytes = 256;
+    job.clean_count = 3;
+    job.clean[0] = {1, 0, 128, 0};
+    job.clean[1] = {1, 512, 256, 0};
+    job.clean[2] = {2, 64, 128, 0};
+
+    const char *why = nullptr;
+    for (uint32_t i = 0; i < 16; ++i) {
+        dcacheUnderQueueLock = 0;
+        cpuAcquires = cpuPublishes = cpuReleases = 0;
+        switch_test_ionew_zero_calls = 0;
+        ASSERT_EQ(run(&job, resolve, &ctx, check, nullptr, &fence, &waitedForRoom, &why), 0);
+        EXPECT_EQ(switch_test_ionew_zero_calls, 0u);
+        EXPECT_EQ(dcacheUnderQueueLock, 0u);
+        EXPECT_EQ(cpuAcquires, 2u);
+        EXPECT_EQ(cpuPublishes, 2u);
+        EXPECT_EQ(cpuReleases, 2u);
+        const uint32_t locksBefore = switch_test_queue_locks;
+        const uint64_t seq = gQueue.submitted;
+        interrupt(fences.size() - 1);
+        semantic(seq);
+        EXPECT_EQ(switch_test_queue_locks - locksBefore, 2u);
+    }
+    EXPECT_EQ(gQueue.count, 0u);
+    EXPECT_EQ(gSetupInUse, 0u);
+    EXPECT_EQ(gSubmissionInUse, 0u);
 }

@@ -70,7 +70,7 @@ class AppleD5500UserClient : public IOUserClient {
     };
 
     struct SubmitScratch {
-        TegraNVDECSubmit submit;  // single-owner while submitting_ is true
+        const TegraNVDECSubmit *submit;  // single-owner while submitting_ is true
         SnapshotEntry blocks[kMaxBuffers];
         uint32_t blockCount;
     };
@@ -93,6 +93,7 @@ class AppleD5500UserClient : public IOUserClient {
 #endif
 
     Buffer *find(uint32_t handle);
+    bool retainBlock(uint32_t handle, TegraNVDECBlock *out);
     bool inActiveSubmitLocked(const switch_gpu_backing *backing) const;
     void snapshotHandleLocked(uint32_t handle);
     void snapshotSubmitLocked();
@@ -102,7 +103,10 @@ class AppleD5500UserClient : public IOUserClient {
     void dropAll(bool returnMemory);
     IOReturn bufferFreeMethod(const void *in, uint32_t inSize, uint32_t *outSize);
     IOReturn submitMethod(const void *in, uint32_t inSize, void *out, uint32_t *outSize);
-    // Wait, BufferFree, Submit and the probe arm manage lock_ themselves; every other method runs under lock_.
+    IOReturn exportMethod(const void *in, uint32_t inSize, uint32_t *outSize);
+    IOReturn presentMethod(const void *in, uint32_t inSize, uint32_t *outSize);
+    // Wait, BufferFree, Submit, Export, Present and the probe arm manage lock_ themselves; every other method runs
+    // under lock_.
     IOReturn run(uint32_t method, const void *in, uint32_t inSize, void *out, uint32_t *outSize);
     static bool resolveSnapshot(void *context, uint32_t handle, TegraNVDECBlock *block);
 
@@ -147,6 +151,19 @@ OSDefineMetaClassAndStructors(AppleD5500UserClient, IOUserClient)
     return nullptr;
 }
 
+bool AppleD5500UserClient::retainBlock(uint32_t handle, TegraNVDECBlock *out)
+{
+    IOLockLock(lock_);
+    const Buffer *b = find(handle);
+    const bool ok = b && b->block.backing;
+    if (ok) {
+        *out = b->block;
+        switch_gpu_backing_retain(out->backing);
+    }
+    IOLockUnlock(lock_);
+    return ok;
+}
+
 bool AppleD5500UserClient::inActiveSubmitLocked(const switch_gpu_backing *backing) const
 {
     for (uint32_t i = 0; i < scratch_->blockCount; ++i) {
@@ -175,14 +192,15 @@ void AppleD5500UserClient::snapshotHandleLocked(uint32_t handle)
 void AppleD5500UserClient::snapshotSubmitLocked()
 {
     scratch_->blockCount = 0;
-    const uint32_t entries = scratch_->submit.entry_count <= TEGRA_NVDEC_MAX_ENTRIES ? scratch_->submit.entry_count : 0;
+    const TegraNVDECSubmit *submit = scratch_->submit;
+    const uint32_t entries = submit->entry_count <= TEGRA_NVDEC_MAX_ENTRIES ? submit->entry_count : 0;
     for (uint32_t i = 0; i < entries; ++i) {
-        if (scratch_->submit.entries[i].kind == TEGRA_NVDEC_ENTRY_RELOC)
-            snapshotHandleLocked(scratch_->submit.entries[i].value);
+        if (submit->entries[i].kind == TEGRA_NVDEC_ENTRY_RELOC)
+            snapshotHandleLocked(submit->entries[i].value);
     }
-    const uint32_t cleans = scratch_->submit.clean_count <= TEGRA_NVDEC_MAX_RANGES ? scratch_->submit.clean_count : 0;
+    const uint32_t cleans = submit->clean_count <= TEGRA_NVDEC_MAX_RANGES ? submit->clean_count : 0;
     for (uint32_t i = 0; i < cleans; ++i)
-        snapshotHandleLocked(scratch_->submit.clean[i].handle);
+        snapshotHandleLocked(submit->clean[i].handle);
 }
 
 bool AppleD5500UserClient::resolveSnapshot(void *context, uint32_t handle, TegraNVDECBlock *block)
@@ -275,8 +293,9 @@ IOReturn AppleD5500UserClient::clientClose()
         IOLog("TegraNVDEC: client closed: %llu recycles, %llu of an exported picture's buffer: %llu took a parked "
               "buffer, %llu allocated one (%u parked at most); %llu exports into %llu surfaces, %llu new surface "
               "objects; since boot %llu native publications into %llu surfaces, %llu new surface objects\n",
-              recycles_, park_.recycled, park_.taken, park_.allocated, park_.most, exports_, exportSurfaces_,
-              exportObjects_, published, surfaces, objects);
+              recycles_, park_.recycled, park_.taken, park_.allocated, park_.most,
+              __atomic_load_n(&exports_, __ATOMIC_RELAXED), __atomic_load_n(&exportSurfaces_, __ATOMIC_RELAXED),
+              __atomic_load_n(&exportObjects_, __ATOMIC_RELAXED), published, surfaces, objects);
     }
 #endif
     dropAll(idle);
@@ -323,8 +342,16 @@ IOReturn AppleD5500UserClient::bufferStats(uint32_t inSize, void *out, uint32_t 
 {
     if (inSize || !out || *outSize < sizeof(SwitchNVDECBufferStats))
         return kIOReturnBadArgument;
-    *static_cast<SwitchNVDECBufferStats *>(out) = {recycles_, park_.recycled, park_.taken, park_.allocated,
-                                                   exports_,  exportObjects_, park_.most,  uint32_t(exportSurfaces_)};
+    *static_cast<SwitchNVDECBufferStats *>(out) = {
+        recycles_,
+        park_.recycled,
+        park_.taken,
+        park_.allocated,
+        __atomic_load_n(&exports_, __ATOMIC_RELAXED),
+        __atomic_load_n(&exportObjects_, __ATOMIC_RELAXED),
+        park_.most,
+        uint32_t(__atomic_load_n(&exportSurfaces_, __ATOMIC_RELAXED)),
+    };
     *outSize = sizeof(SwitchNVDECBufferStats);
     return kIOReturnSuccess;
 }
@@ -367,6 +394,7 @@ IOReturn AppleD5500UserClient::submitMethod(const void *in, uint32_t inSize, voi
     if (inSize != sizeof(TegraNVDECSubmit) || *outSize < sizeof(TegraNVDECFence) || !out)
         return kIOReturnBadArgument;
     *outSize = sizeof(TegraNVDECFence);
+    const TegraNVDECSubmit *submit = static_cast<const TegraNVDECSubmit *>(in);
     IOLockLock(lock_);
     while (submitting_ && !closing_) {
         ++submitWaiters_;
@@ -378,7 +406,7 @@ IOReturn AppleD5500UserClient::submitMethod(const void *in, uint32_t inSize, voi
         return kIOReturnNotOpen;
     }
     submitting_ = true;
-    memcpy(&scratch_->submit, in, sizeof(scratch_->submit));
+    scratch_->submit = submit;
     snapshotSubmitLocked();
 #if SWITCH_NVDEC_PROBES
     const bool probe = displayProbe_;
@@ -389,7 +417,6 @@ IOReturn AppleD5500UserClient::submitMethod(const void *in, uint32_t inSize, voi
     uint32_t fence = 0;
     bool waitedForRoom = false;
     const char *why = nullptr;
-    const TegraNVDECSubmit *submit = &scratch_->submit;
     int err = -22;
     const uint32_t codecs = tegra_nvdec_codecs();
     const bool tenBit = submit->codec == TEGRA_NVDEC_CODEC_HEVC && submit->setup_bytes >= sizeof(nvdec_hevc_pic_s) &&
@@ -434,6 +461,7 @@ IOReturn AppleD5500UserClient::submitMethod(const void *in, uint32_t inSize, voi
             toRelease[releaseCount++] = scratch_->blocks[i].block.backing;
     }
     scratch_->blockCount = 0;
+    scratch_->submit = nullptr;
     submitting_ = false;
     if (submitWaiters_)
         IOLockWakeup(lock_, &submitting_, false);
@@ -446,6 +474,69 @@ IOReturn AppleD5500UserClient::submitMethod(const void *in, uint32_t inSize, voi
         reply->flags = waitedForRoom ? SWITCH_NVDEC_FENCE_WAITED_FOR_ROOM : 0;
     }
     return ret;
+}
+
+IOReturn AppleD5500UserClient::exportMethod(const void *in, uint32_t inSize, uint32_t *outSize)
+{
+    if (inSize != sizeof(TegraNVDECPresent))
+        return kIOReturnBadArgument;
+    *outSize = 0;
+    TegraNVDECPresent request;
+    memcpy(&request, in, sizeof(request));
+    TegraNVDECBlock block = {};
+    const bool held = retainBlock(request.handle, &block);
+    SwitchNVDECExportRefusal refusal = {"native export of a buffer the connection does not hold", 0, 0, 0};
+    bool fresh = false, first = false;
+    const int error =
+        held ? switch_nvdec_output_export(&block, &request, current_task(), &refusal, &fresh, &first) : -22;
+    if (held)
+        switch_gpu_backing_release(block.backing);
+#if SWITCH_NVDEC_PROBES
+    if (!error) {
+        __atomic_add_fetch(&exports_, 1, __ATOMIC_RELAXED);
+        if (fresh)
+            __atomic_add_fetch(&exportObjects_, 1, __ATOMIC_RELAXED);
+        if (first)
+            __atomic_add_fetch(&exportSurfaces_, 1, __ATOMIC_RELAXED);
+    }
+#endif
+    if (error) {
+        const uint64_t key = switch_refusal_key_with(switch_refusal_key("TegraNVDEC", refusal.why), uint32_t(error));
+        switch_refusal_k(key, "TegraNVDEC", refusal.why,
+                         "a %ux%u %u-bit picture stays VIC's copy into surface %u (%d): allocation %llu bytes, "
+                         "descriptor %llu, base offset %llu",
+                         request.width, request.height, request.sample_bytes * 8, request.surface_id, error,
+                         refusal.allocationBytes, refusal.descriptorBytes, refusal.baseOffset);
+    }
+    return error == -95 ? kIOReturnUnsupported : ioreturn(error);
+}
+
+IOReturn AppleD5500UserClient::presentMethod(const void *in, uint32_t inSize, uint32_t *outSize)
+{
+    if (inSize != sizeof(TegraNVDECPresent))
+        return kIOReturnBadArgument;
+    *outSize = 0;
+    TegraNVDECPresent request;
+    memcpy(&request, in, sizeof(request));
+    TegraNVDECBlock block = {};
+    const bool held = retainBlock(request.handle, &block);
+    TegraVICPicture picture = {};
+    const int checked = switch_nvdec_output_picture(held ? &block : nullptr, &request, &picture);
+    if (checked) {
+        if (held) {
+            switch_dcache_invalidate(block.va, block.size);
+            switch_gpu_backing_release(block.backing);
+        }
+        return ioreturn(checked);
+    }
+    const char *why = nullptr;
+    const int error = tegra_vic_present(&picture, current_task(), &why);
+    if (error)
+        switch_dcache_invalidate(block.va, picture.bytes);
+    switch_gpu_backing_release(block.backing);
+    if (error)
+        return (error == -22 || error == -12) ? ioreturn(error) : kIOReturnUnsupported;
+    return kIOReturnSuccess;
 }
 
 IOReturn AppleD5500UserClient::run(uint32_t method, const void *in, uint32_t inSize, void *out, uint32_t *outSize)
@@ -483,18 +574,38 @@ IOReturn AppleD5500UserClient::run(uint32_t method, const void *in, uint32_t inS
         const int ret = tegra_nvdec_wait(w->fence);  // bounded by the kernel, whatever timeout_us says
         if (ret)
             return ioreturn(ret);
-        IOLockLock(lock_);
+        if (!w->invalidate_count)
+            return kIOReturnSuccess;
+
+        struct Span {
+            switch_gpu_backing *backing;
+            uint8_t *va;
+            uint64_t length;
+        } spans[TEGRA_NVDEC_MAX_RANGES];
+
+        uint32_t spanCount = 0;
         IOReturn result = kIOReturnSuccess;
+        IOLockLock(lock_);
         for (uint32_t i = 0; i < w->invalidate_count; i++) {
             const TegraNVDECRange *r = &w->invalidate[i];
             const Buffer *b = find(r->handle);
-            if (!b || static_cast<uint64_t>(r->offset) + r->length > b->block.size) {
+            if (!b || !b->block.backing || static_cast<uint64_t>(r->offset) + r->length > b->block.size) {
                 result = kIOReturnBadArgument;
                 break;
             }
-            switch_dcache_clean_invalidate(b->block.va + r->offset, r->length);
+            if (!r->length)
+                continue;
+            switch_gpu_backing_retain(b->block.backing);
+            spans[spanCount++] = {b->block.backing, b->block.va + r->offset, r->length};
         }
         IOLockUnlock(lock_);
+        if (!result && spanCount) {
+            for (uint32_t i = 0; i < spanCount; i++)
+                switch_dcache_invalidate_lines(spans[i].va, spans[i].length);
+            switch_dcache_sync();
+        }
+        for (uint32_t i = 0; i < spanCount; i++)
+            switch_gpu_backing_release(spans[i].backing);
         return result;
     }
 
@@ -560,50 +671,6 @@ IOReturn AppleD5500UserClient::run(uint32_t method, const void *in, uint32_t inS
                                                           buffer->map->getAddress()};
         break;
     }
-    case SwitchNVDECMethodExport: {
-        const auto *request = static_cast<const TegraNVDECPresent *>(in);
-        const auto *buffer = find(request->handle);
-        SwitchNVDECExportRefusal refusal = {"native export of a buffer the connection does not hold", 0, 0, 0};
-        bool fresh = false, first = false;
-        const int error =
-            buffer ? switch_nvdec_output_export(&buffer->block, request, current_task(), &refusal, &fresh, &first)
-                   : -22;
-#if SWITCH_NVDEC_PROBES
-        exports_ += !error;
-        exportObjects_ += !error && fresh;
-        exportSurfaces_ += !error && first;
-#endif
-        if (error) {
-            const uint64_t key =
-                switch_refusal_key_with(switch_refusal_key("TegraNVDEC", refusal.why), uint32_t(error));
-            switch_refusal_k(key, "TegraNVDEC", refusal.why,
-                             "a %ux%u %u-bit picture stays VIC's copy into surface %u (%d): allocation %llu bytes, "
-                             "descriptor %llu, base offset %llu",
-                             request->width, request->height, request->sample_bytes * 8, request->surface_id, error,
-                             refusal.allocationBytes, refusal.descriptorBytes, refusal.baseOffset);
-        }
-        ret = error == -95 ? kIOReturnUnsupported : ioreturn(error);
-        break;
-    }
-    case TegraNVDECMethodPresent: {
-        const auto *request = static_cast<const TegraNVDECPresent *>(in);
-        const auto *buffer = find(request->handle);
-        TegraVICPicture picture = {};
-        const int checked = switch_nvdec_output_picture(buffer ? &buffer->block : nullptr, request, &picture);
-        if (checked) {
-            if (buffer)
-                switch_dcache_clean_invalidate(buffer->block.va, buffer->block.size);
-            ret = ioreturn(checked);
-            break;
-        }
-        const char *why = nullptr;
-        const int error = tegra_vic_present(&picture, current_task(), &why);
-        if (error) {
-            switch_dcache_clean_invalidate(buffer->block.va, picture.bytes);
-            ret = (error == -22 || error == -12) ? ioreturn(error) : kIOReturnUnsupported;
-        }
-        break;
-    }
     default:
         ret = kIOReturnUnsupported;
         break;
@@ -643,6 +710,10 @@ IOReturn AppleD5500UserClient::externalMethod(uint32_t selector, IOExternalMetho
         ret = bufferFreeMethod(header + 2, inSize, &outSize);
     } else if (method == TegraNVDECMethodSubmit) {
         ret = submitMethod(header + 2, inSize, arguments->structureOutput, &outSize);
+    } else if (method == SwitchNVDECMethodExport) {
+        ret = exportMethod(header + 2, inSize, &outSize);
+    } else if (method == TegraNVDECMethodPresent) {
+        ret = presentMethod(header + 2, inSize, &outSize);
     } else {
         if (inSize > sizeof(input_))
             return kIOReturnBadArgument;
