@@ -86,7 +86,6 @@ bool a64x_regs(uint32_t w, uint32_t *rd_mask, uint32_t *wr_mask);
 uint32_t a64x_stub_gprs(uint32_t w);
 /* false for a site translated as BL whose original instruction names x30 */
 bool a64x_bl_site_ok(uint32_t orig, uint32_t site_word);
-uint32_t a64x_dead_regs(const uint32_t *next, int n);
 /* path-sensitive: window[0..n) is the page, site is the index of the instruction being replaced */
 uint32_t a64x_dead_regs_window(const uint32_t *window, int n, int site);
 uint32_t a64x_dead_regs_window_lr(const uint32_t *window, int n, int site);
@@ -129,13 +128,24 @@ static inline bool a64x_class_uses_vtemps(enum a64x_class c)
 
 /*
  * Out-of-line ARMv8.0 code for w (LSE, far LDRA): written to out[0..] for execution at stub_pc, ending in a branch to
- * site_pc + 4. `dead` = registers free at the site (a64x_dead_regs), others are spilled below the red zone.
+ * site_pc + 4 (or RET when shared is true). `dead` = registers free at the site, others are spilled below the red zone.
  * Returns the number of words (may exceed max: then nothing past max was written) or -1 if w has no stub.
  */
 int a64x_stub(uint32_t w, uint64_t site_pc, uint64_t stub_pc, uint32_t dead, uint32_t *out, int max);
-/* same, with the SIMD&FP registers dead at the site (a64x_dead_vregs_flow): FP stubs use them instead of spilling */
-int a64x_stub_v(uint32_t w, uint64_t site_pc, uint64_t stub_pc, uint32_t dead, uint32_t vdead, uint32_t *out, int max);
+/* same, with SIMD&FP registers dead at the site and shared (RET vs B site_pc+4) exit selection */
+int a64x_stub_v(uint32_t w, uint64_t site_pc, uint64_t stub_pc, uint32_t dead, uint32_t vdead, bool shared,
+                uint32_t *out, int max);
 #define A64X_STUB_MAX 64
+
+static inline bool a64x_stub_spills(const uint32_t *st, int n)
+{
+    if (n <= 0 || !st) {
+        return false;
+    }
+    uint32_t w = st[0];
+    return (w & 0xFFE003E0u) == 0xA9A003E0u || (w & 0xFFF00FE0u) == 0xF8100FE0u ||
+           (w & 0xFFE003E0u) == 0xADA003E0u || (w & 0xFFF00FE0u) == 0x3C900FE0u;
+}
 /* B from -> to, or 0 if out of range. */
 uint32_t a64x_branch(uint64_t from, uint64_t to);
 

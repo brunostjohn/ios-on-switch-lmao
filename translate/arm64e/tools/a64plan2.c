@@ -1345,9 +1345,80 @@ static uint64_t place(const uint32_t *st, int n, uint64_t dummy, uint64_t near, 
     return addr[0];
 }
 
+struct island {
+    uint64_t va;
+    uint32_t used, size;
+};
+static struct island *islands;
+static size_t nislands, capislands;
+static uint64_t stat_island_stubs, stat_island_words;
+
+static int cmp_island(const void *x, const void *y)
+{
+    const struct island *a = x, *b = y;
+    return a->va < b->va ? -1 : a->va > b->va;
+}
+
+static void add_island(uint64_t va, uint32_t size)
+{
+    if (nislands == capislands) {
+        capislands = capislands ? capislands * 2 : 1024;
+        islands = realloc(islands, capislands * sizeof(*islands));
+    }
+    islands[nislands++] = (struct island){va, 0, size};
+}
+
+static uint64_t place_island(const uint32_t *st, int n, uint64_t dummy, uint64_t near, uint64_t range)
+{
+    if (!nislands)
+        return 0;
+    size_t lo = 0, hi = nislands;
+    while (lo < hi) {
+        size_t mid = (lo + hi) / 2;
+        if (islands[mid].va < near)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    int64_t r = (int64_t)lo, l = (int64_t)lo - 1;
+    while (l >= 0 || r < (int64_t)nislands) {
+        uint64_t dl = l >= 0 ? (near >= islands[l].va ? near - islands[l].va : islands[l].va - near) : UINT64_MAX;
+        uint64_t dr =
+            r < (int64_t)nislands ? (islands[r].va >= near ? islands[r].va - near : near - islands[r].va) : UINT64_MAX;
+        int64_t idx;
+        uint64_t dist;
+        if (dl <= dr) {
+            idx = l--;
+            dist = dl;
+        } else {
+            idx = r++;
+            dist = dr;
+        }
+        if (dist > range)
+            break;
+        struct island *isl = &islands[idx];
+        if (isl->size - isl->used < (uint32_t)n)
+            continue;
+        uint64_t base = isl->va + 4ull * isl->used;
+        if ((base > near ? base - near : near - base) > range)
+            continue;
+        uint64_t addr[A64X_STUB_MAX];
+        for (int j = 0; j < n; j++)
+            addr[j] = base + 4ull * (uint64_t)j;
+        if (commit(st, n, dummy, addr, NULL, 0)) {
+            isl->used += (uint32_t)n;
+            stat_island_stubs++;
+            stat_island_words += (uint64_t)n;
+            return base;
+        }
+    }
+    return 0;
+}
+
 struct shared {
     uint32_t word;
     uint8_t variant;
+    bool spills;
     uint64_t va;
     struct shared *next;
 };
@@ -1356,7 +1427,7 @@ struct shared {
 static struct shared *sh_tab[SH_BUCKETS];
 static uint64_t sh_copies, sh_words;
 
-static uint64_t shared_stub(uint32_t w, uint8_t variant, uint64_t site, int *pieces)
+static uint64_t shared_stub(uint32_t w, uint8_t variant, uint64_t site, int *pieces, bool *spills)
 {
     uint32_t key = (w * 2654435761u ^ variant) & (SH_BUCKETS - 1);
     for (struct shared *s = sh_tab[key]; s; s = s->next) {
@@ -1364,6 +1435,7 @@ static uint64_t shared_stub(uint32_t w, uint8_t variant, uint64_t site, int *pie
             int64_t d = (int64_t)(s->va - site);
             if (d > -(120LL << 20) && d < (120LL << 20)) {
                 *pieces = 0;
+                *spills = s->spills;
                 return s->va;
             }
         }
@@ -1371,18 +1443,24 @@ static uint64_t shared_stub(uint32_t w, uint8_t variant, uint64_t site, int *pie
     uint32_t st[A64X_STUB_MAX];
     uint64_t dummy = site + 8;
     int n = a64x_stub_v(w, site, dummy, (variant & 1) ? ((1u << 16) | (1u << 17)) : 0, (variant & 2) ? 0xFFFF0000u : 0,
-                        st, A64X_STUB_MAX);
+                        true, st, A64X_STUB_MAX);
     if (n <= 0 || n > A64X_STUB_MAX)
         return 0;
-    st[n - 1] = 0xD65F03C0; /* ret */
-    uint64_t va = place(st, n, dummy, site, 100u << 20, pieces);
+    uint64_t va = place_island(st, n, dummy, site, 100u << 20);
+    if (va) {
+        *pieces = 1;
+    } else {
+        va = place(st, n, dummy, site, 100u << 20, pieces);
+    }
     if (!va)
         return 0;
+    bool sp = a64x_stub_spills(st, n);
     struct shared *s = malloc(sizeof(*s));
-    *s = (struct shared){w, variant, va, sh_tab[key]};
+    *s = (struct shared){w, variant, sp, va, sh_tab[key]};
     sh_tab[key] = s;
     sh_copies++;
     sh_words += (uint64_t)n;
+    *spills = sp;
     return va;
 }
 
@@ -1693,7 +1771,7 @@ static uint64_t fp_sites, fp_vspill_before, fp_vspill_after, fp_words_before, fp
 static uint32_t vtemps_of(uint32_t w)
 {
     uint32_t st[A64X_STUB_MAX], m = 0, r, wr;
-    int n = a64x_stub_v(w, 0x100000, 0x200000, (1u << 16) | (1u << 17), 0xFFFF0000u, st, A64X_STUB_MAX);
+    int n = a64x_stub_v(w, 0x100000, 0x200000, (1u << 16) | (1u << 17), 0xFFFF0000u, true, st, A64X_STUB_MAX);
     for (int k = 0; k < n && k < A64X_STUB_MAX; k++) {
         a64x_vregs_public(st[k], &r, &wr);
         m |= r | wr;
@@ -1701,6 +1779,13 @@ static uint32_t vtemps_of(uint32_t w)
     uint32_t ops = (1u << (w & 31)) | (1u << ((w >> 5) & 31)) | (1u << ((w >> 16) & 31)) | (1u << ((w >> 16) & 15)) |
                    (1u << ((w >> 10) & 31));
     return m & 0xFFFF0000u & ~ops;
+}
+
+static bool is_stub_class(enum a64x_class c, uint32_t w)
+{
+    uint32_t one;
+    return c == A64X_LSE_CAS || c == A64X_LSE_CASP || c == A64X_LSE_LDOP || c == A64X_LSE_SWP || c == A64X_JSCVT ||
+           c == A64X_FCMA || c == A64X_RDM || ((c == A64X_PAC_LDRA || c == A64X_FP16) && !a64x_rewrite1(w, &one));
 }
 
 static bool has_vspill(const uint32_t *st, int n)
@@ -1953,12 +2038,9 @@ int a64x_cmd_plan2(int argc, char **argv)
                 uint64_t fo = fo0 + 4 * (pg + x);
                 if (!(codebits[f][(fo / 4) >> 3] & (1 << ((fo / 4) & 7))))
                     continue;
-                uint32_t w = in[x], one;
+                uint32_t w = in[x];
                 enum a64x_class c = a64x_classify(w);
-                bool stub_class = c == A64X_LSE_CAS || c == A64X_LSE_CASP || c == A64X_LSE_LDOP || c == A64X_LSE_SWP ||
-                                  c == A64X_JSCVT || c == A64X_FCMA || c == A64X_FP16 || c == A64X_RDM ||
-                                  (c == A64X_PAC_LDRA && !a64x_rewrite1(w, &one));
-                if (!stub_class)
+                if (!is_stub_class(c, w))
                     continue;
                 if (nsites == capsites) {
                     capsites = capsites ? capsites * 2 : 1 << 20;
@@ -2022,6 +2104,37 @@ int a64x_cmd_plan2(int argc, char **argv)
         }
     }
     free(walk_buf);
+    for (int q = 0; q < nfm; q++) {
+        if (!(fm[q].prot & 4))
+            continue;
+        int f = fm[q].file;
+        uint64_t nw = fm[q].size / 4, x0 = fm[q].off / 4;
+        const uint8_t *t = fb[f] + fm[q].off;
+        for (uint64_t k = 1; k < nw;) {
+            if (u32(t, 4 * k) != 0 || !BITV(codebits[f], x0 + k)) {
+                k++;
+                continue;
+            }
+            uint64_t end = k;
+            bool entered = false;
+            while (end < nw && u32(t, 4 * end) == 0 && BITV(codebits[f], x0 + end)) {
+                entered |= refbits[f] && BITV(refbits[f], x0 + end);
+                end++;
+            }
+            if (!entered && end - k >= 16 && BITV(codebits[f], x0 + k - 1) && a64x_ends_code(u32(t, 4 * (k - 1)))) {
+                uint64_t rem = end - k, cur = k;
+                while (rem > 0) {
+                    uint32_t take = rem > UINT32_MAX ? UINT32_MAX : (uint32_t)rem;
+                    add_island(fm[q].addr + 4 * cur, take);
+                    cur += take;
+                    rem -= take;
+                }
+            }
+            k = end;
+        }
+    }
+    if (nislands > 0)
+        qsort(islands, nislands, sizeof(*islands), cmp_island);
     if (nholes > 0)
         qsort(holes, nholes, sizeof(*holes), cmp_hole);
     {
@@ -2134,13 +2247,14 @@ int a64x_cmd_plan2(int argc, char **argv)
             if (phase == 0 && !no_shared && s->lr_dead && s->cls != A64X_PAC_LDRA) {
                 uint32_t vt = a64x_class_uses_vtemps(s->cls) ? vtemps_of(s->w) : 0;
                 bool vfree = vt && (s->vdead & vt) == vt;
-                uint64_t va = shared_stub(s->w, (two_free ? 1 : 0) | (vfree ? 2 : 0), s->va, &pieces);
+                bool sh_spills = false;
+                uint64_t va = shared_stub(s->w, (two_free ? 1 : 0) | (vfree ? 2 : 0), s->va, &pieces, &sh_spills);
                 if (va && a64x_class_uses_vtemps(s->cls)) {
                     uint32_t st0[A64X_STUB_MAX], st1[A64X_STUB_MAX];
-                    int n0 = a64x_stub_v(s->w, s->va, s->va + 8, two_free ? (1u << 16) | (1u << 17) : 0, 0, st0,
+                    int n0 = a64x_stub_v(s->w, s->va, s->va + 8, two_free ? (1u << 16) | (1u << 17) : 0, 0, true, st0,
                                          A64X_STUB_MAX);
                     int n1 = a64x_stub_v(s->w, s->va, s->va + 8, two_free ? (1u << 16) | (1u << 17) : 0,
-                                         vfree ? 0xFFFF0000u : 0, st1, A64X_STUB_MAX);
+                                         vfree ? 0xFFFF0000u : 0, true, st1, A64X_STUB_MAX);
                     fp_sites++;
                     fp_words_before += (uint64_t)n0;
                     fp_words_after += (uint64_t)n1;
@@ -2151,7 +2265,7 @@ int a64x_cmd_plan2(int argc, char **argv)
                     add_patch(s->va, enc_bl(s->va, va));
                     ok = true;
                     by_shared++;
-                    if (!two_free)
+                    if (sh_spills)
                         spill_sites++;
                     extra_branches += 2 + (pieces > 1 ? (uint64_t)(pieces - 1) : 0);
                 }
@@ -2163,12 +2277,12 @@ int a64x_cmd_plan2(int argc, char **argv)
             if (!ok) {
                 uint32_t st[A64X_STUB_MAX];
                 uint64_t dummy = s->va + 8;
-                int n = a64x_stub_v(s->w, s->va, dummy, s->dead, s->vdead, st, A64X_STUB_MAX);
+                int n = a64x_stub_v(s->w, s->va, dummy, s->dead, s->vdead, false, st, A64X_STUB_MAX);
                 if (n > 0 && n <= A64X_STUB_MAX)
                     size_hist[n]++;
                 if (n > 0 && a64x_class_uses_vtemps(s->cls)) {
                     uint32_t st0[A64X_STUB_MAX];
-                    int n0 = a64x_stub_v(s->w, s->va, dummy, s->dead, 0, st0, A64X_STUB_MAX);
+                    int n0 = a64x_stub_v(s->w, s->va, dummy, s->dead, 0, false, st0, A64X_STUB_MAX);
                     fp_sites++;
                     fp_words_before += (uint64_t)n0;
                     fp_words_after += (uint64_t)n;
@@ -2177,6 +2291,10 @@ int a64x_cmd_plan2(int argc, char **argv)
                 }
                 if (n > 0 && n <= A64X_STUB_MAX) {
                     uint64_t va = place(st, n, dummy, s->va, 120u << 20, &pieces);
+                    if (!va) {
+                        va = place_island(st, n, dummy, s->va, 120u << 20);
+                        pieces = 1;
+                    }
                     if (va) {
                         add_patch(s->va, a64x_branch(s->va, va));
                         ok = true;
@@ -2184,7 +2302,7 @@ int a64x_cmd_plan2(int argc, char **argv)
                             by_single++;
                         else
                             by_pieces++;
-                        if ((st[0] & 0xFFC003FFu) == 0xD10003FFu)
+                        if (a64x_stub_spills(st, n))
                             spill_sites++;
                         extra_branches += 2 + (uint64_t)(pieces - 1);
                     }
@@ -2222,8 +2340,8 @@ int a64x_cmd_plan2(int argc, char **argv)
            nsites, placed, 100.0 * placed / nsites, by_shared, by_single, by_pieces,
            stat_pieces_sites ? (double)stat_pieces_total / stat_pieces_sites : 0.0, by_hop, failed);
     printf("hot libraries: %" PRIu64 " / %" PRIu64 " placed; x30 dead at %" PRIu64 " sites; shared copies %" PRIu64
-           " (%" PRIu64 " words)\n",
-           hot_ok, hot_sites, lr_dead, sh_copies, sh_words);
+           " (%" PRIu64 " words, %" PRIu64 " stubs / %" PRIu64 " words in %zu islands)\n",
+           hot_ok, hot_sites, lr_dead, sh_copies, sh_words, stat_island_stubs, stat_island_words, nislands);
     printf("veneer chains: %" PRIu64 " sites, %.2f hops each\n", chain_sites,
            chain_sites ? (double)chain_hops / chain_sites : 0.0);
     printf("cost: %.2f taken branches per placed site on average (inline LL/SC = 0); spilling at %" PRIu64 " sites\n",
@@ -2287,9 +2405,7 @@ int a64x_cmd_plan2(int argc, char **argv)
                     fprintf(d, "%08x\n", out[x]);
                 }
                 enum a64x_class c = a64x_classify(in[x]);
-                if ((c == A64X_LSE_CAS || c == A64X_LSE_CASP || c == A64X_LSE_LDOP || c == A64X_LSE_SWP ||
-                     c == A64X_JSCVT || c == A64X_FCMA || c == A64X_FP16 || c == A64X_RDM) &&
-                    out[x] != in[x]) {
+                if (c != A64X_PAC_LDRA && is_stub_class(c, in[x]) && out[x] != in[x]) {
                     vcls[c]++;
                     if (a64x_bl_site_ok(in[x], out[x]) && follow(va + 4 * x, out[x]) &&
                         a64x_stub_ordered(in[x], va + 4 * x, out[x], plan_word, NULL))

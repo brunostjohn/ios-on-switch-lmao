@@ -58,10 +58,12 @@
 #define SWITCH_PT_INDEX          ".index"
 #define SWITCH_PT_TRUST_PROPERTY "switch-pretranslated-cdhashes"
 #define SWITCH_PT_MAX_SIGNATURE  (40u << 20)
-#define SWITCH_PT_CACHE_SIZE     2048u
-#define SWITCH_PT_CACHE_SHARDS   16u
-#define SWITCH_PT_CACHE_VALID    0x01u
-#define SWITCH_PT_CACHE_IN_TREE  0x02u
+#define SWITCH_PT_CACHE_SIZE      2048u
+#define SWITCH_PT_CACHE_SHARDS    16u
+#define SWITCH_PT_CACHE_VALID     0x01u
+#define SWITCH_PT_CACHE_IN_TREE   0x02u
+#define SWITCH_PT_CACHE_AUTHENTIC 0x04u
+#define SWITCH_PT_CACHE_COPY_OK   0x08u
 
 bool switch_pretranslated_on = false;
 
@@ -84,7 +86,7 @@ static inline uint32_t switch_pt_cache_index(vnode_t vp)
     return (uint32_t)(((bits >> 8) ^ (bits >> 19)) & (SWITCH_PT_CACHE_SIZE - 1u));
 }
 
-static bool switch_pt_cache_get(vnode_t vp, bool *in_tree, uint64_t *data_id, uint64_t *system_id)
+static bool switch_pt_cache_get(vnode_t vp, bool *in_tree, uint64_t *data_id, uint64_t *system_id, uint8_t *out_flags)
 {
     const uint32_t vid = vnode_vid(vp);
     const struct switch_pt_cache_slot *slot = &switch_pt_cache[switch_pt_cache_index(vp)];
@@ -97,9 +99,12 @@ static bool switch_pt_cache_get(vnode_t vp, bool *in_tree, uint64_t *data_id, ui
     const uint8_t flags = __atomic_load_n(&slot->flags, __ATOMIC_RELAXED);
     const uint64_t cached_data_id = __atomic_load_n(&slot->data_id, __ATOMIC_RELAXED);
     const uint64_t cached_system_id = __atomic_load_n(&slot->system_id, __ATOMIC_RELAXED);
-    __atomic_thread_fence(__ATOMIC_ACQUIRE);
-    if (__atomic_load_n(&slot->seq, __ATOMIC_RELAXED) != seq1 || cached_vp != vp || cached_vid != vid ||
-        (flags & SWITCH_PT_CACHE_VALID) == 0u) {
+    /* Address dependency orders the closing seq load after every payload load on ARMv8.0 without a dmb. */
+    const uintptr_t dep_bits =
+        (uintptr_t)cached_vp ^ cached_vid ^ flags ^ (uintptr_t)cached_data_id ^ (uintptr_t)cached_system_id;
+    const os_atomic_dependency_t dep = os_atomic_make_dependency(dep_bits);
+    const uint32_t seq2 = os_atomic_load_with_dependency_on(&slot->seq, dep);
+    if (seq2 != seq1 || cached_vp != vp || cached_vid != vid || (flags & SWITCH_PT_CACHE_VALID) == 0u) {
         return false;
     }
     if (in_tree) {
@@ -111,17 +116,23 @@ static bool switch_pt_cache_get(vnode_t vp, bool *in_tree, uint64_t *data_id, ui
     if (system_id) {
         *system_id = cached_system_id;
     }
+    if (out_flags) {
+        *out_flags = flags;
+    }
     return true;
 }
 
-static void switch_pt_cache_put(vnode_t vp, bool in_tree, uint64_t data_id, uint64_t system_id)
+static void switch_pt_cache_put(vnode_t vp, bool in_tree, uint64_t data_id, uint64_t system_id, uint8_t extra_flags)
 {
     const uint32_t idx = switch_pt_cache_index(vp);
     lck_spin_t *lock = &switch_pt_cache_locks[idx & (SWITCH_PT_CACHE_SHARDS - 1u)];
     struct switch_pt_cache_slot *slot = &switch_pt_cache[idx];
     const uint32_t vid = vnode_vid(vp);
-    const uint8_t flags = SWITCH_PT_CACHE_VALID | (in_tree ? SWITCH_PT_CACHE_IN_TREE : 0u);
     lck_spin_lock(lock);
+    uint8_t flags = SWITCH_PT_CACHE_VALID | (in_tree ? SWITCH_PT_CACHE_IN_TREE : 0u) | extra_flags;
+    if (slot->vp == vp && slot->vid == vid && (slot->flags & SWITCH_PT_CACHE_VALID) != 0u) {
+        flags |= slot->flags & (SWITCH_PT_CACHE_AUTHENTIC | SWITCH_PT_CACHE_COPY_OK);
+    }
     const uint32_t seq = slot->seq;
     __atomic_store_n(&slot->seq, seq + 1u, __ATOMIC_RELAXED);
     __atomic_thread_fence(__ATOMIC_RELEASE);
@@ -263,9 +274,13 @@ static int switch_pt_read_originals(vnode_t tree, vfs_context_t ctx)
         parsed = switch_pt_originals_parse(switch_pt.originals_raw, switch_pt.originals_size, &switch_pt.originals);
     }
     if (!error && parsed == SWITCH_PT_OK && switch_pt.originals.count) {
+        const size_t scratch_bytes = switch_pt_originals_link_bytes(&switch_pt.tables.index);
+        void *scratch = kalloc_data(scratch_bytes, Z_WAITOK | Z_NOFAIL);
         switch_pt.original_files =
             kalloc_data((size_t)switch_pt.originals.count * sizeof(uint32_t), Z_WAITOK | Z_ZERO | Z_NOFAIL);
-        parsed = switch_pt_originals_link(&switch_pt.tables.index, &switch_pt.originals, switch_pt.original_files);
+        parsed = switch_pt_originals_link(&switch_pt.tables.index, &switch_pt.originals, switch_pt.original_files,
+                                          scratch, scratch_bytes);
+        kfree_data(scratch, scratch_bytes);
     }
     if (!error && parsed == SWITCH_PT_OK && !switch_pt_map_put(&switch_pt.tables.data, id, SWITCH_PT_PROTECTED)) {
         parsed = SWITCH_PT_DUPLICATE_ID;
@@ -414,6 +429,13 @@ static int switch_pt_copy(uint64_t data_id, vfs_context_t ctx, vnode_t *copy)
     if (error) {
         return error;
     }
+    uint64_t cached_data_id = 0;
+    uint8_t flags = 0;
+    if (vnode_mount(*copy) == switch_pt.data && vnode_isreg(*copy) && !vnode_isnamedstream(*copy) &&
+        switch_pt_cache_get(*copy, NULL, &cached_data_id, NULL, &flags) &&
+        (flags & SWITCH_PT_CACHE_COPY_OK) != 0u && cached_data_id == data_id) {
+        return 0;
+    }
     VATTR_INIT(&va);
     VATTR_WANTED(&va, va_fileid);
     VATTR_WANTED(&va, va_parentid);
@@ -428,6 +450,9 @@ static int switch_pt_copy(uint64_t data_id, vfs_context_t ctx, vnode_t *copy)
     if (error) {
         vnode_put(*copy);
         *copy = NULLVP;
+    } else {
+        const uint64_t system_id = switch_pt_file_at(&switch_pt.tables.index, listed).system_id;
+        switch_pt_cache_put(*copy, true, data_id, system_id, SWITCH_PT_CACHE_COPY_OK);
     }
     return error;
 }
@@ -493,7 +518,7 @@ static uint64_t switch_pt_system_id_of(vnode_t vp, const struct vnode_attr *know
         return switch_pt_system_id(&switch_pt.tables, *data_id);
     }
     uint64_t system_id = 0;
-    if (switch_pt_cache_get(vp, NULL, data_id, &system_id)) {
+    if (switch_pt_cache_get(vp, NULL, data_id, &system_id, NULL)) {
         return system_id;
     }
     struct vnode_attr id;
@@ -505,7 +530,7 @@ static uint64_t switch_pt_system_id_of(vnode_t vp, const struct vnode_attr *know
     uint32_t entry = SWITCH_PT_PROTECTED;
     const bool in_tree = switch_pt_map_get(&switch_pt.tables.data, id.va_fileid, &entry);
     system_id = (in_tree && entry < SWITCH_PT_PROTECTED) ? switch_pt_file_at(&switch_pt.tables.index, entry).system_id : 0;
-    switch_pt_cache_put(vp, in_tree, id.va_fileid, system_id);
+    switch_pt_cache_put(vp, in_tree, id.va_fileid, system_id, 0);
     *data_id = id.va_fileid;
     return system_id;
 }
@@ -578,7 +603,7 @@ static bool switch_pt_in_tree(vnode_t vp)
         return false;
     }
     bool in_tree = false;
-    if (switch_pt_cache_get(vp, &in_tree, NULL, NULL)) {
+    if (switch_pt_cache_get(vp, &in_tree, NULL, NULL, NULL)) {
         return in_tree;
     }
     struct vnode_attr va;
@@ -591,7 +616,7 @@ static bool switch_pt_in_tree(vnode_t vp)
     in_tree = switch_pt_map_get(&switch_pt.tables.data, va.va_fileid, &entry);
     const uint64_t system_id =
         (in_tree && entry < SWITCH_PT_PROTECTED) ? switch_pt_file_at(&switch_pt.tables.index, entry).system_id : 0;
-    switch_pt_cache_put(vp, in_tree, va.va_fileid, system_id);
+    switch_pt_cache_put(vp, in_tree, va.va_fileid, system_id, 0);
     return in_tree;
 }
 
@@ -640,6 +665,16 @@ bool switch_pretranslated_authentic(vnode_t vp)
         !vnode_isreg(vp)) {
         return false;
     }
+    uint64_t cached_system_id = 0;
+    uint8_t flags = 0;
+    if (switch_pt_cache_get(vp, NULL, NULL, &cached_system_id, &flags)) {
+        if (cached_system_id == 0) {
+            return false;
+        }
+        if ((flags & SWITCH_PT_CACHE_AUTHENTIC) != 0u) {
+            return true;
+        }
+    }
     struct vnode_attr va;
     VATTR_INIT(&va);
     VATTR_WANTED(&va, va_fileid);
@@ -650,20 +685,23 @@ bool switch_pretranslated_authentic(vnode_t vp)
         return false;
     }
     uint32_t file = SWITCH_PT_PROTECTED;
-    if (!switch_pt_map_get(&switch_pt.tables.data, va.va_fileid, &file) || file >= SWITCH_PT_PROTECTED) {
+    const bool in_tree = switch_pt_map_get(&switch_pt.tables.data, va.va_fileid, &file);
+    if (!in_tree || file >= SWITCH_PT_PROTECTED) {
+        switch_pt_cache_put(vp, in_tree, va.va_fileid, 0, 0);
         return false;
     }
-    const uint8_t *cdhash = switch_pt_file_at(&switch_pt.tables.index, file).cdhash;
+    const struct switch_pt_file entry = switch_pt_file_at(&switch_pt.tables.index, file);
     const struct switch_pt_trust_facts facts = {
         .listed = true,
         .regular = true,
         .uid = va.va_uid,
         .gid = va.va_gid,
         .mode = va.va_mode,
-        .cdhash_pinned = switch_cdhash_listed(&switch_pt.trusted, cdhash),
-        .cdhash_matches = switch_pt_signed_as(vp, cdhash),
+        .cdhash_pinned = switch_cdhash_listed(&switch_pt.trusted, entry.cdhash),
+        .cdhash_matches = switch_pt_signed_as(vp, entry.cdhash),
     };
     const bool authentic = switch_pt_trusted(&facts);
+    switch_pt_cache_put(vp, true, va.va_fileid, entry.system_id, authentic ? SWITCH_PT_CACHE_AUTHENTIC : 0);
     if (!authentic && switch_pt_log_allowed()) {
         printf("SwitchPretranslated: file %llu is not authenticated (%u:%u %o, CDHash pinned %d matches %d)\n",
                (unsigned long long)va.va_fileid, facts.uid, facts.gid, facts.mode, facts.cdhash_pinned,
