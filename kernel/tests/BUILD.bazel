@@ -221,6 +221,20 @@ host_test(
 )
 
 host_test(
+    name = "xnu_kalloc_nofail_source_test",
+    srcs = ["xnu_kalloc_nofail_source_test.cpp"],
+    data = [
+        "//kernel:lint_sources",
+        "//kernel/switch:headers",
+        "//kernel/switch:srcs",
+        "//kernel/xnu-10063.141.1/bsd:kern/kern_exec.c",
+        "//kernel/xnu-10063.141.1/osfmk:kern/switch_kprof.c",
+        "//kernel/xnu-12377.121.6/bsd:kern/kern_exec.c",
+        "//kernel/xnu-12377.121.6/osfmk:kern/switch_kprof.c",
+    ],
+)
+
+host_test(
     name = "xnu_recorder_hooks_source_test",
     srcs = ["xnu_recorder_hooks_source_test.cpp"],
     data = [

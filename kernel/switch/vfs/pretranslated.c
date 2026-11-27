@@ -226,11 +226,15 @@ static int switch_pt_read_tree_file(vnode_t tree, const char *name, size_t min, 
     if (!error) {
         int resid = 0;
         *raw = kalloc_data((vm_size_t)length, Z_WAITOK);
-        *size = (size_t)length;
-        error = vn_rdwr(UIO_READ, file, (caddr_t)*raw, (int)length, 0, UIO_SYSSPACE, IO_NODELOCKED,
-                        vfs_context_ucred(ctx), &resid, current_proc());
-        if (!error && resid) {
-            error = EIO;
+        if (!*raw) {
+            error = ENOMEM;
+        } else {
+            *size = (size_t)length;
+            error = vn_rdwr(UIO_READ, file, (caddr_t)*raw, (int)length, 0, UIO_SYSSPACE, IO_NODELOCKED,
+                            vfs_context_ucred(ctx), &resid, current_proc());
+            if (!error && resid) {
+                error = EIO;
+            }
         }
     }
     if (file) {
@@ -275,12 +279,18 @@ static int switch_pt_read_originals(vnode_t tree, vfs_context_t ctx)
     }
     if (!error && parsed == SWITCH_PT_OK && switch_pt.originals.count) {
         const size_t scratch_bytes = switch_pt_originals_link_bytes(&switch_pt.tables.index);
-        void *scratch = kalloc_data(scratch_bytes, Z_WAITOK | Z_NOFAIL);
+        void *scratch = kalloc_data(scratch_bytes, Z_WAITOK);
         switch_pt.original_files =
-            kalloc_data((size_t)switch_pt.originals.count * sizeof(uint32_t), Z_WAITOK | Z_ZERO | Z_NOFAIL);
-        parsed = switch_pt_originals_link(&switch_pt.tables.index, &switch_pt.originals, switch_pt.original_files,
-                                          scratch, scratch_bytes);
-        kfree_data(scratch, scratch_bytes);
+            kalloc_data((size_t)switch_pt.originals.count * sizeof(uint32_t), Z_WAITOK | Z_ZERO);
+        if (!scratch || !switch_pt.original_files) {
+            error = ENOMEM;
+        } else {
+            parsed = switch_pt_originals_link(&switch_pt.tables.index, &switch_pt.originals, switch_pt.original_files,
+                                              scratch, scratch_bytes);
+        }
+        if (scratch) {
+            kfree_data(scratch, scratch_bytes);
+        }
     }
     if (!error && parsed == SWITCH_PT_OK && !switch_pt_map_put(&switch_pt.tables.data, id, SWITCH_PT_PROTECTED)) {
         parsed = SWITCH_PT_DUPLICATE_ID;
@@ -323,6 +333,10 @@ static const char *switch_pt_build(vnode_t tree, vfs_context_t ctx, int *error)
     const uint32_t extra = 2 + switch_pt.applied.updates + switch_pt.applied.dir_count;
     switch_pt.storage_size = switch_pt_tables_bytes(&index, extra);
     switch_pt.storage = kalloc_data(switch_pt.storage_size, Z_WAITOK | Z_ZERO);
+    if (!switch_pt.storage) {
+        *error = ENOMEM;
+        return "index storage";
+    }
     parsed = switch_pt_tables_build(&switch_pt.tables, &index, extra, switch_pt.storage, switch_pt.storage_size,
                                     switch_pt_name_hash);
     if (parsed == SWITCH_PT_OK && !switch_pt_map_put(&switch_pt.tables.data, index_id, SWITCH_PT_PROTECTED)) {

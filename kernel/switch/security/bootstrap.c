@@ -40,7 +40,8 @@ LCK_MTX_DECLARE(switch_bootstrap_lock, &switch_bootstrap_lck_grp);
 
 static int switch_bootstrap_lookup_path(const char *path, vnode_t directory, vnode_t *vp)
 {
-    struct nameidata *nd = kalloc_type(struct nameidata, Z_WAITOK | Z_NOFAIL);
+    struct nameidata *nd = kalloc_type(struct nameidata, Z_WAITOK);
+    if (!nd) return ENOMEM;
     NDINIT(nd, LOOKUP, OP_LOOKUP, NOFOLLOW | (directory ? NOCROSSMOUNT : 0), UIO_SYSSPACE,
            CAST_USER_ADDR_T(path), vfs_context_kernel());
     nd->ni_flag |= NAMEI_NOFOLLOW_ANY;

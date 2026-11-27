@@ -23,7 +23,8 @@ _Static_assert((SWITCH_P_LAPP_CODE & (P_LDELAYTERM | P_LHASTASK | P_LTERM | P_LE
 
 static int switch_app_code_lookup(const char *path, struct vnode **vp)
 {
-    struct nameidata *nd = kalloc_type(struct nameidata, Z_WAITOK | Z_NOFAIL);
+    struct nameidata *nd = kalloc_type(struct nameidata, Z_WAITOK);
+    if (!nd) return ENOMEM;
     NDINIT(nd, LOOKUP, OP_LOOKUP, NOFOLLOW, UIO_SYSSPACE, CAST_USER_ADDR_T(path), vfs_context_kernel());
     nd->ni_flag |= NAMEI_NOFOLLOW_ANY;
     const int error = namei(nd);

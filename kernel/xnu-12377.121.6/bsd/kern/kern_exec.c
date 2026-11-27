@@ -6869,7 +6869,8 @@ switch_bootstrap_environment(struct image_params *imgp, int pointer_size)
     const char *library = SWITCH_BOOTSTRAP_INJECTOR;
     static const char prefix[] = "DYLD_INSERT_LIBRARIES=";
     const size_t capacity = (size_t)(imgp->ip_strendp - imgp->ip_endargv) + sizeof(prefix) + strlen(library) + 2;
-    char *value = kalloc_data(capacity, Z_WAITOK | Z_NOFAIL);
+    char *value = kalloc_data(capacity, Z_WAITOK);
+    if (!value) return ENOMEM;
     memcpy(value, prefix, sizeof(prefix));
     char *entry = imgp->ip_endargv;
     while (entry < imgp->ip_strendp) {

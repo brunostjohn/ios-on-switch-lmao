@@ -128,10 +128,10 @@ static void a64x_image_free(struct a64x_image *im)
         vnode_rele(im->vp);
     }
     if (im->cursor) {
-        kfree_data(im->cursor, (im->npages + 1) * sizeof(uint32_t));
+        kfree_data(im->cursor, (size_t)(im->npages + 1) * sizeof(uint32_t));
     }
     if (im->stubs) {
-        kfree_data(im->stubs, im->stubcap * sizeof(uint32_t));
+        kfree_data(im->stubs, (size_t)im->stubcap * sizeof(uint32_t));
     }
     if (im->ranges) {
         kfree_data(im->ranges, im->ranges_cap * sizeof(struct a64x_range));
@@ -185,31 +185,41 @@ static int a64x_text_page(const void *src, void *dst, unsigned long long off, vo
 #if DEVELOPMENT || DEBUG
         size_t chk_bytes = (size_t)(c1 - c0) * sizeof(uint32_t);
         scratch_bytes = chk_bytes + (im->has_vtemps ? A64X_WALK_BYTES(A64X_WORDS) : 0);
-        scratch = kalloc_data(scratch_bytes, Z_WAITOK | Z_NOFAIL);
-        chk = scratch;
-        if (im->has_vtemps) {
-            walk = a64x_walk_in(chk + (c1 - c0), A64X_WORDS);
-            walkp = &walk;
+        scratch = kalloc_data(scratch_bytes, Z_WAITOK);
+        if (scratch) {
+            chk = scratch;
+            if (im->has_vtemps) {
+                walk = a64x_walk_in(chk + (c1 - c0), A64X_WORDS);
+                walkp = &walk;
+            }
+        } else {
+            ok = false;
         }
 #else
         if (im->has_vtemps) {
             scratch_bytes = A64X_WALK_BYTES(A64X_WORDS);
-            scratch = kalloc_data(scratch_bytes, Z_WAITOK | Z_NOFAIL);
-            walk = a64x_walk_in(scratch, A64X_WORDS);
-            walkp = &walk;
+            scratch = kalloc_data(scratch_bytes, Z_WAITOK);
+            if (scratch) {
+                walk = a64x_walk_in(scratch, A64X_WORDS);
+                walkp = &walk;
+            } else {
+                ok = false;
+            }
         }
 #endif
-        struct a64x_stub_region sr = {im->text_off + (uint64_t)im->stub_delta, chk, c1, c0, walkp};
-        uint32_t end = a64x_translate_page(src, dst, A64X_WORDS, off, &cm, &sr, c0, NULL);
+        if (ok) {
+            struct a64x_stub_region sr = {im->text_off + (uint64_t)im->stub_delta, chk, c1, c0, walkp};
+            uint32_t end = a64x_translate_page(src, dst, A64X_WORDS, off, &cm, &sr, c0, NULL);
 #if DEVELOPMENT || DEBUG
-        if (end != c1 || bcmp(chk, im->stubs + c0, chk_bytes)) {
+            if (end != c1 || bcmp(chk, im->stubs + c0, chk_bytes)) {
 #else
-        if (end != c1) {
+            if (end != c1) {
 #endif
-            ok = false;
-            A64X_INC(a64x_mismatch);
-            printf("a64x: text page 0x%llx: stubs differ from the validated words; leaving LSE to the trap path\n",
-                   off);
+                ok = false;
+                A64X_INC(a64x_mismatch);
+                printf("a64x: text page 0x%llx: stubs differ from the validated words; leaving LSE to the trap path\n",
+                       off);
+            }
         }
         if (scratch) {
             kfree_data(scratch, scratch_bytes);
@@ -570,10 +580,25 @@ static int a64x_scan(struct a64x_image *im)
 {
     size_t cluster_pages = MIN((size_t)im->npages, (size_t)(A64X_READ_CLUSTER / A64X_PAGE));
     size_t cluster_bytes = cluster_pages ? cluster_pages * A64X_PAGE : A64X_PAGE;
-    uint32_t *cluster = kalloc_data(cluster_bytes, Z_WAITOK | Z_NOFAIL);
-    uint32_t *out = kalloc_data(A64X_PAGE, Z_WAITOK | Z_NOFAIL);
-    void *walk_buf = kalloc_data(A64X_WALK_BYTES(A64X_WORDS), Z_WAITOK | Z_NOFAIL);
-    struct a64x_stats *st = kalloc_type(struct a64x_stats, Z_WAITOK | Z_NOFAIL);
+    uint32_t *cluster = kalloc_data(cluster_bytes, Z_WAITOK);
+    uint32_t *out = kalloc_data(A64X_PAGE, Z_WAITOK);
+    void *walk_buf = kalloc_data(A64X_WALK_BYTES(A64X_WORDS), Z_WAITOK);
+    struct a64x_stats *st = kalloc_type(struct a64x_stats, Z_WAITOK);
+    if (!cluster || !out || !walk_buf || !st) {
+        if (st) {
+            kfree_type(struct a64x_stats, st);
+        }
+        if (cluster) {
+            kfree_data(cluster, cluster_bytes);
+        }
+        if (out) {
+            kfree_data(out, A64X_PAGE);
+        }
+        if (walk_buf) {
+            kfree_data(walk_buf, A64X_WALK_BYTES(A64X_WORDS));
+        }
+        return ENOMEM;
+    }
     struct a64x_walk walk = a64x_walk_in(walk_buf, A64X_WORDS);
     struct a64x_code_map cm = {im, img_is_code, im->map_flags, NULL};
     uint32_t cursor = 0;
@@ -701,12 +726,19 @@ static int a64x_map_image(vm_map_t map, struct vnode *vp, off_t slice_off, const
         }
     }
     struct a64x_image *im = kalloc_type(struct a64x_image, Z_WAITOK | Z_ZERO);
+    if (!im) {
+        return ENOMEM;
+    }
     im->map_flags = kind == A64X_IMAGE_ARM64 ? A64X_MAP_NO_PAC : 0;
     im->refs = 1; /* local owner reference; each pager takes its own ref before vm_map_apple_protected */
     im->text_off = lay->exec_fileoff;
     im->text_size = lay->exec_filesize;
     im->npages = (uint32_t)((lay->exec_filesize + A64X_PAGE - 1) / A64X_PAGE);
-    im->cursor = kalloc_data((im->npages + 1) * sizeof(uint32_t), Z_WAITOK | Z_ZERO);
+    im->cursor = kalloc_data((size_t)(im->npages + 1) * sizeof(uint32_t), Z_WAITOK | Z_ZERO);
+    if (!im->cursor) {
+        a64x_image_release(im);
+        return ENOMEM;
+    }
     if (vnode_ref(vp)) {
         a64x_image_release(im);
         return EIO;
@@ -751,7 +783,7 @@ static int a64x_map_image(vm_map_t map, struct vnode *vp, off_t slice_off, const
             /* the address after the image is taken: no stubs, LSE goes to the trap path */
             printf("a64x: no room for %u stub words after the image (kr %d)\n", im->nstub, kr);
             im->nstub = 0;
-            bzero(im->cursor, (im->npages + 1) * sizeof(uint32_t));
+            bzero(im->cursor, (size_t)(im->npages + 1) * sizeof(uint32_t));
         } else {
             stub_mapped = true;
             OSIncrementAtomic(&im->refs);
@@ -799,7 +831,10 @@ int a64x_load_image(vm_map_t map, struct vnode *vp, off_t slice_offset, const vo
                     int64_t slide)
 {
     const struct mach_header_64 *mh = lcmds;
-    struct a64x_layout *lay = kalloc_type(struct a64x_layout, Z_WAITOK | Z_NOFAIL);
+    struct a64x_layout *lay = kalloc_type(struct a64x_layout, Z_WAITOK);
+    if (!lay) {
+        return a64x_image_kind(mh->cputype, mh->cpusubtype) == A64X_IMAGE_ARM64E ? ENOMEM : 0;
+    }
     int error = a64x_parse(lcmds, lcmds_size, slice_offset, lay);
     if (!error) {
         error = a64x_map_image(map, vp, slice_offset, mh, lay, (vm_map_offset_t)(lay->exec_vmaddr + slide));
@@ -834,12 +869,15 @@ int a64x_mmap_exec(vm_map_t map, struct vnode *vp, off_t file_pos, vm_map_offset
         return EBADMACHO;
     }
     void *buf = kalloc_data(lsize, Z_WAITOK);
-    int error = vn_rdwr(UIO_READ, vp, buf, (int)lsize, file_pos, UIO_SYSSPACE, IO_NODELOCKED,
+    struct a64x_layout *lay = kalloc_type(struct a64x_layout, Z_WAITOK);
+    int error = (!buf || !lay) ? ENOMEM : 0;
+    if (!error) {
+        error = vn_rdwr(UIO_READ, vp, buf, (int)lsize, file_pos, UIO_SYSSPACE, IO_NODELOCKED,
                         vfs_context_ucred(vfs_context_kernel()), &resid, current_proc());
+    }
     if (!error && resid) {
         error = EBADMACHO;
     }
-    struct a64x_layout *lay = kalloc_type(struct a64x_layout, Z_WAITOK | Z_NOFAIL);
     if (!error) {
         error = a64x_parse(buf, lsize, file_pos, lay);
     }
@@ -849,8 +887,12 @@ int a64x_mmap_exec(vm_map_t map, struct vnode *vp, off_t file_pos, vm_map_offset
     if (!error) {
         error = a64x_map_image(map, vp, file_pos, buf, lay, addr);
     }
-    kfree_type(struct a64x_layout, lay);
-    kfree_data(buf, lsize);
+    if (lay) {
+        kfree_type(struct a64x_layout, lay);
+    }
+    if (buf) {
+        kfree_data(buf, lsize);
+    }
     if (error && a64x_image_kind(mh.cputype, mh.cpusubtype) != A64X_IMAGE_ARM64E) {
         return 0; /* plain arm64 runs untranslated rather than not at all */
     }
@@ -1064,6 +1106,9 @@ void *a64x_shared_cache_pager(void *file_object, uint64_t file_offset, uint64_t 
     }
     lck_mtx_unlock(&a64x_plan_lock);
     struct a64x_cache_map *cm = kalloc_type(struct a64x_cache_map, Z_WAITOK);
+    if (!cm) {
+        return MEMORY_OBJECT_NULL;
+    }
     cm->fileoff = file_offset;
     cm->vmaddr = vmaddr;
     struct pager_crypt_info ci = {a64x_cache_page, a64x_cache_map_end, cm, 0};
