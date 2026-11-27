@@ -8,6 +8,9 @@
 // The work runs on its own kernel thread, so the probe returns at once; switch_root_boot_prepare() calls it once the
 // SD disk is published. From the end of stage 1 the GPU interrupts (SPI 157/158) drive nvkm; there is no polled mode.
 // Logs one line per stage reached ("tegra-gm20b: M1 ok ..."), or the line of the stage that failed.
+#ifndef SWITCH_IPSW_BUILD
+#error "TegraGM20B compiles with the IPSW kind's header (IPSW_KIND_FLAGS)"
+#endif
 #include <IOKit/IOLib.h>
 #include <IOKit/IOService.h>
 #include <IOKit/IOPlatformExpert.h>
@@ -42,6 +45,9 @@ void tegra_gm20b_accelerator_static_init(void) __asm__("__GLOBAL__sub_I_TegraGM2
 	__attribute__((weak));
 IOService *tegra_gm20b_accelerator_allocate(void) __attribute__((weak));
 unsigned tegra_gm20b_accelerator_instance_size(void) __attribute__((weak));
+#if SWITCH_IPSW_KIND_24B119
+void tegra_gm20b_accelerator_set_super_meta(const OSMetaClass *meta) __attribute__((weak));
+#endif
 }
 extern "C" OSReturn switch_kernel_classes(void (*initialize)());
 
@@ -127,6 +133,15 @@ IOReturn publish()
 	if (!parent || parent->getClassSize() != 136 ||
 	    tegra_gm20b_accelerator_instance_size() != 136)
 		return kIOReturnNotFound;
+#if SWITCH_IPSW_KIND_24B119
+	const OSSymbol *iogpuName = OSSymbol::withCString("IOGPU");
+	const OSMetaClass *iogpu =
+		iogpuName ? OSMetaClass::getMetaClassWithName(iogpuName) : nullptr;
+	OSSafeReleaseNULL(iogpuName);
+	if (!iogpu || iogpu->getSuperClass() != parent || !tegra_gm20b_accelerator_set_super_meta)
+		return kIOReturnNotFound;
+	tegra_gm20b_accelerator_set_super_meta(iogpu);
+#endif
 	const IOReturn ret = switch_kernel_classes(tegra_gm20b_accelerator_static_init);
 	if (ret)
 		return ret;

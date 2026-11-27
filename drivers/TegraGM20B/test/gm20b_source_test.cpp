@@ -1347,8 +1347,9 @@ TEST(GM20BRailSource, RailDownStopsTheGpuCallouts)
 }
 
 // IOGPUDeviceSetDisplayParams is scalar method 0x21 in iOS 17's IOGPU.framework and IOConnectTrap2 index 8 in iOS 27's;
-// XNU answers a trap index with no trap behind it kIOReturnSuccess, so the device connection serves index 8 and refuses
-// every other by name instead of letting it pass unseen.
+// on iOS 27 scalar methods 0x21 and 0x22 are IOGPUDeviceSetAppGPURole and IOGPUDeviceGetAppGPURole (runningboardd), so
+// 0x21 must not overwrite the display deadline there. XNU answers a trap index with no trap behind it kIOReturnSuccess,
+// so the device connection serves index 8 and refuses every other by name instead of letting it pass unseen.
 TEST(GM20BDeviceSource, DisplayParamsArriveByMethodAndByTrap)
 {
 	const std::string client = SourceText("../TegraGM20BDeviceClient.cpp");
@@ -1360,9 +1361,49 @@ TEST(GM20BDeviceSource, DisplayParamsArriveByMethodAndByTrap)
 	EXPECT_TRUE(Block(client, "IOReturn TegraGM20BDeviceUserClient::setDisplayParams(")
 			    .has("storeDeadline(reinterpret_cast<uint64_t>(nextVblank), "
 				 "reinterpret_cast<uint64_t>(interval));"));
+	const std::string ios17 = Configured(client, "SWITCH_IPSW_KIND_24B119", false);
 	EXPECT_TRUE(
-		CodeText(client).has("case kSetDisplayParams: if (arguments->scalarInputCount != "
-				     "2) return kIOReturnBadArgument; storeDeadline("));
+		CodeText(ios17).has("case kSetDisplayParams: if (arguments->scalarInputCount != "
+				    "2) return kIOReturnBadArgument; storeDeadline("));
+	const std::string ios27 = Configured(client, "SWITCH_IPSW_KIND_24B119", true);
+	const CodeText ios27Method(
+		Block(ios27, "IOReturn TegraGM20BDeviceUserClient::externalMethod("));
+	EXPECT_FALSE(ios27Method.has("storeDeadline("));
+	EXPECT_TRUE(CodeText(ios27).has("kSetAppGPURole = 0x21"));
+	EXPECT_TRUE(CodeText(ios27).has("kGetAppGPURole = 0x22"));
+	EXPECT_TRUE(CodeText(ios27).has(
+		"constexpr char kGpuRoleEntitlement[] = \"com.apple.agx.gpurole\";"));
+	EXPECT_TRUE(ios27Method.has("case kSetAppGPURole:"));
+	EXPECT_TRUE(ios27Method.has("if (!hasGpuRoleEntitlement(task_)) return "
+				    "kIOReturnNotPrivileged;"));
+	EXPECT_TRUE(ios27Method.has("tegra_gm20b_set_app_gpu_role("));
+	EXPECT_TRUE(ios27Method.has("kIOReturnNoDevice"));
+	EXPECT_TRUE(ios27Method.has("case kGetAppGPURole:"));
+	EXPECT_TRUE(ios27Method.has("tegra_gm20b_get_app_gpu_role("));
+}
+
+// On 24B119, runningboardd matches IOServiceMatching("IOGPU") while Metal matches IOAcceleratorES: publish() sets
+// AGXAccelerator's metaclass superclass to IOGPUFamily's IOGPU (after verifying IOGPU subclasses IOAcceleratorES)
+// before switch_kernel_classes runs the staged initializer. 21H461 stays directly under IOAcceleratorES.
+TEST(GM20BDeviceSource, AcceleratorConformsToIogpuOnIos27Only)
+{
+	const std::string pub = SourceText("../TegraGM20B.cpp");
+	const std::string acc = SourceText("../TegraGM20BAccelerator.cpp");
+	const CodeText pub27(
+		Block(Configured(pub, "SWITCH_IPSW_KIND_24B119", true), "IOReturn publish()"));
+	EXPECT_TRUE(pub27.before("OSSymbol::withCString(\"IOGPU\")",
+				 "if (!iogpu || iogpu->getSuperClass() != parent || "
+				 "!tegra_gm20b_accelerator_set_super_meta)"));
+	EXPECT_TRUE(pub27.before("tegra_gm20b_accelerator_set_super_meta(iogpu);",
+				 "switch_kernel_classes(tegra_gm20b_accelerator_static_init);"));
+	const CodeText pub17(
+		Block(Configured(pub, "SWITCH_IPSW_KIND_24B119", false), "IOReturn publish()"));
+	EXPECT_FALSE(pub17.has("tegra_gm20b_accelerator_set_super_meta("));
+	EXPECT_TRUE(CodeText(Configured(acc, "SWITCH_IPSW_KIND_24B119", true))
+			    .has("OSMetaClass(\"AGXAccelerator\", gSuperMeta ? gSuperMeta : "
+				 "&IOAcceleratorES::gMetaClass, sizeof(AGXAccelerator))"));
+	EXPECT_TRUE(CodeText(Configured(acc, "SWITCH_IPSW_KIND_24B119", false))
+			    .has("OSDefineMetaClassAndStructors(AGXAccelerator, IOAcceleratorES)"));
 }
 
 // A hang's line reads the hung submission's pushes through the user client that claimed the channel's space, and only

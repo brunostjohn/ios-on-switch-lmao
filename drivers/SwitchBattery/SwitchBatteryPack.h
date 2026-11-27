@@ -14,6 +14,9 @@
 //          missing) and the banks whose PackID is the pack's ID. The battery's UpdateTime is read before and after and
 //          the whole read retried while it differs or is missing. With no AppleSmartBattery it logs "No match for
 //          AppleSmartBattery IOService".
+//   thermalmonitord  matches AppleSmartBatteryBank (initPowerSource) and reads top-level Voltage, InstantAmperage,
+//          Temperature, AppleRawCurrentCapacity, AppleRawMaxCapacity and BatteryData (getGasGaugeAveragePower logs
+//          "<Error> could not find Voltage property" without top-level Voltage).
 // 21H461's daemons read none of this, so only a 24B119 kernel publishes it. The classes keep Apple's names because
 // IOServiceMatching and IOObjectConformsTo match on them, as AppleKeyStore does in NativeKeyStoreEvents.
 #pragma once
