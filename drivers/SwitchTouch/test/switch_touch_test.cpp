@@ -784,11 +784,20 @@ struct Report {
 static std::vector<Report> gReports;
 static bool gTimedPosts = true;
 static uint32_t gEdge = 0;
+static IOWorkLoop *gHidLoop = nullptr;
+
+IOService *switch_hid_create(SwitchHIDKind kind, IOWorkLoop *sharedLoop)
+{
+    check(kind == kSwitchHIDTouch, "only the touch device");
+    gHidLoop = sharedLoop;
+    if (sharedLoop)
+        sharedLoop->retain();
+    return new IOService;
+}
 
 IOService *switch_hid_create(SwitchHIDKind kind)
 {
-    check(kind == kSwitchHIDTouch, "only the touch device");
-    return new IOService;
+    return switch_hid_create(kind, nullptr);
 }
 
 bool switch_hid_supports_timestamps(IOService *)
@@ -1824,6 +1833,29 @@ static void scenarioJoyConTouchPreemptHook()
     check(gJoyConTouchMs.size() == hooksBeforeEsd, "releaseAll on EvReady reset does not notify SwitchJoyCon");
 }
 
+static void scenarioSharedWorkLoop()
+{
+    gControllers[3].devices[0x49] = &gFtm4;
+    gControllers[5].devices[0x3c] = &gPmic;
+    for (unsigned bus = 1; bus <= 5; ++bus)
+        gControllers[bus].bus = bus;
+    gAfterEvent = deliver;
+    gFtm4.fifo.push_back({0x10, 0, 0, 0, 0, 0, 0, 0});
+    check(switch_touch_start() == 0, "shared workloop: switch_touch_start");
+    check(IOWorkLoop::created == 1 && IOWorkLoop::last != nullptr,
+          format("shared workloop: SwitchTouch creates one IOWorkLoop (got %u)", IOWorkLoop::created));
+    check(gHidLoop == IOWorkLoop::last, "shared workloop: touch HID device shares SwitchTouch's IOWorkLoop");
+    fireWatchdog();
+    gRunUntil(gNow + 1000000);
+    const size_t before = gReports.size();
+    drag(1, 3, 10000000);
+    check(gReports.size() > before, "shared workloop: touch reports dispatch after bring-up");
+    switch_touch_display_power(false);
+    switch_touch_display_power(true);
+    fireWatchdog();
+    gRunUntil(gNow + 1000000);
+}
+
 // --- One process per scenario (the drivers keep boot-wide state) ------------------------------------------------------
 static void run(void (*scenario)())
 {
@@ -1975,4 +2007,9 @@ TEST(SwitchTouch, TegraI2CTimeoutQuiesceAndRecover)
 TEST(SwitchTouch, JoyConTouchPreemptHook)
 {
     run(scenarioJoyConTouchPreemptHook);
+}
+
+TEST(SwitchTouch, SharedWorkLoop)
+{
+    run(scenarioSharedWorkLoop);
 }

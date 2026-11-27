@@ -168,7 +168,6 @@ OSDefineMetaClassAndStructors(SwitchButtons, IOService)
 {
     if (!IOService::start(provider))
         return false;
-    hid = switch_hid_create(kSwitchHIDButtons);
     loop = IOWorkLoop::workLoop();
     if (!loop)
         panic("SwitchButtons: work loop setup failed");
@@ -207,6 +206,8 @@ OSDefineMetaClassAndStructors(SwitchButtons, IOService)
         loop->addEventSource(btTimer) != kIOReturnSuccess) {
         panic("SwitchButtons: click source setup failed");
     }
+
+    hid = switch_hid_create(kSwitchHIDButtons, loop);
 
     for (auto *source : volume)
         source->enable();

@@ -406,12 +406,6 @@ OSDefineMetaClassAndStructors(SwitchTouch, IOService)
 {
     if (!IOService::start(provider))
         return false;
-    hid = switch_hid_create(kSwitchHIDTouch);
-    timed = switch_hid_supports_timestamps(hid);
-    if (!timed) {
-        IOLog("SwitchTouch: HID reports cannot carry the interrupt's time here (SwitchHID); stamped at the post "
-              "instead\n");
-    }
     IOService *nub = tegra_gpio_interrupt_nub(TEGRA_GPIO_TOUCH_INT, TEGRA_GPIO_LEVEL_LOW);
     if (!nub) {
         char state[256];
@@ -425,6 +419,12 @@ OSDefineMetaClassAndStructors(SwitchTouch, IOService)
     if (!loop || !irq || !timer || loop->addEventSource(irq) != kIOReturnSuccess ||
         loop->addEventSource(timer) != kIOReturnSuccess) {
         panic("SwitchTouch: work loop setup failed");
+    }
+    hid = switch_hid_create(kSwitchHIDTouch, loop);
+    timed = switch_hid_supports_timestamps(hid);
+    if (!timed) {
+        IOLog("SwitchTouch: HID reports cannot carry the interrupt's time here (SwitchHID); stamped at the post "
+              "instead\n");
     }
     timer->setTimeoutMS(1);  // power the panel up on the work loop, off the caller's thread
     return true;

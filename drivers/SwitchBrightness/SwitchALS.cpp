@@ -727,7 +727,7 @@ bool SwitchALS::start(IOService *provider)
         panic("SwitchALS: work loop setup failed");
     }
     kick->enable();
-    hid = switch_hid_create(kSwitchHIDLight);
+    hid = switch_hid_create(kSwitchHIDLight, loop);
     switch_hid_set_feature_handler(hid, &SwitchALS::reportIntervalSet, this);
     switch_hid_set_light_copy_handler(hid, &SwitchALS::copyEvent, this);
     registerService();

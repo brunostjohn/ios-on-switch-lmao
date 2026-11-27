@@ -152,10 +152,16 @@ public:
 class IOWorkLoop : public OSObject {
 public:
     using Action = IOReturn (*)(OSObject *target, void *a0, void *a1, void *a2, void *a3);
+    static inline IOWorkLoop *last = nullptr;
+    static inline unsigned created = 0;
+    static inline unsigned runActionCalls = 0;
 
     static IOWorkLoop *workLoop()
     {
-        return new IOWorkLoop;
+        auto *wl = new IOWorkLoop;
+        last = wl;
+        ++created;
+        return wl;
     }
 
     IOReturn addEventSource(IOEventSource *)
@@ -171,6 +177,7 @@ public:
     IOReturn runAction(Action action, OSObject *target, void *a0 = nullptr, void *a1 = nullptr, void *a2 = nullptr,
                        void *a3 = nullptr)
     {
+        ++runActionCalls;
         return action(target, a0, a1, a2, a3);
     }
 };
