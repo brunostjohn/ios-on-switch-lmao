@@ -75,6 +75,7 @@ bool Device::constexprSampler(const std::array<uint32_t, 8> &words, uint32_t &in
         if (constexprCount_ == kConstexprSamplers || !takeTsc(tsc))
             return false;
         memcpy(tsc_.cpu + 32 * tsc, words.data(), 32);
+        noteTscWrite();
         constexprTsc_[constexprCount_] = tsc;
         constexprWord0_[constexprCount_] = words[0];
         known = completedSamplers_.emplace(words, uint8_t(constexprCount_++)).first;
@@ -109,6 +110,7 @@ void Device::offerCompletedSplit(Completed &c, const RuntimeRecord &r, const Pla
 
 Pipeline *Device::addRecord(const RuntimeRecord &r, bool caTransform, std::string &why, bool *retry)
 {
+    ensurePackWindow();
     if (retry)
         *retry = false;
     const bool tess = tessellates(r.pipeline), pixel = pixelStage(r.pipeline);
@@ -229,6 +231,7 @@ Pipeline *Device::addRecord(const RuntimeRecord &r, bool caTransform, std::strin
 
 bool Device::attachFullForm(const RuntimeRecord &full, std::string &why)
 {
+    ensurePackWindow();
     const RuntimeRecord *forms[2] = {&full, full.strideTwin.get()};
     const RecordLayout layouts[2] = {layoutOf(full), forms[1] ? layoutOf(*forms[1]) : RecordLayout()};
     std::lock_guard<gm20b::Mutex> l(lock_);
@@ -269,7 +272,7 @@ Pipeline *Device::makeTurned(Pipeline &pl)
     PlacedProgram fs;
     if (!placeCompletedSlot(t->fs, fs)) {
         stats.heapFull++;
-        os_log_error(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "gm20b"),
+        os_log_error(gm20b::log(),
                      "SwitchMetal: a turned variant found no room in the shader heap or local memory: this turned draw "
                      "is refused");
         return nullptr;
@@ -328,6 +331,7 @@ bool isOwnState(uint64_t keyHash)
 
 Pipeline *Device::ownPipeline(const char *name)
 {
+    ensurePackWindow();
     if (!name)
         return nullptr;
     const uint64_t key = Pack::fnv(name, strlen(name));

@@ -20,7 +20,6 @@
 // and denormals and onto BGRA8 changed no bit with it on.
 #pragma once
 #include <cstdint>
-#include <cstdio>
 #include <cstring>
 
 namespace gm20b {
@@ -79,23 +78,171 @@ inline bool noopSourceCoeff(uint32_t c, bool normalized)
     return normalized && c >= 0x4304 && c <= 0x4308;  // DST_ALPHA .. ONE_MINUS_DST_COLOR, SRC_ALPHA_SATURATE
 }
 
+inline bool parseKeyUint(const char *&p, uint32_t &out)
+{
+    if (*p < '0' || *p > '9')
+        return false;
+    uint32_t v = 0;
+    do {
+        v = v * 10u + uint32_t(*p - '0');
+        ++p;
+    } while (*p >= '0' && *p <= '9');
+    out = v;
+    return true;
+}
+
+struct ParsedColorKey {
+    uint32_t format = 0;
+    uint32_t writeMask = 0;
+    uint32_t blending = 0;
+    uint32_t srcRGB = 0, dstRGB = 0, rgbOp = 0;
+    uint32_t srcAlpha = 0, dstAlpha = 0, alphaOp = 0;
+    uint8_t fieldCount = 0;
+};
+
+struct ParsedPipelineKey {
+    ParsedColorKey colors[8] = {};
+    uint32_t colorFormat[8] = {};
+    uint8_t colorTargets = 0;
+    uint32_t samples = 1;
+    bool samples1Prefix = false;
+    uint32_t depth = 0, stencil = 0;
+    bool hasDs = false;
+    bool hasZeroDsToken = false;
+    bool rasterOff = false;
+    bool hasA0 = false;
+    uint32_t a0Format = 0, a0Offset = 0, a0Buffer = 0, a0Stride = 0, a0Step = 0;
+};
+
+// Single-pass zero-stdio parser over a pipeline state key string.
+inline ParsedPipelineKey parsePipelineKey(const char *keyString)
+{
+    ParsedPipelineKey out;
+    if (!keyString)
+        return out;
+    out.samples1Prefix = !strncmp(keyString, "samples=1 ", 10);
+    bool seenSamples = false;
+    uint8_t seenColorFmt = 0;
+    for (const char *p = keyString; *p;) {
+        const bool afterSpace = p > keyString && p[-1] == ' ';
+        const char *tok = p;
+        while (*p && *p != ' ')
+            ++p;
+        const size_t len = size_t(p - tok);
+        if (afterSpace) {
+            if (len >= 4 && tok[0] == 'c' && tok[1] >= '0' && tok[1] <= '9') {
+                const char *q = tok + 1;
+                uint32_t c = 0;
+                if (parseKeyUint(q, c) && *q == '=' && c < 8) {
+                    ++q;
+                    uint32_t vals[9] = {};
+                    uint8_t count = 0;
+                    while (count < 9) {
+                        if (!parseKeyUint(q, vals[count]))
+                            break;
+                        ++count;
+                        if (*q != ':')
+                            break;
+                        ++q;
+                    }
+                    if (count >= 1 && !(seenColorFmt >> c & 1)) {
+                        seenColorFmt |= uint8_t(1u << c);
+                        out.colorFormat[c] = vals[0];
+                        if (vals[0])
+                            out.colorTargets |= uint8_t(1u << c);
+                    }
+                    if (count >= 3) {
+                        ParsedColorKey &ck = out.colors[c];
+                        ck.format = vals[0];
+                        ck.writeMask = vals[1];
+                        ck.blending = vals[2];
+                        ck.srcRGB = vals[3];
+                        ck.dstRGB = vals[4];
+                        ck.rgbOp = vals[5];
+                        ck.srcAlpha = vals[6];
+                        ck.dstAlpha = vals[7];
+                        ck.alphaOp = vals[8];
+                        ck.fieldCount = count;
+                    }
+                }
+            } else if (!out.hasA0 && len >= 3 && tok[0] == 'a' && tok[1] == '0' && tok[2] == '=') {
+                const char *q = tok + 3;
+                uint32_t v[5] = {};
+                if (parseKeyUint(q, v[0]) && *q++ == ':' && parseKeyUint(q, v[1]) && *q++ == ':' &&
+                    parseKeyUint(q, v[2]) && *q++ == ':' && parseKeyUint(q, v[3]) && *q++ == ':' &&
+                    parseKeyUint(q, v[4])) {
+                    out.hasA0 = true;
+                    out.a0Format = v[0];
+                    out.a0Offset = v[1];
+                    out.a0Buffer = v[2];
+                    out.a0Stride = v[3];
+                    out.a0Step = v[4];
+                }
+            } else if (len >= 6 && !memcmp(tok, "rast=0", 6)) {
+                out.rasterOff = true;
+            }
+            if (len == 6 && *p == ' ' && !memcmp(tok, "ds=0/0", 6))
+                out.hasZeroDsToken = true;
+        }
+        if (!out.hasDs && len >= 3 && tok[0] == 'd' && tok[1] == 's' && tok[2] == '=') {
+            out.hasDs = true;
+            const char *q = tok + 3;
+            uint32_t d = 0, s = 0;
+            if (parseKeyUint(q, d)) {
+                out.depth = d;
+                if (*q == '/') {
+                    ++q;
+                    if (parseKeyUint(q, s))
+                        out.stencil = s;
+                }
+            }
+        } else if (!seenSamples && len >= 8 && !memcmp(tok, "samples=", 8)) {
+            seenSamples = true;
+            const char *q = tok + 8;
+            uint32_t s = 0;
+            if (parseKeyUint(q, s) && s > 1)
+                out.samples = s;
+        }
+        if (*p == ' ')
+            ++p;
+    }
+    return out;
+}
+
 // The colour format of target `j` in a state key ("... c<j>=<MTLPixelFormat>:..."), 0 without one
 inline uint32_t keyColorFormat(const char *keyString, uint32_t j)
 {
-    char field[8];
-    snprintf(field, sizeof field, " c%u=", j);
-    const char *at = keyString ? strstr(keyString, field) : nullptr;
-    unsigned format = 0;
-    return at && sscanf(at + strlen(field), "%u", &format) == 1 ? format : 0;
+    if (!keyString || j >= 8)
+        return 0;
+    const char target = char('0' + j);
+    for (const char *p = keyString; *p; ++p) {
+        if (*p != ' ' || p[1] != 'c' || p[2] != target || p[3] != '=')
+            continue;
+        const char *q = p + 4;
+        uint32_t format = 0;
+        return parseKeyUint(q, format) ? format : 0;
+    }
+    return 0;
 }
 
 // The colour targets a state key names, bit j its c<j> (record_parts.h targets for a key the runtime holds as a string)
 inline uint8_t keyColorTargets(const char *keyString)
 {
-    uint8_t targets = 0;
-    for (uint32_t j = 0; j < 8; j++)
-        if (keyColorFormat(keyString, j))
+    if (!keyString)
+        return 0;
+    uint8_t targets = 0, seen = 0;
+    for (const char *p = keyString; *p; ++p) {
+        if (*p != ' ' || p[1] != 'c' || p[2] < '0' || p[2] > '7' || p[3] != '=')
+            continue;
+        const uint32_t j = uint32_t(p[2] - '0');
+        if (seen >> j & 1)
+            continue;
+        seen |= uint8_t(1u << j);
+        const char *q = p + 4;
+        uint32_t format = 0;
+        if (parseKeyUint(q, format) && format)
             targets |= uint8_t(1u << j);
+    }
     return targets;
 }
 
@@ -103,11 +250,12 @@ inline uint8_t keyColorTargets(const char *keyString)
 // after them, its key and the targets its program writes as storage images
 inline uint32_t iteratedBlendNoop(const uint32_t *blob, uint32_t dwords, const uint32_t writes[8],
                                   const char *keyString, uint8_t storageBits,
-                                  const uint32_t *defaultPerTarget = nullptr, uint8_t defaultSeen = 0)
+                                  const uint32_t *defaultPerTarget = nullptr, uint8_t defaultSeen = 0,
+                                  const ParsedPipelineKey *parsed = nullptr)
 {
     if (!(writes[0] & 0x1111) || (storageBits & 1) || !keyString)
         return kNoopNever;
-    const uint8_t targets = keyColorTargets(keyString);
+    const uint8_t targets = parsed ? parsed->colorTargets : keyColorTargets(keyString);
     for (uint32_t j = 1; j < 8; j++)
         if ((writes[j] & 0x1111) && (targets >> j & 1))
             return kNoopNever;
@@ -135,7 +283,7 @@ inline uint32_t iteratedBlendNoop(const uint32_t *blob, uint32_t dwords, const u
     for (bool s : seen)
         if (!s)
             return kNoopNever;
-    const uint32_t format = keyColorFormat(keyString, 0);
+    const uint32_t format = parsed ? parsed->colorFormat[0] : keyColorFormat(keyString, 0);
     const bool normalized = normalizedFormat(format);
     for (uint32_t half = 0; half < 2; half++) {
         const uint32_t *t = perTarget + 3 * half;  // op, source coefficient, destination coefficient

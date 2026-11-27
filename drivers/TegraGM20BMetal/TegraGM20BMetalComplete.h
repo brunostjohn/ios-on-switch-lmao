@@ -17,6 +17,7 @@
 #include <mutex>
 #include <set>
 #include <string>
+#include <string_view>
 #include "compiler.h"
 #include "compute_lookup.h"
 #include "metallib.h"
@@ -38,8 +39,10 @@ struct Pipeline;
 
 class Completion {
 public:
-    // `cacheDir`: the process's own shader cache directory (null or empty: records kept in memory only)
-    Completion(Device &device, const char *cacheDir, uint64_t stack, const char *seedDir = nullptr);
+    // `cacheDir`: the process's own shader cache directory (null or empty: records kept in memory only).
+    // `resolveCacheDir`: when non-null, resolves the writable cache directory and attaches/tidies it on persistenceQueue_.
+    Completion(Device &device, const char *cacheDir, uint64_t stack, const char *seedDir = nullptr,
+               std::function<std::string()> resolveCacheDir = nullptr);
     ~Completion();
 
     struct Ask {
@@ -179,7 +182,7 @@ private:
     static std::string packKeyOf(const CompileRequest &r);
 
     struct Kernel {
-        gm20b::Mutex lock;
+        gm20b::UnfairMutex lock;
         ComputeKernelBuild<ComputeRecord, ComputeState> build;
     };
 
@@ -191,10 +194,10 @@ private:
     dispatch_group_t pending_;
     dispatch_group_t forms_;  // the forms asked in the background (askForms), which ~Completion waits for too
     std::atomic<bool> stopping_{false};
-    gm20b::Mutex kernelLock_;  // map membership only; each kernel owns its single-flight lock
+    gm20b::UnfairMutex kernelLock_;  // map membership only; each kernel owns its single-flight lock
     // the pipelines and forms asked: creation threads, the answer queue and the forms' own background work ask at once,
     // never at a draw
-    gm20b::Mutex formLock_;
+    gm20b::UnfairMutex formLock_;
     std::map<std::pair<const Pipeline *, RequestForm>, FormState> formsAsked_;
     std::atomic<uint32_t> formsRetrying_{0};
     std::map<uint64_t, std::shared_ptr<Kernel>> kernels_;
@@ -214,7 +217,7 @@ private:
     // storedReflection of one function of this facade as a request's one stage tagged `tag`
     bool functionReflection(const char *tag, id function, const CacheKey &k, std::string &blob, std::string &why);
     // Whether one of `store`'s candidate names (store_key.h kStoreCandidates) holds an entry `decoded` takes as its content's
-    bool storedEntry(const StoreKey &store, const std::function<bool(const std::string &bytes)> &decoded);
+    bool storedEntry(const StoreKey &store, const std::function<bool(std::string_view bytes)> &decoded);
     // The render record the store holds under `store`, keyed by this process's pack key of it (store_key.h rekeyRecord)
     RecordCache::Found fromStore(const StoreKey &store, const std::string &packKey, RuntimeRecord &record,
                                  std::string &why);
@@ -238,7 +241,7 @@ private:
 #endif
 #if SWITCH_METAL_DIAGNOSTICS
     void logInProcessCa(const Ask &a, const CacheKey &k, RecordCache::Found found);
-    gm20b::Mutex inProcessCaLock_;  // debug-only miss path: serializes once-per-label deduplication across threads
+    gm20b::UnfairMutex inProcessCaLock_;  // debug-only miss path: serializes once-per-label deduplication across threads
     std::set<std::string> inProcessCaSeen_;
 #endif
 };

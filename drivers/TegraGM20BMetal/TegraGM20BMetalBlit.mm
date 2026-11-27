@@ -72,7 +72,7 @@ bool bufferCopy(__unsafe_unretained SwitchMetalCommandBuffer *cb, const char *ca
                 NSUInteger slice, NSUInteger level, MTLOrigin &o, MTLSize &size, NSUInteger offset, NSUInteger row,
                 NSUInteger image, MTLBlitOption options, bool intoTexture, int &aspect)
 {
-    SwitchMetalBuffer *a = [(id)s isKindOfClass:[SwitchMetalBuffer class]] ? (SwitchMetalBuffer *)s : nil;
+    SwitchMetalBuffer *a = gm20bAsBuffer(s);
     aspect = gm20b::kAspectWhole;
     if (!a) {
         gm20bCallInvalid(cb, PredCallBufForeign, offset, 0,
@@ -119,13 +119,14 @@ bool bufferCopy(__unsafe_unretained SwitchMetalCommandBuffer *cb, const char *ca
     }
     if (t->_descriptor.sampleCount > 1) {
         SwitchMetalTexture *owner = t->_levelsOwner ?: t;
-        bool made;
-        @synchronized(owner) {
-            made = gRM->raw->sampleRows(owner->_raw);
-        }
-        if (!made) {
-            failNoStencilTemp(cb, call);
-            return false;
+        if (!__atomic_load_n(&owner->_raw.sampleRows, __ATOMIC_ACQUIRE)) {
+            os_unfair_lock_lock(&owner->_auxLock);
+            const bool made = gRM->raw->sampleRows(owner->_raw);
+            os_unfair_lock_unlock(&owner->_auxLock);
+            if (!made) {
+                failNoStencilTemp(cb, call);
+                return false;
+            }
         }
     }
     return true;
@@ -215,8 +216,8 @@ bool isIdentityTextureCopy(SwitchMetalTexture *a, NSUInteger ss, NSUInteger sl, 
     [_cb retain:s];
     [_cb retain:d];
     noteReadAsData(s);
-    if ([(id)d isKindOfClass:[SwitchMetalTexture class]])
-        declareGpuWrites((SwitchMetalTexture *)d);
+    if (SwitchMetalTexture *dst = gm20bAsTexture(d))
+        declareGpuWrites(dst);
     Cmd m = cmd(OpCopyTexture);
     m.a = form;
     m.obj = (__bridge void *)s;
@@ -282,8 +283,8 @@ bool isIdentityTextureCopy(SwitchMetalTexture *a, NSUInteger ss, NSUInteger sl, 
 
 - (void)fillBuffer:(id<MTLBuffer>)b range:(NSRange)r value:(uint8_t)value
 {
-    SwitchMetalBuffer *t = (SwitchMetalBuffer *)b;
-    if (![(id)t isKindOfClass:[SwitchMetalBuffer class]])
+    SwitchMetalBuffer *t = gm20bAsBuffer(b);
+    if (!t)
         return gm20bCallInvalid(_cb, PredCallBufForeign, NSMaxRange(r), 0,
                                 b ? "a fill of a buffer not made by this device" : "a fill of a nil buffer");
     if (NSMaxRange(r) > t->_raw.length) {
@@ -308,8 +309,8 @@ bool isIdentityTextureCopy(SwitchMetalTexture *a, NSUInteger ss, NSUInteger sl, 
      destinationOffset:(NSUInteger)dof
                   size:(NSUInteger)n
 {
-    SwitchMetalBuffer *a = (SwitchMetalBuffer *)s, *b = (SwitchMetalBuffer *)d;
-    if (![(id)a isKindOfClass:[SwitchMetalBuffer class]] || ![(id)b isKindOfClass:[SwitchMetalBuffer class]])
+    SwitchMetalBuffer *a = gm20bAsBuffer(s), *b = gm20bAsBuffer(d);
+    if (!a || !b)
         return gm20bCallInvalid(_cb, PredCallBufForeign, so + n, dof + n,
                                 s && d ? "a copy of a buffer not made by this device" : "a copy of a nil buffer");
     if (so + n > a->_raw.length || dof + n > b->_raw.length) {
@@ -369,8 +370,8 @@ bool isIdentityTextureCopy(SwitchMetalTexture *a, NSUInteger ss, NSUInteger sl, 
         return;
     [_cb retain:s];
     [_cb retain:d];
-    if ([(id)d isKindOfClass:[SwitchMetalTexture class]])
-        declareGpuWrites((SwitchMetalTexture *)d);
+    if (SwitchMetalTexture *dst = gm20bAsTexture(d))
+        declareGpuWrites(dst);
     Cmd m = cmd(OpCopyBufferToTexture);
     m.obj = (__bridge void *)s;
     m.obj2 = (__bridge void *)d;

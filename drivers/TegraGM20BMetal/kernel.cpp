@@ -33,7 +33,7 @@ std::shared_ptr<SharedEvents> Kernel::sharedEvents()
 {
     if (!exactJobs())
         return nullptr;
-    std::lock_guard<gm20b::Mutex> lock(eventsLock_);
+    std::lock_guard<gm20b::UnfairMutex> lock(eventsLock_);
     if (!events_)
         events_ = SharedEvents::create(conn_, tunnel_, selector_);
     return events_;
@@ -124,7 +124,7 @@ int Kernel::packImageMap(const TegraGM20BAbiPackCpuRange *cpuRanges, uint32_t cp
 
 uint64_t Kernel::allocVa(uint64_t bytes, uint64_t align)
 {
-    std::lock_guard<gm20b::Mutex> lock(vaLock_);
+    std::lock_guard<gm20b::UnfairMutex> lock(vaLock_);
     bytes = (bytes + kVaGranule - 1) & ~(kVaGranule - 1);
     const uint64_t minimumAlignment = bytes >= kBigPageAlignment ? kBigPageAlignment : kVaGranule;
     if (align < minimumAlignment)
@@ -147,7 +147,7 @@ uint64_t Kernel::allocVa(uint64_t bytes, uint64_t align)
 
 void Kernel::freeVa(uint64_t va, uint64_t bytes)
 {
-    std::lock_guard<gm20b::Mutex> lock(vaLock_);
+    std::lock_guard<gm20b::UnfairMutex> lock(vaLock_);
     bytes = (bytes + kVaGranule - 1) & ~(kVaGranule - 1);
     if (!va || !bytes)
         return;
@@ -537,7 +537,7 @@ bool Kernel::mapAt(uint32_t token, uint64_t bytes, uint64_t fixedVa, bool readOn
 
 bool Kernel::channel(uint32_t engines, uint32_t &channel, const volatile uint32_t *&fence)
 {
-    std::lock_guard<gm20b::Mutex> l(lostLock_);
+    std::lock_guard<gm20b::UnfairMutex> l(lostLock_);
     if (engines == TegraGM20BEngineCopy)
         engines |= TegraGM20BEngineCopyOnly;
     TegraGM20BAbiChannelCreate in = {engines, 0};
@@ -589,7 +589,7 @@ void Kernel::closeChannel(uint32_t channel)
 
 const volatile uint32_t *Kernel::channelEpoch()
 {
-    std::lock_guard<gm20b::Mutex> l(lostLock_);
+    std::lock_guard<gm20b::UnfairMutex> l(lostLock_);
     if (!fenceMap_ && !map(info_.fence_token, true, fenceMap_, fenceMapBytes_))
         return nullptr;
     return reinterpret_cast<const volatile uint32_t *>(uintptr_t(fenceMap_)) + TegraGM20BChannelEpochWord;
@@ -667,7 +667,7 @@ bool Kernel::clockAnchors(const volatile TegraGM20BAbiClockAnchors *&table, uint
     TegraGM20BAbiClockAnchorsReply r = {};
     if (call(TegraGM20BMethodClockAnchors, nullptr, 0, &r, sizeof r) != KERN_SUCCESS || !r.gpu_va)
         return false;
-    std::lock_guard<gm20b::Mutex> l(lostLock_);
+    std::lock_guard<gm20b::UnfairMutex> l(lostLock_);
     if (!fenceMap_ && !map(r.fence_token, true, fenceMap_, fenceMapBytes_)) {
         fenceMap_ = 0;
         fenceMapBytes_ = 0;
@@ -692,7 +692,7 @@ void Kernel::notResponding(uint32_t channel, uint32_t opened)
 
 void Kernel::markLost(uint32_t channel, uint32_t opened)
 {
-    std::lock_guard<gm20b::Mutex> l(lostLock_);
+    std::lock_guard<gm20b::UnfairMutex> l(lostLock_);
     if (opened != opened_.load(std::memory_order_relaxed))
         return;
     TegraGM20BAbiStatus st;

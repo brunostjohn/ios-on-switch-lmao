@@ -4,6 +4,7 @@
 #include "fx/fx_image.h"
 #include "attachment_lifetime.h"
 #include "gpu.h"
+#include "clear_box.h"
 #include "layers.h"
 #include "mixed_samples.h"
 #include "rotated_pass.h"
@@ -347,9 +348,37 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass, const char **why)
         SWITCH_METAL_DIAGNOSTIC(zcullCounts_.carried += carried);
     }
     // DontCare can become a clear after later draws establish readBits_. Treat its deferred prologue write like Clear.
-    for (uint32_t j = 0; j < pass.count && j < 8; j++)
-        if (e.pass_.color[j].texture && e.pass_.color[j].load != ColorAttachment::Load)
+    bool hasStoredDontCare = false, hasStoredClear = false, hasNarrowable = false, volatileColor = false;
+    for (uint32_t j = 0; j < pass.count && j < 8; j++) {
+        const ColorAttachment &a = e.pass_.color[j];
+        if (!a.texture)
+            continue;
+        if (a.load != ColorAttachment::Load)
             e.attachmentWrites_.rop |= uint8_t(1u << j);
+        if (!e.shadowOf_[j] && a.texture->storageRange().gpuVolatile)
+            volatileColor = true;
+        const bool mem = e.memoryless_[j];
+        if (a.load == ColorAttachment::Clear) {
+            hasStoredClear |= a.store && !mem;
+            hasNarrowable |= clearSeenOnlyByDraws(a.store, e.samples_, false, e.pass_.drawn);
+        } else if (a.load == ColorAttachment::DontCare) {
+            if (mem)
+                hasNarrowable |= clearSeenOnlyByDraws(a.store, e.samples_, false, e.pass_.drawn);
+            else
+                hasStoredDontCare |= a.store;
+        }
+    }
+    e.passHasVolatileColor_ = volatileColor;
+    e.trackRects_ = hasStoredDontCare && !hasStoredClear;
+    e.whole_ = !e.trackRects_ && !hasNarrowable;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    e.probeFetchRung_ = dev_->probeFetchRung.load(std::memory_order_relaxed);
+    e.fetchBarrierMode_ = uint8_t(dev_->fetchBarrier.load(std::memory_order_relaxed));
+#endif
+#if SWITCH_METAL_DIAGNOSTICS
+    e.probeNvn_ = dev_->probeNvn.load(std::memory_order_relaxed);
+    e.probeZcullKeep_ = dev_->probeZcullKeep.load(std::memory_order_relaxed);
+#endif
     if (e.attachmentWrites_.rop) {
         DrawGeometry cleared;
         cleared.limit = {0, 0, e.areaW_, e.areaH_};

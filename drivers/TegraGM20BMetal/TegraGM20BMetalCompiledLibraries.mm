@@ -126,14 +126,14 @@ struct SpecializedEntry {
 };
 
 struct SpecializedCache {
-    gm20b::Mutex lock;
+    gm20b::UnfairMutex lock;
     std::list<SpecializedEntry> lru;
     std::map<std::string, std::list<SpecializedEntry>::iterator, std::less<>> index;
     size_t totalBytes = 0;
 
     SwitchMetalLibrary *find(const std::string &key)
     {
-        std::lock_guard<gm20b::Mutex> guard(lock);
+        std::lock_guard<gm20b::UnfairMutex> guard(lock);
         const auto it = index.find(key);
         if (it == index.end())
             return nil;
@@ -145,7 +145,7 @@ struct SpecializedCache {
     {
         if (!library || bytes > kMaxSpecializedBytes)
             return;
-        std::lock_guard<gm20b::Mutex> guard(lock);
+        std::lock_guard<gm20b::UnfairMutex> guard(lock);
         const auto existing = index.find(key);
         if (existing != index.end()) {
             totalBytes -= existing->second->bytes;
@@ -168,7 +168,7 @@ struct SpecializedCache {
 
     void clear()
     {
-        std::lock_guard<gm20b::Mutex> guard(lock);
+        std::lock_guard<gm20b::UnfairMutex> guard(lock);
         index.clear();
         lru.clear();
         totalBytes = 0;

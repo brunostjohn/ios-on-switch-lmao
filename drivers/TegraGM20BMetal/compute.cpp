@@ -49,7 +49,8 @@ constexpr uint8_t kConstexprSampler = 0x80;
 constexpr uint32_t kQmdProgramOffset = SWITCH_NVB1C0_QMD_WORD(NVB1C0_QMDV01_07_PROGRAM_OFFSET),
                    kQmdRasterWidth = SWITCH_NVB1C0_QMD_WORD(NVB1C0_QMDV01_07_CTA_RASTER_WIDTH),
                    kQmdRasterHeightDepth = SWITCH_NVB1C0_QMD_WORD(NVB1C0_QMDV01_07_CTA_RASTER_HEIGHT),
-                   kQmdCbufValid = SWITCH_NVB1C0_QMD_WORD(NVB1C0_QMDV01_07_CONSTANT_BUFFER_VALID(0));
+                   kQmdCbufValid = SWITCH_NVB1C0_QMD_WORD(NVB1C0_QMDV01_07_CONSTANT_BUFFER_VALID(0)),
+                   kQmdCbufSizeShift = SWITCH_NVB1C0_QMD_SHIFT(NVB1C0_QMDV01_07_CONSTANT_BUFFER_SIZE(0));
 
 constexpr uint32_t qmdCbufLo(uint32_t i)
 {
@@ -57,14 +58,15 @@ constexpr uint32_t qmdCbufLo(uint32_t i)
 }
 
 // The states made, by device and key (a pack kernel's keyHash, a record's address): a device lives as long as its process
-gm20b::Mutex gStatesLock;
+gm20b::UnfairMutex gStatesLock;
 std::map<std::pair<const Device *, uint64_t>, ComputeState> gStates;
 
 }  // namespace
 
 const ComputeState *computeState(Device &dev, uint64_t keyHash)
 {
-    std::lock_guard<gm20b::Mutex> hold(gStatesLock);
+    dev.ensurePackWindow();
+    std::lock_guard<gm20b::UnfairMutex> hold(gStatesLock);
     if (auto it = gStates.find({&dev, keyHash}); it != gStates.end())
         return &it->second;
     const PackKernel *k = dev.pack().findKernel(keyHash);
@@ -101,7 +103,8 @@ void kernelBufferDescriptor(const PackKernelEntry &e, uint64_t va, uint32_t size
 
 const ComputeState *placeCompute(Device &dev, const ComputeRecord &r)
 {
-    std::lock_guard<gm20b::Mutex> hold(gStatesLock);
+    dev.ensurePackWindow();
+    std::lock_guard<gm20b::UnfairMutex> hold(gStatesLock);
     const uint64_t key = uint64_t(uintptr_t(&r));
     if (auto it = gStates.find({&dev, key}); it != gStates.end())
         return &it->second;
@@ -177,7 +180,7 @@ bool Device::rebindKernelArguments(const ComputeState &placed)
     bindKernelArguments(c, *c.rec);
     const bool bound = !__atomic_load_n(&c.heapMissing, __ATOMIC_ACQUIRE);
     if (!bound)
-        os_log_error(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "gm20b"),
+        os_log_error(gm20b::log(),
                      "SwitchMetal: no memory for a kernel's argument tables: this dispatch is refused");
     return bound;
 }
@@ -190,10 +193,13 @@ ComputeEncoder::ComputeEncoder(CommandBuffer &cb, Device &dev) : cb_(cb), dev_(d
     p_ = Push{start_, start_ + kEncoderWords};
     cb_.loops_.openSegment(stream());
     const BarrierForms forms = cb.barrierForms();
+    const bool alreadyIdle = forms.switchForm == SwitchForm::Rule && cb.computeReleased_;
     [[maybe_unused]] const Opened opened =
         computeEncoderOpening(p_, switchFormFor(forms.switchForm, cb.lastEngine_, BarrierEngine::Compute),
-                              entryFormFor(forms.entry), cb.lastEngine_);
+                              entryFormFor(forms.entry), cb.lastEngine_, alreadyIdle);
     cb.lastEngine_ = BarrierEngine::Compute;
+    cb.passShaderFlushed_ = false;
+    cb.computeReleased_ = false;
     cb.encodersOpened_++;
     SWITCH_METAL_DIAGNOSTIC(cb.taken_.count(opened));
 }
@@ -295,6 +301,64 @@ void ComputeEncoder::barrier()
     room(8);
     p_.m(INVALIDATE_SHADER_CACHES, kInvalidateData | kFlushData | kInvalidateConstant, SUBC_COMPUTE);
     p_.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0, SUBC_COMPUTE);
+    pendingReadCount_ = 0;
+    pendingWriteCount_ = 0;
+    pendingUnknownRead_ = false;
+    pendingUnknownWrite_ = false;
+}
+
+bool ComputeEncoder::dispatchHasHazard(const AccessRange *extraReads, uint32_t extraReadCount) const
+{
+    const auto overlapsList = [](const AccessRange &a, const AccessRange *list, uint32_t count) {
+        for (uint32_t i = 0; i < count; ++i)
+            if (a.lo < list[i].hi && list[i].lo < a.hi)
+                return true;
+        return false;
+    };
+    const bool curHasReads = curUnknownRead_ || curReadCount_ > 0 || extraReadCount > 0;
+    const bool curHasWrites = curUnknownWrite_ || curWriteCount_ > 0;
+    if (pendingUnknownWrite_ && (curHasReads || curHasWrites))
+        return true;
+    if (pendingUnknownRead_ && curHasWrites)
+        return true;
+    if (curUnknownWrite_ && (pendingWriteCount_ > 0 || pendingReadCount_ > 0))
+        return true;
+    if (curUnknownRead_ && pendingWriteCount_ > 0)
+        return true;
+    for (uint32_t i = 0; i < curReadCount_; ++i)
+        if (overlapsList(curReads_[i], pendingWrites_, pendingWriteCount_))
+            return true;
+    for (uint32_t i = 0; i < extraReadCount; ++i)
+        if (overlapsList(extraReads[i], pendingWrites_, pendingWriteCount_))
+            return true;
+    for (uint32_t i = 0; i < curWriteCount_; ++i)
+        if (overlapsList(curWrites_[i], pendingWrites_, pendingWriteCount_) ||
+            overlapsList(curWrites_[i], pendingReads_, pendingReadCount_))
+            return true;
+    return false;
+}
+
+void ComputeEncoder::recordDispatchAccesses(const AccessRange *extraReads, uint32_t extraReadCount)
+{
+    const auto appendRange = [](AccessRange *dst, uint32_t &count, bool &unknown, const AccessRange &r) {
+        if (r.lo >= r.hi)
+            return;
+        for (uint32_t i = 0; i < count; ++i)
+            if (dst[i].lo == r.lo && dst[i].hi == r.hi)
+                return;
+        if (count < kHazardRanges)
+            dst[count++] = r;
+        else
+            unknown = true;
+    };
+    pendingUnknownRead_ |= curUnknownRead_;
+    pendingUnknownWrite_ |= curUnknownWrite_;
+    for (uint32_t i = 0; i < curReadCount_; ++i)
+        appendRange(pendingReads_, pendingReadCount_, pendingUnknownRead_, curReads_[i]);
+    for (uint32_t i = 0; i < extraReadCount; ++i)
+        appendRange(pendingReads_, pendingReadCount_, pendingUnknownRead_, extraReads[i]);
+    for (uint32_t i = 0; i < curWriteCount_; ++i)
+        appendRange(pendingWrites_, pendingWriteCount_, pendingUnknownWrite_, curWrites_[i]);
 }
 
 Predication::Answer ComputeEncoder::startIf(uint64_t wordVa, PredicateCompare compare, uint32_t reference)
@@ -384,7 +448,31 @@ bool ComputeEncoder::prepareDescriptors(const char **why)
     // A refused rebuild may have changed scratch words/residuals. Never let it make the previous cache entry appear valid.
     setVa_ = rootVa_ = 0;
     describedState_ = nullptr;
+    curReadCount_ = 0;
+    curWriteCount_ = 0;
     const PackKernel &r = *state_->rec;
+    curUnknownRead_ = curUnknownWrite_ =
+        r.heapArrays || r.rootSlots || r.rootTableWord || r.statusWord;
+    const auto noteAccess = [&](bool writes, uint64_t lo, uint64_t bytes) {
+        if (!lo || !bytes)
+            return;
+        const AccessRange range{lo, lo + bytes};
+        const auto add = [&](AccessRange *dst, uint32_t &count, bool &unknown) {
+            for (uint32_t k = 0; k < count; ++k)
+                if (dst[k].lo == range.lo && dst[k].hi == range.hi)
+                    return;
+            if (count < kHazardRanges)
+                dst[count++] = range;
+            else
+                unknown = true;
+        };
+        if (writes) {
+            add(curWrites_, curWriteCount_, curUnknownWrite_);
+            add(curReads_, curReadCount_, curUnknownRead_);
+        } else {
+            add(curReads_, curReadCount_, curUnknownRead_);
+        }
+    };
     const uint32_t setBytes = std::max<uint32_t>((r.setBytes + 255) & ~255u, 256);
     descriptorWords_.assign(setBytes / 4, 0);
     uint32_t *set = descriptorWords_.data();
@@ -418,10 +506,13 @@ bool ComputeEncoder::prepareDescriptors(const char **why)
         uint32_t *at = set + e.offset / 4;
         if (e.kind == KernelBuffer) {
             const Bound &b = bufs_[e.slot];
-            if (b.buffer)
+            if (b.buffer) {
                 cb_.use(*b.buffer, writes);
-            else if (!b.kernelMemory)
+                noteAccess(writes, b.buffer->va, b.buffer->length);
+            } else if (!b.kernelMemory) {
                 cb_.useAddress(b.va, b.size, writes);
+                noteAccess(writes, b.va, b.size);
+            }
             BufferDescriptor desc;
             kernelBufferDescriptor(e, b.va, b.size, desc);
             if (spilledWord(desc.word)) {
@@ -464,8 +555,14 @@ bool ComputeEncoder::prepareDescriptors(const char **why)
             }
             if (t) {
                 cb_.use(*t, writes);
-                if (t->sampled)
+                const auto st = t->storageRange();
+                noteAccess(writes, st.bytes ? st.va : t->va, st.bytes ? st.bytes : fusionImageBytes(*t));
+                if (t->sampled) {
                     cb_.use(*t->sampled, writes);
+                    const auto ss = t->sampled->storageRange();
+                    noteAccess(writes, ss.bytes ? ss.va : t->sampled->va,
+                               ss.bytes ? ss.bytes : fusionImageBytes(*t->sampled));
+                }
             }
             uint32_t tic = t ? t->tic : 0;
             const bool cubeAsArray =
@@ -502,6 +599,7 @@ bool ComputeEncoder::prepareDescriptors(const char **why)
             *why = "a kernel record entry of a kind the driver does not bind";
             return false;
         } else if (e.kind == KernelTextureTable || e.kind == KernelSamplerTable) {
+            curUnknownRead_ = curUnknownWrite_ = true;
             tableDescriptor(dev_, e, at);
         } else if (kernelSamplerPairsKnown(e)) {
             uint32_t tsc = 0;
@@ -688,8 +786,25 @@ bool ComputeEncoder::icbBinds(const ComputeState &k, uint64_t va, std::vector<ic
     return true;
 }
 
+uint32_t ComputeEncoder::activeRootBytes(const ComputeState &k, const PackKernel &r, uint32_t residualMask,
+                                         bool indirectStageIn)
+{
+    bool usesPush = r.pushMask != 0 || residualMask != 0 || r.regionWord >= 0 || k.argumentMask != 0 ||
+                    (r.rootSlots && r.rootTableWord && r.rootTableWord <= 31) ||
+                    (r.stageInRegionWord && r.stageInRegionWord - 1u + 8u <= 32) ||
+                    (indirectStageIn && r.stageInRegionWord && r.stageInRegionWord + 7u <= 32);
+    if (!usesPush) {
+        for (const auto &stride : r.stageInStride)
+            if (stride[1] && stride[1] <= 32) {
+                usesPush = true;
+                break;
+            }
+    }
+    return usesPush ? kRootBytes : 256u;
+}
+
 bool ComputeEncoder::qmdWords(const ComputeState &k, const uint32_t groups[3], uint64_t rootVa, uint64_t setVa,
-                              uint32_t *qmd, const char **why)
+                              uint32_t *qmd, const char **why, uint32_t rootBytes)
 {
     memcpy(qmd, k.rec->qmd, sizeof k.rec->qmd);
     qmd[kQmdProgramOffset] = k.program;
@@ -699,7 +814,8 @@ bool ComputeEncoder::qmdWords(const ComputeState &k, const uint32_t groups[3], u
         if (!(qmd[kQmdCbufValid] >> i & 1))
             continue;
         uint64_t va = 0;
-        switch (cbufKind(k.cbufType[i])) {
+        const uint8_t kind = cbufKind(k.cbufType[i]);
+        switch (kind) {
         case CbufRoot:
             va = rootVa;
             break;
@@ -714,7 +830,10 @@ bool ComputeEncoder::qmdWords(const ComputeState &k, const uint32_t groups[3], u
             return false;
         }
         qmd[qmdCbufLo(i)] = uint32_t(va);
-        qmd[qmdCbufLo(i) + 1] = (qmd[qmdCbufLo(i) + 1] & ~0xffu) | uint32_t(va >> 32);
+        uint32_t hi = (qmd[qmdCbufLo(i) + 1] & ~0xffu) | uint32_t(va >> 32);
+        if (kind == CbufRoot)
+            hi = (hi & ~(0x1ffffu << kQmdCbufSizeShift)) | (rootBytes << kQmdCbufSizeShift);
+        qmd[qmdCbufLo(i) + 1] = hi;
     }
     return true;
 }
@@ -771,9 +890,16 @@ bool ComputeEncoder::dispatchRegion(const ComputeRegion &part, const std::array<
         pieces = std::min(probeBands(state_->rate, units, pieces, first && last && dispatches_ == 0), pieceCap);
     }
     emitKindSwitch();
-    if (serial_ && dispatched_ && first)
+    AccessRange extras[1];
+    uint32_t extraCount = 0;
+    if (stageInRegion_)
+        extras[extraCount++] = {stageInRegion_->va + stageInRegionOffset_,
+                                stageInRegion_->va + stageInRegionOffset_ + 24};
+    if (serial_ && dispatched_ && first && (looping || dispatchHasHazard(extras, extraCount)))
         barrier();
     dispatched_ = true;
+    if (first)
+        recordDispatchAccesses(extras, extraCount);
     if (pieces > 1 && cb_.batchWork_.operations) {
         if (progressVa) {
             room(kProgressReleaseWords);
@@ -845,21 +971,25 @@ bool ComputeEncoder::launch(const std::array<uint32_t, 3> &grid, const DispatchP
 {
     const PackKernel &r = *state_->rec;
     if (!rootVa_ || stageInRegion_ || grid_ != grid || base_ != piece.base || region_ != region) {
-        uint32_t root[kRootBytes / 4] = {};
+        const uint32_t rootBytes = activeRootBytes(*state_, r, residualMask_, stageInRegion_ != nullptr);
+        uint32_t root[kRootBytes / 4];
+        memset(root, 0, rootBytes);
         rootWords(r, piece.base.data(), grid.data(), setVa_, residualMask_, residuals_, region.data(), root);
         argumentRoot(r, root);
-        stageInWords(r, stageIn_, root + kRootPush / 4);
-        uint8_t *upload = dev_.alloc(dev_.upload_, kRootBytes, 256, rootVa_);
-        memcpy(upload, root, sizeof root);
+        if (rootBytes > kRootPush)
+            stageInWords(r, stageIn_, root + kRootPush / 4);
+        uint8_t *upload = dev_.alloc(dev_.upload_, rootBytes, 256, rootVa_);
+        memcpy(upload, root, rootBytes);
+        rootBytes_ = rootBytes;
         grid_ = grid;
         base_ = piece.base;
         region_ = region;
-        SWITCH_METAL_DIAGNOSTIC(dev_.stats.uploadBytes += kRootBytes);
+        SWITCH_METAL_DIAGNOSTIC(dev_.stats.uploadBytes += rootBytes);
         stageInFromMemory(r, rootVa_);
     }
     uint64_t qmdVa = 0;
     uint32_t qmd[kQmdWords];
-    if (!qmdWords(*state_, piece.groups.data(), rootVa_, setVa_, qmd, why))
+    if (!qmdWords(*state_, piece.groups.data(), rootVa_, setVa_, qmd, why, rootBytes_))
         return false;
 #if defined(SWITCH_METAL_HARNESS_MARKS)
     if (benchQmd && !benchQmd(qmd))
@@ -964,7 +1094,9 @@ void ComputeEncoder::end()
         emitStamp(p_, dev_.stamps_.va + drawStampOffset(candidate_.slot, true), candidate_.payload);
         cb_.timings.push_back(candidate_);
     }
-    computeToGraphics(p_, true);
+    if (dispatched_)
+        computeRelease(p_);
+    cb_.computeReleased_ = true;
     cb_.loops_.closeSegment(stream());
     dev_.push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - dev_.push_.bo.cpu);
     SWITCH_METAL_DIAGNOSTIC(dev_.stats.pushBytes += uint64_t(p_.at - start_) * 4);

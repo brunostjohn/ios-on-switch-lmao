@@ -36,7 +36,7 @@ public:
         };
 
         static thread_local Member member{this};
-        std::lock_guard<gm20b::Mutex> l(lock_);
+        std::lock_guard<gm20b::UnfairMutex> l(lock_);
         threads_.push_back(pthread_self());
         if (policy_ != SCHED_OTHER)
             pthread_setschedparam(pthread_self(), policy_, &param_);
@@ -55,7 +55,7 @@ public:
         if (pthread_getschedparam(pthread_self(), &policy, &param) != 0 || policy == SCHED_OTHER)
             return;
         fixed = true;
-        std::lock_guard<gm20b::Mutex> l(lock_);
+        std::lock_guard<gm20b::UnfairMutex> l(lock_);
         if (policy_ != SCHED_OTHER && param.sched_priority <= param_.sched_priority)
             return;
         policy_ = policy;
@@ -66,14 +66,14 @@ public:
 
     bool isFixed()
     {
-        std::lock_guard<gm20b::Mutex> l(lock_);
+        std::lock_guard<gm20b::UnfairMutex> l(lock_);
         return policy_ != SCHED_OTHER;
     }
 
     void initAttr(pthread_attr_t *attr)
     {
         pthread_attr_init(attr);
-        std::lock_guard<gm20b::Mutex> l(lock_);
+        std::lock_guard<gm20b::UnfairMutex> l(lock_);
         if (policy_ != SCHED_OTHER) {
             pthread_attr_setinheritsched(attr, PTHREAD_EXPLICIT_SCHED);
             pthread_attr_setschedpolicy(attr, policy_);
@@ -86,11 +86,11 @@ public:
 private:
     void leave(pthread_t self)
     {
-        std::lock_guard<gm20b::Mutex> l(lock_);
+        std::lock_guard<gm20b::UnfairMutex> l(lock_);
         threads_.erase(std::remove(threads_.begin(), threads_.end(), self), threads_.end());
     }
 
-    gm20b::Mutex lock_;
+    gm20b::UnfairMutex lock_;
     std::vector<pthread_t> threads_;
     int policy_ = SCHED_OTHER;
     sched_param param_{};

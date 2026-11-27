@@ -113,9 +113,12 @@ bool xrCopyTemps(SwitchMetalTexture *a, SwitchMetalTexture *b)
     if (!surfaceXr(a) && !surfaceXr(b))
         return true;
     SwitchMetalTexture *image = descriptorXr(a) ? a : b, *owner = image->_levelsOwner ?: image;
-    @synchronized(owner) {
-        return gRM->raw->stencilTemp(owner->_raw);
-    }
+    if (__atomic_load_n(&owner->_raw.stencilTemp, __ATOMIC_ACQUIRE))
+        return true;
+    os_unfair_lock_lock(&owner->_auxLock);
+    const bool made = gRM->raw->stencilTemp(owner->_raw);
+    os_unfair_lock_unlock(&owner->_auxLock);
+    return made;
 }
 
 bool copyXrPlanes(gm20b::CommandBuffer *rc, gm20b::BlitEncoder *be, const void *srcKey, const void *dstKey,

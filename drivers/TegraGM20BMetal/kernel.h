@@ -342,7 +342,7 @@ public:
 
     std::string error() const
     {
-        std::lock_guard<gm20b::Mutex> lock(errorLock_);
+        std::lock_guard<gm20b::UnfairMutex> lock(errorLock_);
         return err_;
     }
 
@@ -382,7 +382,7 @@ private:
 #endif
     void setError(std::string error)
     {
-        std::lock_guard<gm20b::Mutex> lock(errorLock_);
+        std::lock_guard<gm20b::UnfairMutex> lock(errorLock_);
         err_ = std::move(error);
     }
 
@@ -401,15 +401,15 @@ private:
     std::atomic<bool> importsWritten_{false};
     std::atomic<uint32_t> lostChannel_{0}, lostError_{0}, opened_{0};
     std::atomic<uint64_t> admissionCookie_{1};
-    gm20b::Mutex lostLock_;  // a channel made, and a channel marked lost, one after the other
+    gm20b::UnfairMutex lostLock_;  // a channel made, and a channel marked lost, one after the other
     std::atomic<uint64_t> lostFaultVa_{0};
     uint64_t fenceMap_ = 0;  // the connection's fence page, mapped once: every channel's word is in it
     uint64_t fenceMapBytes_ = 0;
     uint32_t selector_ = 0;
     TegraGM20BAbiInfo info_ = {};
     std::map<uint64_t, uint64_t> vaFree_;  // start -> bytes, coalesced
-    gm20b::Mutex vaLock_;
-    gm20b::Mutex eventsLock_;
+    gm20b::UnfairMutex vaLock_;
+    gm20b::UnfairMutex eventsLock_;
     std::shared_ptr<SharedEvents> events_;
     std::atomic<uint64_t> vaUsed_{0};
     std::atomic<uint64_t> allocated_{0};
@@ -417,7 +417,7 @@ private:
     // give-back line on another: a count of their own, as allocated_ is, not their BOs' fields
     std::atomic<uint64_t> controlMapped_{0};
     std::string err_;
-    mutable gm20b::Mutex errorLock_;
+    mutable gm20b::UnfairMutex errorLock_;
 };
 
 // Whether the calling thread's last Kernel::submitJob, asked to end quiet, ends with its own interrupt all the same

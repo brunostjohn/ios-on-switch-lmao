@@ -194,7 +194,8 @@ Device::Backing *Device::compBacking(const Texture &m, uint32_t tag, uint32_t ki
         const FormatInfo *f = formatInfo(m.format);
         uint32_t w[8];
         fx::mipChainTic(c, t.va, f->tic0, f->srgb, 0, 1, w);
-        memcpy(tic_.cpu + 32 * t.tic, w, 32);  // visible at the next submission's header invalidate
+        memcpy(tic_.cpu + 32 * t.tic, w, 32);
+        noteTicWrite();
     }
     auto *b = new Backing;
     b->texture = t;

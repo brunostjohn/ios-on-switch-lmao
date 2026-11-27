@@ -38,7 +38,7 @@ public:
     ~HandoffQueue()
     {
         for (std::atomic<Node *> &chunk : chunks_)
-            delete[] chunk.load();
+            delete[] chunk.load(std::memory_order_relaxed);
     }
 
     HandoffQueue(const HandoffQueue &) = delete;

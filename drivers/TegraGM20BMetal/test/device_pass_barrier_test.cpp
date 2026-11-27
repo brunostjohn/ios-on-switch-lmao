@@ -239,9 +239,6 @@ TEST_F(DevicePassBarrier, APassOfStorageFormsKeepsTheDrain)
     EXPECT_EQ(std::count(m.begin(), m.end(), kPixelShaderBarrier), 0);
 }
 
-// A Core Animation scale frame (boot 21: 15 passes, each a BGRA8 target of its own and a memoryless RGBA16F c1, four of
-// 55 textures sampled a pass): the passes open with PIXEL_SHADER_BARRIER but where one samples the full-size target a pass
-// since the last drain rendered (a glass backdrop), which no held cell covers and keeps the drain
 TEST_F(DevicePassBarrier, ACompositorFrameDrainsOnlyWhereAPassReadsAnEarlierOnesTarget)
 {
     constexpr uint32_t kPasses = 15, kTextures = 55;
@@ -280,18 +277,69 @@ TEST_F(DevicePassBarrier, ACompositorFrameDrainsOnlyWhereAPassReadsAnEarlierOnes
     uint32_t seqno = 0;
     ASSERT_TRUE(cb->commit(seqno));
     const std::vector<uint32_t> m = methods(kernel_model::model.jobs.back().words);
-    EXPECT_EQ(std::count(m.begin(), m.end(), kPixelShaderBarrier), long(kPasses - 1 - 3));
-    EXPECT_EQ(std::count(m.begin(), m.end(), kWaitForIdle), 3) << "the three passes that sample a backdrop";
+    EXPECT_EQ(std::count(m.begin(), m.end(), kPixelShaderBarrier), long(kPasses - 1));
+    EXPECT_EQ(std::count(m.begin(), m.end(), kWaitForIdle), 0);
 }
 
-TEST_F(DevicePassBarrier, AFullSizeTargetKeepsTheDrain)
+TEST_F(DevicePassBarrier, AFullSizeTargetTakesPixelBarrierForFsAndDrainsForVs)
 {
     const auto read = twoPasses(big, half, &big, true);
-    EXPECT_EQ(read.first, 0u);
-    EXPECT_EQ(read.second, 1u);
+    EXPECT_EQ(read.first, 1u);
+    EXPECT_EQ(read.second, 0u);
     const auto unrelated = twoPasses(big, half, nullptr, true);
     EXPECT_EQ(unrelated.first, 0u);
     EXPECT_EQ(unrelated.second, 0u);
+
+    gm20b::CommandBuffer *cb = dev.begin();
+    ASSERT_NE(cb, nullptr);
+    gm20b::PassUses aUses;
+    aUses.known = true;
+    gm20b::RenderEncoder *a = cb->render(cleared(big));
+    a->plan(aUses);
+    a->end();
+    gm20b::PassUses bUses;
+    bUses.known = true;
+    bUses.sample(gm20b::hazardImage(big), true);
+    gm20b::RenderEncoder *b = cb->render(cleared(half));
+    b->plan(bUses);
+    b->end();
+    uint32_t seqno = 0;
+    ASSERT_TRUE(cb->commit(seqno));
+    const std::vector<uint32_t> m = methods(kernel_model::model.jobs.back().words);
+    EXPECT_EQ(std::count(m.begin(), m.end(), kPixelShaderBarrier), 0);
+    EXPECT_EQ(std::count(m.begin(), m.end(), kWaitForIdle), 1);
+}
+
+TEST_F(DevicePassBarrier, EntryGatesHeaderAndSamplerInvalidatesOnDirtyPool)
+{
+    const auto entryInvalidates = [&]() -> std::pair<size_t, size_t> {
+        gm20b::CommandBuffer *cb = dev.begin();
+        EXPECT_NE(cb, nullptr);
+        cb->render(cleared(atlas))->end();
+        uint32_t seqno = 0;
+        EXPECT_TRUE(cb->commit(seqno));
+        const std::vector<uint32_t> m = methods(kernel_model::model.jobs.back().words);
+        return {size_t(std::count(m.begin(), m.end(), kHeaderCache)),
+                size_t(std::count(m.begin(), m.end(), kSamplerCache))};
+    };
+    const auto first = entryInvalidates();
+    EXPECT_EQ(first.first, 1u);
+    EXPECT_EQ(first.second, 1u);
+    const auto clean = entryInvalidates();
+    EXPECT_EQ(clean.first, 0u);
+    EXPECT_EQ(clean.second, 0u);
+    gm20b::Texture extra;
+    ASSERT_TRUE(dev.createTexture(32, 32, kBgra8, extra));
+    const auto afterTic = entryInvalidates();
+    EXPECT_EQ(afterTic.first, 1u);
+    EXPECT_EQ(afterTic.second, 0u);
+    gm20b::Sampler sampler;
+    ASSERT_TRUE(dev.createSampler({}, sampler));
+    const auto afterTsc = entryInvalidates();
+    EXPECT_EQ(afterTsc.first, 0u);
+    EXPECT_EQ(afterTsc.second, 1u);
+    dev.destroySampler(sampler);
+    dev.destroyTexture(extra);
 }
 
 TEST_F(DevicePassBarrier, VolatilePitchBufferTextureTargetKeepsTheDrain)
@@ -345,11 +393,27 @@ TEST_F(DevicePassBarrier, FallbackDrainAvoidsDoubleWfiAndDropsConstantsOnlyAfter
         return values;
     };
 
-    const auto read = twoPasses(big, half, &big, true);
-    EXPECT_EQ(read.first, 0u);
-    EXPECT_EQ(read.second, 1u);
+    {
+        gm20b::CommandBuffer *cb = dev.begin();
+        ASSERT_NE(cb, nullptr);
+        gm20b::PassUses aUses;
+        aUses.known = true;
+        gm20b::RenderEncoder *a = cb->render(cleared(big));
+        a->plan(aUses);
+        a->end();
+        gm20b::PassUses bUses;
+        bUses.known = true;
+        bUses.sample(gm20b::hazardImage(big), true);
+        gm20b::RenderEncoder *b = cb->render(cleared(half));
+        b->plan(bUses);
+        b->end();
+        uint32_t seqno = 0;
+        ASSERT_TRUE(cb->commit(seqno));
+    }
     const std::vector<uint32_t> &ropWords = kernel_model::model.jobs.back().words;
     const std::vector<uint32_t> ropMethods = methods(ropWords);
+    EXPECT_EQ(std::count(ropMethods.begin(), ropMethods.end(), kPixelShaderBarrier), 0);
+    EXPECT_EQ(std::count(ropMethods.begin(), ropMethods.end(), kWaitForIdle), 1);
     EXPECT_EQ(std::count(ropMethods.begin(), ropMethods.end(), kShaderCaches), 0);
     const std::vector<uint32_t> ropNoWfi = shaderInvalValues(ropWords, kShaderCachesNoWfi);
     ASSERT_GE(ropNoWfi.size(), 2u);
@@ -372,7 +436,7 @@ TEST_F(DevicePassBarrier, FallbackDrainAvoidsDoubleWfiAndDropsConstantsOnlyAfter
     ASSERT_TRUE(cb->commit(seqno));
     const std::vector<uint32_t> &bufWords = kernel_model::model.jobs.back().words;
     const std::vector<uint32_t> bufMethods = methods(bufWords);
-    EXPECT_EQ(std::count(bufMethods.begin(), bufMethods.end(), kWaitForIdle), 1);
+    EXPECT_EQ(std::count(bufMethods.begin(), bufMethods.end(), kWaitForIdle), 0);
     EXPECT_EQ(std::count(bufMethods.begin(), bufMethods.end(), kShaderCaches), 1);
     const std::vector<uint32_t> bufNoWfi = shaderInvalValues(bufWords, kShaderCachesNoWfi);
     ASSERT_GE(bufNoWfi.size(), 2u);

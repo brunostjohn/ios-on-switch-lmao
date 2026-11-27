@@ -90,7 +90,7 @@ void RenderEncoder::clears(std::vector<Clear> &out, bool fused)
     const uint32_t perRow = (areaW_ + kTile - 1) / kTile, rows = (areaH_ + kTile - 1) / kTile;
     std::vector<bool> &tiles = tiles_;
     tiles.clear();
-    if (reach == Draws && !whole_ && perRow && rows) {
+    if (reach == Draws && trackRects_ && !whole_ && perRow && rows) {
         bool every = false;
         for (const auto &r : rects_)
             every |= r[0] < kTile && r[1] < kTile && (r[2] + kTile - 1) / kTile >= perRow &&
@@ -106,6 +106,8 @@ void RenderEncoder::clears(std::vector<Clear> &out, bool fused)
             else if (std::find(tiles.begin(), tiles.end(), true) == tiles.end())
                 reach = Nothing;
         }
+    } else if (reach == Draws && !whole_ && reached_.empty()) {
+        reach = Nothing;
     }
     static const float zero[4] = {};
     for (uint32_t j = 0; j < pass_.count && j < 8; j++) {

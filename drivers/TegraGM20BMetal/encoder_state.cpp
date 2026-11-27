@@ -149,10 +149,10 @@ bool RenderEncoder::writeClipControl(Push &p, const Pipeline &pl, const Raster &
                              topDepthBias(raster.bias, bitsFloat(raster.biasConstant), bitsFloat(raster.biasSlope),
                                           bitsFloat(raster.biasClamp), unit));
         const uint32_t range[2] = {floatBits(bounds.lo), floatBits(bounds.hi)};
-        if (!clampRangeHeld_ || memcmp(range, clampRange_, sizeof range)) {
+        if (!cb_->clampRangeHeld_ || memcmp(range, cb_->clampRange_, sizeof range)) {
             writeClipDepthRange(p, range);
-            memcpy(clampRange_, range, sizeof range);
-            clampRangeHeld_ = true;
+            memcpy(cb_->clampRange_, range, sizeof range);
+            cb_->clampRangeHeld_ = true;
         }
     } else {
         unclampDepthRange(p);
@@ -165,17 +165,17 @@ void RenderEncoder::writeClipDepthRange(Push &p, const uint32_t range[2])
     p.m(NVB197_SET_VIEWPORT_CLIP_MIN_Z(0), range[0]);
     p.m(NVB197_SET_VIEWPORT_CLIP_MAX_Z(0), range[1]);
     // the channel holds the last drawn state's segment, whose registers hold the range only where it names it
-    if (!emitted_ || emitted_->namesViewportClipRange)
+    if (emitted_ && emitted_->namesViewportClipRange)
         cb_->heldSegment_.lose();
 }
 
 void RenderEncoder::unclampDepthRange(Push &p)
 {
-    if (!clampRangeHeld_)
+    if (!cb_->clampRangeHeld_)
         return;
     const uint32_t unbounded[2] = {floatBits(-INFINITY), floatBits(INFINITY)};
     writeClipDepthRange(p, unbounded);
-    clampRangeHeld_ = false;
+    cb_->clampRangeHeld_ = false;
 }
 
 }  // namespace gm20b

@@ -168,7 +168,7 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
     };
     bool wholeQuad = instances == 1 && written_.lastNonOverlappingQuad();
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    if (dev_->probeFetchRung.load(std::memory_order_relaxed) == kProbeBlendTwinTriangles)
+    if (probeFetchRung_ == kProbeBlendTwinTriangles)
         wholeQuad = false;
 #endif
     if (ordered && !wholeQuad) {
@@ -217,7 +217,7 @@ bool RenderEncoder::orderedFetch(const Pipeline &pl, const FetchDraw &shape) con
     if (!fetchesOwnColor(pl.fetchBits, pl.writeBits, pl.storageBits) || (!shape.indirect && singlePrimitive(shape)))
         return false;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    if (dev_->probeFetchRung.load(std::memory_order_relaxed) == kProbeBlendTwinWhole)
+    if (probeFetchRung_ == kProbeBlendTwinWhole)
         return false;
 #endif
     return true;
@@ -243,12 +243,13 @@ void RenderEncoder::fetchDraw(uint32_t primitive, bool indexed, uint32_t first, 
 #endif
 }
 
-StorageFallback RenderEncoder::storageFallback(const Pipeline &pl) const
+StorageFallback RenderEncoder::storageFallback(const Pipeline &pl, const Pipeline *barrierTwin) const
 {
     if (!pl.storageBits)
         return StorageFallback::None;
-    if (const Pipeline *twin = __atomic_load_n(&pl.barrierTwin, __ATOMIC_ACQUIRE);
-        twin && fetchesOnlyUnwritten(pl.fetchBits, pl.writeBits, pl.storageWriteBits, twin->fetchBits, twin->writeBits))
+    if (barrierTwin &&
+        fetchesOnlyUnwritten(pl.fetchBits, pl.writeBits, pl.storageWriteBits, barrierTwin->fetchBits,
+                             barrierTwin->writeBits))
         return StorageFallback::ReadOnly;
     StorageFallback reason = StorageFallback::None;
     for (uint32_t slot = 0; slot < 8 && reason == StorageFallback::None; slot++)
@@ -284,7 +285,7 @@ Pipeline *RenderEncoder::fetchFreeFor(const Pipeline &pl, [[maybe_unused]] Stora
                        blended != cb_->serial;
     uint8_t forced = 0;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    forced = dev_->probeFetchRung.load(std::memory_order_relaxed);
+    forced = probeFetchRung_;
 #endif
     SWITCH_METAL_DIAGNOSTIC(if (route) {
         route->free = FreeMiss::Rule;
@@ -304,29 +305,30 @@ Pipeline *RenderEncoder::fetchFreeFor(const Pipeline &pl, [[maybe_unused]] Stora
 
 Pipeline *RenderEncoder::formFor(Pipeline *pl, const FetchDraw &shape)
 {
+    if (!pl || (!pl->fetchBits && !pl->storageBits))
+        return pl;
     uint8_t forced = 0;
-    Pipeline *blendTwin = pl ? __atomic_load_n(&pl->blendTwin, __ATOMIC_ACQUIRE) : nullptr;
-    Pipeline *barrierTwin = pl ? __atomic_load_n(&pl->barrierTwin, __ATOMIC_ACQUIRE) : nullptr;
+    Pipeline *blendTwin = pl->storageBlendBits ? __atomic_load_n(&pl->blendTwin, __ATOMIC_ACQUIRE) : nullptr;
+    Pipeline *barrierTwin = pl->storageBits ? __atomic_load_n(&pl->barrierTwin, __ATOMIC_ACQUIRE) : nullptr;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    forced = dev_->probeFetchRung.load(std::memory_order_relaxed);
-    if (pl && (forced == kProbeBlendTwinTriangles || forced == kProbeBlendTwinWhole))
+    forced = probeFetchRung_;
+    if (forced == kProbeBlendTwinTriangles || forced == kProbeBlendTwinWhole)
         if (Pipeline *twin = blendTwin ? blendTwin : barrierTwin) {
             dev_->stats.fetch.blendTwin++;
             return twin;
         }
 #endif
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    if (pl && pl->storageBits && cb_->forms_.barrierFetch)
+    if (pl->storageBits && cb_->forms_.barrierFetch)
         if (Pipeline *twin = barrierTwin ? barrierTwin : blendTwin)
             return twin;
 #endif
     StorageRoute route;
-    if (pl)
-        if (Pipeline *free = fetchFreeFor(*pl, SWITCH_METAL_STATS ? &route : nullptr))
-            return free;
-    if (!pl || !pl->storageBits) {
+    if (Pipeline *free = fetchFreeFor(*pl, SWITCH_METAL_STATS ? &route : nullptr))
+        return free;
+    if (!pl->storageBits) {
 #if SWITCH_METAL_STATS
-        if (pl && pl->fetchBits && pl->rec) {
+        if (pl->fetchBits && pl->rec) {
             route.key = pl->rec->keyHash;
             route.barrier = true;
             route.triangles = triangles(shape);
@@ -336,7 +338,7 @@ Pipeline *RenderEncoder::formFor(Pipeline *pl, const FetchDraw &shape)
 #endif
         return pl;
     }
-    const StorageFallback reason = storageFallback(*pl);
+    const StorageFallback reason = storageFallback(*pl, barrierTwin);
     if (reason == StorageFallback::None) {
         Pipeline *twin = blendTwin ? blendTwin : barrierTwin;
         if (forced || !twin || !twinTaken({shape, twin->primitiveId, uint64_t(areaW_) * areaH_, amplifications_ > 1})) {
@@ -405,6 +407,7 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
     const uint64_t fetchEnd = offset < ib->length ? (ib->length + 3) & ~uint64_t(3) : ib->length,
                    inside = fetchEnd > offset ? (fetchEnd - offset) / indexSize : 0;
     Buffer zero;
+    zero.hostVisible = false;
     drawIndexCpuSafe_ = false;
     // the index fetch's last byte: the draw's last index where the buffer holds every one, else the buffer's fetch end,
     // the hardware reading index 0 past it (caps row 3D-B11); a draw of no index the buffer holds reads the zero page under
@@ -471,7 +474,7 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
     };
     bool wholeQuad = instances == 1 && written_.lastNonOverlappingQuad();
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    if (dev_->probeFetchRung.load(std::memory_order_relaxed) == kProbeBlendTwinTriangles)
+    if (probeFetchRung_ == kProbeBlendTwinTriangles)
         wholeQuad = false;
 #endif
     if (ordered && !wholeQuad) {

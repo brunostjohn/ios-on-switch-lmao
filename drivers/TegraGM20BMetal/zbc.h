@@ -191,7 +191,7 @@ public:
     // thread that asks)
     bool lookup(const TegraGM20BAbiZbc &e, bool &wanted)
     {
-        std::lock_guard<gm20b::Mutex> l(lock_);
+        std::lock_guard<gm20b::UnfairMutex> l(lock_);
         wanted = false;
         Entry *x = find(e);
         if (!x) {
@@ -209,7 +209,7 @@ public:
     // The next entry to ask the kernel for, now Asking
     bool next(TegraGM20BAbiZbc &e)
     {
-        std::lock_guard<gm20b::Mutex> l(lock_);
+        std::lock_guard<gm20b::UnfairMutex> l(lock_);
         for (uint32_t i = 0; i < count_; i++)
             if (entries_[i].state == Wanted) {
                 entries_[i].state = Asking;
@@ -221,7 +221,7 @@ public:
 
     void answer(const TegraGM20BAbiZbc &e, bool held)
     {
-        std::lock_guard<gm20b::Mutex> l(lock_);
+        std::lock_guard<gm20b::UnfairMutex> l(lock_);
         if (Entry *x = find(e))
             x->state = held ? Held : Refused;
     }
@@ -230,7 +230,7 @@ public:
     // met: the table is never emptied, so that one alone is worth a line
     bool firstFull(uint32_t type)
     {
-        std::lock_guard<gm20b::Mutex> l(lock_);
+        std::lock_guard<gm20b::UnfairMutex> l(lock_);
         bool &said = fullSaid_[type == TegraGM20BZbcDepth];
         const bool first = !said;
         said = true;
@@ -239,7 +239,7 @@ public:
 
     bool pending()
     {
-        std::lock_guard<gm20b::Mutex> l(lock_);
+        std::lock_guard<gm20b::UnfairMutex> l(lock_);
         for (uint32_t i = 0; i < count_; i++)
             if (entries_[i].state == Wanted)
                 return true;
@@ -249,7 +249,7 @@ public:
     // An entry wanted or in the kernel's hands, not yet added or refused
     bool unanswered()
     {
-        std::lock_guard<gm20b::Mutex> l(lock_);
+        std::lock_guard<gm20b::UnfairMutex> l(lock_);
         for (uint32_t i = 0; i < count_; i++)
             if (entries_[i].state == Wanted || entries_[i].state == Asking)
                 return true;
@@ -293,7 +293,7 @@ private:
         return nullptr;
     }
 
-    gm20b::Mutex lock_;
+    gm20b::UnfairMutex lock_;
     Entry entries_[kEntries] = {};
     uint32_t count_ = 0, evict_ = 0, evictRefused_ = 0;
     bool fullSaid_[2] = {};

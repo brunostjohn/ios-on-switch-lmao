@@ -122,6 +122,9 @@ host_test(
         "switch_frame_timeline_test.cpp",
         "//drivers/TegraGM20BMetal:plugin/SwitchFrameTimeline.h",
     ],
-    copts = ["-Idrivers/TegraGM20BMetal/plugin"],
+    copts = [
+        "-Idrivers/TegraGM20BMetal/plugin",
+        "-DSWITCH_STATS_FRAME=1",
+    ],
     cxx_std = "c++17",
 )

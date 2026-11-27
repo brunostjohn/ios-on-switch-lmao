@@ -70,17 +70,9 @@ static void splice(SwitchMetalCommandBuffer *cb, SwitchMetalSubRecorder *s)
         cb->_predA = s->_predA;
         cb->_predB = s->_predB;
     }
-    if (s->_segError.set()) {
-        NSError *error = nil;
-        {
-            std::lock_guard<gm20b::Mutex> l(s->_lock);
-            error = s->_segError;
-        }
-        std::lock_guard<gm20b::Mutex> l(cb->_lock);
-        if (!cb->_segError.set()) {
-            cb->_segError = error;
-            cb->_failedBy = s->_failedBy;
-        }
+    if (s->_segError.set() && !cb->_segError.set()) {
+        cb->_segError = static_cast<NSError *>(s->_segError);
+        cb->_failedBy = s->_failedBy;
     }
     [cb closeEncoder];
     cb->_encAt = cb->_plan.size();
@@ -96,7 +88,7 @@ static void splice(SwitchMetalCommandBuffer *cb, SwitchMetalSubRecorder *s)
 @implementation SwitchMetalParallelRenderEncoder {
 @public
     MTLRenderPassDescriptor *_descriptor;
-    gm20b::Mutex _lock;
+    gm20b::UnfairMutex _lock;
     std::vector<SwitchMetalSubRecorder *> _subs;
 }
 
@@ -107,7 +99,7 @@ static void splice(SwitchMetalCommandBuffer *cb, SwitchMetalSubRecorder *s)
     s->_commandLog = &s->_log;
     s->_device = _device;
     s->_queue = _cb->_queue;
-    s->_status = MTLCommandBufferStatusNotEnqueued;
+    s->_status.store(MTLCommandBufferStatusNotEnqueued, std::memory_order_relaxed);
     SwitchMetalRenderEncoder *e = (SwitchMetalRenderEncoder *)[s renderCommandEncoderWithDescriptor:_descriptor];
     gm20bOwnPass(e);  // its seam changes its pass's loads and stores
     s->_encoder = e;
@@ -118,7 +110,7 @@ static void splice(SwitchMetalCommandBuffer *cb, SwitchMetalSubRecorder *s)
 
 - (id<MTLRenderCommandEncoder>)renderCommandEncoder
 {
-    std::lock_guard<gm20b::Mutex> hold(_lock);
+    std::lock_guard<gm20b::UnfairMutex> hold(_lock);
     return _ended ? nil : (id<MTLRenderCommandEncoder>)[self makeSub];
 }
 
@@ -157,7 +149,7 @@ static void splice(SwitchMetalCommandBuffer *cb, SwitchMetalSubRecorder *s)
 {
     std::vector<SwitchMetalSubRecorder *> subs;
     {
-        std::lock_guard<gm20b::Mutex> hold(_lock);
+        std::lock_guard<gm20b::UnfairMutex> hold(_lock);
         if (_ended)
             return;
         _ended = true;

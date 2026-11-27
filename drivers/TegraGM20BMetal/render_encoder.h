@@ -185,6 +185,8 @@ public:
     {
         ++bindingRevision_;
         moved_.all = true;
+        rootTableVa_[0] = rootTableVa_[1] = 0;
+        rootBufDirty_[0] = rootBufDirty_[1] = ~0u;
     }
 
     void setScissor(uint32_t x, uint32_t y, uint32_t w, uint32_t h);
@@ -533,6 +535,8 @@ private:
         ++bindingRevision_;
         moved_.buffers[stage] |= 1u << slot;
         touched_[0].buffers[stage] |= 1u << slot;
+        if (stage == 1 || stage == 2)
+            rootBufDirty_[stage - 1] |= 1u << slot;
     }
 
     void textureMoved(uint32_t at, uint32_t slot)
@@ -574,8 +578,10 @@ private:
         return samplers_[handleStage(e)][e.sampler];
     }
 
-    // what each vertex stream's location and limit registers hold (vertex_streams.cpp)
+    // what each vertex stream's location, limit and dynamic-stride format registers hold (vertex_streams.cpp)
     uint64_t streamVa_[kPackVertexStreams] = {}, streamLimit_[kPackVertexStreams] = {};
+    uint32_t streamFormat_[kPackVertexStreams] = {};
+    uint32_t streamFormatKnown_ = 0;
     uint64_t ibVa_ = 0, ibEnd_ = 0;
     uint32_t ibSize_ = 0;
     // the state a draw needs but its draw parameters, which its macro call writes (vertices [vFirst, vFirst + vCount) of
@@ -614,6 +620,9 @@ private:
     bool shadowStencil_ = false;  // the draws are a shader-side stencil's (shader_test_push.h shadowStencil)
     bool prepareShaderTests(const Pipeline &pipeline, const char **why);
     uint64_t rootTable(const PackPipeline &r, uint32_t k, bool writes);
+    uint64_t rootTableVa_[2] = {};
+    uint32_t rootTableSlots_[2] = {}, rootBufDirty_[2] = {~0u, ~0u};
+    bool rootTableWrites_[2] = {};
     void copyShaderTests(uint8_t flags, bool toAttachment);
     void endShaderTests();
     // PassDesc::separate's textures and the copy engine's two-byte stand-in for their stencil; the aspects (shader_tests.h
@@ -649,9 +658,7 @@ private:
 
     Raster raster_, rasterHeld_;
     bool depthClamp_ = false;
-    uint32_t clipHeld_ = 0;        // the channel's SET_VIEWPORT_CLIP_CONTROL since the encoder's first bind
-    bool clampRangeHeld_ = false;  // the viewport's clip depth range is a clamp's, clampRange_
-    uint32_t clampRange_[2] = {};
+    uint32_t clipHeld_ = 0;  // the channel's SET_VIEWPORT_CLIP_CONTROL since the encoder's first bind
     void writeRaster(Push &p, const Raster &want);
     // after the state's registers, which may set SET_DEPTH_BIAS_CONTROL
     void writeBiasUnits(Push &p, const Raster &want);
@@ -677,7 +684,16 @@ private:
         {};  // a shadow target's texture, where pass_ holds its pool image (CommandBuffer::render)
     // what m2v's DontCare loads answer (metal2vulkan clear_reach.rs: dont_care_loads, DrawnArea): whether the pass has a draw
     // call and one that draws, the colors its draws read, and the pixels they may write (scissor within viewport, each draw)
-    bool called_ = false, drew_ = false, whole_ = false;
+    bool called_ = false, drew_ = false, whole_ = false, trackRects_ = false;
+    bool passHasVolatileColor_ = false;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    uint8_t probeFetchRung_ = 0;
+    uint8_t fetchBarrierMode_ = 0;
+#endif
+#if SWITCH_METAL_DIAGNOSTICS
+    uint32_t probeNvn_ = 0;
+    uint32_t probeZcullKeep_ = 0;
+#endif
     uint32_t readBits_ = 0, areaW_ = 0, areaH_ = 0;
     // rung-2 forms' ROP blends over each colour so far (rule fetch.blend's layers), and whether SET_CT_SELECT holds a rung-3
     // form's one target in place of the pass's
@@ -724,7 +740,7 @@ private:
     Pipeline *fetchFreeFor(const Pipeline &pl, StorageRoute *route = nullptr);
     bool matrixConstants(const Pipeline &pl, const char **why);
     uint32_t colorTargets() const;
-    StorageFallback storageFallback(const Pipeline &pl) const;
+    StorageFallback storageFallback(const Pipeline &pl, const Pipeline *barrierTwin) const;
     bool orderedFetch(const Pipeline &pl, const FetchDraw &shape) const;
     void fetchDraw(uint32_t primitive, bool indexed, uint32_t first, uint32_t count, uint32_t instances, uint32_t root,
                    uint32_t baseInstance);

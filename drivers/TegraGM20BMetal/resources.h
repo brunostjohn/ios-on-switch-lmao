@@ -429,6 +429,14 @@ struct Buffer {
     // made on a reused span no CPU zeroed (a Private buffer in a chunk no host-visible buffer reached): Metal's new buffer
     // reads zeros, so the copy engine fills it ahead of its first use (TegraGM20BMetalFresh.h establishFreshBuffer)
     bool freshFill = false;
+    // Bumped on CPU access/uploads; cleared per job once L2_SYSMEM_INVALIDATE covers it.
+    mutable uint64_t cpuDirtyGen = 1;
+    mutable uint64_t cpuSeenGen = 0;
+
+    void markCpuDirty() const
+    {
+        __atomic_add_fetch(&cpuDirtyGen, uint64_t(1), __ATOMIC_RELEASE);
+    }
 #if SWITCH_METAL_DIAGNOSTICS
     uint64_t keptBytes = 0;  // a decoded texture's kept blocks: in Stats::textureBytes until destroyBuffer
 #endif

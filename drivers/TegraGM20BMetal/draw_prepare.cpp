@@ -408,15 +408,15 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     } else if (!pl->splitOf && !generic)
         pl = prepared;
     SWITCH_METAL_ENCODE_END(variantSpan);
-    if (!whole_) {
-        if (x[1] > x[0] && y[1] > y[0]) {
+    if (!whole_ && x[1] > x[0] && y[1] > y[0]) {
+        growReached(reached_, {x[0], y[0], x[1], y[1]});
+        if (trackRects_) {
             const std::array<uint32_t, 4> r = {x[0], y[0], x[1], y[1]};
-            if (std::find(rects_.begin(), rects_.end(), r) == rects_.end()) {
+            if (std::find(rects_.begin(), rects_.end(), r) == rects_.end())
                 rects_.push_back(r);
-                growReached(reached_, {r[0], r[1], r[2], r[3]});
-            }
             if (rects_.size() > 1024) {
                 whole_ = true;
+                trackRects_ = false;
                 rects_.clear();
             }
         }
@@ -517,8 +517,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         const bool depthOn = zeta && zetaHasDepth(zeta->format) && pass_.depthStencil.depthEnabled,
                    stencilOn = zeta && zetaHasStencil(zeta->format) && pass_.depthStencil.stencilEnabled;
 #if SWITCH_METAL_DIAGNOSTICS
-        openBounds = pl->fragmentDepth && (d.probeNvn.load(std::memory_order_relaxed) & kNvnZcullBounds);
-        if ((keep = d.probeZcullKeep.load(std::memory_order_relaxed))) {
+        openBounds = pl->fragmentDepth && (probeNvn_ & kNvnZcullBounds);
+        if ((keep = probeZcullKeep_)) {
             ZcullPass without = zcull_, with = zcull_;
             const bool fragmentDepth = pl->fragmentDepth && !openBounds, shaderTests = shaderTestsActive_ != 0;
             d.stats.zcullRulesKept += zcullInvalidates(without, ds_, depthOn, stencilOn, fragmentDepth, shaderTests,
@@ -545,7 +545,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         cb_->refusal = {RefUnnamedUniform};
         return false;
     }
-    if (__atomic_load_n(&pl->heapMissing, __ATOMIC_ACQUIRE) && !dev_->rebindArguments(*pl)) {
+    if (pl != emitted_ && __atomic_load_n(&pl->heapMissing, __ATOMIC_ACQUIRE) && !dev_->rebindArguments(*pl)) {
         *why = "no memory for the tables a state reads argument buffers through";
         cb_->refusal = {RefHeapMemory};
         return false;
@@ -623,7 +623,12 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     const Raster raster = rasterFor(primitive);
     writeRaster(p, raster);
     const bool dynamicBlend = r.halfBlendColorWord;
-    const bool slotRoots = r.rootSlots[0] || r.rootSlots[1];
+    const auto rootTableDirty = [&](uint32_t k) {
+        return r.rootSlots[k] && r.rootTableWord[k] && r.rootTableWord[k] <= 31 &&
+               (!rootTableVa_[k] || rootTableSlots_[k] != r.rootSlots[k] ||
+                rootTableWrites_[k] != pl->writesMemory[k] || (rootBufDirty_[k] & r.rootSlots[k]));
+    };
+    const bool slotRootsDirty = rootTableDirty(0) || rootTableDirty(1);
     const bool patches = tessellates(r);
     const bool drawnWordsDirty = ((r.amplificationIdWord || r.amplificationCountWord || r.amplificationLayerWord ||
                                    r.amplificationViewportWord) &&
@@ -631,7 +636,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                                  r.pulledStride[0][1] || r.arrayLengthWord || r.viewportCountWord;
     const bool rebinds = pl != emitted_;
     if (pl != emitted_ || residualMask || residualsPushed_ || (dynamicBlend && blendColorDirty_) ||
-        r.shaderTests.flags || shadowStencil(r.shaderTests) || slotRoots || (patches && tessWordsDirty_) ||
+        r.shaderTests.flags || shadowStencil(r.shaderTests) || slotRootsDirty || (patches && tessWordsDirty_) ||
         drawnWordsDirty || holesMoved) {
         if (pl != emitted_) {
             blendColorDirty_ |= pl->constantBlend || dynamicBlend;
@@ -648,8 +653,9 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                 narrowed_ = narrow;
             }
             bindState(p, *pl);
+            streamFormatKnown_ = 0;
             clipHeld_ = pl->viewportClip;
-            clampRangeHeld_ = clampRangeHeld_ && !pl->namesViewportClipRange;
+            cb_->clampRangeHeld_ = cb_->clampRangeHeld_ && !pl->namesViewportClipRange;
             // a vertex program's Layer selects the slice where it writes one (NVK: the last pre-rasterization stage's)
             if (const uint32_t rtLayer = pl->writesLayer ? kRtLayerFromShader : 0; rtLayer != cb_->rtLayer_) {
                 p.m(NVB197_SET_RT_LAYER, rtLayer);
@@ -675,7 +681,13 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         patchShaderTestPush(r.shaderTests, ds_, stencilRef_, depthRange_, false, want);
         for (uint32_t k = 0; k < 2; k++)
             if (const uint8_t word = r.rootTableWord[k]; r.rootSlots[k] && word && word <= 31) {
-                const uint64_t table = rootTable(r, k, pl->writesMemory[k]);
+                if (rootTableDirty(k)) {
+                    rootTableVa_[k] = rootTable(r, k, pl->writesMemory[k]);
+                    rootTableSlots_[k] = r.rootSlots[k];
+                    rootTableWrites_[k] = pl->writesMemory[k];
+                    rootBufDirty_[k] &= ~r.rootSlots[k];
+                }
+                const uint64_t table = rootTableVa_[k];
                 want[word - 1] = uint32_t(table);
                 want[word] = uint32_t(table >> 32);
             }
@@ -752,12 +764,16 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     if (descriptorBinding_.changed(pl, setVa)) {
         const HeapSet *heap = pl->heapSet;
         const uint64_t heapVa = heap ? heap->memory.va : 0;
-        // NVK's root table sets[0] and sets[1]: set 0, and set 1 for a heap array a program reads past its constant buffer
-        const uint32_t s[8] = {uint32_t(setVa),        uint32_t(setVa >> 32),  setBytes, 0, uint32_t(heapVa),
-                               uint32_t(heapVa >> 32), heap ? r.heapBytes : 0, 0};
+        const uint32_t s[4] = {uint32_t(setVa), uint32_t(setVa >> 32), setBytes, 0};
         p.m(LOAD_CB_OFFSET, 0x38);
-        p.nonInc(LOAD_CB, s, heap ? 8 : 4);
-        if (pl->heapSlot[0] || pl->heapSlot[1] || pl->heapSlot[2] || pl->heapSlot[3]) {
+        p.nonInc(LOAD_CB, s, 4);
+        if (heap && descriptorBinding_.heapRootChanged(heapVa, r.heapBytes)) {
+            const uint32_t h[4] = {uint32_t(heapVa), uint32_t(heapVa >> 32), r.heapBytes, 0};
+            p.m(LOAD_CB_OFFSET, 0x48);
+            p.nonInc(LOAD_CB, h, 4);
+        }
+        if ((pl->heapSlot[0] || pl->heapSlot[1] || pl->heapSlot[2] || pl->heapSlot[3]) &&
+            descriptorBinding_.heapBindChanged(pl, heapVa, r.heapBytes)) {
             p.inc(CB_SELECTOR_A, {cbufBindBytes(r.heapBytes), uint32_t(heapVa >> 32), uint32_t(heapVa)});
             for (uint32_t k = 0; k < 4; k++)
                 if (pl->heapSlot[k])
@@ -906,7 +922,7 @@ const char *Device::fetchBarrierName(FetchBarrier b)
 void RenderEncoder::fetchBarrier(Push &p)
 {
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    switch (dev_->fetchBarrier.load(std::memory_order_relaxed)) {
+    switch (Device::FetchBarrier(fetchBarrierMode_)) {
     case Device::FetchBarrier::None:
         return;
     case Device::FetchBarrier::WaitForIdle:
@@ -927,12 +943,9 @@ void RenderEncoder::fetchBarrier(Push &p)
         break;
     }
 #endif
-    for (uint32_t j = 0; j < pass_.count && j < 8; j++) {
-        const Texture *t = pass_.color[j].texture;
-        if (t && !shadowOf_[j] && t->storageRange().gpuVolatile) {
-            kit(p, switch_gm20b_pixel_shader_barrier_sysmem);
-            return;
-        }
+    if (passHasVolatileColor_) {
+        kit(p, switch_gm20b_pixel_shader_barrier_sysmem);
+        return;
     }
     kit(p, switch_gm20b_pixel_shader_barrier);
 }

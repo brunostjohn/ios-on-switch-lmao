@@ -121,7 +121,8 @@ Device::Backing *Device::plainBacking(std::unique_lock<gm20b::Mutex> &l, const T
         if (blockLinear) {
             uint32_t w[8];
             fx::mipChainTic(c, t.va, f->tic0, f->srgb, 0, 1, w);
-            memcpy(tic_.cpu + 32 * t.tic, w, 32);  // visible at the next submission's header invalidate
+            memcpy(tic_.cpu + 32 * t.tic, w, 32);
+            noteTicWrite();
         } else {
             t.renderable = t.renderable && linearTarget(t);
             writeTic(t);
@@ -174,8 +175,8 @@ Texture *Device::lastBacking(const Texture &m, uint32_t tag, bool blockLinear, b
         if (ask.epoch != epoch || !ask.same(m, tag, blockLinear, compression, copied, kindProbes()))
             continue;
         Backing *b = ask.backing;
-        b->lastCommit.store(commitCount_, std::memory_order_relaxed);
-        b->lastClosed.store(closedCount_, std::memory_order_seq_cst);
+        b->lastCommit.store(commitCount_.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        b->lastClosed.store(closedCount_.load(std::memory_order_relaxed), std::memory_order_seq_cst);
         // a trim moves the epoch before it reads the stamps: one that began since reads ours or is seen here
         return backingEpoch_.load(std::memory_order_seq_cst) == epoch ? &b->texture : nullptr;
     }
@@ -194,8 +195,8 @@ Texture *Device::backing(std::unique_lock<gm20b::Mutex> &l, DeferredFrees &defer
     Backing *plain = nullptr;
     blockLinear |= m.samples > 1;
     const auto asked = [&](Backing *b) {
-        b->lastCommit.store(commitCount_, std::memory_order_relaxed);
-        b->lastClosed.store(closedCount_, std::memory_order_relaxed);
+        b->lastCommit.store(commitCount_.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        b->lastClosed.store(closedCount_.load(std::memory_order_relaxed), std::memory_order_relaxed);
         if (tag < lastBackings_.size())
             lastBackings_[tag] = b;
         ask.backing = b;
@@ -271,8 +272,8 @@ Texture *Device::copyScratch(std::unique_lock<gm20b::Mutex> &l, DeferredFrees &d
     }
     for (Backing *b : backings_) {
         if (!b->retired && b->tag == tag && b->plain == mem) {
-            b->lastCommit.store(commitCount_, std::memory_order_relaxed);
-            b->lastClosed.store(closedCount_, std::memory_order_relaxed);
+            b->lastCommit.store(commitCount_.load(std::memory_order_relaxed), std::memory_order_relaxed);
+            b->lastClosed.store(closedCount_.load(std::memory_order_relaxed), std::memory_order_relaxed);
             return &b->texture;
         }
     }
@@ -283,8 +284,8 @@ Texture *Device::copyScratch(std::unique_lock<gm20b::Mutex> &l, DeferredFrees &d
     b->tag = tag;
     b->plain = mem;
     b->usedNs = compClock();
-    b->lastCommit.store(commitCount_, std::memory_order_relaxed);
-    b->lastClosed.store(closedCount_, std::memory_order_relaxed);
+    b->lastCommit.store(commitCount_.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    b->lastClosed.store(closedCount_.load(std::memory_order_relaxed), std::memory_order_relaxed);
     mem->views++;
     SWITCH_METAL_DIAGNOSTIC(stats.backings++);
     backings_.push_back(b);

@@ -419,7 +419,7 @@ size_t metal_fetch_keys(char *out, size_t size)
 static void gm20bEventWaitTick()
 {
     const uint64_t now = nowUs();
-    std::unique_lock<gm20b::Mutex> h(gHoldersLock, std::try_to_lock);
+    std::unique_lock<gm20b::UnfairMutex> h(gHoldersLock, std::try_to_lock);
     if (!h.owns_lock())
         return;
     for (auto &[cb, note] : gEventWaits) {
@@ -461,7 +461,7 @@ void gm20bStallTick()
     const long waiting = long(r.waitingCommitted.load(std::memory_order_relaxed)), inflight = long(r.inflight.size());
     bool holders = false;
     {
-        std::unique_lock<gm20b::Mutex> h(gHoldersLock, std::try_to_lock);
+        std::unique_lock<gm20b::UnfairMutex> h(gHoldersLock, std::try_to_lock);
         holders = h.owns_lock();
     }
     const bool device = r.raw->lockFree();

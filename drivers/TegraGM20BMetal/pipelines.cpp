@@ -218,7 +218,7 @@ bool Device::rebindArguments(Pipeline &pl)
     bindArguments(pl, *pl.rec);
     const bool bound = !__atomic_load_n(&pl.heapMissing, __ATOMIC_RELAXED);
     if (!bound)
-        os_log_error(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "gm20b"),
+        os_log_error(gm20b::log(),
                      "SwitchMetal: no memory for a state's argument tables: this draw is refused");
     return bound;
 }
@@ -344,6 +344,7 @@ std::vector<std::pair<std::string, Pipeline *>> Device::variantPipelines(uint64_
 
 std::vector<std::pair<std::string, Pipeline *>> Device::variantPipelines(const PackRun &run, bool caTransform)
 {
+    ensurePackWindow();
     std::vector<std::pair<std::string, Pipeline *>> out;
     bool anyVariant = false;
     for (uint32_t i = 0; i < run.records; ++i)
@@ -377,6 +378,7 @@ std::vector<std::pair<std::string, Pipeline *>> Device::variantPipelines(const P
 
 Pipeline *Device::variantPipeline(const PackRun &run, const std::string &name, bool caTransform)
 {
+    ensurePackWindow();
     const PackPipeline *rec = pack_.variantRecord(run, name, PackForm::Default);
     if (!rec)
         rec = pack_.variantRecord(run, name, PackForm::Barrier);
@@ -397,6 +399,7 @@ Pipeline *Device::variantPipeline(const PackRun &run, const std::string &name, b
 
 Pipeline *Device::placePipeline(const PackRun &run, uint64_t keyHash, PackForm form, bool caTransform)
 {
+    ensurePackWindow();
     const PackPipeline *rec = pack_.find(run, form);
     if (rec)
         return placePackedRecord(*rec, caTransform);
@@ -482,6 +485,7 @@ Pipeline *Device::publishTier0(uint32_t idx, std::unique_ptr<Pipeline> built)
 
 Pipeline *Device::variantPipelineLockFree(const PackRun &run, const std::string &name, bool caTransform)
 {
+    ensurePackWindow();
     const PackPipeline *pipelines = pack_.section<PackPipeline>(PackPipelines);
     if (!run.records || uint64_t(run.first - pipelines) >= tier0Pipelines_.count)
         return nullptr;
@@ -501,6 +505,7 @@ Pipeline *Device::variantPipelineLockFree(const PackRun &run, const std::string 
 
 Pipeline *Device::placePackedRecord(const PackPipeline &pp, bool caTransform)
 {
+    ensurePackWindow();
     const uint32_t idx = uint32_t(&pp - pack_.section<PackPipeline>(PackPipelines));
     if (idx < tier0Pipelines_.count) {
         if (Pipeline *existing = tier0Pipelines_.slots[idx].load(std::memory_order_acquire))
@@ -622,9 +627,15 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     uint32_t writes[8];
     uint32_t interlockControl = 0;
     uint32_t sampleControl = 1;
+    bool tests = false, alphaToCoverage = false;
     memcpy(writes, ctWrite_, sizeof writes);
     for (uint32_t k = 0; k < pp.blobDwords; k += 2) {
         const uint32_t m = blob[k], v = blob[k + 1];
+        tests |= (m == DEPTH_TEST || m == STENCIL_TEST || m == ANTI_ALIAS_ALPHA_CONTROL) && (v & 1);
+        alphaToCoverage |= m == ANTI_ALIAS_ALPHA_CONTROL && (v & 1);
+        pl.namesAlphaControl |= m == ANTI_ALIAS_ALPHA_CONTROL;
+        if (m == HYBRID_ANTI_ALIAS_CONTROL)
+            pl.samplePasses = uint8_t(std::max(1u, v & 0xf));
         if (ownedMethod(m) || swizzleMethod(m))
             continue;  // a pack made before the method was the runtime's: the probe process's value
         if (m >= CT_WRITE && m < CT_WRITE + 32)
@@ -650,22 +661,30 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
             w.m(m, v);
     }
     memcpy(pl.ctWrite, writes, sizeof writes);
+    const ParsedPipelineKey parsedKey = parsePipelineKey(keyString);
     // what the state writes: a target its key does not name is no attachment of its passes, whatever SET_CT_WRITE the
     // pack's baseline leaves it (24B119: targets 6 and 7 at 0x1111; blend_kill.h)
-    const uint8_t keyTargets = keyColorTargets(keyString);
+    const uint8_t keyTargets = parsedKey.colorTargets;
     uint32_t named[8];
     for (uint32_t c = 0; c < 8; c++)
         named[c] = keyTargets >> c & 1 ? writes[c] : 0;
-    pl.blendKill = iteratedBlendNoop(blob, pp.blobDwords, named, keyString,
-                                     (pp.flags & PipelineStorageMetadata) ? pp.storageMask : 0, blendPerTarget_,
-                                     blendPerTargetSeen_) == kNoopSourceRgba0000;
     if (prebuilt) {
         // the GPU gets the word the pack's generator wrote into the segment, whatever this build's rule says: a card's pack
         // may predate it. Its flag (pack/segments.py FLAG_BLEND_KILL) is in the segment table tier 0 wires; the segment's
         // words are heap pages no process keeps resident, an SD read on the creating thread.
         const bool pushed = prebuilt->flags & kPackSegmentBlendKill;
-        SWITCH_METAL_DIAGNOSTIC(stats.blendKillPackDisagreements += pushed != pl.blendKill);
+#if SWITCH_METAL_DIAGNOSTICS
+        const bool computed =
+            iteratedBlendNoop(blob, pp.blobDwords, named, keyString,
+                              (pp.flags & PipelineStorageMetadata) ? pp.storageMask : 0, blendPerTarget_,
+                              blendPerTargetSeen_, &parsedKey) == kNoopSourceRgba0000;
+        stats.blendKillPackDisagreements += pushed != computed;
+#endif
         pl.blendKill = pushed;
+    } else {
+        pl.blendKill = iteratedBlendNoop(blob, pp.blobDwords, named, keyString,
+                                         (pp.flags & PipelineStorageMetadata) ? pp.storageMask : 0, blendPerTarget_,
+                                         blendPerTargetSeen_, &parsedKey) == kNoopSourceRgba0000;
     }
     if (!prebuilt) {
         w.m(PIXEL_SHADER_INTERLOCK_CONTROL, legalInterlockControl(interlockControl, sampleControl));
@@ -731,12 +750,12 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
                 pl.ubos[pl.uboCount++] = {group, c, uint16_t(entry)};
         }
     if (!prebuilt) {
-        stageSwitches(pp, keyString, w, pl.restore);
+        stageSwitches(pp, parsedKey.rasterOff, w, pl.restore);
         pl.methods.assign(words.data(), w.at);
     } else {
-        stageSwitchesRestore(pp, keyString, pl.restore);
+        stageSwitchesRestore(pp, parsedKey.rasterOff, pl.restore);
     }
-    pl.stagesOff = !pixelStage(pp) || rasterOff(keyString);
+    pl.stagesOff = !pixelStage(pp) || parsedKey.rasterOff;
     memcpy(pl.push, pp.pushWords, sizeof pl.push);
     pl.pushMask = pp.pushMask;
     guestBasesOf(pp, pl.guestBases);
@@ -748,40 +767,35 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
         if (spillEntryOf(pp, k))
             pl.spill[k] = spills ? spills + (k ? pp.spillWords[0] : 0) : nullptr;
     // the color formats of its key, and which colors its draws read as they were (blend_reads.h)
-    for (const char *at = keyString; (at = strstr(at, " c")); at += 2) {
-        unsigned c = 0;
-        ColorKeyFields k = {};
-        const int n = sscanf(at, " c%u=%u:%u:%u:%u:%u:%u:%u:%u:%u", &c, &k.format, &k.writeMask, &k.blending, &k.srcRGB,
-                             &k.dstRGB, &k.rgbOp, &k.srcAlpha, &k.dstAlpha, &k.alphaOp);
-        if (n >= 4 && c < 8) {
-            // rendered through its stand-in (Texture::planarStandIn; an extended-range one's, format_standin.h)
-            constexpr unsigned kRGB8_444_2P = 542, kRGBA16Float = 115;
-            pl.colorFormats[c] = k.format == kRGB8_444_2P || xrTarget(k.format) ? kRGBA16Float : k.format;
-            if (colorReadsDestination(k))
-                pl.readBits |= uint8_t(1u << c);
-            // MTLBlendFactorBlendColor, OneMinusBlendColor, BlendAlpha, OneMinusBlendAlpha
-            for (const unsigned factor : {k.srcRGB, k.dstRGB, k.srcAlpha, k.dstAlpha})
-                pl.constantBlend |= k.blending && factor >= 11 && factor <= 14;
-        }
+    for (unsigned c = 0; c < 8; c++) {
+        const ParsedColorKey &pk = parsedKey.colors[c];
+        if (pk.fieldCount < 3)
+            continue;
+        const ColorKeyFields k = {pk.format, pk.writeMask, pk.blending, pk.srcRGB, pk.dstRGB,
+                                  pk.rgbOp,  pk.srcAlpha,  pk.dstAlpha, pk.alphaOp};
+        // rendered through its stand-in (Texture::planarStandIn; an extended-range one's, format_standin.h)
+        constexpr unsigned kRGB8_444_2P = 542, kRGBA16Float = 115;
+        pl.colorFormats[c] = k.format == kRGB8_444_2P || xrTarget(k.format) ? kRGBA16Float : k.format;
+        if (colorReadsDestination(k))
+            pl.readBits |= uint8_t(1u << c);
+        // MTLBlendFactorBlendColor, OneMinusBlendColor, BlendAlpha, OneMinusBlendAlpha
+        for (const unsigned factor : {k.srcRGB, k.dstRGB, k.srcAlpha, k.dstAlpha})
+            pl.constantBlend |= k.blending && factor >= 11 && factor <= 14;
     }
     // attribute 0 ("a0=<MTLVertexFormat>:<offset>:<buffer>:<stride>:<step function>:..."): MTLVertexFormatFloat2, Float3
     // or Float4, per vertex, from the stream's buffer
-    unsigned format = 0, offset = 0, buffer = 0, stride = 0, step = 0;
-    if (const char *a0 = strstr(keyString, " a0=");
-        a0 && sscanf(a0, " a0=%u:%u:%u:%u:%u", &format, &offset, &buffer, &stride, &step) == 5 && format >= 29 &&
-        format <= 31 && buffer == pp.vertexSlot && stride == pp.vertexStride && step == 1) {
-        pl.positionComponents = uint8_t(format - 27);
-        pl.positionOffset = uint16_t(offset);
+    if (parsedKey.hasA0 && parsedKey.a0Format >= 29 && parsedKey.a0Format <= 31 && parsedKey.a0Buffer == pp.vertexSlot &&
+        parsedKey.a0Stride == pp.vertexStride && parsedKey.a0Step == 1) {
+        pl.positionComponents = uint8_t(parsedKey.a0Format - 27);
+        pl.positionOffset = uint16_t(parsedKey.a0Offset);
     }
     pl.caTransform = caTransform;
-    if (const char *ds = strstr(keyString, "ds=")) {
-        uint32_t depth = 0, stencil = 0;
-        sscanf(ds, "ds=%u/%u", &depth, &stencil);
+    if (parsedKey.hasDs) {
+        const uint32_t depth = parsedKey.depth, stencil = parsedKey.stencil;
         // a Depth32Float or Depth16Unorm and a Stencil8 apart are rendered as one Depth32Float_Stencil8 (PassDesc::separate)
         pl.depthFormat = (depth == 252 || depth == 250) && stencil == 253 ? kZetaFormat : depth ? depth : stencil;
     }
-    if (const char *n = strstr(keyString, "samples="))
-        pl.samples = uint8_t(std::max(1, atoi(n + 8)));
+    pl.samples = uint8_t(parsedKey.samples);
     // SET_DEPTH_TEST, SET_STENCIL_TEST and SET_ANTI_ALIAS_ALPHA_CONTROL's alpha to coverage in bit 0
     pl.primitiveId = has(fs, kProgramPrimitiveId);
     pl.vertexStores = has(vs, kProgramGlobalStore) ||
@@ -789,17 +803,8 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     pl.fragmentDepth = has(fs, kProgramWritesDepth);
     pl.viewportIndex = has(tess ? tess[1] : vs, kProgramWritesViewportIndex);
     pl.writesLayer = has(tess ? tess[1] : vs, kProgramWritesLayer);
-    bool tests = false, alphaToCoverage = false;
-    for (uint32_t k = 0; k < pp.blobDwords; k += 2) {
-        const uint32_t m = blob[k], v = blob[k + 1];
-        tests |= (m == DEPTH_TEST || m == STENCIL_TEST || m == ANTI_ALIAS_ALPHA_CONTROL) && (v & 1);
-        alphaToCoverage |= m == ANTI_ALIAS_ALPHA_CONTROL && (v & 1);
-        pl.namesAlphaControl |= m == ANTI_ALIAS_ALPHA_CONTROL;
-        if (m == HYBRID_ANTI_ALIAS_CONTROL)
-            pl.samplePasses = uint8_t(std::max(1u, v & 0xf));
-    }
     pl.dropsPixels = has(fs, kProgramKillsPixels) || has(fs, kProgramWritesSampleMask) || tests ||
-                     strncmp(keyString, "samples=1 ", 10) || !strstr(keyString, " ds=0/0 ");
+                     !parsedKey.samples1Prefix || !parsedKey.hasZeroDsToken;
     // KILLS_PIXELS, OMAP_SAMPLE_MASK or OMAP_DEPTH, or its registers' alpha to coverage; a Metal state's own alpha to
     // coverage is the encoder's, per draw (alpha_control.h)
     pl.shapesCoverage = has(fs, kProgramKillsPixels) || has(fs, kProgramWritesSampleMask) ||

@@ -18,7 +18,7 @@ void gm20bChanged(SwitchMetalCommandBuffer *cb)
 void gm20bSetCompileWaits(SwitchMetalCommandBuffer *cb, std::vector<std::function<bool()>> waits)
 {
     {
-        std::lock_guard<gm20b::Mutex> l(cb->_lock);
+        std::lock_guard<gm20b::UnfairMutex> l(cb->_lock);
         cb->_compileWaits = std::move(waits);
     }
     cb->_compileWaitGen.fetch_add(1, std::memory_order_acq_rel);
@@ -30,7 +30,7 @@ void gm20bClearCompileWaits(SwitchMetalCommandBuffer *cb)
 {
     std::vector<std::function<bool()>> cleared;
     {
-        std::lock_guard<gm20b::Mutex> l(cb->_lock);
+        std::lock_guard<gm20b::UnfairMutex> l(cb->_lock);
         cleared.swap(cb->_compileWaits);
     }
 }
@@ -43,7 +43,7 @@ void gm20bNoteCompileWaitReady(SwitchMetalCommandBuffer *cb)
 
 static std::vector<std::function<bool()>> copyCompileWaits(SwitchMetalCommandBuffer *cb)
 {
-    std::lock_guard<gm20b::Mutex> l(cb->_lock);
+    std::lock_guard<gm20b::UnfairMutex> l(cb->_lock);
     return cb->_compileWaits;
 }
 
@@ -51,7 +51,7 @@ NSArray *gm20bTakeHandlers(SwitchMetalCommandBuffer *cb, NSMutableArray *__stron
 {
     if (!added.load())
         return nil;
-    std::lock_guard<gm20b::Mutex> l(cb->_lock);
+    std::lock_guard<gm20b::UnfairMutex> l(cb->_lock);
     NSArray *taken = list;
     list = nil;
     return taken;
@@ -139,19 +139,18 @@ void gm20bPoolCommandBuffers()
         return;
     _owners.push_back(object);
     SwitchMetalResourceFacts facts;
-    if ([object isKindOfClass:[SwitchMetalTexture class]]) {
+    if (__unsafe_unretained SwitchMetalTexture *texture = gm20bAsTexture(object)) {
         facts.kind = SwitchMetalResourceKind::Texture;
-        __unsafe_unretained SwitchMetalTexture *texture = (SwitchMetalTexture *)object;
         facts.roles = uint8_t(texture->_raw.converted() ? SwitchMetalResourceFacts::Converted : 0);
         __unsafe_unretained SwitchMetalTexture *root = texture->_levelsOwner ?: texture;
         facts.surfaceWrites = root->_surfaceWrites;
         facts.cpuBuffer = (__bridge void *)root->_buffer;
-    } else if ([object isKindOfClass:[SwitchMetalBuffer class]]) {
+    } else if (gm20bAsBuffer(object)) {
         facts.kind = SwitchMetalResourceKind::Buffer;
         facts.cpuBuffer = (__bridge void *)object;
-    } else if ([object isKindOfClass:[SwitchMetalSampler class]])
+    } else if (gm20bAsSampler(object))
         facts.kind = SwitchMetalResourceKind::Sampler;
-    else if ([object isKindOfClass:[SwitchMetalHeap class]])
+    else if (gm20bAsHeap(object))
         facts.kind = SwitchMetalResourceKind::Heap;
     _plan.registerResource((__bridge void *)object, facts);
 }
@@ -169,8 +168,8 @@ static const gm20b::Pipeline *recordedPipeline(const gm20b::RasterState &raster)
 {
     if (const gm20b::Pipeline *native = static_cast<const gm20b::Pipeline *>(raster.nativePipeline))
         return native;
-    __unsafe_unretained SwitchMetalPipeline *pipeline = (__bridge SwitchMetalPipeline *)raster.pipeline;
-    return [(id)pipeline isKindOfClass:[SwitchMetalPipeline class]] ? pipeline->_raw : nullptr;
+    __unsafe_unretained SwitchMetalPipeline *pipeline = gm20bAsPipeline((__bridge id)raster.pipeline);
+    return pipeline ? pipeline->_raw : nullptr;
 }
 
 - (void)record:(const Cmd &)cmd
@@ -307,7 +306,7 @@ static const gm20b::Pipeline *recordedPipeline(const gm20b::RasterState &raster)
 
 - (NSMutableDictionary *)userDictionary
 {
-    std::lock_guard<gm20b::Mutex> l(_lock);
+    std::lock_guard<gm20b::UnfairMutex> l(_lock);
     if (!_userDictionary)
         _userDictionary = [NSMutableDictionary dictionary];
     return _userDictionary;
@@ -315,7 +314,7 @@ static const gm20b::Pipeline *recordedPipeline(const gm20b::RasterState &raster)
 
 - (uint64_t)globalTraceObjectID
 {
-    std::lock_guard<gm20b::Mutex> l(_lock);
+    std::lock_guard<gm20b::UnfairMutex> l(_lock);
     if (!_traceId)
         _traceId = nextTraceId();
     return _traceId;
@@ -343,7 +342,7 @@ static const gm20b::Pipeline *recordedPipeline(const gm20b::RasterState &raster)
 
 - (MTLCommandBufferStatus)status
 {
-    return _status.load();
+    return _status.load(std::memory_order_acquire);
 }
 
 - (NSError *)error
@@ -443,7 +442,7 @@ static const gm20b::Pipeline *recordedPipeline(const gm20b::RasterState &raster)
     }
     _hasScheduledHandlers.store(true);
     {
-        std::lock_guard<gm20b::Mutex> l(_lock);
+        std::lock_guard<gm20b::UnfairMutex> l(_lock);
         // once scheduled() took the handlers, one added is run behind them (was: until they ran, it joined a list no one read
         // again, and a presentDrawable added then never presented)
         if (!_scheduledSent) {
@@ -476,7 +475,7 @@ static const gm20b::Pipeline *recordedPipeline(const gm20b::RasterState &raster)
     bool now;
     _hasCompletedHandlers.store(true);
     {
-        std::lock_guard<gm20b::Mutex> l(_lock);
+        std::lock_guard<gm20b::UnfairMutex> l(_lock);
         now = _completedSent;  // as addScheduledHandler: once finish() took the handlers
         if (!now) {
             if (!_completedHandlers)
@@ -504,7 +503,7 @@ static void deferPresent(SwitchMetalCommandBuffer *cb, id<MTLDrawable> drawable,
     bool failed = false;
     bool wake = false;
     {
-        std::lock_guard<gm20b::Mutex> l(cb->_lock);
+        std::lock_guard<gm20b::UnfairMutex> l(cb->_lock);
         completed = cb->_completedSent.load(std::memory_order_seq_cst);
         if (!completed) {
             cb->_presents.store(true, std::memory_order_release);
@@ -578,10 +577,10 @@ static void deferPresent(SwitchMetalCommandBuffer *cb, id<MTLDrawable> drawable,
 
 - (void)commit
 {
-    if (_committed.exchange(true))
+    if (_committed.exchange(true, std::memory_order_acq_rel))
         return;
     gm20bClaimCommitSlot(self);
-    _status = MTLCommandBufferStatusCommitted;
+    _status.store(MTLCommandBufferStatusCommitted, std::memory_order_release);
     _kernelStart = hostSeconds();
 #if SWITCH_METAL_DIAGNOSTICS
     _committedTicks = mach_absolute_time();
@@ -616,10 +615,10 @@ static void deferPresent(SwitchMetalCommandBuffer *cb, id<MTLDrawable> drawable,
     // A failed one returns once finish() withdrew the writes it will never make (TegraGM20BMetalSchedule.mm cancelPromises), so
     // a present its caller makes next of a surface it was to write is refused, never shown with the frame before
     auto returns = [&] {
-        return gm20b::scheduledWaitReturns(_scheduledDone,
+        return gm20b::scheduledWaitReturns(_scheduledDone.load(std::memory_order_acquire),
                                            _segError.set() && _promised.load(std::memory_order_acquire));
     };
-    if (_committed && !returns()) {
+    if (_committed.load(std::memory_order_acquire) && !returns()) {
 #if SWITCH_FRAME_TIMELINE
         const switch_frame::WaitScope frameWait(_frame);
 #endif
@@ -634,14 +633,15 @@ static void deferPresent(SwitchMetalCommandBuffer *cb, id<MTLDrawable> drawable,
     }
 #if SWITCH_METAL_STATS
     uint64_t none = 0;
-    if (_held && !_scheduledDone && _heldReturnUs.compare_exchange_strong(none, nowUs()))
+    if (_held.load(std::memory_order_acquire) && !_scheduledDone.load(std::memory_order_acquire) &&
+        _heldReturnUs.compare_exchange_strong(none, nowUs(), std::memory_order_acq_rel, std::memory_order_relaxed))
         gRM->stats.heldReturns++;
 #endif
 }
 
 - (void)waitUntilCompleted
 {
-    if (!_committed || _completedDone)
+    if (!_committed.load(std::memory_order_acquire) || _completedDone.load(std::memory_order_acquire))
         return;
 #if SWITCH_METAL_STATS
     const BlockedWait blocked(gRM->stats.completedWaits, gRM->stats.completedWaitUs);
@@ -650,7 +650,7 @@ static void deferPresent(SwitchMetalCommandBuffer *cb, id<MTLDrawable> drawable,
     gRM->completionWaiters.fetch_add(1, std::memory_order_seq_cst);
     gRM->inflight.wake();
     waitFor(self, [&] {
-        return _completedDone.load();
+        return _completedDone.load(std::memory_order_acquire);
     });
     gRM->completionWaiters.fetch_sub(1, std::memory_order_relaxed);
 }
@@ -658,8 +658,8 @@ static void deferPresent(SwitchMetalCommandBuffer *cb, id<MTLDrawable> drawable,
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 - (NSNumber *)switchMetalWholePrograms
 {
-    std::lock_guard<gm20b::Mutex> lock(_lock);
-    if (_committed)
+    std::lock_guard<gm20b::UnfairMutex> lock(_lock);
+    if (_committed.load(std::memory_order_relaxed))
         return @NO;
     gm20bPipelineVeto(self, VetoProbes);
     _forceWholePrograms = true;
@@ -670,8 +670,8 @@ static void deferPresent(SwitchMetalCommandBuffer *cb, id<MTLDrawable> drawable,
 // inlineStates)
 - (NSNumber *)switchMetalInlineStates
 {
-    std::lock_guard<gm20b::Mutex> lock(_lock);
-    if (_committed)
+    std::lock_guard<gm20b::UnfairMutex> lock(_lock);
+    if (_committed.load(std::memory_order_relaxed))
         return @NO;
     gm20bPipelineVeto(self, VetoProbes);
     _inlineStates = true;
@@ -682,7 +682,7 @@ static void deferPresent(SwitchMetalCommandBuffer *cb, id<MTLDrawable> drawable,
 // stamps) or "host" (the host's window from submission to completion, which stands in where no stamp was read)
 - (NSString *)switchGpuClock
 {
-    if (!_completedSent)
+    if (!_completedSent.load(std::memory_order_acquire))
         return @"pending";
     return _gpuStamped ? @"ns" : @"host";
 }
@@ -693,7 +693,7 @@ static void deferPresent(SwitchMetalCommandBuffer *cb, id<MTLDrawable> drawable,
 // mark this acquires.
 - (NSString *)switchMetalPath
 {
-    if (!_completedSent)
+    if (!_completedSent.load(std::memory_order_acquire))
         return @"pending";
     if (!_error)
         return @"gm20b";
@@ -728,7 +728,7 @@ static void deferPresent(SwitchMetalCommandBuffer *cb, id<MTLDrawable> drawable,
 // kernel's anchors)
 - (NSDictionary<NSString *, NSNumber *> *)switchMetalPipelined
 {
-    if (!_completedSent)
+    if (!_completedSent.load(std::memory_order_acquire))
         return nil;
     NSMutableDictionary *out = [@{
         @"encoders" : @(_pipelineEncoders),
@@ -819,7 +819,7 @@ static void deferPresent(SwitchMetalCommandBuffer *cb, id<MTLDrawable> drawable,
     SwitchMetalCommandBuffer *b = [SwitchMetalCommandBuffer new];
     b->_device = _device;
     b->_queue = self;
-    b->_status = MTLCommandBufferStatusNotEnqueued;
+    b->_status.store(MTLCommandBufferStatusNotEnqueued, std::memory_order_relaxed);
     gm20bTakeRecording(b);
 #if SWITCH_FRAME_TIMELINE
     switch_frame::made(b->_frame);

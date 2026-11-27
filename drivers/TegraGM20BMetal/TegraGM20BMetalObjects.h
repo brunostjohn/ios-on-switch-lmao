@@ -205,6 +205,7 @@ enum class SwitchMetalShareable : uint8_t {
     // (gm20bWantCompressed registers it)
     uint64_t _movableBytes;
     __weak SwitchMetalTexture *_wanting;  // itself: the worker's look holds it only while it is not being deallocated
+    os_unfair_lock _auxLock;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     std::atomic<bool> _freshUnwritten;  // a fresh texture no command wrote yet (TegraGM20BMetalFresh.mm traceFreshUses)
 #endif
@@ -228,13 +229,22 @@ enum class SwitchMetalShareable : uint8_t {
                 slice:(NSUInteger)slice;
 @end
 
+struct SwitchMetalClampedSampler {
+    uint32_t lodMinBits = 0;
+    uint32_t lodMaxBits = 0;
+    id<MTLSamplerState> sampler = nil;
+};
+
 @interface SwitchMetalSampler : SwitchMetalObject {
 @public
     gm20b::Sampler _raw;
     MTLSamplerDescriptor *_descriptor;
     std::atomic<bool> _idNamed;
     gm20b::Sampler _normalized;  // a pixel-coordinate sampler's twin of normalized coordinates, what a heap holds of it
-    NSMutableDictionary<NSValue *, id<MTLSamplerState>> *_clamped;  // its descriptor's with a bind's LOD clamps
+    os_unfair_lock _clampedLock;
+    std::array<SwitchMetalClampedSampler, 4> _clampedInline;
+    uint8_t _clampedInlineCount;
+    std::vector<SwitchMetalClampedSampler> _clampedOverflow;
 }
 @end
 
@@ -265,7 +275,7 @@ enum class SwitchMetalShareable : uint8_t {
     uint64_t _packKey;  // the hash the pack finds its records and reflection by (its key's, or its key and AIR's)
     gm20b::PackRun _packRun;
     bool _hasPackVariants;
-    gm20b::Mutex _variantLock;
+    gm20b::UnfairMutex _variantLock;
     // every variant asked of it, by name, for its life: plans and encoders name each by address
     std::map<std::string, std::shared_ptr<gm20b::Variant<gm20b::Pipeline>>> _variants;
     gm20b::Obtained _obtained;  // debug builds: how its creation got its record
@@ -296,7 +306,7 @@ enum class SwitchMetalShareable : uint8_t {
     // addResidencySet:'s sets, which every command buffer of it uses, under _residencyLock
     NSMutableArray *_residencySets;
     std::atomic<uint32_t> _residencySetCount;
-    gm20b::Mutex _residencyLock;
+    gm20b::UnfairMutex _residencyLock;
 }
 @end
 
@@ -619,7 +629,7 @@ struct SwitchMetalResidencySnapshot {
     gm20b::OwnedWord _submitOwner;  // submitLoop's thread port while committed and actively queued for submission
     std::atomic<uint32_t> _compileWaitGen;
     std::vector<std::function<bool()>> _compileWaits;  // under _lock: blocking compile waits while parked
-    gm20b::Mutex _lock;
+    gm20b::UnfairMutex _lock;
     uint32_t _seqno;
     uint32_t _stamp;  // its raw submission's GPU time stamps (gm20b::CommandBuffer::stamp), 0 for any other
     uint32_t

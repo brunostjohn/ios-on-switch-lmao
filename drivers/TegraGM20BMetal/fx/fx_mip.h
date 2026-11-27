@@ -168,6 +168,9 @@ uint32_t twodPointFormat(uint32_t bpp);
 // (twodPointFormat); in generateWords
 void emitPointGenerate(Push &p, const MipChain &c, uint64_t chainVa, uint32_t fmt2d, uint32_t firstLevel,
                        uint32_t lastLevel);
+void emitGenerateLayersRange(Push &p, const MipChain &c, uint64_t chainVa, uint32_t fmt2d, uint32_t firstLevel,
+                             uint32_t lastLevel, uint32_t firstLayer, uint32_t layers, bool point = false,
+                             Sampling sampling = kGm20bSampling);
 
 // A 1:1 copy of [sx, sx + w) x [sy, sy + h) of a pitch surface into level `level` of the chain at (dx, dy): a copy into a level
 // (copyFromTexture/copyFromBuffer ... destinationLevel:), with the same waits as emitGenerate.

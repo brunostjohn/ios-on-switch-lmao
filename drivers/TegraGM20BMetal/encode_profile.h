@@ -15,7 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 
-#if (!defined(SWITCH_DEBUG) || SWITCH_DEBUG) && (!defined(SWITCH_PROF_GPU) || SWITCH_PROF_GPU)
+#if (!defined(SWITCH_DEBUG) || SWITCH_DEBUG) && defined(SWITCH_PROF_GPU) && SWITCH_PROF_GPU
 #define SWITCH_METAL_ENCODE_PROFILE 1
 #else
 #define SWITCH_METAL_ENCODE_PROFILE 0

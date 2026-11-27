@@ -10,6 +10,7 @@
 #include <functional>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include "../../../kits/SwitchSeedPack/SwitchSeedStore.h"
 #include "../compile_request.h"
 
@@ -82,8 +83,9 @@ public:
     }
 
 private:
-    bool findLocked(const gm20b::Digest &name, const gm20b::CacheKey &key, std::string &bytes, gm20b::Digest &at) const;
-    bool holdsLocked(const gm20b::Digest &name, const gm20b::CacheKey &key, std::string &bytes) const;
+    bool findViewLocked(const gm20b::Digest &name, const gm20b::CacheKey &key, std::string_view &bytes,
+                        gm20b::Digest &at) const;
+    bool holdsLocked(const gm20b::Digest &name, const gm20b::CacheKey &key) const;
 
     // persistLock_ then lock_: a persist syncs the file outside lock_, so the file it syncs must stay open meanwhile.
     // makeRoom (a full store, on a compile's publish) waits for at most one persist's msync and two barrier fsyncs,

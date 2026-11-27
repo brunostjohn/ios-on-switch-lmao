@@ -350,6 +350,7 @@
     if (!buffer->_raw.hostVisible && !gRM->raw->hostAccess(buffer->_raw, true, access))
         return nil;
     memcpy(buffer->_raw.cpu, p, n);
+    buffer->_raw.markCpuDirty();
     if (!access.finish())
         return nil;
     return b;

@@ -128,7 +128,7 @@ static void forwardCall(SwitchMetalEncoder *e, SEL selector, const void *argumen
         gm20b::VisibilityAsk ask;
         ask.mode = uint32_t(mode);
         ask.offset = offset;
-        ask.gm20bBuffer = [(id)results isKindOfClass:[SwitchMetalBuffer class]];
+        ask.gm20bBuffer = gm20bAsBuffer(results) != nil;
         ask.bufferLength = ask.gm20bBuffer ? ((SwitchMetalBuffer *)results)->_raw.length : 0;
         accumulate = [_pass respondsToSelector:@selector(visibilityResultType)] &&
                      [[(id)_pass valueForKey:@"visibilityResultType"] integerValue] != 0;
@@ -159,7 +159,7 @@ static void forwardCall(SwitchMetalEncoder *e, SEL selector, const void *argumen
                  baseInstance:(NSUInteger)baseInstance
 {
     SWITCH_API(ApiDraw);
-    if (![(id)buffer isKindOfClass:[SwitchMetalBuffer class]])
+    if (!gm20bAsBuffer(buffer))
         return gm20bCallInvalid(_cb, PredCallBufForeign, 0xffff, 0,
                                 buffer ? "an index buffer not made by this device" : "a nil index buffer");
     if (indexType != MTLIndexTypeUInt16 && indexType != MTLIndexTypeUInt32)
@@ -217,11 +217,10 @@ static void forwardCall(SwitchMetalEncoder *e, SEL selector, const void *argumen
 - (void)setRenderPipelineState:(id<MTLRenderPipelineState>)state
 {
     SWITCH_API(ApiState);
-    SwitchMetalPipeline *p = (SwitchMetalPipeline *)state;
-    if (![(id)p isKindOfClass:[SwitchMetalPipeline class]])
+    __unsafe_unretained SwitchMetalPipeline *next = gm20bAsPipeline(state);
+    if (!next)
         return gm20bCallInvalid(_cb, PredStateForeign, 0, 0,
                                 state ? "a render state not made by this device" : "a nil render state");
-    __unsafe_unretained SwitchMetalPipeline *next = p;
     const bool changed = _pipe != next;
     if (changed)
         _formSamplers[0] = _formSamplers[1] = 0;
@@ -314,9 +313,10 @@ static void forwardCall(SwitchMetalEncoder *e, SEL selector, const void *argumen
 
 - (void)setDepthStencilState:(id<MTLDepthStencilState>)s
 {
-    if (s && ![(id)s isKindOfClass:[SwitchMetalDepthStencil class]])
+    __unsafe_unretained SwitchMetalDepthStencil *ds = gm20bAsDepthStencil(s);
+    if (s && !ds)
         return gm20bCallInvalid(_cb, PredStateForeign, 0, 0, "a depth/stencil state not made by this device");
-    _ds = s ? ((SwitchMetalDepthStencil *)s)->_raw.desc() : gm20b::DepthStencilDesc();
+    _ds = ds ? ds->_raw.desc() : gm20b::DepthStencilDesc();
     _eligibility++;
     if (gm20b::testsHiddenZeta(_ds))
         _cb->_passes[_passAt].testsHiddenZeta = true;
@@ -475,10 +475,8 @@ static void recordDraw(__unsafe_unretained SwitchMetalRenderEncoder *e, MTLPrimi
 {
     SWITCH_API(ApiDraw);
     const uint64_t bytes = indexed ? 20 : 16;
-    SwitchMetalBuffer *buffer =
-        [(id)arguments isKindOfClass:[SwitchMetalBuffer class]] ? (SwitchMetalBuffer *)arguments : nil;
-    SwitchMetalBuffer *index =
-        [(id)indices isKindOfClass:[SwitchMetalBuffer class]] ? (SwitchMetalBuffer *)indices : nil;
+    SwitchMetalBuffer *buffer = gm20bAsBuffer(arguments);
+    SwitchMetalBuffer *index = gm20bAsBuffer(indices);
     if (!buffer)
         return gm20bCallInvalid(_cb, PredCallBufForeign, offset, bytes,
                                 arguments ? "indirect arguments of a buffer not made by this device"
@@ -546,7 +544,7 @@ static void recordDraw(__unsafe_unretained SwitchMetalRenderEncoder *e, MTLPrimi
 
 - (void)useHeap:(id<MTLHeap>)heap stages:(MTLRenderStages)stages
 {
-    if ([(id)heap isKindOfClass:[SwitchMetalHeap class]])
+    if (gm20bAsHeap(heap))
         [self useResource:(id<MTLResource>)heap usage:MTLResourceUsageRead stages:stages];
     else if (heap)
         gm20bCallInvalid(_cb, PredCallBufForeign, 0, stages, "a heap used (useHeap:) not made by this device");

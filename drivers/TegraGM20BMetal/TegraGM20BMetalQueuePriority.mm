@@ -9,7 +9,7 @@
 namespace {
 
 struct QueuePriorityState {
-    gm20b::Mutex lock;
+    gm20b::UnfairMutex lock;
     switch_metal::QueuePriorities priorities;
     uint32_t applied = switch_metal::QueuePriorities::kDefault;
     uint32_t appliedBackground = switch_metal::QueuePriorities::kDefaultBackground;
@@ -41,7 +41,7 @@ void apply(QueuePriorityState &s)
 void queuePriorityAdd(SwitchMetalQueue *queue)
 {
     QueuePriorityState &s = priorityState();
-    std::lock_guard<gm20b::Mutex> l(s.lock);
+    std::lock_guard<gm20b::UnfairMutex> l(s.lock);
     queue->_gpuPriority = switch_metal::QueuePriorities::kDefault;
     queue->_backgroundGpuPriority = switch_metal::QueuePriorities::kDefaultBackground;
     s.priorities.add(queue->_gpuPriority, queue->_backgroundGpuPriority);
@@ -50,7 +50,7 @@ void queuePriorityAdd(SwitchMetalQueue *queue)
 void queuePriorityRemove(SwitchMetalQueue *queue)
 {
     QueuePriorityState &s = priorityState();
-    std::lock_guard<gm20b::Mutex> l(s.lock);
+    std::lock_guard<gm20b::UnfairMutex> l(s.lock);
     s.priorities.remove(queue->_gpuPriority, queue->_backgroundGpuPriority);
     apply(s);
 }
@@ -61,7 +61,7 @@ static BOOL setPriority(SwitchMetalQueue *queue, NSUInteger priority, bool backg
     if (priority > switch_metal::QueuePriorities::kMax || !gRM || !gRM->raw->hasGpuPriority())
         return NO;
     QueuePriorityState &s = priorityState();
-    std::lock_guard<gm20b::Mutex> l(s.lock);
+    std::lock_guard<gm20b::UnfairMutex> l(s.lock);
     s.priorities.remove(queue->_gpuPriority, queue->_backgroundGpuPriority);
     (background ? queue->_backgroundGpuPriority : queue->_gpuPriority) = uint32_t(priority);
     s.priorities.add(queue->_gpuPriority, queue->_backgroundGpuPriority);
@@ -86,14 +86,14 @@ static BOOL setPriority(SwitchMetalQueue *queue, NSUInteger priority, bool backg
 - (NSUInteger)getGPUPriority
 {
     QueuePriorityState &s = priorityState();
-    std::lock_guard<gm20b::Mutex> l(s.lock);
+    std::lock_guard<gm20b::UnfairMutex> l(s.lock);
     return _gpuPriority;
 }
 
 - (NSUInteger)getBackgroundGPUPriority
 {
     QueuePriorityState &s = priorityState();
-    std::lock_guard<gm20b::Mutex> l(s.lock);
+    std::lock_guard<gm20b::UnfairMutex> l(s.lock);
     return _backgroundGpuPriority;
 }
 

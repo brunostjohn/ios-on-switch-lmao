@@ -135,7 +135,7 @@ inline std::string encodeReflectionEntry(const CacheKey &k, const std::string *b
 }
 
 // False: no entry of `k`; otherwise `made` says whether `text` is its blob or its refusal
-inline bool decodeReflectionEntry(const std::string &bytes, const CacheKey &k, bool &made, std::string &text)
+inline bool decodeReflectionEntry(std::string_view bytes, const CacheKey &k, bool &made, std::string &text)
 {
     Reader r(bytes);
     uint32_t kind = 0;

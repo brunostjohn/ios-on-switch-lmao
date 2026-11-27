@@ -273,7 +273,7 @@ bool Device::poolAlloc(std::unique_lock<gm20b::Mutex> &l, uint64_t bytes, Span &
                 chunkReady_.notify_all();
             if (!ready) {
                 os_log_fault(
-                    os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "gm20b"),
+                    gm20b::log(),
                     "SwitchMetal: pool chunk not wired after 20 s (the grower's import): abort() for the stack");
                 abort();
             }
@@ -288,14 +288,19 @@ bool Device::poolAlloc(std::unique_lock<gm20b::Mutex> &l, uint64_t bytes, Span &
 
 void Device::warm()
 {
+    ensurePackWindow();
     {
         std::unique_lock<gm20b::Mutex> l(lock_);
+        if (closing_)
+            return;
         uint32_t c;
-        while (poolFree_ <= sizes_.chunk && newChunk(sizes_.chunk, false, l, c)) {
+        while (!closing_ && poolFree_ <= sizes_.chunk && newChunk(sizes_.chunk, false, l, c)) {
         }  // the first and the one ahead of it
-        while (tiledFreeBytes(blChunks_) <= sizes_.blChunk &&
+        while (!closing_ && tiledFreeBytes(blChunks_) <= sizes_.blChunk &&
                newTiledChunk(blChunks_, fx::kBlockLinearKind, sizes_.blChunk, false, l, c)) {
         }  // and of block-linear images: the first frames' memoryless backings find room before the grower runs
+        if (closing_)
+            return;
     }
     if (!grower_.joinable())
         startGrower();
@@ -692,7 +697,7 @@ bool Device::tiledAlloc(std::unique_lock<gm20b::Mutex> &l, std::vector<Chunk> &c
             if (--offLockChunkOps_ == 0)
                 chunkReady_.notify_all();
             if (!ready) {
-                os_log_fault(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "gm20b"),
+                os_log_fault(gm20b::log(),
                              "SwitchMetal: block-linear chunk not wired after 20 s (the grower's import): abort() for "
                              "the stack");
                 abort();
@@ -1042,6 +1047,7 @@ uint32_t Device::wcChunksHeld()
 
 uint64_t Device::heapInPlaceBytes()
 {
+    ensurePackWindow();
     std::lock_guard<gm20b::Mutex> l(lock_);
     uint64_t bytes = packPages_.boundBytes();
     for (const StoreRegion &r : storeRegions_)
@@ -1188,7 +1194,7 @@ bool Device::ownChunkMemory(const void *bytes, uint64_t length, const char *what
     if (!overlaps(chunks_) && !overlaps(blChunks_) && !overlaps(wcChunks_) && !overlaps(volatileWcChunks_) &&
         std::none_of(std::begin(zChunks_), std::end(zChunks_), overlaps) && !inArena)
         return false;
-    os_log_error(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "gm20b"),
+    os_log_error(gm20b::log(),
                  "SwitchMetal: %{public}s: %{public}s over %llu bytes at %p: they lie in this process's own GPU memory "
                  "(a Metal buffer's contents), which no import may take",
                  getprogname(), what, (unsigned long long)length, bytes);

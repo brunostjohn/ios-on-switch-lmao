@@ -18,6 +18,7 @@
 //
 // Threads. The Device's resource calls take its lock; one CommandBuffer encodes and commits at a time (TegraGM20BMetal.mm serialises).
 #pragma once
+#include "gm20b_log.h"
 #include "lock.h"
 #include "dirty_ranges.h"
 #include "batch.h"
@@ -148,7 +149,8 @@ public:
     };
 
     ~Device();
-    bool open(const char *packPath, uint64_t stack, std::string &err, Role role = Role::RenderServer);
+    bool open(const char *packPath, uint64_t stack, std::string &err, Role role = Role::RenderServer,
+              bool asyncPackWindow = false);
 
     // What made open() fail (device_open.h)
     OpenFailure openFailure() const
@@ -169,7 +171,7 @@ public:
     // Why the kernel last refused the channel or its context (ensureChannel, or begin() making a killed channel again)
     std::string channelError()
     {
-        std::lock_guard<gm20b::Mutex> l(channelLock_);
+        std::lock_guard<gm20b::UnfairMutex> l(channelLock_);
         return channelError_;
     }
 
@@ -651,6 +653,7 @@ public:
     // the shader heap's bound bytes of host memory (the programs copied so far, in steps)
     uint64_t heapBytes() const
     {
+        ensurePackWindow();
         return heapBound_.load(std::memory_order_relaxed) - heapCopiesAt_;
     }
 
@@ -659,16 +662,19 @@ public:
 
     uint64_t packWindowVa() const
     {
+        ensurePackWindow();
         return packWindowVa_;
     }
 
     uint64_t packWindowBytes() const
     {
+        ensurePackWindow();
         return packWindowBytes_;
     }
 
     const uint8_t *packWindowCpu() const
     {
+        ensurePackWindow();
         return packWindowCpu_;
     }
 
@@ -1445,7 +1451,7 @@ private:
     OpenFailure openFailure_ = OpenFailure::Structural;
     std::atomic<bool> criticalPriority_{false};
     Sizes sizes_ = kSizes[0];
-    gm20b::Mutex lock_;
+    mutable gm20b::Mutex lock_;
     Kernel k_;
     // The BOs only this device's jobs touch (resource_set.h); setView_ is the submitting thread's
     ResourceSet set_;
@@ -1528,6 +1534,18 @@ private:
     // two differ
     std::atomic<uint64_t> tablesWritten_{0};
     uint64_t tablesInvalidated_ = 0;
+    std::atomic<uint64_t> ticWritten_{1}, tscWritten_{1};
+    uint64_t ticInvalidated_ = 0, tscInvalidated_ = 0;
+
+    void noteTicWrite()
+    {
+        ticWritten_.fetch_add(1, std::memory_order_release);
+    }
+
+    void noteTscWrite()
+    {
+        tscWritten_.fetch_add(1, std::memory_order_release);
+    }
     HeapHolds heapHolds_ = nullptr;
     bool heapMemory();
     const HeapSet *heapSet(const HeapLayout &layout);
@@ -1616,7 +1634,7 @@ private:
         return semanticFenceAt(fence_.load(std::memory_order_acquire), seqno);
     }
 
-    gm20b::Mutex channelLock_;
+    gm20b::UnfairMutex channelLock_;
     std::atomic<bool> channelReady_{false};
     ChannelGenerations generations_;
     // channelLock_'s until the first channel is made (ensureChannel), then the submit thread's (reopen), as contextless_
@@ -1707,6 +1725,22 @@ private:
 
     bool slmNeed(uint64_t perWarp);
     uint64_t programSlm(const PlacedProgram &p) const;
+    std::atomic<bool> packWindowReady_{true}, packInitDone_{true};
+    bool packWindowOk_ = true;
+    mutable gm20b::CondVar packWindowCv_;
+
+    void waitPackWindow() const;
+    void runAsyncPackWindow();
+
+    void ensurePackWindow() const
+    {
+        if (__builtin_expect(packWindowReady_.load(std::memory_order_acquire), 1))
+            return;
+        waitPackWindow();
+    }
+
+    bool finishPackWindow(std::string &err);
+    void warmRenderServer();
     bool initPackWindow(std::string &err);
     bool place(uint32_t prog, uint32_t &program, uint64_t &data);
     bool heapGrow(uint64_t end);
@@ -1841,6 +1875,8 @@ private:
     uint32_t rtLayer_ = ~0u;         // and SET_RT_LAYER (~0: not known)
     uint32_t alphaHeld_ = ~0u;       // and SET_ANTI_ALIAS_ALPHA_CONTROL (~0: not known)
     uint32_t sampleMaskHeld_ = ~0u;  // and SET_SAMPLE_MASK_X0_Y0..X1_Y1 (~0: not known)
+    bool clampRangeHeld_ = false;
+    uint32_t clampRange_[2] = {};
     DepthStencilRegs ds_;            // and its depth/stencil registers
     uint32_t tiledCacheSize_ = kTiledCacheDefaultSize;
     std::map<std::tuple<uint64_t, uint64_t, uint64_t>, Import *> surfaces_;
@@ -2236,7 +2272,7 @@ private:
     // dropped is left
     std::atomic<bool> nativeStale_{false};
 
-    bool init(std::string &err);
+    bool init(std::string &err, bool asyncPackWindow);
     bool openChannel(std::string &err, bool &gaveBack);
     void growRing(Ring &r, uint64_t most);
     void freeChunk(Chunk &ch, DeferredFrees &deferred);
@@ -2268,7 +2304,7 @@ private:
     std::vector<KillRange> failedSeqnos() const;
     void forgetKept();
     const volatile uint32_t *keptSlot_ = &kNoFence;  // the fence record of the slot the kept records were written in
-    mutable gm20b::Mutex killedLock_;
+    mutable gm20b::UnfairMutex killedLock_;
     std::atomic<bool> keptKills_{false};
     std::atomic<uint32_t> keptThrough_{0};
     std::array<Killed, 4> killedKept_{};

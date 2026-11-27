@@ -136,8 +136,8 @@ void pooledDealloc(id self, SEL)
 
 bool gm20bPoolInstances(Class cls, void (*dropped)(void *object))
 {
-    static gm20b::Mutex lock;
-    std::lock_guard<gm20b::Mutex> l(lock);
+    static gm20b::UnfairMutex lock;
+    std::lock_guard<gm20b::UnfairMutex> l(lock);
     const uint32_t at = gPoolCount.load(std::memory_order_relaxed);
     if (!cls || poolOf(cls) || at == kPools)
         return false;

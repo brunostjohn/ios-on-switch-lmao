@@ -138,7 +138,7 @@ SplitState *Device::makeSplit(Pipeline &pl)
         stats.heapFull++;
         SWITCH_METAL_DIAGNOSTIC(stats.splitRoomRefusals++);
         os_log_error(
-            os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "gm20b"),
+            gm20b::log(),
             "SwitchMetal: a split twin found no room in the shader heap or local memory: this draw draws whole");
         return nullptr;
     }

@@ -53,7 +53,7 @@ void Completion::logInProcessCa(const Ask &a, const CacheKey &k, RecordCache::Fo
     if (!caLabelSpec(utf8))
         return;
     {
-        std::lock_guard<gm20b::Mutex> hold(inProcessCaLock_);
+        std::lock_guard<gm20b::UnfairMutex> hold(inProcessCaLock_);
         if (!inProcessCaSeen_.insert(utf8).second)
             return;
     }
@@ -68,14 +68,15 @@ void Completion::logInProcessCa(const Ask &a, const CacheKey &k, RecordCache::Fo
 }
 #endif
 
-Completion::Completion(Device &device, const char *cacheDir, uint64_t stack, const char *seedDir)
+Completion::Completion(Device &device, const char *cacheDir, uint64_t stack, const char *seedDir,
+                       std::function<std::string()> resolveCacheDir)
     : device_(device), stack_(stack), queue_(answerQueue("com.brunostjohn.switch.gm20b.complete")),
       persistenceQueue_(
           dispatch_queue_create("com.brunostjohn.switch.gm20b.kernel-cache",
                                 dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_UTILITY, 0))),
       pending_(dispatch_group_create()), forms_(dispatch_group_create())
 {
-    const bool writable = cacheDir && *cacheDir && cache_.attach(cacheDir, stack_, kCacheCap);
+    const bool writable = !resolveCacheDir && cacheDir && *cacheDir && cache_.attach(cacheDir, stack_, kCacheCap, true);
     if (seedDir && *seedDir)
         cache_.attachSeed(seedDir, stack_);
     compiler_ = std::make_unique<Compiler>(&cache_, [](const CacheKey &, RuntimeRecord &, std::string &why) {
@@ -97,14 +98,26 @@ Completion::Completion(Device &device, const char *cacheDir, uint64_t stack, con
             "SwitchMetal: %{public}s has no shader compiler this boot: a state its pack, seed and store lack fails "
             "its creation",
             getprogname());
-    // the directory taken at once, for the lookups at state creation; its scan (another build's entries removed, the bytes
-    // kept counted) on the queue, before any store there
-    if (writable)
+    if (resolveCacheDir) {
+        auto resolver = std::make_shared<std::function<std::string()>>(std::move(resolveCacheDir));
+        dispatch_async(persistenceQueue_, ^{
+            if (stopping_.load(std::memory_order_acquire))
+                return;
+            const std::string resolved = (*resolver)();
+            if (resolved.empty())
+                return;
+            if (cache_.attach(resolved, stack_, kCacheCap, true))
+                cache_.tidy();
+            else
+                NSLog(@"TegraGM20BMetal: raw records kept in memory only: %s takes no entry", resolved.c_str());
+        });
+    } else if (writable) {
         dispatch_async(persistenceQueue_, ^{
             cache_.tidy();
         });
-    else if (cacheDir && *cacheDir)
+    } else if (cacheDir && *cacheDir) {
         NSLog(@"TegraGM20BMetal: raw records kept in memory only: %s takes no entry", cacheDir);
+    }
 }
 
 Completion::~Completion()
@@ -316,13 +329,13 @@ const ComputeState *Completion::kernel(MTLComputePipelineDescriptor *descriptor,
     k.key = "kernel | " + key;
     std::shared_ptr<Kernel> job;
     {
-        std::lock_guard<gm20b::Mutex> mapLock(kernelLock_);
+        std::lock_guard<gm20b::UnfairMutex> mapLock(kernelLock_);
         auto &entry = kernels_[k.name()];
         if (!entry)
             entry = std::make_shared<Kernel>();
         job = entry;
     }
-    std::lock_guard<gm20b::Mutex> hold(job->lock);
+    std::lock_guard<gm20b::UnfairMutex> hold(job->lock);
     using Build = ComputeKernelBuild<ComputeRecord, ComputeState>;
     std::string why;
     bool attempted = false;

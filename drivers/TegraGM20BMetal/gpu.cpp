@@ -18,12 +18,15 @@
 #include "stamps.h"
 #include "tiled_cache.h"
 
+#include <dispatch/dispatch.h>
 #include <mach/mach.h>
 #if SWITCH_METAL_DIAGNOSTICS
 #include <mach/mach_time.h>
 #endif
 #include <mach/vm_page_size.h>
 #include <os/log.h>
+#include <pthread.h>
+#include <pthread/qos.h>
 #include <sys/mman.h>
 #include <algorithm>
 #include <cstdlib>
@@ -348,13 +351,16 @@ void Device::retire(Ring &r, uint32_t seqno)
 
 Device::~Device()
 {
-    transfers_.close(k_, lock_);
-    // the render server keeps its device until it exits; a host test's device: the kernel frees what the connection held
     {
-        std::lock_guard<gm20b::Mutex> l(lock_);
+        std::unique_lock<gm20b::Mutex> l(lock_);
         stopping_ = true;
         closing_ = true;
+        packWindowCv_.wait(l, [&] {
+            return packInitDone_.load(std::memory_order_acquire);
+        });
     }
+    transfers_.close(k_, lock_);
+    // the render server keeps its device until it exits; a host test's device: the kernel frees what the connection held
     grow_.notify_all();
     grown_.notify_all();
     if (grower_.joinable())
@@ -428,12 +434,13 @@ void Device::emitContext(Push &p)
         ds_ = unknown;
     }
     heldSegment_.lose();
+    clampRangeHeld_ = false;
     // root table selected for LOAD_CONSTANT_BUFFER from here on (draws reselect it after binding set 0 as a cbuf); NVK's init
     // above zeroed it, so one sample's layout goes in now, as every pass but a multisampled one leaves it
     sampleWords(p, 1, root_.va);
 }
 
-bool Device::open(const char *packPath, uint64_t stack, std::string &err, Role role)
+bool Device::open(const char *packPath, uint64_t stack, std::string &err, Role role, bool asyncPackWindow)
 {
     role_ = role;
     sizes_ = kSizes[role == Role::RenderServer ? 0 : 1];
@@ -453,7 +460,7 @@ bool Device::open(const char *packPath, uint64_t stack, std::string &err, Role r
     }
     ZcullRegion probe;
     zcullOn_ = k_.zcullInfo(zcullInfo_) == KERN_SUCCESS && zcullRegion(zcullInfo_, 0, 0, 1, 1, probe);
-    return init(err);
+    return init(err, asyncPackWindow);
 }
 
 // The interlock's ticket words (nak_nir_lower_fs_interlock.c interlock_ticket_word): word (SR_AFFINITY & 0xff) * 256 +
@@ -461,9 +468,92 @@ bool Device::open(const char *packPath, uint64_t stack, std::string &err, Role r
 // buffer would spin on and add into the control memory mapped after it without a fault
 constexpr uint32_t kTicketBytes = 256 * 256 * 4;
 
+void Device::waitPackWindow() const
+{
+    std::unique_lock<gm20b::Mutex> l(lock_);
+    packWindowCv_.wait(l, [&] {
+        return packWindowReady_.load(std::memory_order_acquire);
+    });
+}
+
+void Device::runAsyncPackWindow()
+{
+    std::string packErr;
+    const bool ok = finishPackWindow(packErr);
+    if (!ok)
+        os_log_error(gm20b::log(), "SwitchMetal: pack window init failed: %{public}s", packErr.c_str());
+    bool warmServer = false;
+    {
+        std::lock_guard<gm20b::Mutex> l(lock_);
+        packWindowOk_ = ok;
+        packWindowReady_.store(true, std::memory_order_release);
+        warmServer = ok && role_ == Role::RenderServer && !closing_;
+    }
+    packWindowCv_.notify_all();
+    if (warmServer)
+        warmRenderServer();
+    {
+        std::lock_guard<gm20b::Mutex> l(lock_);
+        packInitDone_.store(true, std::memory_order_release);
+    }
+    packWindowCv_.notify_all();
+}
+
+bool Device::finishPackWindow(std::string &err)
+{
+    if (!initPackWindow(err))
+        return false;
+    const PackHeader &h = *pack_.header();
+    const uint64_t page = k_.info().page_size;
+    uint64_t mapped = 0;
+    for (const PackSection &section : h.section)
+        mapped = std::max(mapped, (section.offset + section.bytes + page - 1) / page * page);
+    const uint64_t heapStart = h.section[PackHeap].offset + packWindowBytes_;
+    packPages_.reset(heapStart, mapped, mapped, packWindowBytes_);
+    const uint64_t packEnd = std::max(packWindowBytes_, packPages_.windowEnd());
+    heapCopiesAt_ = heapPlaced_ = (packEnd + kHeapStep - 1) & ~(kHeapStep - 1);
+    heapBound_.store(heapCopiesAt_, std::memory_order_relaxed);
+    heapStoresAt_ = heapCopiesAt_ + kHeapCopiesWindow;
+    tier0Pipelines_.reset(uint32_t(pack_.tier0Entries(PackPipelines, sizeof(PackPipeline))));
+    if (packWindowBytes_ && h.tier0SlmPerWarp) {
+        std::lock_guard<gm20b::Mutex> l(lock_);
+        (void)slmNeed(h.tier0SlmPerWarp);
+    }
+    return true;
+}
+
+void Device::warmRenderServer()
+{
+    {
+        std::lock_guard<gm20b::Mutex> l(lock_);
+        if (closing_)
+            return;
+    }
+    if (!ensureChannel())
+        return;
+    {
+        DeferredFrees deferred(*this);
+        std::unique_lock<gm20b::Mutex> l(lock_);
+        if (closing_)
+            return;
+        if (!packWindowBytes_)
+            heapGrow(heapCopiesAt_ + std::min<uint64_t>(pack_.bytes(PackHeap) + kHeapSlack, kHeapAtOpen));
+        Span first;
+        if (blAlloc(l, 1, 0, first))
+            blFree(first, deferred);
+        uint32_t chunk;
+        newChunk(sizes_.chunk, false, l, chunk);
+    }
+    warm();
+#if SWITCH_METAL_DIAGNOSTICS
+    os_log(gm20b::log(), "SwitchMetal: shader heap %llu KB, each program placed at its state's first use",
+           (unsigned long long)((heapBound_.load(std::memory_order_relaxed) - heapCopiesAt_) >> 10));
+#endif
+}
+
 // Every process's: the header pools, the root table, the zero page, the interlock tickets and the shader heap's reservation,
 // which textures, samplers and states need before any submission. The render server's channel, heap and first chunks too.
-bool Device::init(std::string &err)
+bool Device::init(std::string &err, bool asyncPackWindow)
 {
     if (!k_.allocControl(kTicCount * 32, tic_, ControlUse::TextureHeaders) ||
         !k_.allocControl(kTscCount * 32, tsc_, ControlUse::SamplerHeaders) ||
@@ -488,14 +578,12 @@ bool Device::init(std::string &err)
 #if SWITCH_METAL_DIAGNOSTICS
     static std::once_flag ticketsLogged;
     std::call_once(ticketsLogged, [this] {
-        os_log(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "gm20b"),
+        os_log(gm20b::log(),
                "SwitchMetal: interlock tickets mapped %{public}s at 0x%llx",
                tickets_.gpuVolatile ? "volatile (GPU L2 bypassed)" : "cached (GPU L2)",
                (unsigned long long)tickets_.va);
     });
 #endif
-    if (!initPackWindow(err))
-        return false;
     memset(tic_.cpu, 0, tic_.bytes);
     memset(tsc_.cpu, 0, tsc_.bytes);
     memset(root_.cpu, 0, root_.bytes);
@@ -598,24 +686,16 @@ bool Device::init(std::string &err)
         chunk = {bo.cpu, bo.va, bo.bytes};
         return true;
     });
-    {
-        const PackHeader &h = *pack_.header();
-        const uint64_t page = k_.info().page_size;
-        uint64_t mapped = 0;
-        for (const PackSection &section : h.section)
-            mapped = std::max(mapped, (section.offset + section.bytes + page - 1) / page * page);
-        const uint64_t heapStart = h.section[PackHeap].offset + packWindowBytes_;
-        packPages_.reset(heapStart, mapped, mapped, packWindowBytes_);
-        const uint64_t packEnd = std::max(packWindowBytes_, packPages_.windowEnd());
-        heapCopiesAt_ = heapPlaced_ = (packEnd + kHeapStep - 1) & ~(kHeapStep - 1);
-        heapBound_.store(heapCopiesAt_, std::memory_order_relaxed);
-        heapStoresAt_ = heapCopiesAt_ + kHeapCopiesWindow;
-        tier0Pipelines_.reset(uint32_t(pack_.tier0Entries(PackPipelines, sizeof(PackPipeline))));
-        if (packWindowBytes_ && h.tier0SlmPerWarp) {
-            std::lock_guard<gm20b::Mutex> l(lock_);
-            (void)slmNeed(h.tier0SlmPerWarp);
-        }
+    if (asyncPackWindow) {
+        packWindowReady_.store(false, std::memory_order_relaxed);
+        packInitDone_.store(false, std::memory_order_relaxed);
+        dispatch_async_f(dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0), this, [](void *ctx) {
+            static_cast<Device *>(ctx)->runAsyncPackWindow();
+        });
+        return true;
     }
+    if (!finishPackWindow(err))
+        return false;
     if (role_ == Role::Client)
         return true;
     if (!ensureChannel()) {
@@ -642,7 +722,7 @@ bool Device::ensureChannel()
 {
     if (channelReady_.load(std::memory_order_acquire))
         return true;
-    std::lock_guard<gm20b::Mutex> l(channelLock_);
+    std::lock_guard<gm20b::UnfairMutex> l(channelLock_);
     if (channelReady_.load(std::memory_order_relaxed))
         return true;
     if (!channelRefusal_.mayAsk(k_))
@@ -662,6 +742,12 @@ bool Device::ensureChannel()
 // back, so a later call starts over; `gaveBack`: a channel among it.
 bool Device::openChannel(std::string &err, bool &gaveBack)
 {
+    ensurePackWindow();
+    if (!packWindowOk_) {
+        err = "no GPU VA for the shader heap's program window";
+        gaveBack = false;
+        return false;
+    }
     uint32_t ch = 0;
     const volatile uint32_t *fence = &kNoFence;
     auto undo = [&](bool created) {
@@ -724,7 +810,7 @@ bool Device::initPackWindow(std::string &err)
         const int kr = k_.packImageMap(cpuRanges, cpuRangeCount, reply);
         for (uint32_t i = 0; i < cpuRangeCount; ++i)
             madvise(reinterpret_cast<void *>(uintptr_t(cpuRanges[i].address)), size_t(cpuRanges[i].bytes), MADV_NORMAL);
-        const os_log_t log = os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "gm20b");
+        const os_log_t log = gm20b::log();
         const char *proc = getprogname();
         const char *who = proc ? proc : "unknown";
         if (kr != KERN_SUCCESS) {
@@ -1028,7 +1114,7 @@ bool Device::placeInPlace(ProgramPages &pages, const uint8_t *file, uint64_t fil
             chunkReady_.notify_all();
         if (!imported) {
             os_log_error(
-                os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "gm20b"),
+                gm20b::log(),
                 "SwitchMetal: the kernel refused %llu KiB of program pages at file offset 0x%llx: copied instead",
                 (unsigned long long)(r.bytes >> 10), (unsigned long long)r.offset);
             return false;
@@ -1036,7 +1122,7 @@ bool Device::placeInPlace(ProgramPages &pages, const uint8_t *file, uint64_t fil
         if (!bound) {
             if (!closing)
                 os_log_error(
-                    os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "gm20b"),
+                    gm20b::log(),
                     "SwitchMetal: the program pages at file offset 0x%llx would not bind in the window: copied instead",
                     (unsigned long long)r.offset);
             return false;

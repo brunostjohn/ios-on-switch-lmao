@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <string_view>
 #include <vector>
 #include "gm20b_cache.h"
 
@@ -44,7 +45,7 @@ public:
 
 class Reader {
 public:
-    explicit Reader(const std::string &in) : in_(in)
+    explicit Reader(std::string_view in) : in_(in)
     {}
 
     bool bytes(void *p, size_t n)
@@ -63,14 +64,19 @@ public:
         return v;
     }
 
-    std::string text()
+    std::string_view textView()
     {
         const uint32_t n = value<uint32_t>();
         if (!ok_ || n > in_.size() - at_)
-            return ok_ = false, std::string();
-        std::string s = in_.substr(at_, n);
+            return ok_ = false, std::string_view();
+        const std::string_view s = in_.substr(at_, n);
         at_ += n;
         return s;
+    }
+
+    std::string text()
+    {
+        return std::string(textView());
     }
 
     template <class T> std::vector<T> list()
@@ -94,13 +100,13 @@ public:
     }
 
 private:
-    const std::string &in_;
+    std::string_view in_;
     size_t at_ = 0;
     bool ok_ = true;
 };
 
 void writeEntryHead(Writer &w, const CacheKey &k, uint32_t kind);
 // False: not an entry of `k` (its head or its key differ)
-bool readEntryHead(const std::string &bytes, Reader &r, const CacheKey &k, uint32_t &kind);
+bool readEntryHead(std::string_view bytes, Reader &r, const CacheKey &k, uint32_t &kind);
 
 }  // namespace gm20b

@@ -587,7 +587,8 @@ void Device::purgeArena(uint32_t arena, const std::atomic<uint32_t> &committed)
 {
     std::unique_lock<gm20b::Mutex> l(lock_);
     waitArena(l, arena);
-    if (arena < arenas_.size() && arenaPurgeable(arenas_[arena], done(submitted()), committed.load() != 0, true))
+    if (arena < arenas_.size() &&
+        arenaPurgeable(arenas_[arena], done(submitted()), committed.load(std::memory_order_acquire) != 0, true))
         purgeLocked(l, arena, committed);
 }
 
@@ -602,7 +603,7 @@ void Device::purgeArenas(const std::atomic<uint32_t> &committed, PurgeStats *sta
         if (!a.used || a.purged || !a.isVolatile)
             continue;
         const bool idle = done(submitted());
-        const uint32_t committedNow = committed.load();
+        const uint32_t committedNow = committed.load(std::memory_order_acquire);
         const uint64_t bytes = a.bytes;
         const bool nonEmpty = a.place.used() != 0;
         if (!a.busy && arenaPurgeable(a, idle, committedNow != 0, false)) {
@@ -620,7 +621,7 @@ void Device::purgeArenas(const std::atomic<uint32_t> &committed, PurgeStats *sta
                 if (parkBusy) {
                     stats->busy++;
                 } else {
-                    const uint32_t after = committed.load();
+                    const uint32_t after = committed.load(std::memory_order_relaxed);
                     stats->committed++;
                     stats->committedCount = std::max(stats->committedCount, after ? after : 1u);
                 }
@@ -652,7 +653,8 @@ void Device::purgeArenas(const std::atomic<uint32_t> &committed)
 {
     std::unique_lock<gm20b::Mutex> l(lock_);
     for (uint32_t i = 0; i < arenas_.size(); ++i)
-        if (!arenas_[i].busy && arenaPurgeable(arenas_[i], done(submitted()), committed.load() != 0, false))
+        if (!arenas_[i].busy &&
+            arenaPurgeable(arenas_[i], done(submitted()), committed.load(std::memory_order_acquire) != 0, false))
             purgeLocked(l, i, committed);
 }
 #endif
@@ -723,7 +725,7 @@ void Device::trimLocked(std::unique_lock<gm20b::Mutex> &l, uint32_t index, const
         parts.clear();
         whole = bindOne(0, bytes, wholeBo);
         SWITCH_METAL_DIAGNOSTIC(if (whole) zeroedBytes += bytes);
-        os_log_error(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "gm20b"),
+        os_log_error(gm20b::log(),
                      "SwitchMetal: %{public}s: the kernel refused a trimmed heap's part of %llu bytes at %llu: the "
                      "heap of %llu bytes is %{public}s",
                      getprogname(), (unsigned long long)refused.bytes, (unsigned long long)refused.offset,

@@ -39,7 +39,7 @@ void Device::beginDrawTimes(CommandBuffer &cb, Push &p)
     if (drawTimes_.asking()) {
         if (!drawTimeMarks_.va && !openDrawTimes()) {
             drawTimes_.cancel();
-            os_log_error(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "gm20b"),
+            os_log_error(gm20b::log(),
                          "SwitchMetal: fw refused: no memory the GPU may write for the capture's marks");
             return;
         }
@@ -95,7 +95,7 @@ void Device::reportDrawTimes()
         return gpuNanoseconds(stamp, ns) ? int64_t(ns) : int64_t(-1);
     };
     const auto *marks = reinterpret_cast<const volatile TimedMark *>(drawTimeMarks_.cpu);
-    const os_log_t log = os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "gm20b");
+    const os_log_t log = gm20b::log();
     for (const std::string &line : drawTimes_.report(marks, getprogname(), ran, stamps, gpuNs))
         os_log(log, "SwitchMetal: fw %{public}s", line.c_str());
 }

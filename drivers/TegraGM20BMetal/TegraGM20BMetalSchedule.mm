@@ -20,10 +20,11 @@ void enqueueBuffer(SwitchMetalCommandBuffer *cb)
     uint8_t none = 0;
     if (!cb->_enqueueState.compare_exchange_strong(none, 2, std::memory_order_acq_rel))
         return;
-    cb->_before =
-        (__bridge_transfer SwitchMetalCommandBuffer *)cb->_queue->_last.exchange((__bridge_retained void *)cb);
+    cb->_before = (__bridge_transfer SwitchMetalCommandBuffer *)cb->_queue->_last.exchange(
+        (__bridge_retained void *)cb, std::memory_order_acq_rel);
     MTLCommandBufferStatus status = MTLCommandBufferStatusNotEnqueued;
-    cb->_status.compare_exchange_strong(status, MTLCommandBufferStatusEnqueued);
+    cb->_status.compare_exchange_strong(status, MTLCommandBufferStatusEnqueued, std::memory_order_acq_rel,
+                                        std::memory_order_relaxed);
     gRM->schedule.push({SwitchMetalScheduleChange::Enqueue, cb}, false);  // nothing to submit until its commit
 }
 
@@ -31,8 +32,8 @@ bool gm20bClaimCommitSlot(SwitchMetalCommandBuffer *cb)
 {
     uint8_t none = 0;
     if (cb->_enqueueState.compare_exchange_strong(none, 1, std::memory_order_acq_rel)) {
-        cb->_before =
-            (__bridge_transfer SwitchMetalCommandBuffer *)cb->_queue->_last.exchange((__bridge_retained void *)cb);
+        cb->_before = (__bridge_transfer SwitchMetalCommandBuffer *)cb->_queue->_last.exchange(
+            (__bridge_retained void *)cb, std::memory_order_acq_rel);
         return false;
     }
     return none == 2;
@@ -48,14 +49,14 @@ static void appendImportHandle(const gm20b::Import *import, std::vector<uint64_t
 static void appendSurfaceHandles(void *object, const SwitchMetalResourceFacts *facts, std::vector<uint64_t> &handles)
 {
     const bool isBuffer = facts ? facts->kind == SwitchMetalResourceKind::Buffer
-                                : [(__bridge id)object isKindOfClass:[SwitchMetalBuffer class]];
+                                : gm20bAsBuffer((__bridge id)object) != nil;
     if (isBuffer) {
         __unsafe_unretained SwitchMetalBuffer *buffer = (__bridge SwitchMetalBuffer *)object;
         appendImportHandle(buffer->_raw.import, handles);
         return;
     }
     const bool isTexture = facts ? facts->kind == SwitchMetalResourceKind::Texture
-                                 : [(__bridge id)object isKindOfClass:[SwitchMetalTexture class]];
+                                 : gm20bAsTexture((__bridge id)object) != nil;
     if (!isTexture)
         return;
     __unsafe_unretained SwitchMetalTexture *texture = (__bridge SwitchMetalTexture *)object;
@@ -91,7 +92,7 @@ static void promiseWrites(SwitchMetalCommandBuffer *cb, const std::vector<uint64
     if (handles.empty())
         return;
     {
-        std::lock_guard<gm20b::Mutex> l(cb->_lock);
+        std::lock_guard<gm20b::UnfairMutex> l(cb->_lock);
         if (cb->_promised.load(std::memory_order_relaxed) || cb->_promisesTaken)
             return;
         cb->_promised.store(true, std::memory_order_release);
@@ -111,7 +112,7 @@ static void promiseWrites(SwitchMetalCommandBuffer *cb, const std::vector<uint64
     }
     bool late;
     {
-        std::lock_guard<gm20b::Mutex> l(cb->_lock);
+        std::lock_guard<gm20b::UnfairMutex> l(cb->_lock);
         late = cb->_promisesTaken;
         if (!late)
             cb->_promises = made;
@@ -135,7 +136,7 @@ void cancelPromises(SwitchMetalCommandBuffer *cb)
     std::vector<uint32_t> left;
     bool promised;
     {
-        std::lock_guard<gm20b::Mutex> l(cb->_lock);
+        std::lock_guard<gm20b::UnfairMutex> l(cb->_lock);
         promised = cb->_promised.load(std::memory_order_relaxed);
         cb->_promisesTaken = true;
         left.swap(cb->_promises);
@@ -167,7 +168,7 @@ static void armBound(SwitchMetalCommandBuffer *cb, gm20b::EventDeadline::Time du
 {
     uint32_t mask = 0;
     {
-        std::lock_guard<gm20b::Mutex> l(cb->_lock);
+        std::lock_guard<gm20b::UnfairMutex> l(cb->_lock);
         for (uint32_t id : cb->_promises)
             mask |= 1u << id;
     }
@@ -256,7 +257,7 @@ void commitBuffer(SwitchMetalCommandBuffer *cb)
         restoreArenas(cb);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     if (waitsForEvent(cb)) {
-        std::lock_guard<gm20b::Mutex> h(gHoldersLock);
+        std::lock_guard<gm20b::UnfairMutex> h(gHoldersLock);
         gHolders.insert(cb);
         cb->_inHolders.store(true, std::memory_order_release);
     }
@@ -395,7 +396,7 @@ static bool promiseWritesEarly(SwitchMetalCommandBuffer *cb, const std::vector<u
         return false;
     }
     {
-        std::lock_guard<gm20b::Mutex> l(cb->_lock);
+        std::lock_guard<gm20b::UnfairMutex> l(cb->_lock);
         if (cb->_promised.load(std::memory_order_relaxed) || cb->_promisesTaken)
             return false;
     }
@@ -416,7 +417,7 @@ static bool promiseWritesEarly(SwitchMetalCommandBuffer *cb, const std::vector<u
     }
     bool late = false;
     {
-        std::lock_guard<gm20b::Mutex> l(cb->_lock);
+        std::lock_guard<gm20b::UnfairMutex> l(cb->_lock);
         late = cb->_promisesTaken || cb->_promised.load(std::memory_order_relaxed);
         if (!late) {
             cb->_promises = std::move(made);
@@ -459,7 +460,7 @@ static bool scheduleAppEarly(SwitchMetalCommandBuffer *cb, bool atCommit)
     // Non-presenting IOSurface writers must reach the kernel before waitUntilScheduled returns so an immediate
     // IOSurfaceLock sees the write; presenting drawables wait for completion via deferPresent.
     if (!cb->_presents.load(std::memory_order_acquire)) {
-        std::vector<uint64_t> handles;
+        static thread_local std::vector<uint64_t> handles;
         earlyWrittenSurfaces(cb, handles);
         if (!handles.empty())
             return false;
@@ -554,7 +555,7 @@ static void applyChange(GM20BState &r, const SwitchMetalScheduleChange &change)
         r.waiting.commit((__bridge void *)cb->_queue, cb, cb->_reservation, &held);
         if (held) {
             promiseWrites(cb, writtenSurfaces(cb));
-            cb->_held = true;
+            cb->_held.store(true, std::memory_order_release);
             armBound(cb, cb->_queue->_heldBound);
             cb->_submitOwner.clearIf(r.submitThread.load(std::memory_order_relaxed));
             gm20bChanged(cb);
@@ -639,7 +640,7 @@ static int variantReadiness(SwitchMetalCommandBuffer *cb, const SwitchMetalSegme
 static gm20b::HeadWait eventWait(SwitchMetalCommandBuffer *cb)
 {
     {
-        std::lock_guard<gm20b::Mutex> l(cb->_lock);
+        std::lock_guard<gm20b::UnfairMutex> l(cb->_lock);
         if (cb->_finishState.pending() || cb->_resourceReady)
             return gm20b::HeadWait::signal;
     }
@@ -658,7 +659,7 @@ static void markHeld(std::vector<SwitchMetalCommandBuffer *> &buffers, bool held
     for (SwitchMetalCommandBuffer *cb : buffers) {
         if (held)
             promiseWrites(cb, writtenSurfaces(cb));
-        cb->_held = held;
+        cb->_held.store(held, std::memory_order_release);
         if (held && cb != head)
             armBound(cb, cb->_queue->_heldBound);
         if (held) {
@@ -737,7 +738,7 @@ void submitLoop()
             const auto failed = [cb]() -> NSError * {
                 if (!cb->_segError.set())
                     return nil;
-                std::lock_guard<gm20b::Mutex> l(cb->_lock);
+                std::lock_guard<gm20b::UnfairMutex> l(cb->_lock);
                 return cb->_segError;
             };
             NSError *error = failed();

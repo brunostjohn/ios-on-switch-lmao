@@ -65,7 +65,7 @@ static gm20b::Variant<gm20b::Pipeline> *renderVariant(SwitchMetalPipeline *p, co
 {
     std::shared_ptr<gm20b::Variant<gm20b::Pipeline>> variant;
     {
-        std::lock_guard<gm20b::Mutex> lock(p->_variantLock);
+        std::lock_guard<gm20b::UnfairMutex> lock(p->_variantLock);
         auto [at, inserted] = p->_variants.try_emplace(forms.name());
         if (inserted)
             at->second = std::make_shared<gm20b::Variant<gm20b::Pipeline>>();

@@ -148,6 +148,7 @@ void Device::ycbcrImageHeader(Texture &t, uint8_t output, uint32_t packedCodes)
     // Y_SOURCE of a one-code texel, ZERO)
     if (output == YcbcrPackedPlane)
         w[0] &= ~(7u << 25 | (packedCodes == 1 ? 7u << 22 : 0u));
+    noteTicWrite();
 }
 
 }  // namespace gm20b

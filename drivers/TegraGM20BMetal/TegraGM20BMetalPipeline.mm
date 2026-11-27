@@ -55,7 +55,7 @@ void giveBack(uint32_t veto)
         return;
     if (a.open) {
         gm20bRangeEncode().reset();
-        gRM->committed.fetch_sub(1);
+        gRM->committed.fetch_sub(1, std::memory_order_release);
         cb->_pipelineAbandons++;
         cb->_pipelineGivenBack |= veto;
         SWITCH_METAL_DIAGNOSTIC(gRM->stats.pipelineAbandons[__builtin_ctz(veto ? veto : uint32_t(VetoFailed))]++);
@@ -184,7 +184,7 @@ bool gm20bPipelineStep()
             gRM->committed.fetch_add(1);
             if (gRM->raw->purgedArenas()) {
                 encode.reset();
-                gRM->committed.fetch_sub(1);
+                gRM->committed.fetch_sub(1, std::memory_order_release);
                 giveBack(VetoDevice);
                 return true;
             }
@@ -257,7 +257,7 @@ bool gm20bPipelineTake(SwitchMetalCommandBuffer *cb, size_t from)
 #if SWITCH_METAL_DIAGNOSTICS
     cb->_pipelinedEncoders = encodersBefore(cb, encode.position());
 #endif
-    gRM->committed.fetch_sub(1);
+    gRM->committed.fetch_sub(1, std::memory_order_release);
     a.cb = nil;
     a.open = false;
     return true;

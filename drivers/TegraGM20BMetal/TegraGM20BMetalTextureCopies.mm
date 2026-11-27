@@ -304,6 +304,8 @@ SwitchMetalTexture *cpuOwner(SwitchMetalTexture *t)
         uint8_t *to = _raw.cpu + (e.origin.y + y) * _raw.pitch + e.origin.x * _raw.bpp;
         memcpy(to, (const uint8_t *)bytes + y * row, line);
     }
+    if (_buffer)
+        _buffer->_raw.markCpuDirty();
 }
 
 - (void)replaceRegion:(MTLRegion)r

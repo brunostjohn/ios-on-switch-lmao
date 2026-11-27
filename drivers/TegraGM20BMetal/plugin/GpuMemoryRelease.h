@@ -40,7 +40,7 @@ public:
     // gives back nothing more.
     void backgrounded()
     {
-        if (!queue_ || background_.exchange(true))
+        if (!queue_ || background_.exchange(true, std::memory_order_acq_rel))
             return;
         dispatch_sync_f(queue_, this, [](void *self) {
             static_cast<GpuMemoryRelease *>(self)->release();
@@ -49,7 +49,7 @@ public:
 
     void foregrounded()
     {
-        background_.store(false);
+        background_.store(false, std::memory_order_release);
     }
 
     void release()

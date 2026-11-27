@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MIT
 #pragma once
+#include <os/lock.h>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <mutex>
 
-#if (!defined(SWITCH_DEBUG) || SWITCH_DEBUG) && (!defined(SWITCH_PROF_GPU) || SWITCH_PROF_GPU)
+#if (!defined(SWITCH_DEBUG) || SWITCH_DEBUG) && defined(SWITCH_PROF_GPU) && SWITCH_PROF_GPU
 #define SWITCH_METAL_LOCK_PROFILE 1
 #include <mach/mach_time.h>
 #else
@@ -164,7 +165,29 @@ private:
     Native m_;
 };
 
+class UnfairLock {
+public:
+    void lock()
+    {
+        os_unfair_lock_lock(&lock_);
+    }
+
+    bool try_lock()
+    {
+        return os_unfair_lock_trylock(&lock_);
+    }
+
+    void unlock()
+    {
+        os_unfair_lock_unlock(&lock_);
+    }
+
+private:
+    os_unfair_lock lock_ = OS_UNFAIR_LOCK_INIT;
+};
+
 using Mutex = CountedMutex<std::mutex>;
+using UnfairMutex = CountedMutex<UnfairLock>;
 using RecursiveMutex = CountedMutex<std::recursive_mutex>;
 
 // std::condition_variable over a Mutex: a wake takes its lock again, and counts it

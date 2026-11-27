@@ -69,7 +69,7 @@ StoreScope Remote::scope()
 {
     if (scopeKnown_.load(std::memory_order_acquire))
         return scope_;
-    std::lock_guard<gm20b::Mutex> l(scopeLock_);
+    std::lock_guard<gm20b::UnfairMutex> l(scopeLock_);
     if (scopeKnown_.load(std::memory_order_relaxed))
         return scope_;
     TegraGM20BAbiCompilerInfoReply info = {};
@@ -218,7 +218,7 @@ uint32_t Remote::portAt(qos_class_t cls)
 // installed pack)
 void Remote::map(uint32_t generation)
 {
-    std::lock_guard<gm20b::Mutex> l(mapLock_);
+    std::lock_guard<gm20b::UnfairMutex> l(mapLock_);
     const Mapping *current = mapping_.load(std::memory_order_acquire);
     if (current && current->generation >= generation)
         return;
@@ -243,7 +243,7 @@ void Remote::map(uint32_t generation)
     mapping_.store(made, std::memory_order_release);
 }
 
-bool Remote::find(const Digest &name, std::string &bytes)
+bool Remote::find(const Digest &name, std::string_view &bytes)
 {
     const uint32_t latest = latest_.load(std::memory_order_acquire);
     const Mapping *m = mapping_.load(std::memory_order_acquire);
@@ -254,7 +254,16 @@ bool Remote::find(const Digest &name, std::string &bytes)
     switch_seed_pack::Bytes found;
     if (!m || !m->reader.find(name.data(), found))
         return false;
-    bytes.assign(reinterpret_cast<const char *>(found.data), found.size);
+    bytes = std::string_view(reinterpret_cast<const char *>(found.data), found.size);
+    return true;
+}
+
+bool Remote::find(const Digest &name, std::string &bytes)
+{
+    std::string_view view;
+    if (!find(name, view))
+        return false;
+    bytes.assign(view.data(), view.size());
     return true;
 }
 

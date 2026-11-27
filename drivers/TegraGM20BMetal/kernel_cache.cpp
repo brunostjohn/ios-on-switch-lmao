@@ -25,7 +25,7 @@ std::string encodeKernelEntry(const CacheKey &k, const ComputeRecord *record, co
     return w.out;
 }
 
-RecordCache::Found decodeKernelEntry(const std::string &bytes, const CacheKey &k, ComputeRecord &record,
+RecordCache::Found decodeKernelEntry(std::string_view bytes, const CacheKey &k, ComputeRecord &record,
                                      std::string &refusal)
 {
     Reader r(bytes);
