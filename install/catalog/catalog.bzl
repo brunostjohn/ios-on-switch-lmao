@@ -187,6 +187,9 @@ def bootstrap_asset_name(release, build):
 def gpu_asset_name(release, build):
     return "{}-{}-gpu-{}.tar".format(REPO.split("/")[1], release, build)
 
+def seed_asset_name(release, build):
+    return "{}-{}-seed-{}.tar".format(REPO.split("/")[1], release, build)
+
 def _write_catalog(ctx, kinds_assets):
     release = ctx.attr.release
     records = ctx.actions.declare_file(ctx.label.name + "/records.json")
@@ -195,7 +198,7 @@ def _write_catalog(ctx, kinds_assets):
     args = ctx.actions.args()
     args.add("--records", records)
     args.add("--out", out)
-    args.add_all(["boot", "overlay", "bootstrap", "gpu"], before_each = "--require-role")
+    args.add_all(["boot", "overlay", "bootstrap", "gpu", "seed"], before_each = "--require-role")
     published = []
     seen = {}
     inputs = [records]
@@ -241,13 +244,14 @@ _COMMON = {
     "_tool": attr.label(default = "//install/catalog:switch_catalog_tool", executable = True, cfg = "exec"),
 }
 
-def _kind_assets(release, kind, boot_tar, overlay_tar, bootstrap_tar, gpu_tar):
+def _kind_assets(release, kind, boot_tar, overlay_tar, bootstrap_tar, gpu_tar, seed_tar):
     build = IPSWS[kind]["build"]
     return {
         "boot": (boot_asset_name(release, build), boot_tar),
         "bootstrap": (bootstrap_asset_name(release, build), bootstrap_tar),
         "gpu": (gpu_asset_name(release, build), gpu_tar),
         "overlay": (overlay_asset_name(release, build), overlay_tar),
+        "seed": (seed_asset_name(release, build), seed_tar),
     }
 
 def _catalog_impl(ctx):
@@ -259,20 +263,22 @@ def _catalog_impl(ctx):
             _single(ctx.split_attr.overlay_assets[kind]),
             _single(ctx.split_attr.bootstrap_assets[kind]),
             _single(ctx.split_attr.gpu_assets[kind]),
+            _single(ctx.split_attr.seed_assets[kind]),
         )
         for kind in ctx.attr.kinds
     })
 
 catalog = rule(
     implementation = _catalog_impl,
-    doc = "catalog.json for every kind in `kinds`, each kind's boot, overlay, bootstrap, and gpu assets, and those " +
-          "assets under the names the release publishes them by.",
+    doc = "catalog.json for every kind in `kinds`, each kind's boot, overlay, bootstrap, gpu, and seed assets, and " +
+          "those assets under the names the release publishes them by.",
     attrs = _COMMON | {
         "boot_assets": attr.label(mandatory = True, cfg = _kinds, doc = "//boot:boot_assets"),
         "bootstrap_assets": attr.label(mandatory = True, cfg = _kinds, doc = "//bootstrap:payload"),
         "gpu_assets": attr.label(mandatory = True, cfg = _kinds, doc = "//install/image_gpu:gpu_assets"),
         "kinds": attr.string_list(mandatory = True),
         "overlay_assets": attr.label(mandatory = True, cfg = _kinds, doc = "//boot:overlay_assets"),
+        "seed_assets": attr.label(mandatory = True, cfg = _kinds, doc = "//install/seed/assets:seed_assets"),
     },
 )
 
@@ -286,18 +292,20 @@ def _selected_catalog_impl(ctx):
             ctx.file.overlay_assets,
             ctx.file.bootstrap_assets,
             ctx.file.gpu_assets,
+            ctx.file.seed_assets,
         ),
     })
 
 selected_catalog = rule(
     implementation = _selected_catalog_impl,
-    doc = "catalog.json for the selected kind alone, from its boot, overlay, bootstrap, and gpu assets in this " +
+    doc = "catalog.json for the selected kind alone, from its boot, overlay, bootstrap, gpu, and seed assets in this " +
           "configuration.",
     attrs = _COMMON | {
         "boot_assets": attr.label(mandatory = True, allow_single_file = True, doc = "//boot:boot_assets"),
         "bootstrap_assets": attr.label(mandatory = True, allow_single_file = True, doc = "//bootstrap:payload"),
         "gpu_assets": attr.label(mandatory = True, allow_single_file = True, doc = "//install/image_gpu:gpu_assets"),
         "overlay_assets": attr.label(mandatory = True, allow_single_file = True, doc = "//boot:overlay_assets"),
+        "seed_assets": attr.label(mandatory = True, allow_single_file = True, doc = "//install/seed/assets:seed_assets"),
         "_kind": attr.label(default = "//ipsw:kind"),
     },
 )

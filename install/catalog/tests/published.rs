@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 use switch_catalog::{CATALOG_NAME, Catalog};
 
-const PUBLISHED_ROLES: [&str; 4] = ["boot", "overlay", "bootstrap", "gpu"];
+const PUBLISHED_ROLES: [&str; 5] = ["boot", "overlay", "bootstrap", "gpu", "seed"];
 
 fn files() -> Vec<PathBuf> {
     let listed = std::env::var("SWITCH_PUBLISHED").expect("SWITCH_PUBLISHED is set by the BUILD file");

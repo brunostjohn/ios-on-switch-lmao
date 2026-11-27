@@ -1,0 +1,64 @@
+# switch_seed: unified cross-platform GPU shader seed & pipeline pack compiler for the desktop installer.
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("//bazel/desktop:defs.bzl", "desktop_binaries")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+_LINK_DEPS = ["//install/seed/cpp:seed_front_objs"]
+
+rust_library(
+    name = "switch_seed",
+    srcs = [
+        "src/asset.rs",
+        "src/error.rs",
+        "src/ffi.rs",
+        "src/fsutil.rs",
+        "src/lib.rs",
+        "src/pipeline.rs",
+        "src/stages.rs",
+    ],
+    crate_root = "src/lib.rs",
+    link_deps = _LINK_DEPS,
+    deps = [
+        "//gpu:translate_desktop",
+        "//install/seed/rs/crawl:switch_seed_crawl",
+        "//install/seed/rs/link:switch_seed_link",
+        "//install/seed/rs/plan:switch_seed_plan",
+        "//third_party/mesa/src/nouveau/switch_compile:desktop",
+        "@installer_crates//:hex",
+        "@installer_crates//:plist",
+        "@installer_crates//:rayon",
+        "@installer_crates//:serde",
+        "@installer_crates//:serde_json",
+        "@installer_crates//:sha2",
+        "@installer_crates//:tar",
+        "@installer_crates//:thiserror",
+    ],
+)
+
+rust_test(
+    name = "switch_seed_test",
+    crate = ":switch_seed",
+    deps = ["@installer_crates//:tempfile"],
+)
+
+rust_binary(
+    name = "switch_seed_cli",
+    srcs = ["src/cli.rs"],
+    crate_root = "src/cli.rs",
+    deps = [
+        ":switch_seed",
+        "//install/seed/rs/plan:switch_seed_plan",
+        "@installer_crates//:clap",
+        "@installer_crates//:hex",
+        "@installer_crates//:sha2",
+    ],
+)
+
+desktop_binaries(
+    name = "desktop",
+    binary = ":switch_seed_cli",
+)

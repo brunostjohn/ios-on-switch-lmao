@@ -93,7 +93,7 @@ write_file(
     content = [json.encode(STAGED)],
 )
 
-# What the release publishes: catalog.json and each kind's boot, overlay, bootstrap, and gpu assets under their
+# What the release publishes: catalog.json and each kind's boot, overlay, bootstrap, gpu, and seed assets under their
 # release names.
 catalog(
     name = "catalog_json",
@@ -103,6 +103,7 @@ catalog(
     kinds = catalog_kinds(),
     overlay_assets = "//boot:overlay_assets",
     release = _RELEASE,
+    seed_assets = "//install/seed/assets:seed_assets",
     tags = ["manual"],
 )
 
@@ -114,6 +115,7 @@ selected_catalog(
     gpu_assets = "//install/image_gpu:gpu_assets",
     overlay_assets = "//boot:overlay_assets",
     release = _RELEASE,
+    seed_assets = "//install/seed/assets:seed_assets",
     tags = ["manual"],
 )
 

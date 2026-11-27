@@ -19,12 +19,13 @@ use switch_image::{
 use switch_image_bootstrap::{
     ARCHIVE, BootstrapPins, HELPER, MANIFEST, stage_bootstrap_from_dir, stage_bootstrap_reader,
 };
-use switch_image_overlay::{SourceKind, TreeSource, merge_tree, place_overlay, stage_apps};
+use switch_image_overlay::{SourceKind, TreeSource, place_overlay, stage_apps};
 use switch_image_pretranslated::{parse_cdhash_pairs, place_pretranslated};
 
 use crate::boot::BootOutputs;
 use crate::error::{EngineError, Result};
 use crate::fetch::{PreparedAssets, PreparedMembers};
+use crate::gpu_seed::{LoadedGpu, PreparedSeed, stage_gpu_and_seed};
 use crate::pretranslate::PreparedDeltas;
 use crate::progress::EngineProgress;
 use crate::{DATA_VOLUME_UUID_STR, LocalInputs, PREBOOT_VOLUME_UUID_STR};
@@ -54,10 +55,12 @@ pub struct AssembleInput<'a> {
     pub system_fs: &'a Fs<'a>,
     pub boot: &'a BootOutputs,
     pub deltas: Option<&'a PreparedDeltas>,
+    pub gpu: LoadedGpu,
+    pub seed: Option<PreparedSeed>,
     pub time_ns: u64,
 }
 
-pub fn assemble_volumes(input: &AssembleInput<'_>, progress: &mut EngineProgress<'_>) -> Result<AssembledVolumes> {
+pub fn assemble_volumes(input: AssembleInput<'_>, progress: &mut EngineProgress<'_>) -> Result<AssembledVolumes> {
     let build = input.build;
     let local = input.local;
     let assets = input.assets;
@@ -94,8 +97,7 @@ pub fn assemble_volumes(input: &AssembleInput<'_>, progress: &mut EngineProgress
     )?;
     progress.check_cancel()?;
 
-    apply_gpu(&mut data_tree, build, local, assets, system_fs, progress)?;
-    apply_seed(&mut data_tree, build, local, assets, progress)?;
+    stage_gpu_and_seed(&mut data_tree, system_fs, input.gpu, input.seed, progress)?;
     progress.check_cancel()?;
 
     progress.log("Planning Switch-iOS-Preboot cryptexes");
@@ -290,91 +292,6 @@ fn apply_bootstrap(
             "Bootstrap staged: {} ({}, {} entries)",
             report.build, report.firmware, report.entries
         ));
-    }
-    Ok(())
-}
-
-fn is_tar_path(path: &Path) -> bool {
-    path.is_file()
-        && path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("tar"))
-}
-
-fn apply_gpu(
-    data_tree: &mut Tree,
-    build: &Build,
-    local: &LocalInputs,
-    assets: &PreparedAssets,
-    system_fs: &Fs<'_>,
-    progress: &mut EngineProgress<'_>,
-) -> Result<()> {
-    if let Some(gpu_path) = &local.gpu_dir {
-        if is_tar_path(gpu_path) {
-            progress.log(format!("Staging GPU bundle tar from {}", gpu_path.display()));
-            let file = File::open(gpu_path).map_err(|e| EngineError::io_path(gpu_path, e))?;
-            let stage = switch_image_gpu::GpuStage::from_tar(BufReader::new(file))?;
-            let report = switch_image_gpu::stage_gpu(data_tree, Some(system_fs), &stage)?;
-            progress.log(format!(
-                "GPU bundle: {} files, {} pref plists, icon build {}",
-                report.files, report.prefs, report.icon_build
-            ));
-        } else if gpu_path.is_file() || gpu_path.join(switch_image_gpu::TREE_MANIFEST).is_file() {
-            progress.log(format!("Staging GPU bundle from {}", gpu_path.display()));
-            let report = switch_image_gpu::stage_gpu_from_path(data_tree, Some(system_fs), gpu_path)?;
-            progress.log(format!(
-                "GPU bundle: {} files, {} pref plists, icon build {}",
-                report.files, report.prefs, report.icon_build
-            ));
-        } else {
-            progress.log(format!("Merging GPU bundle from {}", gpu_path.display()));
-            let gpu_src = TreeSource::from_dir(gpu_path)?;
-            let report = merge_tree(data_tree, &gpu_src)?;
-            progress.log(format!("GPU bundle: {} files, {} dirs", report.files, report.dirs));
-        }
-    } else if let Some(tar_path) = &assets.gpu_tar {
-        progress.log(format!("Staging GPU release asset from {}", tar_path.display()));
-        let asset = build.asset("gpu")?;
-        let file = File::open(tar_path).map_err(|e| EngineError::io_path(tar_path, e))?;
-        let mut checked = asset.checked(BufReader::new(file));
-        let stage = switch_image_gpu::GpuStage::from_tar(&mut checked)?;
-        checked.finish()?;
-        let report = switch_image_gpu::stage_gpu(data_tree, Some(system_fs), &stage)?;
-        progress.log(format!(
-            "GPU bundle: {} files, {} pref plists, icon build {}",
-            report.files, report.prefs, report.icon_build
-        ));
-    }
-    Ok(())
-}
-
-fn apply_seed(
-    data_tree: &mut Tree,
-    build: &Build,
-    local: &LocalInputs,
-    assets: &PreparedAssets,
-    progress: &mut EngineProgress<'_>,
-) -> Result<()> {
-    if let Some(seed_path) = &local.shader_seed_dir {
-        progress.log(format!("Merging shader seed from {}", seed_path.display()));
-        let seed_src = if seed_path.is_dir() {
-            TreeSource::from_dir(seed_path)?
-        } else {
-            let file = File::open(seed_path).map_err(|e| EngineError::io_path(seed_path, e))?;
-            TreeSource::from_tar(BufReader::new(file))?
-        };
-        let report = merge_tree(data_tree, &seed_src)?;
-        progress.log(format!("Shader seed: {} files, {} dirs", report.files, report.dirs));
-    } else if let Some(tar_path) = &assets.seed_tar {
-        progress.log(format!("Merging shader seed release asset from {}", tar_path.display()));
-        let asset = build.asset("seed")?;
-        let file = File::open(tar_path).map_err(|e| EngineError::io_path(tar_path, e))?;
-        let mut checked = asset.checked(BufReader::new(file));
-        let seed_src = TreeSource::from_tar(&mut checked)?;
-        checked.finish()?;
-        let report = merge_tree(data_tree, &seed_src)?;
-        progress.log(format!("Shader seed: {} files, {} dirs", report.files, report.dirs));
     }
     Ok(())
 }

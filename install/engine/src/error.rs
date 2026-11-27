@@ -49,6 +49,8 @@ pub enum EngineError {
     Bootstrap(#[from] switch_image_bootstrap::Error),
     #[error("GPU stage: {0}")]
     ImageGpu(#[from] switch_image_gpu::Error),
+    #[error("shader seed: {0}")]
+    Seed(#[from] switch_seed::SeedError),
     #[error("disk: {0}")]
     Disk(#[from] switch_disk::Error),
     #[error("card tables: {0}")]

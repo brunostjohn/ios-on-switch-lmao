@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 use std::fs;
 use std::io::{Cursor, Read};
+use std::sync::Arc;
 
 use flate2::read::GzDecoder;
 use plist::Value as PlistValue;
@@ -16,7 +17,9 @@ use switch_engine::{
     TargetSpec, partition_fingerprint, read_pending_journal, run,
 };
 use switch_image::{DEFAULT_DATA_NAME, DEFAULT_PREBOOT_NAME, parse_uuid};
-use switch_image_gpu::{GpuStage, ICON_CACHE_RECORD_PATH, REQUIRED_PLUGIN_PATH, STATE_PATH, TREE_MANIFEST};
+use switch_image_gpu::{
+    FileContent, FileRecord, GpuStage, ICON_CACHE_RECORD_PATH, REQUIRED_PLUGIN_PATH, STATE_PATH, TREE_MANIFEST,
+};
 use tempfile::TempDir;
 use zerocopy::FromZeros;
 use zerocopy::little_endian::{U32, U64};
@@ -344,7 +347,20 @@ fn e2e_install_mode_stages_format2_gpu_bundle_and_merges_prefs() {
         pack_bytes.len(),
     );
     fs::write(gpu_dir.join(TREE_MANIFEST), &manifest).unwrap();
-    let expected_stage = GpuStage::from_path(&gpu_dir).unwrap();
+    let mut expected_stage = GpuStage::from_path(&gpu_dir).unwrap();
+    let seed_rel = "Switch/seed/shaders.bin";
+    let seed_bytes = fs::read(fixture.seed_dir.join(seed_rel)).unwrap();
+    expected_stage.files.insert(
+        seed_rel.to_owned(),
+        FileRecord {
+            path: seed_rel.to_owned(),
+            sha256: sha256(&seed_bytes),
+            size: seed_bytes.len() as u64,
+            mode: 0o644,
+            source: seed_rel.to_owned(),
+            content: FileContent::Bytes(Arc::from(seed_bytes)),
+        },
+    );
 
     let mut req = RunRequest::new(Mode::Install, TargetSpec::image_file(&img));
     fixture.apply_to_request(&mut req, false);

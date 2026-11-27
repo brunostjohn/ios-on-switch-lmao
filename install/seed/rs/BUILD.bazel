@@ -1,0 +1,25 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary")
+load("//bazel/desktop:defs.bzl", "desktop_binaries")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+rust_binary(
+    name = "switch_seed_tool",
+    srcs = ["tool/main.rs"],
+    deps = [
+        "//install/seed/rs/crawl:switch_seed_crawl",
+        "//install/seed/rs/link:switch_seed_link",
+        "//install/seed/rs/plan:switch_seed_plan",
+        "@installer_crates//:clap",
+        "@installer_crates//:hex",
+        "@installer_crates//:serde_json",
+    ],
+)
+
+desktop_binaries(
+    name = "desktop",
+    binary = ":switch_seed_tool",
+)

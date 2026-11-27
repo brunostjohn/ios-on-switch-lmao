@@ -4,6 +4,7 @@ pub mod boot;
 pub mod decode;
 pub mod error;
 pub mod fetch;
+pub mod gpu_seed;
 pub mod modes;
 pub mod paths;
 pub mod pretranslate;

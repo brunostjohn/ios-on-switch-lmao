@@ -15,6 +15,7 @@ use crate::assemble::{AssembleInput, assemble_volumes};
 use crate::boot::prepare_boot;
 use crate::error::{EngineError, Result};
 use crate::fetch::{prepare_members, resolve_release_assets};
+use crate::gpu_seed::{load_gpu, prepare_seed};
 use crate::pretranslate::prepare_pretranslated;
 use crate::probe::read_pending_journal;
 use crate::progress::{EngineProgress, EngineStep, StepOutcome};
@@ -32,6 +33,7 @@ pub fn steps_for_mode(mode: Mode, pretranslate: bool) -> Vec<EngineStep> {
         if pretranslate {
             steps.push(EngineStep::new("pretranslate", "Pretranslate arm64e binaries"));
         }
+        steps.push(EngineStep::new("seed", "Compile GPU shader seed"));
         steps.push(EngineStep::new("assemble", "Build boot files & plan APFS volumes"));
         steps.push(EngineStep::new("write_apfs", "Stream APFS container to partition"));
         steps.push(EngineStep::new("write_boot", "Write FAT boot files & finalize GPT"));
@@ -267,6 +269,18 @@ fn execute_install_stage(
         None
     };
 
+    progress.start_step("seed", false)?;
+    let gpu = load_gpu(build, &request.local, &assets, progress)?;
+    let seed = prepare_seed(build, &request.local, &assets, &members, &gpu, work_dir, progress)?;
+    progress.finish_step(
+        "seed",
+        if seed.is_some() {
+            StepOutcome::Done
+        } else {
+            StepOutcome::Skipped
+        },
+    );
+
     progress.start_step("assemble", false)?;
     let os_src =
         FileSource::open(&members.os_container, 0).map_err(|e| EngineError::io_path(&members.os_container, e))?;
@@ -286,7 +300,7 @@ fn execute_install_stage(
         progress,
     )?;
     let assembled = assemble_volumes(
-        &AssembleInput {
+        AssembleInput {
             build,
             local: &request.local,
             assets: &assets,
@@ -294,6 +308,8 @@ fn execute_install_stage(
             system_fs: &system_fs,
             boot: &boot,
             deltas: deltas.as_ref(),
+            gpu,
+            seed,
             time_ns: request.time_ns,
         },
         progress,

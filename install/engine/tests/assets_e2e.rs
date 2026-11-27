@@ -22,7 +22,7 @@ use crate::synth_apfs::{sha256, sha256_file};
 use crate::synth_fat::{FAT_FIRST_LBA, create_gpt_card_file, format_fat32_region, make_gpt_entry};
 use crate::synth_fixture::{SyntheticFixture, build_synthetic_fixture};
 
-fn append_tar_file<W: std::io::Write>(tar: &mut tar::Builder<W>, path: &str, data: &[u8], mode: u32) {
+pub(crate) fn append_tar_file<W: std::io::Write>(tar: &mut tar::Builder<W>, path: &str, data: &[u8], mode: u32) {
     let mut header = tar::Header::new_ustar();
     header.set_size(data.len() as u64);
     header.set_mode(mode);
@@ -44,7 +44,7 @@ struct ReleaseAssetsBundle {
     expected_gpu_stage: GpuStage,
 }
 
-fn build_release_assets_bundle(fixture: &SyntheticFixture) -> ReleaseAssetsBundle {
+fn build_release_assets_bundle(fixture: &SyntheticFixture, include_seed_in_catalog: bool) -> ReleaseAssetsBundle {
     let root = fixture.tmp.path();
     let assets_dir = root.join("release_assets");
     fs::create_dir_all(&assets_dir).unwrap();
@@ -112,6 +112,10 @@ fn build_release_assets_bundle(fixture: &SyntheticFixture) -> ReleaseAssetsBundl
     .unwrap();
 
     let plugin_bytes = b"\xcf\xfa\xed\xfe-release-gpu-plugin";
+    let plist_rel = "ngpu/addons/TegraGM20BMetal.bundle/Info.plist";
+    let plist_bytes = br#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>SwitchShaderStack</key><string>0123456789abcdef</string></dict></plist>"#;
     let pack_bytes = b"release-gpu-pack-payload";
     let pack_rel = "ngpu/addons/TegraGM20BMetal.pack/pipelines.bin";
     let kext_digest = "cd".repeat(32);
@@ -119,11 +123,14 @@ fn build_release_assets_bundle(fixture: &SyntheticFixture) -> ReleaseAssetsBundl
         "# gpu stage 2 tree\n\
          # kext {kext_digest}\n\
          file\t{REQUIRED_PLUGIN_PATH}\t{}\t{}\t755\t{REQUIRED_PLUGIN_PATH}\n\
+         file\t{plist_rel}\t{}\t{}\t644\t{plist_rel}\n\
          file\t{pack_rel}\t{}\t{}\t644\t{pack_rel}\n\
          pref\tmobile/Library/Preferences/com.apple.backboardd.plist\t501\tCAEnableDeepFramebuffer\tfalse\n\
          pref\troot/Library/Preferences/com.apple.backboardd.plist\t0\tCAEnableDeepFramebuffer\tfalse\n",
         hex::encode(sha256(plugin_bytes)),
         plugin_bytes.len(),
+        hex::encode(sha256(plist_bytes)),
+        plist_bytes.len(),
         hex::encode(sha256(pack_bytes)),
         pack_bytes.len(),
     );
@@ -133,6 +140,7 @@ fn build_release_assets_bundle(fixture: &SyntheticFixture) -> ReleaseAssetsBundl
         let mut tar = tar::Builder::new(file);
         append_tar_file(&mut tar, TREE_MANIFEST, gpu_manifest.as_bytes(), 0o644);
         append_tar_file(&mut tar, REQUIRED_PLUGIN_PATH, plugin_bytes, 0o755);
+        append_tar_file(&mut tar, plist_rel, plist_bytes, 0o644);
         append_tar_file(&mut tar, pack_rel, pack_bytes, 0o644);
         tar.finish().unwrap();
     }
@@ -151,14 +159,31 @@ fn build_release_assets_bundle(fixture: &SyntheticFixture) -> ReleaseAssetsBundl
     let (gpu_len, gpu_sha) = sha256_file(&gpu_tar);
     let (seed_len, seed_sha) = sha256_file(&seed_tar);
 
+    let mut assets_map = serde_json::Map::new();
+    assets_map.insert(
+        "boot".into(),
+        serde_json::json!({ "name": boot_tar.file_name().unwrap().to_str().unwrap(), "size": boot_len, "sha256": boot_sha }),
+    );
+    assets_map.insert(
+        "overlay".into(),
+        serde_json::json!({ "name": overlay_tar.file_name().unwrap().to_str().unwrap(), "size": ov_len, "sha256": ov_sha }),
+    );
+    assets_map.insert(
+        "bootstrap".into(),
+        serde_json::json!({ "name": bootstrap_tar.file_name().unwrap().to_str().unwrap(), "size": bs_len, "sha256": bs_sha }),
+    );
+    assets_map.insert(
+        "gpu".into(),
+        serde_json::json!({ "name": gpu_tar.file_name().unwrap().to_str().unwrap(), "size": gpu_len, "sha256": gpu_sha }),
+    );
+    if include_seed_in_catalog {
+        assets_map.insert(
+            "seed".into(),
+            serde_json::json!({ "name": seed_tar.file_name().unwrap().to_str().unwrap(), "size": seed_len, "sha256": seed_sha }),
+        );
+    }
     let mut catalog: serde_json::Value = serde_json::from_slice(&fs::read(&fixture.catalog_path).unwrap()).unwrap();
-    catalog["builds"][0]["assets"] = serde_json::json!({
-        "boot": { "name": boot_tar.file_name().unwrap().to_str().unwrap(), "size": boot_len, "sha256": boot_sha },
-        "overlay": { "name": overlay_tar.file_name().unwrap().to_str().unwrap(), "size": ov_len, "sha256": ov_sha },
-        "bootstrap": { "name": bootstrap_tar.file_name().unwrap().to_str().unwrap(), "size": bs_len, "sha256": bs_sha },
-        "gpu": { "name": gpu_tar.file_name().unwrap().to_str().unwrap(), "size": gpu_len, "sha256": gpu_sha },
-        "seed": { "name": seed_tar.file_name().unwrap().to_str().unwrap(), "size": seed_len, "sha256": seed_sha },
-    });
+    catalog["builds"][0]["assets"] = serde_json::Value::Object(assets_map);
     let catalog_path = root.join("release-catalog.json");
     let cat_bytes = serde_json::to_vec_pretty(&catalog).unwrap();
     Catalog::parse(&cat_bytes).unwrap();
@@ -176,7 +201,7 @@ fn build_release_assets_bundle(fixture: &SyntheticFixture) -> ReleaseAssetsBundl
     }
 }
 
-fn create_install_card(path: &Path) -> u64 {
+pub(crate) fn create_install_card(path: &Path) -> u64 {
     let fat_sectors: u64 = 160_000;
     let target_first = FAT_FIRST_LBA + fat_sectors;
     let target_sectors: u64 = 4_194_304;
@@ -209,7 +234,7 @@ fn read_apfs_file(src: &FileSource, fs_vol: &Fs<'_>, path: &str) -> (u32, u32, u
 #[test]
 fn e2e_install_from_catalog_and_assets_dir_without_overrides() {
     let fixture = build_synthetic_fixture(false);
-    let bundle = build_release_assets_bundle(&fixture);
+    let bundle = build_release_assets_bundle(&fixture, false);
     let img = fixture.tmp.path().join("auto-assets.img");
     let target_first = create_install_card(&img);
 
@@ -282,15 +307,12 @@ fn e2e_install_from_catalog_and_assets_dir_without_overrides() {
         dict.get("CAEnableDeepFramebuffer").and_then(PlistValue::as_boolean),
         Some(false)
     );
-
-    let (_, _, _, seed_bytes) = read_apfs_file(&src, &data_fs, "/Switch/seed/shaders.bin");
-    assert_eq!(seed_bytes, b"release-seed-v2");
 }
 
 #[test]
 fn corrupted_release_assets_in_assets_dir_are_refused() {
     let fixture = build_synthetic_fixture(false);
-    let bundle = build_release_assets_bundle(&fixture);
+    let bundle = build_release_assets_bundle(&fixture, false);
     let img = fixture.tmp.path().join("corrupt-assets.img");
     create_install_card(&img);
 
@@ -348,12 +370,33 @@ fn corrupted_release_assets_in_assets_dir_are_refused() {
         "expected digest refusal on corrupted bootstrap tar, got {err:?}"
     );
     fs::write(&bundle.bootstrap_tar, orig_bs).unwrap();
+
+    let seed_bundle = build_release_assets_bundle(&fixture, true);
+    let mut seed_req = req.clone();
+    seed_req.local.catalog_path = Some(seed_bundle.catalog_path.clone());
+    seed_req.local.assets_dir = Some(seed_bundle.assets_dir.clone());
+    let orig_seed = fs::read(&seed_bundle.seed_tar).unwrap();
+    let mut bad_seed = orig_seed.clone();
+    let last = bad_seed.len() - 1;
+    bad_seed[last] ^= 0x01;
+    fs::write(&seed_bundle.seed_tar, &bad_seed).unwrap();
+    let err = run(&seed_req, None, &mut sink, CancelToken::new()).unwrap_err();
+    assert!(
+        matches!(err, EngineError::Catalog(switch_catalog::Error::AssetMismatch { .. })),
+        "expected AssetMismatch on corrupted seed tar, got {err:?}"
+    );
+    fs::write(&seed_bundle.seed_tar, orig_seed).unwrap();
+    let err = run(&seed_req, None, &mut sink, CancelToken::new()).unwrap_err();
+    assert!(
+        matches!(err, EngineError::Seed(switch_seed::SeedError::Asset(_))),
+        "expected seed asset manifest refusal on synthetic non-seed tar, got {err:?}"
+    );
 }
 
 #[test]
 fn resolve_release_asset_cache_edits_and_tar_overrides() {
     let fixture = build_synthetic_fixture(false);
-    let bundle = build_release_assets_bundle(&fixture);
+    let bundle = build_release_assets_bundle(&fixture, false);
     let catalog = Catalog::parse(&fs::read(&bundle.catalog_path).unwrap()).unwrap();
     let build = catalog.record("24B119").unwrap().plan().unwrap();
 
@@ -431,4 +474,23 @@ fn resolve_release_asset_cache_edits_and_tar_overrides() {
     let src = FileSource::open(&img, target_first * SECTOR as u64).unwrap();
     let container = Container::open(&src).unwrap();
     assert!(switch_apfs_read::audit(&container, &src).unwrap().ok());
+    let data_vol = container.volume(parse_uuid(DATA_VOLUME_UUID_STR).unwrap()).unwrap();
+    let data_fs = Fs::open(&src, data_vol).unwrap();
+    let (_, _, _, seed_bytes) = read_apfs_file(&src, &data_fs, "/Switch/seed/shaders.bin");
+    assert_eq!(seed_bytes, b"release-seed-v2");
+
+    // Prebuilt shader seed overrides must also enter ngpu/stage.tsv.gz and Switch/icon-cache-gpu.
+    let (_, _, _, got_gz) = read_apfs_file(&src, &data_fs, &format!("/{STATE_PATH}"));
+    let mut tsv = String::new();
+    GzDecoder::new(got_gz.as_slice()).read_to_string(&mut tsv).unwrap();
+    assert!(
+        tsv.contains("Switch/seed/shaders.bin"),
+        "expected prebuilt seed file in stage.tsv.gz:\n{tsv}"
+    );
+    let (_, _, _, got_icon) = read_apfs_file(&src, &data_fs, &format!("/{ICON_CACHE_RECORD_PATH}"));
+    assert_ne!(
+        got_icon,
+        format!("{}\n", bundle.expected_gpu_stage.icon_build()).as_bytes(),
+        "expected icon-cache-gpu digest to include prebuilt shader seed files"
+    );
 }

@@ -77,7 +77,7 @@ jobs:
           "$catalog_tool" \
             --merge "$catalogs/ios17.json" \
             --merge "$catalogs/ios27.json" \
-            --require-role boot --require-role overlay --require-role bootstrap --require-role gpu \
+            --require-role boot --require-role overlay --require-role bootstrap --require-role gpu --require-role seed \
             --assets-dir "$dist" \
             --out "$dist/catalog.json"
           bins="$(bazel cquery --config=release --output=files //release:installer_binaries)"

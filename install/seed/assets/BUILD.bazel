@@ -1,0 +1,79 @@
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("@rules_python//python:py_library.bzl", "py_library")
+load("@rules_python//python:py_test.bzl", "py_test")
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//release:ipsw_free.bzl", "ipsw_free")
+load(":assets.bzl", "seed_assets")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+GM20B_METAL = "//drivers/TegraGM20BMetal"
+
+py_library(
+    name = "split_ipsw_free_lib",
+    srcs = ["split_ipsw_free.py"],
+    deps = [GM20B_METAL + ":pack"],
+)
+
+py_binary(
+    name = "split_ipsw_free",
+    srcs = ["split_ipsw_free.py"],
+    deps = [GM20B_METAL + ":pack"],
+)
+
+py_library(
+    name = "pack_seed_asset_lib",
+    srcs = ["pack_seed_asset.py"],
+)
+
+py_binary(
+    name = "pack_seed_asset",
+    srcs = ["pack_seed_asset.py"],
+)
+
+py_test(
+    name = "split_ipsw_free_test",
+    size = "small",
+    srcs = ["split_ipsw_free_test.py"],
+    data = ["//tools/gpu:stage_format.py"],
+    deps = [":split_ipsw_free_lib"],
+)
+
+py_test(
+    name = "pack_seed_asset_test",
+    size = "small",
+    srcs = ["pack_seed_asset_test.py"],
+    data = [GM20B_METAL + ":plugin/TwoPlaneStandIn.h"],
+    deps = [":pack_seed_asset_lib"],
+)
+
+seed_assets(
+    name = "seed_assets",
+    app_libraries = select({
+        "//ipsw:ios17": {
+            "//apps/hwtest:SwitchHWTest17_metallib": "Applications/SwitchHWTest.app/default.metallib",
+        },
+        "//ipsw:ios27": {
+            "//apps/hwtest:SwitchHWTest27_metallib": (
+                "Applications/SwitchHWTest.app/default.metallib," +
+                "Applications/SwitchHWTest27e.app/default.metallib"
+            ),
+        },
+    }),
+    app_states = [GM20B_METAL + ":app_state_lists"],
+    archives = [GM20B_METAL + ":archive_inventories"],
+    ca_names = [GM20B_METAL + ":ca_name_lists"],
+    corpus = GM20B_METAL + ":precompile/corpus.log",
+    draw_context = GM20B_METAL + ":pack/draw_context.txt",
+    embedded = [GM20B_METAL + ":plugin/TwoPlaneStandIn.h"],
+    tags = ["manual"],
+    tools = "//gpu/seed:local_tools",
+)
+
+ipsw_free(
+    name = "seed_assets_ipsw_free",
+    src = ":seed_assets",
+    tags = ["manual"],
+)
