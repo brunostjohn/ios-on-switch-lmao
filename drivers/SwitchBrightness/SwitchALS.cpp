@@ -103,6 +103,7 @@ constexpr uint8_t kPowerOn = 1u << 0, kAdcEnable = 1u << 1;
 constexpr unsigned kSupplyDeadlineMS = 20000;  // from start to SwitchTouch's first LDO6 (it powers up in ~60 ms)
 constexpr unsigned kErrorLimit = 20;           // samples in a row the sensor did not answer (about 2.3 s)
 constexpr unsigned kUnclaimedLimit = 300;      // samples with no IOHIDEventDriver on the HID device (about 35 s)
+constexpr uint64_t kOnDemandRefreshMS = 4000;  // refresh cached copyEvent reading before thermalmonitord's 5 s cadence
 #if defined(SWITCH_STATS_POWER) && SWITCH_STATS_POWER
 constexpr unsigned kStatsSamples = 43;  // one log line per 5 s of samples
 #endif
@@ -123,8 +124,11 @@ int writeRegister(uint8_t reg, uint8_t value)
 
 uint64_t msSince(uint64_t then)
 {
+    const uint64_t now = mach_absolute_time();
+    if (now <= then)
+        return 0;
     uint64_t ns = 0;
-    absolutetime_to_nanoseconds(mach_absolute_time() - then, &ns);
+    absolutetime_to_nanoseconds(now - then, &ns);
     return ns / 1000000;
 }
 
@@ -221,8 +225,22 @@ class SwitchALS : public IOService {
     IOInterruptEventSource *kick = nullptr;     // ReportInterval updated on IOHIDEventDriver's thread
     IOService *hid = nullptr;
 
-    // Written by reportIntervalSet (IOHIDEventDriver's thread), consumed on this work loop.
+    struct CachedSample {
+        uint32_t seq = 0;  // odd while updating on the work loop; even when consistent
+        uint64_t timestamp = 0;
+        uint32_t level = 0;
+        uint32_t visible = 0;
+        uint32_t ir = 0;
+    };
+
+    // Written by reportIntervalSet / copyEvent (caller thread), consumed on this work loop.
     uint32_t requestedSampleUS = 0;
+    bool oneShotRequested = false;
+
+    // Published on the work loop, read lock-free by copyEvent (client thread).
+    CachedSample cached = {};
+    bool copyReady = false;
+    bool streaming = false;
 
     // Work loop state.
     State state = State::Off;
@@ -232,6 +250,8 @@ class SwitchALS : public IOService {
     bool supplied = false;  // LDO6 has come on at least once
     uint64_t supplyAt = 0;  // when LDO6 last came on (switch_als_supply)
     uint32_t sampleUS = 0;  // 0 until a client sets ReportInterval > 0
+    bool oneShot = false;
+    unsigned oneShotSteps = 0;
     bool hasDispatched = false;
     uint32_t lastLevel = 0;
 #if defined(SWITCH_STATS_POWER) && SWITCH_STATS_POWER
@@ -243,6 +263,9 @@ class SwitchALS : public IOService {
     static void ticked(OSObject *owner, IOTimerEventSource *sender);
     static void intervalChanged(OSObject *owner, IOInterruptEventSource *sender, int count);
     static void reportIntervalSet(void *context, const uint8_t *report, size_t length);
+    static OSObject *copyEvent(void *context);
+    static OSObject *makeEvent(uint32_t level, uint32_t visible, uint32_t ir, uint64_t timestamp,
+                               const char **why = nullptr);
     static void supplyLate(OSObject *owner, IOTimerEventSource *sender);
     void armClock(IOTimerEventSource *sender, uint32_t intervalUS);
     void update();
@@ -250,7 +273,9 @@ class SwitchALS : public IOService {
     int configure();
     void sample();
     void failed(int err);
-    void dispatch(uint32_t level, uint32_t visible, uint32_t ir);
+    void recordSample(uint32_t level, uint32_t visible, uint32_t ir, uint64_t timestamp);
+    bool readCachedSample(uint32_t &level, uint32_t &visible, uint32_t &ir, uint64_t &timestamp) const;
+    void dispatch(uint32_t level, uint32_t visible, uint32_t ir, uint64_t timestamp);
 #if defined(SWITCH_STATS_POWER) && SWITCH_STATS_POWER
     void noteStats(uint32_t level, uint32_t visible, uint32_t ir);
 #endif
@@ -296,18 +321,32 @@ void SwitchALS::armClock(IOTimerEventSource *sender, uint32_t intervalUS)
     sender->setTimeout(kIOTimeOptionsWithLeeway, intervalAbs, leewayAbs);
 }
 
-// Work loop. The sensor samples while a client has asked for a nonzero ReportInterval, the panel is lit (or waking),
-// the console awake and LDO6 on; otherwise it is powered down (RegControl = 0) and its timer is off.
+// Work loop. The sensor samples while a client has asked for a nonzero ReportInterval (or an on-demand copyEvent
+// conversion is pending), the panel is lit (or waking), the console awake and LDO6 on; otherwise it is powered down
+// (RegControl = 0) and its timer is off.
 void SwitchALS::update()
 {
     if (state == State::Broken) {
+        oneShot = false;
+        __atomic_store_n(&oneShotRequested, false, __ATOMIC_RELEASE);
+        __atomic_store_n(&copyReady, false, __ATOMIC_RELEASE);
+        __atomic_store_n(&streaming, false, __ATOMIC_RELEASE);
         clock->cancelTimeout();
         return;
     }
-    const bool want = lit && !suspended && supply && sampleUS > 0;
+    const bool hardwareReady = lit && !suspended && supply;
+    __atomic_store_n(&copyReady, hardwareReady, __ATOMIC_RELEASE);
+    __atomic_store_n(&streaming, sampleUS > 0, __ATOMIC_RELEASE);
+    if (sampleUS > 0) {
+        oneShot = false;
+        __atomic_store_n(&oneShotRequested, false, __ATOMIC_RELEASE);
+    }
+    const bool want = hardwareReady && (sampleUS > 0 || oneShot);
     if (!want) {
         const bool wasRunning = state == State::Running;
         state = State::Off;
+        oneShot = false;
+        __atomic_store_n(&oneShotRequested, false, __ATOMIC_RELEASE);
         hasDispatched = false;
         clock->cancelTimeout();
         if (wasRunning)
@@ -335,6 +374,10 @@ void SwitchALS::giveUp()
 {
     const bool wasRunning = state == State::Running;
     state = State::Broken;
+    oneShot = false;
+    __atomic_store_n(&oneShotRequested, false, __ATOMIC_RELEASE);
+    __atomic_store_n(&copyReady, false, __ATOMIC_RELEASE);
+    __atomic_store_n(&streaming, false, __ATOMIC_RELEASE);
     hasDispatched = false;
     clock->cancelTimeout();
     if (wasRunning)
@@ -380,28 +423,93 @@ int SwitchALS::configure()
     return err;
 }
 
-void SwitchALS::dispatch(uint32_t level, uint32_t visible, uint32_t ir)
+OSObject *SwitchALS::makeEvent(uint32_t level, uint32_t visible, uint32_t ir, uint64_t timestamp, const char **why)
 {
     OSObject *event = OSMetaClass::allocClassWithName("IOHIDEvent");
     if (!event) {
-        IOLog("SwitchALS: off: OSMetaClass::allocClassWithName(\"IOHIDEvent\") failed (IOHIDFamily not loaded?)\n");
-        giveUp();
-        return;
+        if (why)
+            *why = "OSMetaClass::allocClassWithName(\"IOHIDEvent\") failed (IOHIDFamily not loaded?)";
+        return nullptr;
     }
     vcall<void, uint32_t>(event, kSetType, kAmbientLightType);
     // initWithType allocates the event data; without it every accessor would dereference null.
     if (!*reinterpret_cast<void *const *>(reinterpret_cast<const uint8_t *>(event) + 0x10)) {
-        IOLog("SwitchALS: off: IOHIDEvent setType(%u) left no event data (wrong vtable slot or no memory)\n",
-              kAmbientLightType);
         event->release();
-        giveUp();
-        return;
+        if (why)
+            *why = "IOHIDEvent setType(12) left no event data (wrong vtable slot or no memory)";
+        return nullptr;
     }
-    vcall<void, uint64_t>(event, kSetTimeStamp, mach_absolute_time());
+    vcall<void, uint64_t>(event, kSetTimeStamp, timestamp);
     vcall<void, uint32_t, int32_t, IOOptionBits>(event, kSetIntegerValue, kFieldLevel, static_cast<int32_t>(level), 0);
     vcall<void, uint32_t, int32_t, IOOptionBits>(event, kSetIntegerValue, kFieldChannel0, static_cast<int32_t>(visible),
                                                  0);
     vcall<void, uint32_t, int32_t, IOOptionBits>(event, kSetIntegerValue, kFieldChannel1, static_cast<int32_t>(ir), 0);
+    return event;
+}
+
+void SwitchALS::recordSample(uint32_t level, uint32_t visible, uint32_t ir, uint64_t timestamp)
+{
+    const uint32_t s = __atomic_load_n(&cached.seq, __ATOMIC_RELAXED);
+    __atomic_store_n(&cached.seq, s + 1u, __ATOMIC_RELAXED);
+    __atomic_thread_fence(__ATOMIC_RELEASE);
+    __atomic_store_n(&cached.timestamp, timestamp, __ATOMIC_RELAXED);
+    __atomic_store_n(&cached.level, level, __ATOMIC_RELAXED);
+    __atomic_store_n(&cached.visible, visible, __ATOMIC_RELAXED);
+    __atomic_store_n(&cached.ir, ir, __ATOMIC_RELAXED);
+    __atomic_store_n(&cached.seq, s + 2u, __ATOMIC_RELEASE);
+}
+
+bool SwitchALS::readCachedSample(uint32_t &level, uint32_t &visible, uint32_t &ir, uint64_t &timestamp) const
+{
+    for (unsigned attempt = 0; attempt < 4; ++attempt) {
+        const uint32_t s1 = __atomic_load_n(&cached.seq, __ATOMIC_ACQUIRE);
+        if (s1 == 0 || (s1 & 1u) != 0)
+            continue;
+        const uint64_t ts = __atomic_load_n(&cached.timestamp, __ATOMIC_RELAXED);
+        const uint32_t lvl = __atomic_load_n(&cached.level, __ATOMIC_RELAXED);
+        const uint32_t vis = __atomic_load_n(&cached.visible, __ATOMIC_RELAXED);
+        const uint32_t ch1 = __atomic_load_n(&cached.ir, __ATOMIC_RELAXED);
+        __atomic_thread_fence(__ATOMIC_ACQUIRE);
+        if (__atomic_load_n(&cached.seq, __ATOMIC_RELAXED) == s1) {
+            level = lvl;
+            visible = vis;
+            ir = ch1;
+            timestamp = ts;
+            return true;
+        }
+    }
+    return false;
+}
+
+// Client thread (possibly holding IOHIDEventDriver's command gate): never wait or touch I2C directly.
+OSObject *SwitchALS::copyEvent(void *context)
+{
+    auto *self = static_cast<SwitchALS *>(context);
+    if (!__atomic_load_n(&self->copyReady, __ATOMIC_ACQUIRE))
+        return nullptr;
+    uint32_t level = 0;
+    uint32_t visible = 0;
+    uint32_t ir = 0;
+    uint64_t stamp = 0;
+    const bool have = self->readCachedSample(level, visible, ir, stamp);
+    const bool isStreaming = __atomic_load_n(&self->streaming, __ATOMIC_RELAXED);
+    const bool stale = !have || msSince(stamp) >= kOnDemandRefreshMS;
+    if (!isStreaming && stale && !__atomic_load_n(&self->oneShotRequested, __ATOMIC_RELAXED)) {
+        __atomic_store_n(&self->oneShotRequested, true, __ATOMIC_RELEASE);
+        self->kick->interruptOccurred(nullptr, nullptr, 0);
+    }
+    return have ? makeEvent(level, visible, ir, stamp) : nullptr;
+}
+
+void SwitchALS::dispatch(uint32_t level, uint32_t visible, uint32_t ir, uint64_t timestamp)
+{
+    const char *why = nullptr;
+    OSObject *event = makeEvent(level, visible, ir, timestamp, &why);
+    if (!event) {
+        IOLog("SwitchALS: off: %s\n", why ? why : "IOHIDEvent creation failed");
+        giveUp();
+        return;
+    }
     // kIOReturnNotReady until IOHIDEventDriver has started on the device; CoreBrightness never sees the sensor without it.
     const IOReturn status = switch_hid_dispatch_event(hid, event);
     event->release();
@@ -495,22 +603,29 @@ void SwitchALS::sample()
     }
     const uint32_t visible = static_cast<uint32_t>(data[1]) << 8 | data[0];
     const uint32_t ir = static_cast<uint32_t>(data[3]) << 8 | data[2];
+    bool valid = false;
     if (!saturated(visible, ir) || gain == 0) {  // a clipped reading at a higher gain only steps the gain down
+        valid = true;
         const uint32_t level = lux(visible, ir, gain);
-        if (shouldReport(hasDispatched, lastLevel, level))
-            dispatch(level, visible, ir);
+        const uint64_t now = mach_absolute_time();
+        recordSample(level, visible, ir, now);
+        if (sampleUS > 0 && shouldReport(hasDispatched, lastLevel, level))
+            dispatch(level, visible, ir, now);
 #if defined(SWITCH_STATS_POWER) && SWITCH_STATS_POWER
-        noteStats(level, visible, ir);
+        if (sampleUS > 0)
+            noteStats(level, visible, ir);
 #endif
     }
 
     const unsigned next = nextGain(gain, visible, ir);
-    if (next == gain)
-        return;
-    if (writeRegister(RegGain, static_cast<uint8_t>(next)))
-        return;  // counted on the next read if the sensor is gone
-    gain = next;
-    skip = 1;  // the conversion in flight finishes at the old gain
+    if (next != gain && !writeRegister(RegGain, static_cast<uint8_t>(next))) {
+        gain = next;
+        skip = 1;  // the conversion in flight finishes at the old gain
+    }
+    if (oneShot && sampleUS == 0 && (valid || ++oneShotSteps >= kGains)) {
+        oneShot = false;
+        update();
+    }
 }
 
 void SwitchALS::ticked(OSObject *owner, IOTimerEventSource *sender)
@@ -518,7 +633,7 @@ void SwitchALS::ticked(OSObject *owner, IOTimerEventSource *sender)
     auto *self = static_cast<SwitchALS *>(owner);
     if (self->state != State::Configuring && self->state != State::Running)
         return;
-    self->armClock(sender, self->sampleUS);
+    self->armClock(sender, self->sampleUS ? self->sampleUS : kSampleUS);
     self->sample();
 }
 
@@ -530,6 +645,13 @@ void SwitchALS::intervalChanged(OSObject *owner, IOInterruptEventSource *, int)
     self->sampleUS = next;
     if (next > 0)
         self->hasDispatched = false;
+    if (next == 0 && __atomic_load_n(&self->oneShotRequested, __ATOMIC_ACQUIRE)) {
+        __atomic_store_n(&self->oneShotRequested, false, __ATOMIC_RELAXED);
+        if (!self->oneShot && self->lit && !self->suspended && self->supply && self->state != State::Broken) {
+            self->oneShot = true;
+            self->oneShotSteps = 0;
+        }
+    }
     self->update();
     if ((self->state == State::Running || self->state == State::Configuring) && prev > 0 && next > 0 && next < prev)
         self->armClock(self->clock, next);
@@ -607,6 +729,7 @@ bool SwitchALS::start(IOService *provider)
     kick->enable();
     hid = switch_hid_create(kSwitchHIDLight);
     switch_hid_set_feature_handler(hid, &SwitchALS::reportIntervalSet, this);
+    switch_hid_set_light_copy_handler(hid, &SwitchALS::copyEvent, this);
     registerService();
     supplyCheck->setTimeoutMS(kSupplyDeadlineMS);
     setLit(switch_display_is_on());

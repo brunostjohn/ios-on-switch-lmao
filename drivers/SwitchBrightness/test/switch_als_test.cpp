@@ -30,6 +30,9 @@ bool gDisplayOn = true;
 IOReturn gDispatchStatus = kIOReturnSuccess;
 SwitchHIDFeatureHandler gFeatureHandler = nullptr;
 void *gFeatureCtx = nullptr;
+SwitchHIDCopyEventHandler gCopyHandler = nullptr;
+void *gCopyCtx = nullptr;
+IOService *gHidDevice = nullptr;
 unsigned gI2cInitCalls = 0;
 unsigned gI2cReadCalls = 0;
 int gEventDataSentinel = 1;
@@ -184,13 +187,20 @@ void switch_refusal(const char *, const char *, const char *, ...)
 
 IOService *switch_hid_create(SwitchHIDKind)
 {
-    return new IOService;
+    gHidDevice = new IOService;
+    return gHidDevice;
 }
 
 void switch_hid_set_feature_handler(IOService *, SwitchHIDFeatureHandler handler, void *context)
 {
     gFeatureHandler = handler;
     gFeatureCtx = context;
+}
+
+void switch_hid_set_light_copy_handler(IOService *, SwitchHIDCopyEventHandler handler, void *context)
+{
+    gCopyHandler = handler;
+    gCopyCtx = context;
 }
 
 IOReturn switch_hid_dispatch_event(IOService *, OSObject *event)
@@ -203,19 +213,43 @@ IOReturn switch_hid_dispatch_event(IOService *, OSObject *event)
     return gDispatchStatus;
 }
 
-TEST(SwitchALS, StartsOffHonorsReportIntervalZeroDeadbandAndWake)
+namespace {
+void resetALS()
 {
-    initEventVtable();
+    if (gALS) {
+        gALS->detach(IOService::getResourceService());
+        gALS = nullptr;
+    }
+    if (gHidDevice) {
+        gHidDevice->release();
+        gHidDevice = nullptr;
+    }
+    gSupply = false;
+    gFeatureHandler = nullptr;
+    gFeatureCtx = nullptr;
+    gCopyHandler = nullptr;
+    gCopyCtx = nullptr;
     gWrites.clear();
     gDispatched.clear();
     OSMetaClass::allocs = 0;
     IOTimerEventSource::all.clear();
+    gI2cInitCalls = 0;
+    gI2cReadCalls = 0;
+    gNowNS = 1000000000ULL;
     gDisplayOn = true;
     gDispatchStatus = kIOReturnSuccess;
+}
+}  // namespace
+
+TEST(SwitchALS, StartsOffHonorsReportIntervalZeroDeadbandAndWake)
+{
+    resetALS();
+    initEventVtable();
     gData0 = 372;
     gData1 = 132;  // 47 lux at 64x
 
     ASSERT_EQ(switch_als_start(), 0);
+    ASSERT_NE(gCopyHandler, nullptr);
     ASSERT_GE(IOTimerEventSource::all.size(), 2u);
     IOTimerEventSource *clock = IOTimerEventSource::all[0];
 
@@ -290,4 +324,127 @@ TEST(SwitchALS, StartsOffHonorsReportIntervalZeroDeadbandAndWake)
     EXPECT_TRUE(clock->armed);
     clock->fire();
     ASSERT_EQ(gDispatched.size(), 4u);
+}
+
+TEST(SwitchALS, CopyEventOnDemandCacheAndPowerGating)
+{
+    resetALS();
+    initEventVtable();
+    gData0 = 372;
+    gData1 = 132;  // 47 lux at 64x
+
+    ASSERT_EQ(switch_als_start(), 0);
+    ASSERT_NE(gCopyHandler, nullptr);
+    ASSERT_GE(IOTimerEventSource::all.size(), 2u);
+    IOTimerEventSource *clock = IOTimerEventSource::all[0];
+
+    // Before LDO6 supply arrives: copyEvent returns nullptr and touches neither clock nor I2C.
+    EXPECT_EQ(gCopyHandler(gCopyCtx), nullptr);
+    EXPECT_FALSE(clock->armed);
+    EXPECT_TRUE(gWrites.empty());
+
+    // Supply arrives while ReportInterval == 0: first copyEvent kicks async one-shot and returns nullptr immediately.
+    switch_als_supply(true);
+    EXPECT_EQ(gCopyHandler(gCopyCtx), nullptr);
+    EXPECT_TRUE(clock->armed);
+    EXPECT_EQ(clock->lastIntervalUS, switch_als::kFirstSampleUS);
+    ASSERT_FALSE(gWrites.empty());
+    EXPECT_EQ(gWrites.back().cmd, static_cast<uint8_t>(0x80 | 0x00));
+    EXPECT_EQ(gWrites.back().val, static_cast<uint8_t>(0x03));
+
+    // One-shot tick reads BH1730, updates cache without unsolicited streaming dispatch, and powers down.
+    gWrites.clear();
+    gNowNS += 150000000ULL;
+    const uint64_t sampleStamp = gNowNS;
+    clock->fire();
+    EXPECT_FALSE(clock->armed);
+    EXPECT_TRUE(gDispatched.empty());
+    ASSERT_EQ(gWrites.size(), 1u);
+    EXPECT_EQ(gWrites[0].cmd, static_cast<uint8_t>(0x80 | 0x00));
+    EXPECT_EQ(gWrites[0].val, 0u);
+
+    // Subsequent copyEvent within freshness window returns the cached reading with zero I2C traffic.
+    gWrites.clear();
+    gNowNS += 1000000000ULL;
+    OSObject *ev = gCopyHandler(gCopyCtx);
+    ASSERT_NE(ev, nullptr);
+    auto *fe = reinterpret_cast<FakeHIDEvent *>(ev);
+    EXPECT_EQ(fe->type, 12u);
+    EXPECT_EQ(fe->level, 47);
+    EXPECT_EQ(fe->ch0, 372);
+    EXPECT_EQ(fe->ch1, 132);
+    EXPECT_EQ(fe->timestamp, sampleStamp);
+    ev->release();
+    EXPECT_FALSE(clock->armed);
+    EXPECT_TRUE(gWrites.empty());
+
+    // Stale copyEvent (>= 4 s later) returns cached event immediately and schedules an async one-shot refresh.
+    gData0 = 600;
+    gData1 = 210;
+    gNowNS += 4000000000ULL;
+    ev = gCopyHandler(gCopyCtx);
+    ASSERT_NE(ev, nullptr);
+    EXPECT_EQ(reinterpret_cast<FakeHIDEvent *>(ev)->level, 47);
+    ev->release();
+    EXPECT_TRUE(clock->armed);
+
+    gNowNS += 150000000ULL;
+    const uint64_t refreshedStamp = gNowNS;
+    clock->fire();
+    EXPECT_FALSE(clock->armed);
+    ev = gCopyHandler(gCopyCtx);
+    ASSERT_NE(ev, nullptr);
+    fe = reinterpret_cast<FakeHIDEvent *>(ev);
+    EXPECT_EQ(fe->level, static_cast<int32_t>(switch_als::lux(600, 210, 2)));
+    EXPECT_EQ(fe->ch0, 600);
+    EXPECT_EQ(fe->ch1, 210);
+    EXPECT_EQ(fe->timestamp, refreshedStamp);
+    ev->release();
+
+    // Screen off and suspend gate copyEvent: returns nullptr with zero clock/I2C activity.
+    gWrites.clear();
+    gNowNS += 5000000000ULL;
+    switch_als_set_active(false);
+    EXPECT_EQ(gCopyHandler(gCopyCtx), nullptr);
+    EXPECT_FALSE(clock->armed);
+    EXPECT_TRUE(gWrites.empty());
+
+    switch_als_set_active(true);
+    switch_als_suspend();
+    EXPECT_EQ(gCopyHandler(gCopyCtx), nullptr);
+    EXPECT_FALSE(clock->armed);
+    EXPECT_TRUE(gWrites.empty());
+
+    // Resume and verify saturated one-shot steps gain down, skips one conversion, records reading, and powers down.
+    switch_als_resume();
+    gData0 = 65535;
+    gData1 = 10000;
+    ev = gCopyHandler(gCopyCtx);
+    ASSERT_NE(ev, nullptr);
+    ev->release();
+    EXPECT_TRUE(clock->armed);
+
+    // Tick 1: saturated at 64x -> steps gain to 2x, sets skip = 1, stays armed.
+    gNowNS += 150000000ULL;
+    clock->fire();
+    EXPECT_TRUE(clock->armed);
+    // Tick 2: skipped conversion in flight at old gain, stays armed.
+    gData0 = 2000;
+    gData1 = 700;
+    gNowNS += 150000000ULL;
+    clock->fire();
+    EXPECT_TRUE(clock->armed);
+    // Tick 3: valid 2x reading recorded and sensor powered down.
+    gNowNS += 150000000ULL;
+    const uint64_t gainStamp = gNowNS;
+    clock->fire();
+    EXPECT_FALSE(clock->armed);
+    ev = gCopyHandler(gCopyCtx);
+    ASSERT_NE(ev, nullptr);
+    fe = reinterpret_cast<FakeHIDEvent *>(ev);
+    EXPECT_EQ(fe->level, static_cast<int32_t>(switch_als::lux(2000, 700, 1)));
+    EXPECT_EQ(fe->ch0, 2000);
+    EXPECT_EQ(fe->ch1, 700);
+    EXPECT_EQ(fe->timestamp, gainStamp);
+    ev->release();
 }

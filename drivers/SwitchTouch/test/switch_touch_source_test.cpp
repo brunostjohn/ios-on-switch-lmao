@@ -158,3 +158,17 @@ TEST(SwitchTouchSource, LightSensorPropertiesCopyEventAndSharedWorkLoop)
     EXPECT_THAT(source, HasSubstr("IOService *switch_hid_create(SwitchHIDKind kind)"));
     EXPECT_THAT(source, HasSubstr("void switch_hid_set_light_copy_handler("));
 }
+
+TEST(SwitchTouchSource, JoyConTouchTimestampHookOnLiveDispatchOnly)
+{
+    const std::string touch = SourceText("../SwitchTouch.cpp");
+    EXPECT_THAT(touch, HasSubstr("#include \"../SwitchJoyCon/SwitchJoyConTouch.h\""));
+    EXPECT_THAT(touch, HasSubstr("extern \"C\" __attribute__((weak)) void switch_joycon_note_touch_ms(uint64_t)"));
+    const std::string flush = Body(touch, "void SwitchTouch::flush(");
+    ASSERT_FALSE(flush.empty());
+    EXPECT_THAT(flush, HasSubstr("if (live && activeCount)"));
+    EXPECT_THAT(flush, HasSubstr("switch_joycon_note_touch_ms(stampUs / 1000);"));
+    const std::string release = Body(touch, "void SwitchTouch::releaseAll(");
+    ASSERT_FALSE(release.empty());
+    EXPECT_THAT(release, HasSubstr("flush(true, 0, false);"));
+}

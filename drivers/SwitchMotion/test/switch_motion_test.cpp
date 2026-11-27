@@ -499,6 +499,7 @@ extern "C" bool switch_display_is_on(void)
 
 struct HidDevice : IOService {
     SwitchHIDKind kind = kSwitchHIDTouch;
+    IOWorkLoop *sharedLoop = nullptr;
     SwitchHIDFeatureHandler handler = nullptr;
     void *context = nullptr;
     std::vector<SwitchMotionReport> reports;
@@ -512,17 +513,32 @@ struct HidDevice : IOService {
     std::vector<uint8_t> orientations;
     unsigned refuse = 0, refused = 0;
     std::vector<SwitchDeviceMotionReport> motionReports;  // the device motion service's
+
+    void free() override
+    {
+        OSSafeReleaseNULL(sharedLoop);
+        IOService::free();
+    }
 };
 
 static bool gTimedPosts = true;  // switch_hid_supports_timestamps
 static std::vector<HidDevice *> gHid;
 
-IOService *switch_hid_create(SwitchHIDKind kind)
+IOService *switch_hid_create(SwitchHIDKind kind, IOWorkLoop *sharedLoop)
 {
     auto *device = new HidDevice;
     device->kind = kind;
+    if (sharedLoop) {
+        sharedLoop->retain();
+        device->sharedLoop = sharedLoop;
+    }
     gHid.push_back(device);
     return device;
+}
+
+IOService *switch_hid_create(SwitchHIDKind kind)
+{
+    return switch_hid_create(kind, nullptr);
 }
 
 constexpr IOReturn kNotReady = (IOReturn)0xe00002d7;  // IOHIDDevice::handleReport before it is ready
@@ -730,6 +746,8 @@ static void teardown()
     for (HidDevice *device : gHid)
         device->release();
     gHid.clear();
+    IOWorkLoop::last = nullptr;
+    IOWorkLoop::created = 0;
     gLog.clear();
     gChip = nullptr;
     gTimedPosts = true;
@@ -1508,6 +1526,23 @@ static void lsm6ds3hDeviceMotionGaps()
     teardown();
 }
 
+static void sharedWorkLoop()
+{
+    Icm42607 chip;
+    check(start(chip), "shared workloop: started");
+    check(IOWorkLoop::created == 1 && IOWorkLoop::last != nullptr,
+          "shared workloop: SwitchMotion creates one IOWorkLoop");
+    check(gHid.size() == 4, "shared workloop: four HID devices created");
+    for (const SwitchHIDKind kind :
+         {kSwitchHIDAccelerometer, kSwitchHIDGyro, kSwitchHIDDeviceMotion, kSwitchHIDOrientation}) {
+        HidDevice *device = hid(kind);
+        REQUIRE(device);
+        check(device->sharedLoop == IOWorkLoop::last, "shared workloop: HID device shares SwitchMotion's IOWorkLoop");
+    }
+    expectClean("shared workloop");
+    teardown();
+}
+
 // --- The scenarios, in this order in one process, as the harness has always run them: each session tears the driver
 // down (teardown()) before the next starts it again. Do not shard or shuffle.
 TEST(SwitchMotion, DecodeAndMapping)
@@ -1563,4 +1598,9 @@ TEST(SwitchMotion, Lsm6ds3hSession)
 TEST(SwitchMotion, Lsm6ds3hDeviceMotionGaps)
 {
     lsm6ds3hDeviceMotionGaps();
+}
+
+TEST(SwitchMotion, SharedWorkLoop)
+{
+    sharedWorkLoop();
 }

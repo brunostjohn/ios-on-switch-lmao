@@ -217,6 +217,16 @@ TEST(SwitchALSSource, ReportIntervalPacesTheSamples)
     EXPECT_THAT(hid, HasSubstr("switch_refusal_k(switch_refusal_key_with(switch_refusal_key(\"hid\", \"set-report\")"));
 }
 
+TEST(SwitchALSSource, CopyEventHandlerIsNonBlockingAndWired)
+{
+    const std::string als = SourceText("../SwitchALS.cpp");
+    EXPECT_THAT(als, HasSubstr("switch_hid_set_light_copy_handler(hid, &SwitchALS::copyEvent, this);"));
+    const std::string copy = Body(als, "OSObject *SwitchALS::copyEvent(");
+    ASSERT_FALSE(copy.empty());
+    for (const char *forbidden : {"tegra_i2c_", "writeRegister", "IOSleep", "IODelay", "runAction"})
+        EXPECT_THAT(copy, testing::Not(HasSubstr(forbidden))) << forbidden;
+}
+
 TEST(SwitchALSSource, BacklightUsesLockFreeSlotAndRealDeadlines)
 {
     const std::string backlight = SourceText("../SwitchBacklight.cpp");

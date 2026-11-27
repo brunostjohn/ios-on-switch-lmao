@@ -45,6 +45,7 @@ kernel_driver(
     hdr_deps = [
         "drivers/ArmGIC",
         "drivers/NativeMobileDisplay",
+        "drivers/SwitchJoyCon",
         "drivers/SwitchPower",
         "drivers/TegraGPIO",
         "drivers/TegraI2C",
