@@ -6,12 +6,55 @@
 #include <os/log.h>
 #include <stdlib.h>
 #include <string.h>
+#include "NVENCListener.h"
 #include "../../../kits/SwitchServiceWait/SwitchServiceWait.h"
+
+enum {
+    kBuffers = 64,
+};
+
+typedef struct {
+    uint32_t handle;
+    uint8_t *va;
+} Mapping;
 
 struct NVENCClient {
     io_connect_t connection;
     uint32_t selector;
+    uint32_t features;
+    Mapping mappings[kBuffers];
+    NVENCListener *listener;
 };
+
+static void remember(NVENCClient *c, uint32_t handle, void *va)
+{
+    Mapping *freeSlot = NULL;
+    for (unsigned i = 0; i < kBuffers; i++) {
+        if (c->mappings[i].handle == handle) {
+            c->mappings[i].va = va;
+            return;
+        }
+        if (!freeSlot && !c->mappings[i].handle)
+            freeSlot = &c->mappings[i];
+    }
+    if (freeSlot)
+        *freeSlot = (Mapping){handle, va};
+}
+
+static void forget(NVENCClient *c, uint32_t handle)
+{
+    for (unsigned i = 0; i < kBuffers; i++)
+        if (c->mappings[i].handle == handle)
+            c->mappings[i] = (Mapping){0, NULL};
+}
+
+void *nvenc_buffer_va(const NVENCClient *c, uint32_t handle)
+{
+    for (unsigned i = 0; handle && i < kBuffers; i++)
+        if (c->mappings[i].handle == handle)
+            return c->mappings[i].va;
+    return NULL;
+}
 
 static io_service_t service(void)
 {
@@ -23,8 +66,8 @@ bool nvenc_service_wait(void)
     return switch_service_wait("TegraNVENC", TEGRA_NVENC_ABSENT_RESOURCE, 20000);  // E3 comes seconds into boot
 }
 
-static kern_return_t call(NVENCClient *c, uint32_t selector, uint32_t method, const void *in, size_t inSize, void *out,
-                          size_t outSize)
+kern_return_t nvenc_tunnel(io_connect_t connection, uint32_t selector, uint32_t method, const void *in, size_t inSize,
+                           void *out, size_t outSize)
 {
     uint8_t buffer[8 + sizeof(TegraNVENCSubmit)];
     const uint32_t header[2] = {TEGRA_NVENC_TUNNEL_MAGIC, method};
@@ -34,7 +77,13 @@ static kern_return_t call(NVENCClient *c, uint32_t selector, uint32_t method, co
     if (inSize)
         memcpy(buffer + 8, in, inSize);
     size_t size = outSize;
-    return IOConnectCallStructMethod(c->connection, selector, buffer, 8 + inSize, out, out ? &size : NULL);
+    return IOConnectCallStructMethod(connection, selector, buffer, 8 + inSize, out, out ? &size : NULL);
+}
+
+static kern_return_t call(NVENCClient *c, uint32_t selector, uint32_t method, const void *in, size_t inSize, void *out,
+                          size_t outSize)
+{
+    return nvenc_tunnel(c->connection, selector, method, in, inSize, out, outSize);
 }
 
 NVENCClient *nvenc_open(int *error)
@@ -75,6 +124,7 @@ NVENCClient *nvenc_open(int *error)
             *error = kr;
         return NULL;
     }
+    c->features = info.features;
     return c;
 }
 
@@ -87,6 +137,8 @@ void nvenc_close(NVENCClient *c)
 {
     if (!c)
         return;
+    nvenc_listener_stop(c->listener);
+    c->listener = NULL;
     IOServiceClose(c->connection);  // the kernel waits for this connection's jobs and frees its buffers
     free(c);
 }
@@ -113,6 +165,7 @@ int nvenc_alloc(void *ctx, uint64_t size, uint32_t *handle, void **va)
     }
     *handle = reply.handle;
     *va = (void *)(uintptr_t)reply.address;
+    remember(c, reply.handle, *va);
     return 0;
 }
 
@@ -121,6 +174,7 @@ void nvenc_free(void *ctx, uint32_t handle)
     NVENCClient *c = ctx;
     const TegraNVENCBuffer b = {handle, 0};
     call(c, c->selector, TegraNVENCMethodBufferFree, &b, sizeof(b), NULL, 0);  // the kernel unmaps it from this task
+    forget(c, handle);
 }
 
 int nvenc_submit(void *ctx, const TegraNVENCSubmit *submit, uint32_t *fence, uint32_t *input)
@@ -134,6 +188,11 @@ int nvenc_submit(void *ctx, const TegraNVENCSubmit *submit, uint32_t *fence, uin
     *fence = reply.fence;
     if (input)
         *input = reply.input;
+    TegraNVENCRange status;
+    if (c->listener && nvenc_status_range(submit, &status)) {
+        const uint8_t *base = nvenc_buffer_va(c, status.handle);
+        nvenc_listener_submitted(c->listener, reply.fence, status, base ? base + status.offset : NULL);
+    }
     return 0;
 }
 
@@ -141,4 +200,25 @@ int nvenc_wait(void *ctx, const TegraNVENCWait *wait)
 {
     NVENCClient *c = ctx;
     return call(c, c->selector, TegraNVENCMethodWait, wait, sizeof(*wait), NULL, 0) ? -1 : 0;
+}
+
+bool nvenc_listen(NVENCClient *c, dispatch_queue_t queue, NVENCDone done, void *context)
+{
+    if (!c || c->listener || !(c->features & TEGRA_NVENC_FEATURE_COMPLETION))
+        return false;
+    c->listener = nvenc_listener_start(c->connection, c->selector, queue, done, context);
+    return c->listener != NULL;
+}
+
+void nvenc_stop_listening(NVENCClient *c)
+{
+    if (!c)
+        return;
+    nvenc_listener_stop(c->listener);
+    c->listener = NULL;
+}
+
+bool nvenc_completions_on_port(const NVENCClient *c)
+{
+    return c && nvenc_listener_on_port(c->listener);
 }
