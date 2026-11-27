@@ -26,11 +26,28 @@ def sign_file(path: Path, identifier: str | None = None, entitlements: Path | No
         args += ['--identifier', identifier]
     if entitlements:
         args += ['--entitlements', str(entitlements)]
-    subprocess.run([*args, str(path)], check=True, capture_output=True)
+    result = subprocess.run([*args, str(path)], capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        raise RuntimeError(f'codesign failed for {path}: {result.stderr.strip() or result.stdout.strip()}')
+
+
+def _copy_bundle_tree(source: Path, destination: Path) -> None:
+    """Copy a bundle, preserving relative in-bundle symlinks while dereferencing Bazel sandbox symlinks."""
+    destination.mkdir(parents=True, exist_ok=True)
+    for path in sorted(source.rglob('*')):
+        dest = destination / path.relative_to(source)
+        if path.is_symlink() and not path.readlink().is_absolute():
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.symlink_to(path.readlink())
+        elif path.is_dir():
+            dest.mkdir(parents=True, exist_ok=True)
+        elif path.is_file():
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, dest)
 
 
 def sign_bundle(source: Path, destination: Path, entitlements: Path) -> Path:
-    shutil.copytree(source, destination, symlinks=True)
+    _copy_bundle_tree(source, destination)
     for path in [destination, *destination.rglob('*')]:
         if not path.is_symlink():
             path.chmod(path.stat().st_mode | 0o200)

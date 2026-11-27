@@ -76,7 +76,8 @@ def tree(root: Path, destination: str) -> dict:
     entries = {}
     for path in sorted(root.rglob('*')):
         name = destination + '/' + path.relative_to(root).as_posix()
-        if path.is_symlink():
+        # Bazel darwin-sandbox materializes TreeArtifact files as absolute symlinks into the execroot.
+        if path.is_symlink() and not path.readlink().is_absolute():
             packages.add_link(entries, name, str(path.readlink()))
         elif path.is_file():
             packages.add_file(entries, name, path.read_bytes(), path.stat().st_mode & 0o777)
