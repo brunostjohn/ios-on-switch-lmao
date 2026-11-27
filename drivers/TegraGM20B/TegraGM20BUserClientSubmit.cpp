@@ -95,8 +95,8 @@ IOReturn AGXDeviceUserClient::cpuAccess(const TegraGM20BAbiCpuAccess *in, bool r
 
 bool AGXDeviceUserClient::reserveJob(JobScratch &job, uint32_t uses)
 {
-	if (!job.bytes)
-		job.bytes = IONew(uint64_t, (kJobBytes + 7) / 8);
+	if (!job.record)
+		job.record = static_cast<SwitchGpuJobBuffer *>(IOMallocData(sizeof(*job.record)));
 	if (!job.dependencies)
 		job.dependencies = IONew(switch_gpu_backing_token, TegraGM20BMaxJobDependencies);
 	if (!job.events) {
@@ -104,7 +104,7 @@ bool AGXDeviceUserClient::reserveJob(JobScratch &job, uint32_t uses)
 		if (job.events)
 			*job.events = {};
 	}
-	if (!job.bytes || !job.dependencies || !job.events)
+	if (!job.record || !job.dependencies || !job.events)
 		return false;
 	if (uses > job.capacity) {
 		uint32_t capacity = job.capacity ? job.capacity : 64;
@@ -151,7 +151,8 @@ bool AGXDeviceUserClient::reserveJob(JobScratch &job, uint32_t uses)
 
 void AGXDeviceUserClient::freeJob(JobScratch &job)
 {
-	IODelete(job.bytes, uint64_t, (kJobBytes + 7) / 8);
+	if (job.record)
+		IOFreeData(job.record, sizeof(*job.record));
 	IODelete(job.dependencies, switch_gpu_backing_token, TegraGM20BMaxJobDependencies);
 	if (job.events) {
 		job.events->clear();

@@ -20,7 +20,7 @@ public:
 			return false;
 		__atomic_store_n(&slotActive_[slot], 1u, __ATOMIC_RELEASE);
 		__atomic_thread_fence(__ATOMIC_SEQ_CST);
-		if (!__atomic_load_n(&blocked_, __ATOMIC_RELAXED))
+		if (!__atomic_load_n(&blocked_, __ATOMIC_ACQUIRE))
 			return true;
 		__atomic_store_n(&slotActive_[slot], 0u, __ATOMIC_RELEASE);
 		return false;

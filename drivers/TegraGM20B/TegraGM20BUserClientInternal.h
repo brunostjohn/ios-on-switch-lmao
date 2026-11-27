@@ -43,6 +43,7 @@
 #include "SwitchGpuWriterPromise.h"
 #include "SwitchGpuBoIndex.h"
 #include "SwitchGpuBoLimits.h"
+#include "SwitchGpuJobRecord.h"
 #include "SwitchGpuBindingTable.h"
 #include "SwitchGpuGatedMethods.h"
 #include "SwitchGpuClaims.h"
@@ -86,12 +87,6 @@ extern uint32_t appRoleGen;
 constexpr uint32_t kMaxChannels = 8;  // fence slots: 64 bytes each in the connection's fence page
 static_assert(kMaxChannels * TegraGM20BFencePageRecordBytes == TegraGM20BFencePageChannelsBytes,
 	      "a channel slot of the fence page for each channel");
-constexpr uint32_t kJobBytes =
-	sizeof(TegraGM20BAbiJob) + TegraGM20BMaxJobPushes * sizeof(TegraGM20BAbiPush) +
-	TegraGM20BMaxJobUses * sizeof(TegraGM20BAbiSurfaceUse) + sizeof(TegraGM20BAbiSubmitEvents) +
-	TegraGM20BMaxJobEvents *
-		(sizeof(TegraGM20BAbiEventUse) + sizeof(TegraGM20BAbiSignalRelease)) +
-	sizeof(TegraGM20BAbiSubmitAdmission) + sizeof(TegraGM20BAbiJobPromises);
 constexpr uint64_t kMaxBoBytes = SWITCH_GPU_MAX_BUFFER_BYTES;
 // IOKit's inline structure limit (4096 bytes) less the tunnel's header
 constexpr uint32_t kMaxRecordBytes = 4096 - 8;
@@ -467,7 +462,7 @@ class AGXDeviceUserClient : public IOUserClient
 	};
 
 	struct JobScratch {
-		uint64_t *bytes;
+		SwitchGpuJobBuffer *record;
 		switch_gpu_backing_token *dependencies;
 		switch_gpu_backing_use *uses;
 		switch_gpu_backing_write_range *writes;

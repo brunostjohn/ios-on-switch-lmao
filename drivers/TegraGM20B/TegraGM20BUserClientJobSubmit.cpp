@@ -1,11 +1,7 @@
 // SPDX-License-Identifier: MIT
 // SubmitJob (TegraGM20BJobABI.h method 33): a job over a resource set and its shared uses, without the connection lock.
 #include "TegraGM20BUserClientInternal.h"
-#include "SwitchGpuJobRecord.h"
 #include "SwitchGpuQuiet.h"
-
-static_assert(SwitchGpuJobRecord::kMaxBytes <= kJobBytes,
-	      "a channel's job scratch holds a SubmitJob record");
 
 IOReturn AGXDeviceUserClient::submitJob(const TegraGM20BAbiSubmitAddress *in,
 					TegraGM20BAbiExecReply *out)
@@ -46,13 +42,10 @@ IOReturn AGXDeviceUserClient::takeJob(const TegraGM20BAbiSubmitAddress *in,
 	IOReturn result = switch_gpu_refuse(why, SwitchGpuRefusal::JobScratch, kIOReturnNoMemory);
 	if (reserveJob(job, TegraGM20BMaxJobUses + TegraGM20BMaxJobPushes)) {
 		why = {};
-		memcpy(job.bytes, &header, sizeof(header));
-		const uint32_t tail = in->bytes - sizeof(header);
-		const auto record =
-			tail && copyin(in->address + sizeof(header), job.bytes + sizeof(header),
-				       tail)
-				? SwitchGpuJobRecord{}
-				: SwitchGpuJobRecord::parse(job.bytes, in->bytes);
+		const auto record = job.record->stage(
+			header, in->bytes, [&](uint8_t *dst, size_t tail) {
+				return copyin(in->address + sizeof(header), dst, tail) == 0;
+			});
 		const bool parsed = record.valid() && record.job->channel == header.channel;
 		result = parsed ? kIOReturnSuccess
 				: switch_gpu_refuse(why, SwitchGpuRefusal::JobParse,

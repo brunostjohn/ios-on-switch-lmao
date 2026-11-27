@@ -3,6 +3,7 @@
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 #include "TegraGM20BJobABI.h"
 #include "TegraGM20BSchedABI.h"
 #include "TegraGM20BVolatileABI.h"
@@ -114,5 +115,21 @@ struct SwitchGpuJobRecord {
 	bool valid() const
 	{
 		return job != nullptr;
+	}
+};
+
+struct alignas(uint64_t) SwitchGpuJobBuffer {
+	uint8_t bytes[SwitchGpuJobRecord::kMaxBytes];
+
+	template <typename CopyTail>
+	SwitchGpuJobRecord stage(const TegraGM20BAbiJob &header, size_t size, CopyTail &&copyTail)
+	{
+		if (size < sizeof(header) || size > sizeof(bytes))
+			return {};
+		memcpy(bytes, &header, sizeof(header));
+		const size_t tail = size - sizeof(header);
+		if (tail && !copyTail(bytes + sizeof(header), tail))
+			return {};
+		return SwitchGpuJobRecord::parse(bytes, size);
 	}
 };
