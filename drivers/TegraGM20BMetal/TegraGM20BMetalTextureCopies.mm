@@ -249,9 +249,6 @@ SwitchMetalTexture *cpuOwner(SwitchMetalTexture *t)
     }
     if (gm20bDecodedReplace(self, r, level, slice, bytes, row, image))
         return;
-#if SWITCH_METAL_DIAGNOSTICS
-    _raw.probeWritten = true;
-#endif
     if (_surfaceWrites)
         noteSurfaceWrite(_surfaceWrites);
     freshBeforeTransfer(self);

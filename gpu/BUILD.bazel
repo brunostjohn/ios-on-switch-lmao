@@ -212,7 +212,6 @@ PLUGIN_CC_SRCS = [
     GM20B_METAL + ":device_stamps.cpp",
     GM20B_METAL + ":draw.cpp",
     GM20B_METAL + ":draw_prepare.cpp",
-    GM20B_METAL + ":draw_probes.cpp",
     GM20B_METAL + ":draw_times.cpp",
     GM20B_METAL + ":draw_inputs.cpp",
     GM20B_METAL + ":draw_shader_tests.cpp",

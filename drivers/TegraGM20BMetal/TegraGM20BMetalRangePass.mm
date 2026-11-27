@@ -165,18 +165,8 @@ bool SwitchMetalRangeEncode::beginPass(size_t at)
             target = &levelTargets_[j];
         }
         const bool whole = target == &t->_raw || (target == &levelTargets_[j] && gm20bWholeViewTarget(t));
-        if (!whole && !own) {
-#if SWITCH_METAL_DIAGNOSTICS
-            static std::atomic<bool> loggedLevel{false};
-            levelPasses_++;
-            if (!loggedLevel.exchange(true))
-                os_log(gm20bLog(),
-                       "SwitchMetal: renders into levels and slices (first: level %lu slice %lu of %ux%u format %u "
-                       "type %u)",
-                       (unsigned long)a.level, (unsigned long)a.slice, t->_raw.width, t->_raw.height, t->_raw.format,
-                       unsigned(t->_raw.type));
-#endif
-        }
+        if (!whole && !own)
+            SWITCH_METAL_DIAGNOSTIC(levelPasses_++);
         p.color[j].texture = target != &t->_raw ? target : standIn ? standIn : &t->_raw;
         if (p.color[j].texture == &t->_raw && t->_raw.nativePlane != ~0u) {
             if (const gm20b::Texture *native = rc->writeTexture(&t->_raw); native != &t->_raw)

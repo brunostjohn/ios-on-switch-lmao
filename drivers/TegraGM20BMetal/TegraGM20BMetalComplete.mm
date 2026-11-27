@@ -31,7 +31,7 @@ std::string constantsLast(const std::string &key)
 
 }  // namespace
 
-#if SWITCH_METAL_DIAGNOSTICS
+#if SWITCH_METAL_STATS
 void logHarvestParts(uint64_t name, NSString *label, const std::string &key)
 {
     std::string text = std::string("label=") + (label.length ? label.UTF8String : "-");
@@ -43,7 +43,9 @@ void logHarvestParts(uint64_t name, NSString *label, const std::string &key)
         os_log(gm20bLog(), "SwitchMetal: harvest %016llx %zu/%zu %{public}s", (unsigned long long)name, i + 1, parts,
                text.substr(i * kPart, kPart).c_str());
 }
+#endif
 
+#if SWITCH_METAL_DIAGNOSTICS
 void Completion::logInProcessCa(const Ask &a, const CacheKey &k, RecordCache::Found found)
 {
     NSString *label = a.descriptor.label ?: a.facade.label;
@@ -56,8 +58,13 @@ void Completion::logInProcessCa(const Ask &a, const CacheKey &k, RecordCache::Fo
             return;
     }
     gInProcessCaLogged.fetch_add(1, std::memory_order_relaxed);
+#if SWITCH_METAL_STATS
     os_log(gm20bLog(), "SwitchMetal: in-process state the pack lacks %016llx (%{public}s): label=%{public}s",
            (unsigned long long)k.name(), found == RecordCache::Found::Record ? "record" : "refusal", utf8);
+#else
+    (void)k;
+    (void)found;
+#endif
 }
 #endif
 

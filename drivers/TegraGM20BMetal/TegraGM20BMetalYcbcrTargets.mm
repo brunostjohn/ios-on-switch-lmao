@@ -162,25 +162,6 @@ int storeYcbcrPlanes(gm20b::CommandBuffer *rc, const gm20b::Texture &t, const gm
         merge->mergePlane(t);
         merge->end();
     }
-    static std::atomic<bool> said{false}, saidPlane{false};
-    if (t.ycbcrStore->plane) {
-        if (!saidPlane.exchange(true, std::memory_order_relaxed))
-            os_log(gm20bLog(),
-                   "SwitchMetal: packed 10-bit plane stored on the GPU (first: %ux%u, %u codes a texel): pass into a "
-                   "memoryless "
-                   "stand-in, words drawn by the pack's store state",
-                   t.width, t.height, t.ycbcrStore->plane);
-    } else if (!said.exchange(true, std::memory_order_relaxed)) {
-        os_log(
-            gm20bLog(),
-            "SwitchMetal: YCbCr target stored on the GPU (first: %ux%u, chroma %ux%u, %u-bit %{public}s): pass into a "
-            "memoryless stand-in, luma and chroma blocks drawn by the pack's store states",
-            t.width, t.height, t.chroma ? t.chroma->width : 0, t.chroma ? t.chroma->height : 0,
-            t.ycbcrStore->max > 255 ? 10u : 8u,
-            t.ycbcrStore->srgb        ? "sRGB"
-            : t.ycbcrStore->converted ? "converted"
-                                      : "codes");
-    }
     return 0;
 }
 

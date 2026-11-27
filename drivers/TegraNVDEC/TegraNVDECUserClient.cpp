@@ -199,7 +199,7 @@ IOReturn AppleD5500UserClient::clientClose()
     const bool idle = quiesce();
     if (!idle)
         IOLog("TegraNVDEC: a closing client's job never finished; its buffers stay wired\n");
-#if SWITCH_NVDEC_PROBES
+#if SWITCH_NVDEC_PROBES && defined(SWITCH_STATS_IO) && SWITCH_STATS_IO
     if (recycles_) {
         uint64_t published = 0, objects = 0, surfaces = 0;
         if (switch_native_surface_publications)

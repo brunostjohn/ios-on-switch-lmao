@@ -48,31 +48,24 @@ struct GlassStage {
     nonisolated static func black(_ level: Float) -> Bool { level <= 0.12 }
 }
 
-/// One snapshot of a new glass stage, as ui.glass_first takes it: built, settled, `before` run on it, composited by the
-/// render server with its command buffers recorded (GlassRecording, with the draw lines when `lines`), the stage
-/// cleared.
 struct GlassRound {
     let level: Float
-    let recording: GlassRecording
     let picture: Raster
-    /// No test built a glass hierarchy in this process before this one.
     let firstInProcess: Bool
 
     var black: Bool { GlassStage.black(level) }
 
     static func run(
-        _ context: TestContext, lines: Bool = false, before: @escaping @MainActor (GlassStage) -> Void = { _ in }
+        _ context: TestContext, before: @escaping @MainActor (GlassStage) -> Void = { _ in }
     ) async -> GlassRound {
         let first = await MainActor.run { GlassStage.built == 0 }
         let stage = await context.onStage(fullScreen: true) { GlassStage($0) }
         await Snapshots.settle()
-        let (picture, recording) = await MainActor.run { () -> (Raster, GlassRecording) in
+        let picture = await MainActor.run { () -> Raster in
             before(stage)
-            return GlassRecording.around(lines: lines) { Snapshots.composited(stage.root) }
+            return Snapshots.composited(stage.root)
         }
         await context.clearStage()
-        return GlassRound(
-            level: GlassStage.level(picture), recording: recording, picture: picture, firstInProcess: first
-        )
+        return GlassRound(level: GlassStage.level(picture), picture: picture, firstInProcess: first)
     }
 }

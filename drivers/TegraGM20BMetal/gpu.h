@@ -70,9 +70,6 @@
 #include "attachment_lifetime.h"
 #include "own_states.h"
 #include "stats.h"
-#if SWITCH_METAL_DIAGNOSTICS
-#include "glass_mem.h"
-#endif
 #include "descriptors.h"
 #include "encode_profile.h"
 #include "use_memo.h"
@@ -1084,8 +1081,6 @@ public:
         std::atomic<uint64_t> commits{0}, pushBytes{0}, uploadBytes{0}, ringWaits{0}, ringsOutgrown{0}, imports{0},
             importBytes{0}, poolBytes{0}, poolChunks{0}, cleanBytes{0}, poolStalls{0};
         std::atomic<uint64_t> textureUploads{0}, textureReadbacks{0}, fusedPasses{0};
-        // GPU memory made or given back since open: chunks, compressed buffers, memoryless backings' memory, heap purges
-        std::atomic<uint64_t> memEvents{0};
         // uncompressed backings held now and their memory (a memoryless one's shared plain memory, a shadow's own), and the
         // retired ones among them and the free bytes of the block-linear and zeta chunks as trimBackings last counted them
         std::atomic<uint64_t> backings{0}, backingBytes{0}, retiredBackings{0}, tiledFreeBytes{0};
@@ -1332,16 +1327,6 @@ public:
 
     std::atomic<FetchBarrier> fetchBarrier{FetchBarrier::PixelShader};
     static const char *fetchBarrierName(FetchBarrier b);
-
-    // The render server's blur-texture probe (glass_mem.h); null in any other process. It runs only while armed
-    // (glassMemArming); glassMemOn is the frame path's one load, set when armed and cleared at the first begin() after
-    std::unique_ptr<GlassMem> glassMem;
-    GlassMemArming glassMemArming;
-    std::atomic<bool> glassMemOn{false};
-    // A submission carrying the probe's reads was killed: the probe stops for the process (its reads are new code on
-    // the compositor's every command buffer)
-    std::atomic<bool> glassMemStopped{false};
-    void glassMemEvent(const char *what, uint64_t bytes);
 #endif
 
 private:
@@ -1567,9 +1552,6 @@ private:
     ProgramPages packPages_;
     uint64_t packWindowVa_ = 0, packWindowBytes_ = 0;
     const uint8_t *packWindowCpu_ = nullptr;
-#if SWITCH_METAL_DIAGNOSTICS
-    uint32_t packPieceLogs_ = 0;
-#endif
 
     // each mapping of the shader compiler's store slots ran from, its pages from window offset heapStoresAt_ on, a mapping
     // after another's (a store written again is mapped again; the old mapping stays)
@@ -2207,19 +2189,6 @@ private:
     std::atomic<uint64_t> commitCount_{0};
     uint64_t begun_ = 0;                    // CommandBuffer::serial's source: Device::begin's, on the submit worker
     std::atomic<uint64_t> closedCount_{0};  // command buffers committed or abandoned
-
-#if SWITCH_METAL_DIAGNOSTICS
-    // the probe's ring of rows (glass_mem.h) and the records of the command buffers whose rows it holds, read at a
-    // begin() once their fences passed
-    Bo glassMemRing_;
-    GlassMemCb glassMemCbs_[kGlassMemSlots];
-    bool glassMemBusy_[kGlassMemSlots] = {};
-    uint32_t glassMemBusyCount_ = 0;
-    uint64_t glassMemSummaryAt_ = 0, glassMemSummaryCbs_ = 0, glassMemSummaryLaunches_ = 0, glassMemSummaryNs_ = 0;
-    bool glassMemLive_ = false;  // armed for the command buffer being encoded (begin())
-    void glassMemFrame();
-    void glassMemRead(uint64_t now);
-#endif
 
     // A pass's backing texture (Device::backing) is its Backing's first member
     static Backing &backingOf(Texture &t)

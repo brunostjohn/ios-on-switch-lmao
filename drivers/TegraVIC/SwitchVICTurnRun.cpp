@@ -15,6 +15,7 @@ extern "C" IOReturn switch_display_landscape_run_call(const IOExternalMethodArgu
 namespace {
 SwitchVICTurnCounters gCounters;
 int gTestPid = -1;
+#if defined(SWITCH_STATS_IO) && SWITCH_STATS_IO
 constexpr unsigned kShapes = 32;
 uint64_t gShapes[kShapes];
 
@@ -54,11 +55,13 @@ void fourcc(char out[5], uint32_t f)
         out[i] = char(f >> (24 - 8 * i));
     out[4] = 0;
 }
+#endif
 }  // namespace
 
 void switch_vic_turn_request_seen(const TegraVICRequest &r, const TegraVICSurfaceDesc &s, const TegraVICSurfaceDesc &d,
                                   int pid)
 {
+#if defined(SWITCH_STATS_IO) && SWITCH_STATS_IO
     if (!firstOf(shapeOf(r, s, d, pid)))
         return;
     char name[32] = {}, from[5], to[5];
@@ -74,6 +77,12 @@ void switch_vic_turn_request_seen(const TegraVICRequest &r, const TegraVICSurfac
         d.width, d.height, r.dst_x, r.dst_y, r.dst_w, r.dst_h, r.src_event_port, r.src_wait, r.src_signal,
         r.dst_event_port, r.dst_wait, r.dst_signal, r.cb_fn != 0, (r.flags & TEGRA_VIC_REQ_SKIP_CALLBACK) != 0);
     os_log(OS_LOG_DEFAULT, "%s", line);
+#else
+    (void)r;
+    (void)s;
+    (void)d;
+    (void)pid;
+#endif
 }
 
 uint8_t switch_vic_turn_origin(int pid)

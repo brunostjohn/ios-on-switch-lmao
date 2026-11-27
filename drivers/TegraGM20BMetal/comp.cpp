@@ -203,13 +203,6 @@ Device::Backing *Device::compBacking(const Texture &m, uint32_t tag, uint32_t ki
     b->usedNs = compClock();
     mem->views++;
     SWITCH_METAL_DIAGNOSTIC(stats.compViews++);
-#if SWITCH_METAL_DIAGNOSTICS
-    if (!comp_.loggedOn) {
-        comp_.loggedOn = true;
-        os_log(compLog(), "SwitchMetal: compression on: first backing %ux%u format %u kind 0x%x (%llu KiB)", t.width,
-               t.height, t.format, kind, (unsigned long long)(mem->bo.bytes >> 10));
-    }
-#endif
     return b;
 }
 
@@ -242,7 +235,6 @@ uint64_t Device::compEvictIdleReady(const CompWant &w, bool comptagExhausted, st
         if (!claimed[i] && !fitsW && needMore) {
             SWITCH_METAL_DIAGNOSTIC(stats.compHeld--);
             SWITCH_METAL_DIAGNOSTIC(stats.compHeldBytes -= r.bo.bytes);
-            SWITCH_METAL_DIAGNOSTIC(glassMemEvent("compressed memory evicted", r.bo.bytes));
             evict.push_back(r.bo);
             freedBytes += r.bo.bytes;
         } else {
@@ -259,15 +251,8 @@ void Device::compMake(std::unique_lock<gm20b::Mutex> &l)
         const CompWant w = comp_.wanted.front();
         Bo bo;
         l.unlock();
-#if SWITCH_METAL_DIAGNOSTICS
-        const auto start = std::chrono::steady_clock::now();
-#endif
         int kr = k_.allocCompressible(w.bytes, bo);
         bool made = kr == KERN_SUCCESS;
-#if SWITCH_METAL_DIAGNOSTICS
-        auto us =
-            std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
-#endif
         l.lock();
         if (stopping_) {
             if (made) {
@@ -277,15 +262,8 @@ void Device::compMake(std::unique_lock<gm20b::Mutex> &l)
             }
             break;
         }
-#if SWITCH_METAL_DIAGNOSTICS
-        const auto bindStart = std::chrono::steady_clock::now();
-#endif
         if (made)
             kr = k_.bindCompressed(bo, w.kind);
-#if SWITCH_METAL_DIAGNOSTICS
-        long long bindUs =
-            std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - bindStart).count();
-#endif
         uint64_t evictedBytes = 0;
         if (kr != KERN_SUCCESS && compShortage(kr) && !comp_.ready.empty()) {
             if (made) {
@@ -308,15 +286,8 @@ void Device::compMake(std::unique_lock<gm20b::Mutex> &l)
                 l.unlock();
                 for (Bo &e : evict)
                     k_.free(e);
-#if SWITCH_METAL_DIAGNOSTICS
-                const auto retryStart = std::chrono::steady_clock::now();
-#endif
                 kr = k_.allocCompressible(w.bytes, bo);
                 made = kr == KERN_SUCCESS;
-#if SWITCH_METAL_DIAGNOSTICS
-                const auto retryElapsed = std::chrono::steady_clock::now() - retryStart;
-                us = std::chrono::duration_cast<std::chrono::microseconds>(retryElapsed).count();
-#endif
                 l.lock();
                 if (stopping_) {
                     if (made) {
@@ -326,22 +297,8 @@ void Device::compMake(std::unique_lock<gm20b::Mutex> &l)
                     }
                     break;
                 }
-#if SWITCH_METAL_DIAGNOSTICS
-                const auto rebindStart = std::chrono::steady_clock::now();
-#endif
                 if (made)
                     kr = k_.bindCompressed(bo, w.kind);
-#if SWITCH_METAL_DIAGNOSTICS
-                bindUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() -
-                                                                               rebindStart)
-                             .count();
-#endif
-                SWITCH_METAL_DIAGNOSTIC(os_log(compLog(),
-                                               "SwitchMetal: compressed memory %llu KiB kind 0x%x: %zu idle buffers "
-                                               "(%llu KiB) given back for it, then %{public}s (0x%x)",
-                                               (unsigned long long)(w.bytes >> 10), w.kind, evict.size(),
-                                               (unsigned long long)(evictedBytes >> 10),
-                                               made && kr == KERN_SUCCESS ? "made" : "refused again", unsigned(kr)));
             }
         }
         if (auto it = std::find(comp_.wanted.begin(), comp_.wanted.end(), w); it != comp_.wanted.end())
@@ -355,13 +312,6 @@ void Device::compMake(std::unique_lock<gm20b::Mutex> &l)
             SWITCH_METAL_DIAGNOSTIC(stats.compMade++);
             SWITCH_METAL_DIAGNOSTIC(stats.compHeld++);
             SWITCH_METAL_DIAGNOSTIC(stats.compHeldBytes += bo.bytes);
-            SWITCH_METAL_DIAGNOSTIC(glassMemEvent("compressed memory made", bo.bytes));
-            // at the default level, which a pulled log archive keeps (25 Nov's lost these at debug): the two kernel calls a
-            // texture born compressed would make on its creating thread
-            SWITCH_METAL_DIAGNOSTIC(os_log(compLog(),
-                                           "SwitchMetal: compressed memory %llu KiB kind 0x%x made in %lld us, "
-                                           "bound in %lld us",
-                                           (unsigned long long)(w.bytes >> 10), w.kind, (long long)us, bindUs));
             continue;
         }
         if (made) {
@@ -456,7 +406,6 @@ void Device::compFree(Backing &b, DeferredFrees &deferred)
         return;
     SWITCH_METAL_DIAGNOSTIC(stats.compHeld--);
     SWITCH_METAL_DIAGNOSTIC(stats.compHeldBytes -= mem->bo.bytes);
-    SWITCH_METAL_DIAGNOSTIC(glassMemEvent("compressed memory freed", mem->bo.bytes));
     deferred.add({mem->bo});
     deferred.noteCompFreed();
     comp_.mems.erase(std::find_if(comp_.mems.begin(), comp_.mems.end(), [&](const std::unique_ptr<CompMem> &m) {
@@ -490,7 +439,6 @@ void Device::compTrim(uint64_t now, DeferredFrees &deferred)
         if (readyStale(commits(), it->madeAt, now, it->readyNs) || (!probeKinds && probeOnlyKind(it->kind))) {
             SWITCH_METAL_DIAGNOSTIC(stats.compHeld--);
             SWITCH_METAL_DIAGNOSTIC(stats.compHeldBytes -= it->bo.bytes);
-            SWITCH_METAL_DIAGNOSTIC(glassMemEvent("compressed memory freed unused", it->bo.bytes));
             deferred.add({it->bo});
             deferred.noteCompFreed();
             it = comp_.ready.erase(it);

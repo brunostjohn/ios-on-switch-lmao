@@ -511,4 +511,41 @@ void watchFetchBarrierWay(gm20b::Device *dev)
         });
     }
 }
+
+void splitCaptureCommitted(gm20b::CommandBuffer &rc)
+{
+    static std::atomic<uint32_t> serial{0};
+    for (const gm20b::SplitCaptureRecord &r : rc.takeSplitCaptures()) {
+        const uint32_t n = serial.fetch_add(1, std::memory_order_relaxed);
+        for (const std::string &line : gm20b::splitCaptureLines(r, n))
+            os_log(gm20bLog(), "SwitchMetal: %{public}s", line.c_str());
+    }
+}
+
+void watchDebugSwitches(gm20b::Device *dev)
+{
+    static std::atomic<uint32_t> generation{0};
+    for (const bool on : {true, false}) {
+        int token;
+        notify_register_dispatch(
+            on ? "com.brunostjohn.switch.debug.split-capture" : "com.brunostjohn.switch.debug.split-capture-off",
+            &token, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^(int) {
+                dev->splitCaptureLeft.store(on ? gm20b::kSplitCaptureDraws : 0, std::memory_order_relaxed);
+                const uint32_t armed = generation.fetch_add(1, std::memory_order_relaxed) + 1;
+                os_log(gm20bLog(), "SwitchMetal: split capture %{public}s (debug notification)", on ? "armed" : "off");
+                if (!on)
+                    return;
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, gm20b::kSplitCaptureMs * NSEC_PER_MSEC),
+                               dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+                                   if (generation.load(std::memory_order_relaxed) == armed)
+                                       dev->splitCaptureLeft.store(0, std::memory_order_relaxed);
+                               });
+            });
+    }
+    int token;
+    notify_register_dispatch("com.brunostjohn.switch.debug.idle-reclaim", &token,
+                             dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^(int) {
+                                 dev->reclaimIdleNow();
+                             });
+}
 #endif

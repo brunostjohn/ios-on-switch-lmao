@@ -99,7 +99,8 @@ private:
     uint32_t gammaTable[switch_color::kGammaWords];
     uint32_t palette[switch_color::kPaletteWords];
     bool paletteOn = false;
-#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
+#if ((defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)) && defined(SWITCH_STATS_FRAME) && \
+    SWITCH_STATS_FRAME
     uint16_t loggedCsc[switch_color::kCscWords];
 #endif
 };

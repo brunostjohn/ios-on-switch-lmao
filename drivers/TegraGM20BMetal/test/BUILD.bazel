@@ -227,7 +227,6 @@ host_library(
         "draw_bands",
         "draw_inputs",
         "draw_prepare",
-        "draw_probes",
         "draw_times",
         "draw_shader_tests",
         "encoder_state",
@@ -3591,32 +3590,10 @@ host_test(
 )
 
 host_test(
-    name = "glass_probe_test",
-    srcs = [
-        "glass_probe_test.cpp",
-        "//drivers/TegraGM20BMetal:glass_probe.h",
-        "//drivers/TegraGM20BMetal:nonfinite.h",
-    ],
-    cxx_std = "c++17",
-)
-
-host_test(
     name = "arena_purge_test",
     srcs = [
         "arena_purge_test.cpp",
         "//drivers/TegraGM20BMetal:arena_purge.h",
-    ],
-    cxx_std = "c++17",
-)
-
-host_test(
-    name = "glass_mem_test",
-    srcs = [
-        "glass_mem_test.cpp",
-        "//drivers/TegraGM20BMetal:glass_mem.h",
-        "//drivers/TegraGM20BMetal:lock.h",
-        "//drivers/TegraGM20BMetal:glass_mem_row.h",
-        "//drivers/TegraGM20BMetal:nonfinite.h",
     ],
     cxx_std = "c++17",
 )
@@ -5021,7 +4998,6 @@ METAL_HOST_UNITS = ["//drivers/TegraGM20BMetal:fx/" + f for f in [
     "draw_bands",
     "draw_inputs",
     "draw_prepare",
-    "draw_probes",
     "draw_times",
     "draw_shader_tests",
     "emit",

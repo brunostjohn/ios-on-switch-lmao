@@ -23,7 +23,6 @@ public struct ContentView: View {
                 }
                 List {
                     RunHeader(suite: suite, list: suite.list)
-                    GlassWatchRow()
                     if suite.running {
                         RunSections(list: suite.list)
                     } else {

@@ -83,7 +83,7 @@ static bool bitcodeOf(id function, gm20b::codegen::Bitcode &out)
 
 static id<MTLLibrary> compiled(id device, uint32_t type, const std::string &request, const char *what, NSError **error)
 {
-#if SWITCH_METAL_DIAGNOSTICS
+#if SWITCH_METAL_STATS
     const uint64_t began = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
 #endif
     gm20b::MadeLibrary made;
@@ -104,7 +104,7 @@ static id<MTLLibrary> compiled(id device, uint32_t type, const std::string &requ
     if (!library)
         return failed(MTLLibraryErrorInternal,
                       std::string("the shader compiler's ") + what + " is no metallib Metal loads", error);
-#if SWITCH_METAL_DIAGNOSTICS
+#if SWITCH_METAL_STATS
     os_log(gm20bLog(), "SwitchMetal: %{public}s: %{public}s made by the shader compiler in %llu ms", getprogname(),
            what, (unsigned long long)((clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - began) / 1000000));
 #endif

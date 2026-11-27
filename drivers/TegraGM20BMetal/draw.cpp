@@ -322,10 +322,10 @@ Pipeline *RenderEncoder::formFor(Pipeline *pl, const FetchDraw &shape)
 #endif
     StorageRoute route;
     if (pl)
-        if (Pipeline *free = fetchFreeFor(*pl, SWITCH_METAL_DIAGNOSTICS ? &route : nullptr))
+        if (Pipeline *free = fetchFreeFor(*pl, SWITCH_METAL_STATS ? &route : nullptr))
             return free;
     if (!pl || !pl->storageBits) {
-#if SWITCH_METAL_DIAGNOSTICS
+#if SWITCH_METAL_STATS
         if (pl && pl->fetchBits && pl->rec) {
             route.key = pl->rec->keyHash;
             route.barrier = true;
@@ -340,7 +340,7 @@ Pipeline *RenderEncoder::formFor(Pipeline *pl, const FetchDraw &shape)
     if (reason == StorageFallback::None) {
         Pipeline *twin = blendTwin ? blendTwin : barrierTwin;
         if (forced || !twin || !twinTaken({shape, twin->primitiveId, uint64_t(areaW_) * areaH_, amplifications_ > 1})) {
-#if SWITCH_METAL_DIAGNOSTICS
+#if SWITCH_METAL_STATS
             route.key = pl->rec ? pl->rec->keyHash : 0;
             route.twin = !twin ? TwinMiss::NoTwin : forced ? TwinMiss::Probe : TwinMiss::Shape;
             route.triangles = triangles(shape);

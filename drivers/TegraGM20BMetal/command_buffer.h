@@ -47,9 +47,6 @@
 #include "use_memo.h"
 #include "zcull_planes.h"
 #include "zeta.h"
-#if SWITCH_METAL_DIAGNOSTICS
-#include "glass_mem.h"
-#endif
 
 namespace gm20b {
 
@@ -417,10 +414,6 @@ private:
     } zcullCounts_;
 #endif
 #if SWITCH_METAL_DIAGNOSTICS
-    Texture glassMemImages_[kGlassMemItems];               // the image each of the probe's rows is read from
-    const Texture *glassMemSources_[kGlassMemItems] = {};  // and the texture a draw bound (alive until completion)
-    int glassMemSlot_ = -1;                                // its ring slot once its reads are encoded
-    void glassMemTail();
     TimedBuffer *drawTimes_ = nullptr;  // its slot in a frame-weights capture (draw_capture.h); null: none
 #endif
     std::map<const Texture *, const Texture *> nativeReads_;

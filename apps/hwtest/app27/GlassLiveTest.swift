@@ -52,16 +52,13 @@ struct UIGlassLiveTest: HWTest {
                     LiveDriver(scene: scene, variant: variant)
                 )
             }
-            GlassProbe.arm(lines: false)
             let start = Date()
-            let recordStart = GlassProbe.count()?.count ?? 0
-            let read = await LiveReader.run(reader, until: start.addingTimeInterval(Self.seconds), after: recordStart)
+            await LiveReader.run(reader, until: start.addingTimeInterval(Self.seconds))
             await MainActor.run { driver.stop() }
             let rest = await Self.atRest(reader, scene)
             await context.clearStage()
             var summary = LiveSummary(
-                name: variant.rawValue, frames: reader?.frames ?? [], recorded: read.recorded,
-                regenerated: read.regenerated, seconds: Date().timeIntervalSince(start)
+                name: variant.rawValue, frames: reader?.frames ?? [], seconds: Date().timeIntervalSince(start)
             )
             summary.rest = rest
             summaries.append(summary)
@@ -78,9 +75,7 @@ struct UIGlassLiveTest: HWTest {
         try? await Task.sleep(nanoseconds: 500_000_000)
         let before = reader.frames.count
         scene.scroll.contentOffset.x += 1
-        _ = await LiveReader.run(
-            reader, until: Date().addingTimeInterval(0.4), after: GlassProbe.count()?.count ?? 0
-        )
+        await LiveReader.run(reader, until: Date().addingTimeInterval(0.4))
         return "\(last)/\(reader.frames.count > before ? reader.frames[before].atPresent : "-")"
     }
 
@@ -104,7 +99,6 @@ struct UIGlassLiveTest: HWTest {
                 metrics.set(s.name + "_moved", s.coincidence)
                 metrics.set(s.name + "_first", Int(s.black[0].sequence))
             }
-            metrics.set(s.name + "_cbs", "\(Int(s.fps.rounded()))/\(s.regenerated)")
             metrics.set(s.name + "_rest", s.rest)
         }
         metrics.set("pngs", pngs.isEmpty ? "-" : String(pngs.prefix(4).joined(separator: ",").prefix(160)))

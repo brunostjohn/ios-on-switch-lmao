@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 // RenderEncoder's draws in scissor bands (draw_bands.h), priced by their state's learned rate (band_rates.h).
-#include <os/log.h>
 #include "gpu.h"
 #include "mme.h"
 #include "stamps.h"
@@ -52,27 +51,13 @@ void RenderEncoder::noteCandidate(uint64_t units, uint32_t bands)
 }
 
 #if SWITCH_METAL_DIAGNOSTICS
-// A draw large enough to measure, by where its price came from, and a line for one priced at a long draw's length or
-// drawn in bands: its target's format and size (a planar target's stand-in named), instances, band grid and box, which
-// tie a wrong banded render on the device to the draw that made it
-void RenderEncoder::notePrice(uint64_t units, BandGrid grid, uint32_t instances) const
+void RenderEncoder::notePrice(uint64_t units, BandGrid, uint32_t) const
 {
     const Pipeline &pl = *emitted_;
     if (units < kMeasureUnits || dev_->compositorClass() || pl.vertexStores)
         return;
     const bool learned = pl.bandRate.psPerUnit.load(std::memory_order_relaxed) != 0;
     (learned ? dev_->stats.pricedLearned : dev_->stats.pricedStatic)++;
-    const uint64_t ns = estimatedNs(pl.bandRate, units, workNs(laneWork(units, pl.fragmentInstructions)));
-    if (ns < kLongDrawNs && grid.total() < 2)
-        return;
-    const Texture *t = pass_.color[0].texture;
-    os_log(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "gm20b"),
-           "SwitchMetal: banded draw k%016llx %llu kunits priced %llu us (%s) in %u bands (%ux%u) of %u instances, "
-           "box %u,%u-%u,%u, target format %u%s %ux%u",
-           (unsigned long long)(pl.rec ? pl.rec->keyHash : 0), (unsigned long long)(units / 1000),
-           (unsigned long long)(ns / 1000), learned ? "learned" : "static", grid.total(), grid.rows, grid.cols,
-           instances, drawBox_.x0, drawBox_.y0, drawBox_.x1, drawBox_.y1, t ? t->format : 0u,
-           t && t->planarStandIn ? " through its stand-in" : "", t ? t->width : 0u, t ? t->height : 0u);
 }
 #endif
 
@@ -204,13 +189,6 @@ void Device::learnCompleted()
         if (stampedNanoseconds(*slot, t.payload, ns)) {
             learn(*t.rate, ns, t.units, t.bands);
             SWITCH_METAL_DIAGNOSTIC(stats.learnedDraws++);
-#if SWITCH_METAL_DIAGNOSTICS
-            if (ns >= kLongDrawNs)
-                os_log(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "gm20b"),
-                       "SwitchMetal: long draw %llu us k%016llx %llu kunits %u instr in %u bands, learned %u ps a unit",
-                       (unsigned long long)(ns / 1000), (unsigned long long)t.key, (unsigned long long)(t.units / 1000),
-                       t.instructions, t.bands, t.rate->psPerUnit.load(std::memory_order_relaxed));
-#endif
             continue;
         }
         if (taken - (t.payload - 1) <= kDrawStampSlots)

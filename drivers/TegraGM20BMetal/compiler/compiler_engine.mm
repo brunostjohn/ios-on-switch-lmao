@@ -16,6 +16,7 @@
 #include "../TegraGM20BMetalDirect.h"
 #include "../TegraGM20BMetalOffline.h"
 #include "../pack.h"
+#include "../stats.h"
 
 namespace switch_compiler {
 namespace {
@@ -96,12 +97,12 @@ std::unique_ptr<gm20b::Direct> Engine::takeCompiler()
             return compiler;
         }
     }
-#if SWITCH_DEBUG
+#if SWITCH_DEBUG && SWITCH_METAL_STATS
     const uint64_t began = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
 #endif
     auto compiler = std::make_unique<gm20b::Direct>(gm20b::PackRules::of(s.pack), false, offline::translator());
     compiler->keepStages(s.stages.get());
-#if SWITCH_DEBUG
+#if SWITCH_DEBUG && SWITCH_METAL_STATS
     os_log(logger(), "SwitchShaderCompiler: a compiler made for a compile no idle one could take in %llu ms",
            (unsigned long long)((clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - began) / 1000000));
 #endif

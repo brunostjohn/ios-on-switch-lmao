@@ -7,7 +7,7 @@
 #include <atomic>
 #include <cstdint>
 #include "stats.h"
-#if SWITCH_METAL_DIAGNOSTICS
+#if SWITCH_METAL_STATS
 #include <os/log.h>
 #endif
 #include "fetch_free.h"
@@ -70,7 +70,7 @@ constexpr const char *twinMissName(TwinMiss m)
     return "?";
 }
 
-#if SWITCH_METAL_DIAGNOSTICS
+#if SWITCH_METAL_STATS
 // Logs `r` the first time its state is drawn by its storage or barrier form in this process. The states logged are a
 // fixed open-addressed table of keys, claimed by compare-and-swap, so encoding threads need no lock; past 1024 states
 // nothing more is logged.

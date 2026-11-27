@@ -98,11 +98,6 @@ TextureTransferResult Device::transferTexture(const Texture &texture, uint32_t l
         return TextureTransferResult::Failed;
     SWITCH_METAL_DIAGNOSTIC(
         (write ? stats.textureUploads : stats.textureReadbacks).fetch_add(1, std::memory_order_relaxed));
-#if SWITCH_METAL_DIAGNOSTICS
-    if (write && glassMemOn.load(std::memory_order_relaxed))
-        glassMem->wrote(texture.storageRange().va ? texture.storageRange().va : texture.va,
-                        commitCount_.load(std::memory_order_relaxed), stats.memEvents.load(std::memory_order_relaxed));
-#endif
     return TextureTransferResult::Complete;
 }
 

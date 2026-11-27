@@ -22,8 +22,6 @@ extension Suite {
         var record: TestRecord
         if let wedged, test.drawsWithGPU, !test.runsWhenGPUWedged {
             record = Suite.record(test, .skip("the app's GPU stopped answering after \(wedged) timed out"), 0)
-        } else if GlassMemWatch.measuresFrames(test.id), let left = GlassMemWatch.armedSeconds() {
-            record = Suite.record(test, .fail(GlassMemWatch.refusal(left)), 0)
         } else {
             record = await execute(test, context)
             if probes(test, record) {
@@ -42,7 +40,6 @@ extension Suite {
         ) }
         record = Suite.record(test, outcome, record.milliseconds)
         log(LogLine.format(record))
-        if GlassMemWatch.armsTheProbe(test.id) { GlassMemWatch.endGlassTest() }
         return (record, cpu, sampleMs)
     }
 

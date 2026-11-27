@@ -624,9 +624,7 @@ void gm20bMemoryTick();
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 void gm20bStallTick();
 void watchFetchBarrierWay(gm20b::Device *dev);
-// TegraGM20BMetalGlassProbe.mm
-void watchGlassProbe(gm20b::Device *dev);
-void glassProbeCommitted(SwitchMetalCommandBuffer *cb);
+void watchDebugSwitches(gm20b::Device *dev);
 void splitCaptureCommitted(gm20b::CommandBuffer &rc);
 // TegraGM20BMetalDrawTimes.mm
 void watchFrameWeights(gm20b::Device *dev);
