@@ -340,3 +340,54 @@ TEST(SwitchAudioSource, ApeIsConfinedToItsRingsBeforeTheAdmaRuns)
     EXPECT_THAT(hook, HasSubstr("gApeView.hold(ringPA[SwitchAudioMemoryInput], kInBytes)"));
     EXPECT_THAT(hook, HasSubstr("attachNarrow(TEGRA_SMMU_APE_ASID, TEGRA_SMMU_TRANSLATION_ENABLE_3, kApeClients"));
 }
+
+TEST(SwitchAudioSource, NoRuntimeBlockingSleepsOrLongSpinsOnWorkLoops)
+{
+    EXPECT_THAT(SourceText("../SwitchAudioCodec.cpp"), Not(HasSubstr("IOSleep")));
+    EXPECT_THAT(SourceText("../SwitchAudioStream.cpp"), Not(HasSubstr("IOSleep")));
+    EXPECT_THAT(SourceText("../SwitchHDA.cpp"), Not(HasSubstr("IOSleep")));
+
+    const std::string rt5639 = SourceText("../SwitchRT5639.cpp");
+    for (const char *fn : {"void SwitchRT5639::biasStandbyBegin()", "void SwitchRT5639::biasStandbyFinish()",
+                           "void SwitchRT5639::speakerRouteUpBegin()", "void SwitchRT5639::headphoneRouteUpBegin()",
+                           "void SwitchRT5639::headphoneRouteUpDepop()", "void SwitchRT5639::speakerRouteDownBegin()",
+                           "void SwitchRT5639::headphoneRouteDownBegin()", "void SwitchRT5639::detectHeadsetBegin()",
+                           "bool SwitchRT5639::detectHeadsetFinish()"}) {
+        EXPECT_THAT(Between(rt5639, fn, "\n}\n"), Not(HasSubstr("IOSleep"))) << fn;
+    }
+
+    const std::string clocks = SourceText("../SwitchAudioClocks.cpp");
+    EXPECT_THAT(clocks, Not(HasSubstr("i < 1000")));
+    EXPECT_THAT(clocks, HasSubstr("delay_for_interval("));
+    EXPECT_THAT(clocks, HasSubstr("gate->commandSleep(&mmioWait"));
+
+    const std::string display = SourceText("../SwitchDisplayAudio.cpp");
+    EXPECT_THAT(display, HasSubstr("displayLoop = IOWorkLoop::workLoop()"));
+    EXPECT_THAT(display, HasSubstr("displayGate->runAction("));
+    EXPECT_THAT(display, Not(HasSubstr("self->gate->")));
+}
+
+TEST(SwitchAudioSource, HalDropsGlobalLockAcrossBlockingIoctls)
+{
+    const std::string plugin = SourceText("../hal/SwitchAudioPlugIn.c");
+    for (const char *fn : {"static void applyHeadphoneLevel(void)", "static void applySpeakerLevel(void)"})
+        EXPECT_THAT(Between(plugin, fn, "\n}\n"), Not(HasSubstr("pthread_mutex_lock(&gLock)"))) << fn;
+
+    const std::string perf = Between(plugin, "static OSStatus PerformDeviceConfigurationChange(", "\n}\n");
+    EXPECT_LT(perf.find("IOConnectCallScalarMethod(gConnect, SwitchAudioSetRate"),
+              perf.find("pthread_mutex_lock(&gLock)"));
+
+    const std::string syncIn = Between(plugin, "static void syncCodecInput(void)", "\n}\n");
+    EXPECT_LT(syncIn.find("pthread_mutex_unlock(&gLock);"), syncIn.find("call(want ?"));
+
+    const std::string startIo = Between(plugin, "static OSStatus StartIO(", "\n}\n");
+    EXPECT_LT(startIo.find("pthread_mutex_unlock(&gLock);"), startIo.find("call(SwitchAudioStartOutput)"));
+
+    const std::string stopIo = Between(plugin, "static OSStatus StopIO(", "\n}\n");
+    EXPECT_LT(stopIo.find("pthread_mutex_unlock(&gLock);"), stopIo.find("call(SwitchAudioStopOutput)"));
+
+    const std::string disp = SourceText("../hal/SwitchDisplayAudio.c");
+    const std::string dispStart = Between(disp, "OSStatus switch_audio_display_start(", "\n}\n");
+    EXPECT_LT(dispStart.find("pthread_mutex_unlock(&gDisplayLock);"),
+              dispStart.find("IOConnectCallScalarMethod(connection, SwitchAudioStartDisplayOutput"));
+}
