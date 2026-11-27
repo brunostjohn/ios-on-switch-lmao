@@ -6,6 +6,7 @@ action with declared inputs, so Bazel reruns only what an edit reaches:
 The shader seed and the pack are gpu/seed's.
 """
 
+load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 load("//bazel:profile.bzl", "METAL_STATS_ATTR", "PROFILE_ATTR", "metal_stats_defines", "switch_debug_define")
 load("//gpu/seed:defs.bzl", "SeedInfo")
 load("//ipsw:ipsw.bzl", "IpswInfo")
@@ -33,7 +34,7 @@ def _xcode_run(ctx, mnemonic, message, command, inputs, outputs, env = {}):
         progress_message = message,
     )
 
-_IOS = ["-target", "arm64-apple-ios17.0", "-isysroot", "@IPHONEOS_SDK@"]
+_IOS = ["-target", "arm64-apple-ios17.0", "-mcpu=cortex-a57", "-isysroot", "@IPHONEOS_SDK@"]
 
 # The old script's one clang++ line, split into compile and link so each object is its own cached action. Paths in
 # debug info and __FILE__ are mapped to /switch-ios, and the link keeps no object paths (oso_prefix) or times.
@@ -48,7 +49,10 @@ _PLUGIN_CFLAGS = [
     "-Wall",
     "-Wextra",
     "-Werror",
-    "-fstack-protector-strong",
+    "-fno-stack-protector",
+    "-fvisibility=hidden",
+    "-fvisibility-inlines-hidden",
+    "-fno-rtti",
     "-std=c++17",
     "-fobjc-arc",
     "-Wno-deprecated-declarations",
@@ -67,10 +71,17 @@ _PLUGIN_CFLAGS = [
     if TREE_ROOT != OLD_TREE
 ]
 
+_PLUGIN_EXPORTS = [
+    "_OBJC_CLASS_$_TegraGM20BMetalDevice",
+    "_OBJC_METACLASS_$_TegraGM20BMetalDevice",
+    "_switch_shader_compiler_main",
+]
+
 _OUTPUT_SPELLING = "bazel-out/bin"
 
 def _plugin_objects(ctx, name, stack):
     """Each unit of the plugin compiled on its own (objects in link order), with `stack` as the stack key's file."""
+    is_release = ctx.attr._profile[BuildSettingInfo].value == "release"
 
     # -I in the old build's order (NativeMetal, drivers/TegraGM20BMetal, TegraGM20B), and the driver's stack key as a define.
     includes = ["-I", ctx.bin_dir.path]
@@ -88,22 +99,40 @@ def _plugin_objects(ctx, name, stack):
     output_maps = ["-ffile-prefix-map={}={}".format(r, _OUTPUT_SPELLING) for r in sorted(roots)]
     objects = []
     for language, sources in (("objective-c++", ctx.files.srcs), ("c++", ctx.files.cc_srcs), ("c", ctx.files.c_srcs)):
-        # Plain C++ sends no Objective-C messages (clang calls the flag unused there, an error under -Werror); C takes
-        # neither the C++ standard nor ARC.
-        cflags = [f for f in _PLUGIN_CFLAGS if language == "objective-c++" or f != "-fno-objc-msgsend-selector-stubs"]
         compiler = "clang++"
-        if language == "c":
+        if language == "objective-c++":
+            # Keep ObjC exceptions enabled for @synchronized until callers migrate off it.
+            cflags = list(_PLUGIN_CFLAGS) + ["-fno-cxx-exceptions"]
+            if is_release:
+                cflags += ["-DNDEBUG", "-flto=thin"]
+        elif language == "c++":
+            cflags = [
+                f
+                for f in _PLUGIN_CFLAGS
+                if f not in ("-fobjc-arc", "-fno-objc-msgsend-selector-stubs")
+            ] + ["-fno-exceptions"]
+            if is_release:
+                cflags = ["-O3" if f == "-O2" else f for f in cflags] + ["-DNDEBUG", "-flto=thin"]
+        else:
             # The C units are kits/SwitchGM20BEmit's emitters: their asserts are Mesa's debug checks, off as in Mesa's
             # release builds rather than new ways for a render server to abort.
-            cflags = [f for f in cflags if f not in ("-std=c++17", "-fobjc-arc")] + ["-std=c11", "-DNDEBUG"]
+            cflags = [
+                f
+                for f in _PLUGIN_CFLAGS
+                if f not in ("-std=c++17", "-fobjc-arc", "-fvisibility-inlines-hidden", "-fno-rtti", "-fno-objc-msgsend-selector-stubs")
+            ] + ["-std=c11", "-DNDEBUG"]
+            if is_release:
+                cflags += ["-flto=thin"]
             compiler = "clang"
         for src in sources:
+            # TegraGM20BMetalDevice is the bundle's principal class; its TU puts all helpers in an anonymous namespace.
+            src_cflags = [f for f in cflags if f != "-fvisibility=hidden"] if src.basename == "TegraGM20BMetalPlugin.mm" else cflags
             obj = ctx.actions.declare_file("%s_objs/%s.o" % (name, src.basename))
             _xcode_run(
                 ctx,
                 "ObjcxxCompile",
                 "Compiling %s" % src.short_path,
-                [compiler] + _IOS + cflags + output_maps + includes + defines +
+                [compiler] + _IOS + src_cflags + output_maps + includes + defines +
                 ["-x", language, "-c", src.path, "-o", obj.path],
                 [src] + headers,
                 [obj],
@@ -118,6 +147,7 @@ def _frameworks(ctx):
     return frameworks
 
 def _metal_plugin_impl(ctx):
+    is_release = ctx.attr._profile[BuildSettingInfo].value == "release"
     objects = _plugin_objects(ctx, ctx.attr.name, ctx.file.stack)
     out = ctx.actions.declare_file(ctx.attr.name + "/TegraGM20BMetal")
     frameworks = _frameworks(ctx)
@@ -131,18 +161,37 @@ def _metal_plugin_impl(ctx):
             ctx.bin_dir.path,
         ))
     objects_root = "@PWD@/" + ctx.bin_dir.path
+    link_flags = [
+        "-bundle",
+        "-O2",
+        "-Wl,-deduplicate",
+        "-Wl,-dead_strip",
+        "-Wl,-oso_prefix,{}/".format(objects_root),
+        "-lobjc",
+    ]
+    link_inputs = list(objects) + [ctx.file.translate, ctx.file.compile]
+    link_outputs = [out]
+    dsym_inputs = list(objects) + [ctx.file.translate, ctx.file.compile, out]
+    if is_release:
+        exports = ctx.actions.declare_file(ctx.attr.name + "/TegraGM20BMetal.exports")
+        ctx.actions.write(exports, "".join([s + "\n" for s in _PLUGIN_EXPORTS]))
+        lto_dir = ctx.actions.declare_directory(ctx.attr.name + "/lto")
+        link_flags += [
+            "-flto=thin",
+            "-Wl,-object_path_lto," + lto_dir.path,
+            "-Wl,-exported_symbols_list," + exports.path,
+        ]
+        link_inputs.append(exports)
+        link_outputs.append(lto_dir)
+        dsym_inputs.append(lto_dir)
     _xcode_run(
         ctx,
         "MetalPluginLink",
         "Linking the TegraGM20BMetal plugin",
-        # The compile flags again, as the old one-line build had them: clang passes -O2 on to ld, whose code
-        # deduplication it turns on (118 KB less __text).
-        ["clang++"] + _IOS + _PLUGIN_CFLAGS + ["-bundle"] + [o.path for o in objects] + [ctx.file.translate.path] +
-        [ctx.file.compile.path] +
-        ["-Wl,-dead_strip", "-Wl,-oso_prefix,{}/".format(objects_root), "-lobjc"] + frameworks + ctx.attr.linkopts +
-        ["-o", out.path],
-        objects + [ctx.file.translate, ctx.file.compile],
-        [out],
+        ["clang++"] + _IOS + link_flags + [o.path for o in objects] + [ctx.file.translate.path] +
+        [ctx.file.compile.path] + frameworks + ctx.attr.linkopts + ["-o", out.path],
+        link_inputs,
+        link_outputs,
     )
     dsym = ctx.actions.declare_directory(ctx.attr.name + "/TegraGM20BMetal.dSYM")
     _xcode_run(
@@ -150,7 +199,7 @@ def _metal_plugin_impl(ctx):
         "Dsymutil",
         "Writing the plugin's dSYM",
         ["dsymutil", "--oso-prepend-path=" + objects_root, out.path, "-o", dsym.path],
-        objects + [ctx.file.translate, ctx.file.compile, out],
+        dsym_inputs,
         [dsym],
     )
     return [
