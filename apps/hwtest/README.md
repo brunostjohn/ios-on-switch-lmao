@@ -28,12 +28,13 @@ VideoToolbox's frame processors). The apps use the compiler's default CPU for th
 that is an A12, so the 27 app carries LSE and FP16 code the A57 lacks, as any app built for iOS 27 does, and
 `a64x.self` checks that the a64x loader translated it.
 
-The apps only go on debug images. A kind's debug `//:boot` puts its app in `/Applications/SwitchHWTest.app` through
-the overlay, so the manifest and `//tools/devicerun` name a single app. A debug iOS 27 image also gets
-`SwitchHWTest27e.app`, the same app built for arm64e, which a64x translates whole. When an app changes,
-`bazel run //deploy:sd` lists it for `switch-appregd`, which registers it on the next boot the way installd registers a
-built-in app, with no data migration. `system.overlay_app_records` checks that each app's record matches the bundle on
-disk. `bazel build --config=remote //apps/hwtest:SwitchHWTest17` (or `:SwitchHWTest27`,
+Debug images include the apps by default, and release images omit them unless you pass `--config=hwtest` (or
+`--//bazel:hwtest=true`). Pass `--//bazel:hwtest=false` to omit them from a debug build. When enabled, a kind's
+`//:boot` puts its app in `/Applications/SwitchHWTest.app` through the overlay, so the manifest and `//tools/devicerun`
+name a single app. An iOS 27 image also gets `SwitchHWTest27e.app`, the same app built for arm64e, which a64x translates
+whole. When an app changes, `bazel run //deploy:sd` lists it for `switch-appregd`, which registers it on the next boot
+the way installd registers a built-in app, with no data migration. `system.overlay_app_records` checks that each app's
+record matches the bundle on disk. `bazel build --config=remote //apps/hwtest:SwitchHWTest17` (or `:SwitchHWTest27`,
 `:SwitchHWTest27e`) builds an app with rules_apple, signed ad hoc.
 
 The test clips and images are pinned in `bazel/pinned/hw_test_app/media`; every frame carries a barcode with its frame
