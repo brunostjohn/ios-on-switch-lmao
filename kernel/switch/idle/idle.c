@@ -29,11 +29,13 @@ struct idle_core {
     uint64_t entered;
     uint64_t wake_at;
     uint64_t lead;
-    uint32_t state;
+    uint64_t enter_now;
     /* C7 requests the firmware refused and the last one's PSCI error. Only this core's idle path writes them (the count
      * last, release); idle_report reads them and keeps its own count of those it has logged (idle_logged). */
     uint64_t refused;
     int64_t refused_rc;
+    uint32_t state;
+    bool c7_seen;
 #if DEVELOPMENT || DEBUG
     struct switch_idle_counts counts;
     bool from_c7; /* back from C7 and no idle entry since: the next frame line paid the exit */
@@ -103,6 +105,14 @@ static void idle_exit(struct idle_core *core, uint64_t now)
 #endif
 }
 
+void switch_idle_note_now(struct cpu_data *cdp, uint64_t now)
+{
+    const uint32_t cpu = (uint32_t)cdp->cpu_number;
+    if (cpu < SWITCH_SMP_CORE_COUNT) {
+        idle_cores[cpu].enter_now = now;
+    }
+}
+
 void switch_idle_wfi(struct cpu_data *cdp)
 {
     const uint32_t cpu = (uint32_t)cdp->cpu_number;
@@ -111,15 +121,20 @@ void switch_idle_wfi(struct cpu_data *cdp)
         return;
     }
     struct idle_core *core = &idle_cores[cpu];
-    const uint64_t now = mach_absolute_time();
+    const uint64_t now = core->enter_now ? core->enter_now : mach_absolute_time();
+    core->enter_now = 0;
     const uint64_t deadline = cdp->rtcPop;
 #if DEVELOPMENT || DEBUG
     core->from_c7 = false;
 #endif
     core->entered = now;
-    core->state = os_atomic_load(&idle_c7, acquire)
-                      ? switch_idle_choose(core->predicted, now, deadline, os_atomic_load(&idle_frame_at, relaxed))
-                      : SWITCH_IDLE_WFI;
+    bool c7 = core->c7_seen;
+    if (__improbable(!c7) && os_atomic_load(&idle_c7, relaxed)) {
+        c7 = os_atomic_load(&idle_c7, acquire);
+        core->c7_seen = c7;
+    }
+    core->state = c7 ? switch_idle_choose(core->predicted, now, deadline, os_atomic_load(&idle_frame_at, relaxed))
+                     : SWITCH_IDLE_WFI;
     if (core->state == SWITCH_IDLE_C7) {
         core->wake_at = switch_idle_c7_wake_at(deadline, core->lead);
 #if DEVELOPMENT || DEBUG

@@ -178,45 +178,69 @@ static uint32_t switch_prefetch_name_groups(struct switch_log_group *groups, uin
     return from_replay;
 }
 
-void switch_prefetch_save_next(struct switch_record_entry *log, uint32_t appended, struct switch_named_file *files,
-                               uint32_t file_count, const struct switch_prefetch_header *expected_key, mount_t *mounts,
-                               const fsid_t *fsids, uint32_t mount_count)
+void switch_prefetch_save_next(struct switch_record_entry **log_p, size_t log_bytes, uint32_t appended,
+                               struct switch_named_file *files, uint32_t file_count,
+                               const struct switch_prefetch_header *expected_key, mount_t *mounts, const fsid_t *fsids,
+                               uint32_t mount_count)
 {
 #if DEVELOPMENT || DEBUG
     const uint64_t start_abs = mach_absolute_time();
 #endif
+    struct switch_record_entry *log = *log_p;
     const uint32_t entries = appended < SWITCH_PREFETCH_LOG_ENTRIES ? appended : SWITCH_PREFETCH_LOG_ENTRIES;
     if (entries == 0u) {
         return;
     }
-    const size_t groups_bytes = (size_t)entries * sizeof(struct switch_log_group);
-    const size_t ranges_bytes = (size_t)entries * sizeof(struct switch_prefetch_range);
-    struct switch_log_group *groups = (struct switch_log_group *)kalloc_data(groups_bytes, Z_WAITOK);
-    struct switch_prefetch_range *ranges = (struct switch_prefetch_range *)kalloc_data(ranges_bytes, Z_WAITOK);
-    if (groups == NULL || ranges == NULL) {
-        if (groups != NULL) {
-            kfree_data(groups, groups_bytes);
-        }
-        if (ranges != NULL) {
-            kfree_data(ranges, ranges_bytes);
-        }
-        os_log(OS_LOG_DEFAULT, "SwitchBootPrefetch: list not saved: %d (%u reads logged)", ENOMEM, appended);
-        return;
-    }
 
     qsort(log, entries, sizeof(*log), compare_log_entries);
-    const uint32_t group_count = switch_prefetch_group_log(log, entries, mount_count, groups);
-    const uint32_t from_replay =
-        switch_prefetch_name_groups(groups, group_count, files, file_count, mounts, fsids, mount_count);
+    const uint32_t group_cap = switch_prefetch_count_groups(log, entries, mount_count);
+    struct switch_log_group *groups = NULL;
+    size_t groups_bytes = 0;
+    uint32_t group_count = 0;
+    uint32_t from_replay = 0;
+    if (group_cap != 0u) {
+        groups_bytes = (size_t)group_cap * sizeof(struct switch_log_group);
+        groups = (struct switch_log_group *)kalloc_data(groups_bytes, Z_WAITOK);
+        if (groups == NULL) {
+            os_log(OS_LOG_DEFAULT, "SwitchBootPrefetch: list not saved: %d (%u reads logged)", ENOMEM, appended);
+            return;
+        }
+        group_count = switch_prefetch_group_log(log, entries, mount_count, groups);
+        from_replay = switch_prefetch_name_groups(groups, group_count, files, file_count, mounts, fsids, mount_count);
+    }
 #if DEVELOPMENT || DEBUG
     const uint64_t named_abs = mach_absolute_time();
 #else
     (void)from_replay;
 #endif
+    uint32_t named_entries = 0;
+    for (uint32_t g = 0; g < group_count; ++g) {
+        if (groups[g].file_id != 0u) {
+            named_entries += groups[g].end - groups[g].first;
+        }
+    }
+    struct switch_prefetch_range *ranges = NULL;
+    size_t ranges_bytes = 0;
+    if (named_entries != 0u) {
+        ranges_bytes = (size_t)named_entries * sizeof(struct switch_prefetch_range);
+        ranges = (struct switch_prefetch_range *)kalloc_data(ranges_bytes, Z_WAITOK);
+        if (ranges == NULL) {
+            kfree_data(groups, groups_bytes);
+            os_log(OS_LOG_DEFAULT, "SwitchBootPrefetch: list not saved: %d (%u reads logged)", ENOMEM, appended);
+            return;
+        }
+    }
+
     uint64_t total_pages = 0;
     uint64_t unnamed_bytes = 0;
-    const uint32_t n = switch_prefetch_log_ranges(log, groups, group_count, ranges, &total_pages, &unnamed_bytes);
-    kfree_data(groups, groups_bytes);
+    const uint32_t n =
+        group_count != 0u ? switch_prefetch_log_ranges(log, groups, group_count, ranges, &total_pages, &unnamed_bytes)
+                          : 0u;
+    if (groups != NULL) {
+        kfree_data(groups, groups_bytes);
+    }
+    kfree_data(log, log_bytes);
+    *log_p = NULL;
 
     struct switch_prefetch_run *runs = NULL;
     size_t runs_bytes = 0;
@@ -224,19 +248,22 @@ void switch_prefetch_save_next(struct switch_record_entry *log, uint32_t appende
     uint32_t list_files = 0;
     if (n != 0u) {
         qsort(ranges, n, sizeof(*ranges), compare_ranges_qsort);
-        const uint64_t cap =
+        uint64_t cap =
             switch_prefetch_run_capacity(n, total_pages, SWITCH_PREFETCH_MAX_RUN_PAGES, SWITCH_PREFETCH_MAX_GAP_PAGES);
-        if (cap <= SWITCH_PREFETCH_MAX_RUNS * 4ULL) {
-            runs_bytes = (size_t)cap * sizeof(*runs);
-            runs = (struct switch_prefetch_run *)kalloc_data(runs_bytes, Z_WAITOK);
-            if (runs != NULL) {
-                built = switch_prefetch_merge_runs(ranges, n, runs, cap, SWITCH_PREFETCH_MAX_RUN_PAGES,
-                                                   SWITCH_PREFETCH_MAX_GAP_PAGES, &list_files);
-                qsort(runs, built, sizeof(*runs), compare_runs_qsort);
-            }
+        if (cap > SWITCH_PREFETCH_MAX_RUNS) {
+            cap = SWITCH_PREFETCH_MAX_RUNS;
+        }
+        runs_bytes = (size_t)cap * sizeof(*runs);
+        runs = (struct switch_prefetch_run *)kalloc_data(runs_bytes, Z_WAITOK);
+        if (runs != NULL) {
+            built = switch_prefetch_merge_runs(ranges, n, runs, cap, SWITCH_PREFETCH_MAX_RUN_PAGES,
+                                               SWITCH_PREFETCH_MAX_GAP_PAGES, &list_files);
+            qsort(runs, built, sizeof(*runs), compare_runs_qsort);
         }
     }
-    kfree_data(ranges, ranges_bytes);
+    if (ranges != NULL) {
+        kfree_data(ranges, ranges_bytes);
+    }
 
     const uint32_t count =
         runs != NULL ? switch_prefetch_cap_runs(runs, built, SWITCH_PREFETCH_CAP_PAGES, SWITCH_PREFETCH_MAX_RUNS) : 0u;

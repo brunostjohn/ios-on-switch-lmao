@@ -23,7 +23,7 @@ extern struct vnode *vnode_pager_lookup_vnode(memory_object_t pager);
 static struct switch_prefetch_pace g_pace;
 static thread_t g_replay_thread;
 static int g_pace_event;
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_STATS_IO) && SWITCH_STATS_IO
 static uint64_t g_replay_abs;
 static uint64_t g_demand_upl_abs;
 static uint64_t g_replay_decmp_bytes;
@@ -76,7 +76,7 @@ void switch_vm_prefetch_committed(uint32_t pages)
 
 void switch_vm_prefetch_inflight_done(uint32_t bytes, uint64_t elapsed_abs)
 {
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_STATS_IO) && SWITCH_STATS_IO
     __atomic_fetch_add(&g_replay_abs, elapsed_abs, __ATOMIC_RELAXED);
 #else
     (void)elapsed_abs;
@@ -86,7 +86,7 @@ void switch_vm_prefetch_inflight_done(uint32_t bytes, uint64_t elapsed_abs)
     }
 }
 
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_STATS_IO) && SWITCH_STATS_IO
 void switch_vm_prefetch_count_replay_decmp(uint64_t bytes, bool tagged)
 {
     __atomic_fetch_add(&g_replay_decmp_bytes, bytes, __ATOMIC_RELAXED);
@@ -134,7 +134,7 @@ uint64_t switch_vm_prefetch_begin(uint64_t list_vm_pages, void *replay_thread)
 
 void switch_vm_prefetch_end_replay(void)
 {
-#if !(DEVELOPMENT || DEBUG)
+#if !((DEVELOPMENT || DEBUG) && defined(SWITCH_STATS_IO) && SWITCH_STATS_IO)
     switch_pace_deactivate(&g_pace);
 #endif
 }
@@ -256,7 +256,7 @@ uint32_t switch_vm_prefetch_boot_stop_reason(void)
     return switch_pace_boot_stop_reason(&g_pace);
 }
 
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_STATS_IO) && SWITCH_STATS_IO
 void switch_vm_prefetch_pace_snapshot(struct switch_prefetch_pace_snapshot *out)
 {
     out->replayed_pages = __atomic_load_n(&g_pace.replayed_pages, __ATOMIC_RELAXED);

@@ -240,7 +240,7 @@ TEST(SwitchPrefetchRecordSource, AReplayedPagesFirstUseIsRecordedOutsideThePhysi
 
         const std::string pageout = SourceText(std::string("../") + t.tree + "/osfmk/vm/vm_pageout.c");
         const std::string mark = between(pageout, "\nupl_mark_decmp(upl_t upl)", "\n}\n");
-        EXPECT_THAT(mark, HasSubstr("#if DEVELOPMENT || DEBUG"));
+        EXPECT_THAT(mark, HasSubstr("#if (DEVELOPMENT || DEBUG) && defined(SWITCH_STATS_IO) && SWITCH_STATS_IO"));
         EXPECT_THAT(mark, HasSubstr("(upl->flags & UPL_SWITCH_PREFETCH) != 0"));
     }
     const std::string vm = SourceText("../switch/vm/prefetch_vm.c");

@@ -6942,7 +6942,7 @@ unsigned int preheat_min_bytes = (1024 * 32);
  * for, so this costs no extra decoding or reading: the pages that were decoded and dropped are kept, and the next
  * faults in the same chunk find them resident. Counted for the kprof decmpfs line.
  */
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_KPROF) && SWITCH_KPROF
 uint64_t switch_decmpfs_aligned, switch_decmpfs_aligned_pages;
 #endif
 #ifndef SWITCH_DECMPFS_CHUNK_ALIGN
@@ -6997,7 +6997,7 @@ switch_cluster_chunk_align(vm_object_t object, vm_object_offset_t *start, vm_siz
 	if (s == *start && e == *start + *length) {
 		return;
 	}
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_KPROF) && SWITCH_KPROF
 	os_atomic_inc(&switch_decmpfs_aligned, relaxed);
 	os_atomic_add(&switch_decmpfs_aligned_pages, (uint64_t)((e - s - *length) >> PAGE_SHIFT), relaxed);
 #endif
@@ -8252,7 +8252,7 @@ ReScan:
 #endif /* MACH_ASSERT */
 #if CONFIG_IOSCHED
 
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_STATS_IO) && SWITCH_STATS_IO
 /* Busy-page raises XNU queued for the device (kernel/switch/vm/prefetch.c's debug line) */
 uint64_t switch_reprio_requested;
 #endif
@@ -8283,7 +8283,7 @@ vm_page_request_reprioritize(vm_object_t o, uint64_t blkno, uint32_t len, int pr
 
 	/* Insert request into the reprioritization list */
 	mpsc_daemon_enqueue(&io_reprioritize_q, &req->iorr_elm, MPSC_QUEUE_DISABLE_PREEMPTION);
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_STATS_IO) && SWITCH_STATS_IO
 	os_atomic_inc(&switch_reprio_requested, relaxed);
 #endif
 
@@ -8402,7 +8402,7 @@ vm_decmp_upl_reprioritize(upl_t upl, int prio, zalloc_flags_t flags)
 
 			/* Insert request into the reprioritization list */
 			mpsc_daemon_enqueue(&io_reprioritize_q, &req->iorr_elm, MPSC_QUEUE_DISABLE_PREEMPTION);
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_STATS_IO) && SWITCH_STATS_IO
 			os_atomic_inc(&switch_reprio_requested, relaxed);
 #endif
 

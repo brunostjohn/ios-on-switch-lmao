@@ -39,7 +39,7 @@ static struct {
     uint32_t thread_active;
     uint32_t thread_done;
     int done_event;
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_STATS_IO) && SWITCH_STATS_IO
     thread_call_t diag_call;
     uint32_t diag_stop;
     uint64_t prev_demand_bytes[SWITCH_PREFETCH_VOLUME_COUNT];
@@ -65,7 +65,7 @@ static inline mount_t switch_prefetch_mount_at(unsigned index)
     return (mount_t)__atomic_load_n(&g_prefetch.ready.mounts[index], __ATOMIC_ACQUIRE);
 }
 
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_STATS_IO) && SWITCH_STATS_IO
 static uint64_t switch_abs_to_ms(uint64_t abs_ticks)
 {
     uint64_t ns = 0;
@@ -442,7 +442,7 @@ static void switch_prefetch_thread(void *parameter, wait_result_t w __unused)
         }
     }
 
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_STATS_IO) && SWITCH_STATS_IO
     if (have_key && switch_vm_prefetch_boot_stop_reason() == SWITCH_PREFETCH_STOP_NONE) {
         g_prefetch.diag_call = thread_call_allocate_with_options(switch_prefetch_diag_tick, NULL,
                                                                  THREAD_CALL_PRIORITY_LOW, THREAD_CALL_OPTIONS_ONCE);
@@ -457,10 +457,14 @@ static void switch_prefetch_thread(void *parameter, wait_result_t w __unused)
     if (runs != NULL && switch_vm_prefetch_replay_stop_reason() == SWITCH_PREFETCH_STOP_NONE) {
         file_count = switch_prefetch_replay_runs(runs, run_count, files);
     }
+    if (runs != NULL) {
+        kfree_data(runs, runs_bytes);
+        runs = NULL;
+    }
 
     const uint32_t stop_reason = switch_vm_prefetch_wait_stop();
 
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_STATS_IO) && SWITCH_STATS_IO
     if (g_prefetch.diag_call != NULL) {
         thread_call_t call = g_prefetch.diag_call;
         __atomic_store_n(&g_prefetch.diag_stop, 1u, __ATOMIC_SEQ_CST);
@@ -479,7 +483,7 @@ static void switch_prefetch_thread(void *parameter, wait_result_t w __unused)
         for (unsigned v = 0; v < SWITCH_PREFETCH_VOLUME_COUNT; ++v) {
             mounts[v] = switch_prefetch_mount_at(v);
         }
-        switch_prefetch_save_next(log, appended, files, file_count, &key, mounts, g_prefetch.fsids,
+        switch_prefetch_save_next(&log, log_bytes, appended, files, file_count, &key, mounts, g_prefetch.fsids,
                                   SWITCH_PREFETCH_VOLUME_COUNT);
     }
 
@@ -488,9 +492,6 @@ static void switch_prefetch_thread(void *parameter, wait_result_t w __unused)
     }
     if (files != NULL) {
         kfree_data(files, files_bytes);
-    }
-    if (runs != NULL) {
-        kfree_data(runs, runs_bytes);
     }
 
     __atomic_store_n(&g_prefetch.thread_done, 1u, __ATOMIC_SEQ_CST);

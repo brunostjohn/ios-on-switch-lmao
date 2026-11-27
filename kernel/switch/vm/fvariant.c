@@ -65,7 +65,7 @@ void switch_fvariant_fill_page(const struct vm_shared_region_slide_info *si, uin
     (void)size;
 #else
     const uint32_t filled = switch_fvariant_fill(si->si_switch_fvariant, si->si_slide, page, uaddr, size);
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_DIAG_FVARIANT) && SWITCH_DIAG_FVARIANT
     if (filled != 0) {
         os_log(OS_LOG_DEFAULT, "SwitchFvariant: filled %u function-variant slots in 0x%llx", filled, uaddr);
     }

@@ -29,9 +29,10 @@ bool switch_prefetch_vget_regular(mount_t mp, fsid_t fsid, uint64_t file_id, vfs
                                   struct switch_prefetch_file_meta *meta_out);
 struct switch_named_file;
 /* The next list is this boot's record log alone: what it read and what it used of the replay, in first-need order.
- * files: the replay's, for naming; sorted here. */
-void switch_prefetch_save_next(struct switch_record_entry *log, uint32_t appended, struct switch_named_file *files,
-                               uint32_t file_count, const struct switch_prefetch_header *expected_key, mount_t *mounts,
-                               const fsid_t *fsids, uint32_t mount_count);
+ * files: the replay's, for naming; sorted here. Takes ownership of *log_p and frees it once ranges are built. */
+void switch_prefetch_save_next(struct switch_record_entry **log_p, size_t log_bytes, uint32_t appended,
+                               struct switch_named_file *files, uint32_t file_count,
+                               const struct switch_prefetch_header *expected_key, mount_t *mounts, const fsid_t *fsids,
+                               uint32_t mount_count);
 
 #endif
