@@ -66,6 +66,28 @@ void giveConnection(int pid)
 constexpr uint64_t kPrefaultMaxBytes = 256ULL << 10;
 }  // namespace
 
+extern "C" bool tegra_gm20b_set_app_gpu_role(int pid, uint32_t role)
+{
+	IOLock *lock = __atomic_load_n(&gConnectionLock, __ATOMIC_ACQUIRE);
+	if (!lock)
+		return false;
+	IOLockLock(lock);
+	const bool ok = gConnections.setRole(pid, role);
+	IOLockUnlock(lock);
+	return ok;
+}
+
+extern "C" bool tegra_gm20b_get_app_gpu_role(int pid, uint32_t *role)
+{
+	IOLock *lock = __atomic_load_n(&gConnectionLock, __ATOMIC_ACQUIRE);
+	if (!lock)
+		return false;
+	IOLockLock(lock);
+	const bool ok = gConnections.getRole(pid, role);
+	IOLockUnlock(lock);
+	return ok;
+}
+
 namespace tgm_uc
 {
 IOOptionBits boMapOptions(bool coherent, bool system, bool fullView, bool readOnly, uint64_t bytes)

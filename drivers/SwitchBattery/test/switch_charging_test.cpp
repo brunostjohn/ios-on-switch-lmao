@@ -2134,6 +2134,11 @@ static void batteryPack()
     check(number(pack, "ID") == 0, "pack ID 0, the one powerd looks for");
     check(number(pack, "BankCount") == 1, "one bank");
     check(number(bank, "PackID") == 0, "the bank names its pack");
+    check(number(bank, "Voltage") == 3900, "bank top-level Voltage for thermalmonitord");
+    check(number(bank, "InstantAmperage") == 1800, "bank top-level InstantAmperage for thermalmonitord");
+    check(number(bank, "Temperature") == 3000, "bank top-level Temperature for thermalmonitord");
+    check(number(bank, "AppleRawCurrentCapacity") == 2586 && number(bank, "AppleRawMaxCapacity") == 4310,
+          "bank top-level raw capacities for thermalmonitord");
     auto data = [](const IOService *s) {
         auto *d = dynamic_cast<OSDictionary *>(s->getProperty("BatteryData"));
         return d ? *d : OSDictionary();
@@ -2157,10 +2162,17 @@ static void batteryPack()
     check(b.numbers == d.numbers && b.strings == d.strings, "the bank's BatteryData is the pack's");
     const long long updated = battery()->ps["UpdateTime"];
     check(updated >= 1795564800ll, "UpdateTime in calendar seconds: " + std::to_string(updated));
+    gGauge.reg[0x09] = static_cast<uint16_t>((3750 * 1000 / 625) << 3);
+    gGauge.reg[0x0a] = static_cast<uint16_t>(static_cast<int16_t>(-500 * 100000 / 15625));
+    gGauge.reg[0x05] = 2400 * 2;
     gGauge.setTemp(4600);
     advance(300);
     check(data(pack).numbers["VirtualTemperature"] == 4600 && data(bank).numbers["VirtualTemperature"] == 4600,
           "VirtualTemperature follows the gauge's alert: " + std::to_string(data(pack).numbers["VirtualTemperature"]));
+    check(number(bank, "Voltage") == 3750 && number(bank, "InstantAmperage") == -500 &&
+              number(bank, "Temperature") == 4600 && number(bank, "AppleRawCurrentCapacity") == 2400 &&
+              number(bank, "AppleRawMaxCapacity") == 4310,
+          "bank top-level readings follow the gauge's alert");
     check(battery()->ps["UpdateTime"] > updated, "UpdateTime moves with every reading");
 #else
     check(dynamic_cast<AppleSmartBattery *>(battery()) == nullptr, "no AppleSmartBattery on 21H461");

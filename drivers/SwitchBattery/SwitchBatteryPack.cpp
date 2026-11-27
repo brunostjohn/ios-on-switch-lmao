@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// The AppleSmartBattery service tree iPadOS 27's dasd, powerd and batteryintelligenced read (SwitchBatteryPack.h).
+// The AppleSmartBattery service tree iPadOS 27's dasd, powerd, batteryintelligenced and thermalmonitord read (SwitchBatteryPack.h).
 #include <IOKit/IOLib.h>
 #include <IOKit/IOService.h>
 #include <libkern/c++/OSDictionary.h>
@@ -93,6 +93,13 @@ void AppleSmartBatteryPack::update(const SwitchPackReading &r, const OSString *s
         if (bank)
             bank->setProperty("BatteryData", data);
         data->release();
+    }
+    if (bank) {
+        setNumber(bank, "Voltage", r.millivolts);
+        setNumber(bank, "InstantAmperage", r.instantMilliamps);
+        setNumber(bank, "Temperature", r.centiCelsius);
+        setNumber(bank, "AppleRawCurrentCapacity", r.remainingMah);
+        setNumber(bank, "AppleRawMaxCapacity", r.fullMah);
     }
 }
 

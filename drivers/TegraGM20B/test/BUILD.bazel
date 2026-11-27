@@ -1257,6 +1257,8 @@ host_test(
         "//drivers/TegraGM20B:SwitchGpuBridgeRetire.cpp",
         "//drivers/TegraGM20B:SwitchGpuTimelineSyncpt.cpp",
         "//drivers/TegraGM20B:SwitchGpuWriterPromise.h",
+        "//drivers/TegraGM20B:TegraGM20B.cpp",
+        "//drivers/TegraGM20B:TegraGM20BAccelerator.cpp",
         "//drivers/TegraGM20B:TegraGM20BDeviceClient.cpp",
         "//drivers/TegraHost1x:TegraHost1x.cpp",
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
