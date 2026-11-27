@@ -245,6 +245,18 @@ host_test(
 )
 
 host_test(
+    name = "switch_thermal_fan_test",
+    srcs = [
+        "switch_thermal_fan_test.cpp",
+        "//drivers/SwitchPower:SwitchThermalCurve.h",
+    ],
+    data = [
+        "//drivers/SwitchPower:SwitchSensors.cpp",
+        "//drivers/SwitchPower:SwitchThermal.cpp",
+    ],
+)
+
+host_test(
     name = "switch_pllx_start_test",
     srcs = [
         "switch_pllx_start_test.cpp",

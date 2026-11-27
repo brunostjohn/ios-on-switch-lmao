@@ -75,8 +75,8 @@
 // commands, at most one every three frames (50 ms), each toward the latest request: requests that arrive meanwhile only
 // replace the target. The panel's own dimming (DCS 0x53 bit 3) smooths the steps between them.
 #include <IOKit/IODeviceTreeSupport.h>
+#include <IOKit/IOInterruptEventSource.h>
 #include <IOKit/IOLib.h>
-#include <IOKit/IOLocks.h>
 #include <IOKit/IOService.h>
 #include <IOKit/IOWorkLoop.h>
 #include <IOKit/IOTimerEventSource.h>
@@ -128,26 +128,23 @@ constexpr uint64_t kSendIntervalNS = 50000000;  // three frames at 60 Hz between
 constexpr uint32_t kQuietMS = 1000;  // no request for this long: the change is over (its log line)
 #endif
 
-volatile bool gDisplayOn = true;
+bool gDisplayOn = true;
 #if DEVELOPMENT || DEBUG
-volatile bool gSawNits, gSawNitsCap, gSawDisplay;  // the first of each is logged once
+bool gSawNits, gSawNitsCap, gSawDisplay;  // the first of each is logged once
 #endif
 
-OSDictionary *range(uint32_t max, uint32_t value)
+OSDictionary *range(const OSNumber *min, const OSNumber *max, uint32_t value)
 {
     OSDictionary *dict = OSDictionary::withCapacity(3);
-
-    const struct {
-        const char *key;
-        uint32_t value;
-    } entries[] = {{"min", 0}, {"max", max}, {"value", value}};
-
-    for (const auto &entry : entries) {
-        const OSNumber *number = OSNumber::withNumber(entry.value, 32);
-        if (dict && number)
-            dict->setObject(entry.key, number);
-        OSSafeReleaseNULL(number);
+    const OSNumber *currentNum = OSNumber::withNumber(value, 32);
+    if (dict && min && max && currentNum) {
+        dict->setObject("min", min);
+        dict->setObject("max", max);
+        dict->setObject("value", currentNum);
+    } else {
+        OSSafeReleaseNULL(dict);
     }
+    OSSafeReleaseNULL(currentNum);
     return dict;
 }
 
@@ -221,27 +218,29 @@ class SwitchBacklight : public IOService {
     // NOLINTNEXTLINE(misc-explicit-constructor): IOKit's structors macro declares the metaclass constructor
     OSDeclareDefaultStructors(SwitchBacklight) IOWorkLoop *loop = nullptr;
     IOTimerEventSource *work = nullptr;
+    IOInterruptEventSource *kickSource = nullptr;
 #if DEVELOPMENT || DEBUG
     IOTimerEventSource *quiet = nullptr;
 #endif
     IOTimerEventSource *guardTimer = nullptr;  // the wake guarantee's deadline
-    IOLock *requestLock = nullptr;
 
-    // Requests, under requestLock.
-    bool haveRequest = false, wantOn = true;
-    uint32_t requestValue = 0;
-    uint64_t requestFadeNS = 0;
+    // Cross-thread request handoff (lock-free atomics, single consumer on this work loop).
+    uint64_t requestSlot = 0;  // packRequest() or 0
+    bool wantOn = true;
+    uint32_t pendingWakeSource = 0;  // 0 = none, source + 1 = wake source to arm guard for
 #if DEVELOPMENT || DEBUG
     unsigned nitsRequests = 0, brightnessRequests = 0;  // since the last settle line
 #endif
-    switch_wake_guard guard = {};
-    uint64_t guardTimeout = 0;  // SWITCH_WAKE_GUARD_MS in mach_absolute_time units
 
     // Work loop state.
+    switch_wake_guard guard = {};
+    uint64_t guardTimeout = 0;                   // SWITCH_WAKE_GUARD_MS in mach_absolute_time units
     uint32_t current = 0, from = 0, target = 0;  // brightness, 0..kMax
-    uint32_t lit = kMax / 2;                     // the last nonzero target, restored on wake
-    uint64_t rampStart = 0, rampLength = 0;      // mach_absolute_time units
-    uint64_t lastSend = 0, sendInterval = 0;     // mach_absolute_time units
+    uint32_t publishedCurrent = ~0u;
+    uint32_t lit = kMax / 2;                  // the last nonzero target, restored on wake
+    uint64_t rampStart = 0, rampLength = 0;   // mach_absolute_time units
+    uint64_t lastSend = 0, sendInterval = 0;  // mach_absolute_time units
+    OSNumber *numZero = nullptr, *numMax = nullptr, *numPanelMax = nullptr, *numMilliNitsMax = nullptr;
 #if DEVELOPMENT || DEBUG
     unsigned settleNits = 0, settleBrightness = 0;  // requests taken since the last settle line
 #endif
@@ -249,11 +248,12 @@ class SwitchBacklight : public IOService {
     bool panelOn = true, scanoutStopped = false, reportedFailure = false;
 
     static void workFired(OSObject *owner, IOTimerEventSource *sender);
+    static void kickFired(OSObject *owner, IOInterruptEventSource *sender, int count);
     static void guardFired(OSObject *owner, IOTimerEventSource *sender);
 
     void kick()
     {
-        work->setTimeoutUS(1);
+        kickSource->interruptOccurred(nullptr, nullptr, 0);
     }
 
     void startRamp(uint32_t value, uint64_t fadeNS);
@@ -299,17 +299,21 @@ OSMetaClassConstructorInit(SwitchBacklight, IOService, ) OSDefineDefaultStructor
 
 void SwitchBacklight::publishParameters()
 {
+    if (current == publishedCurrent)
+        return;
     OSDictionary *parameters = OSDictionary::withCapacity(3);
-    const OSDictionary *brightness = range(kMax, current);
-    const OSDictionary *raw = range(TEGRA_PANEL_BRIGHTNESS_MAX, toRaw(current));
-    const OSDictionary *milliNits = range(kMilliNitsMax, rawToMilliNits(toRaw(current)));
+    const OSDictionary *brightness = range(numZero, numMax, current);
+    const unsigned rawLevel = toRaw(current);
+    const OSDictionary *raw = range(numZero, numPanelMax, rawLevel);
+    const OSDictionary *milliNits = range(numZero, numMilliNitsMax, rawToMilliNits(rawLevel));
     if (parameters && brightness && raw && milliNits) {
         parameters->setObject("brightness", brightness);
         parameters->setObject("rawBrightness", raw);
         parameters->setObject("BrightnessMilliNits", milliNits);
         setProperty("IODisplayParameters", parameters);
+        publishedCurrent = current;
     }
-    setProperty("brightness-nits", rawToNits(toRaw(current)), 32);  // what the panel shows, nits * 65536
+    setProperty("brightness-nits", rawToNits(rawLevel), 32);  // what the panel shows, nits * 65536
     OSSafeReleaseNULL(milliNits);
     OSSafeReleaseNULL(raw);
     OSSafeReleaseNULL(brightness);
@@ -393,7 +397,7 @@ void SwitchBacklight::powerOn()
     sentRaw = err || level < 0 ? ~0u : static_cast<unsigned>(level);
     if (target == 0 && level >= 0)
         target = current = lit;
-    gDisplayOn = true;
+    __atomic_store_n(&gDisplayOn, true, __ATOMIC_RELEASE);
     switch_motion_display_power(true);
     switch_power_journal("SwitchBacklight: display on in %llu ms (touch %llu, scanout and als %llu, panel %llu %s; "
                          "level %d)",
@@ -401,25 +405,33 @@ void SwitchBacklight::powerOn()
                          err ? "not running" : "awake", level);
 }
 
-// Work loop: the latest requests, display power first, then one step of the current ramp. Re-arms itself until the
-// ramp reaches its target; a panel command blocks this loop for four frames.
+// Work loop: the latest requests, display power first, then one step of the current ramp. Re-arms itself directly for
+// the next real deadline until the ramp reaches its target; a panel command blocks this loop for four frames.
 void SwitchBacklight::step()
 {
-    IOLockLock(requestLock);
-    const bool on = wantOn;
-    const bool fresh = haveRequest;
-    const uint32_t value = requestValue;
-    const uint64_t fadeNS = requestFadeNS;
-    haveRequest = false;
+    const bool on = __atomic_load_n(&wantOn, __ATOMIC_ACQUIRE);
+    if (on) {
+        switch_wake_guard_display_on(&guard);
+        guardTimer->cancelTimeout();
+    } else if (__atomic_load_n(&pendingWakeSource, __ATOMIC_RELAXED)) {
+        const uint32_t pending = __atomic_exchange_n(&pendingWakeSource, 0u, __ATOMIC_ACQ_REL);
+        if (pending && switch_wake_guard_arm(&guard, pending - 1, mach_absolute_time(), guardTimeout, panelOn || on)) {
+            guardTimer->setTimeoutMS(SWITCH_WAKE_GUARD_MS);
+            tegra_gm20b_display_expected();
+        }
+    }
+    uint64_t req = 0;
+    if (__atomic_load_n(&requestSlot, __ATOMIC_RELAXED))
+        req = __atomic_exchange_n(&requestSlot, 0ULL, __ATOMIC_ACQ_REL);
 #if DEVELOPMENT || DEBUG
-    settleNits += nitsRequests;
-    settleBrightness += brightnessRequests;
-    nitsRequests = brightnessRequests = 0;
+    if (__atomic_load_n(&nitsRequests, __ATOMIC_RELAXED))
+        settleNits += __atomic_exchange_n(&nitsRequests, 0u, __ATOMIC_RELAXED);
+    if (__atomic_load_n(&brightnessRequests, __ATOMIC_RELAXED))
+        settleBrightness += __atomic_exchange_n(&brightnessRequests, 0u, __ATOMIC_RELAXED);
 #endif
-    IOLockUnlock(requestLock);
 
-    if (fresh)
-        startRamp(value, fadeNS);
+    if (req)
+        startRamp(unpackRequestValue(req), unpackRequestFadeNS(req));
     if (on != panelOn) {
         if (on) {
             powerOn();
@@ -427,7 +439,7 @@ void SwitchBacklight::step()
             powerOff();
         }
     }
-    gDisplayOn = panelOn;  // also when a request to go dark was taken back before it ran
+    __atomic_store_n(&gDisplayOn, panelOn, __ATOMIC_RELEASE);  // also when a request to go dark was taken back
     // Dark: the request is only recorded, and played on wake.
     if (!panelOn) {
         current = target;
@@ -442,7 +454,8 @@ void SwitchBacklight::step()
                                          static_cast<int64_t>(elapsed) / static_cast<int64_t>(rampLength));
     }
     const unsigned raw = toRaw(next);
-    if (raw != sentRaw) {
+    const bool willSend = raw != sentRaw;
+    if (willSend) {
         const uint64_t now = mach_absolute_time();
         if (lastSend && now - lastSend < sendInterval) {
             work->wakeAtTime(lastSend + sendInterval);  // the latest target is taken then
@@ -454,9 +467,16 @@ void SwitchBacklight::step()
         next = target;  // give up on this ramp, keep the request
     current = next;
     if (current != target) {
-        work->setTimeoutMS(1);
+        const uint64_t deadline =
+            nextRampDeadline(mach_absolute_time(), rampStart, rampLength, lastSend, sendInterval, willSend);
+        if (deadline) {
+            work->wakeAtTime(deadline);
+        } else {
+            kick();
+        }
     } else {
-        publishParameters();
+        if (!__atomic_load_n(&requestSlot, __ATOMIC_RELAXED))
+            publishParameters();
 #if DEVELOPMENT || DEBUG
         if (settleNits || settleBrightness)
             quiet->setTimeoutMS(kQuietMS);  // the line once the requests stop
@@ -488,6 +508,12 @@ void SwitchBacklight::workFired(OSObject *owner, IOTimerEventSource *)
         self->step();
 }
 
+void SwitchBacklight::kickFired(OSObject *owner, IOInterruptEventSource *, int)
+{
+    if (auto *self = OSDynamicCast(SwitchBacklight, owner))
+        self->step();
+}
+
 // Work loop, at the wake guarantee's deadline: with the panel still off and no display-on asked for, light it as the
 // render server would have (wantOn), then play it.
 void SwitchBacklight::guardFired(OSObject *owner, IOTimerEventSource *sender)
@@ -495,18 +521,16 @@ void SwitchBacklight::guardFired(OSObject *owner, IOTimerEventSource *sender)
     auto *self = OSDynamicCast(SwitchBacklight, owner);
     if (!self)
         return;
-    IOLockLock(self->requestLock);
+    const bool on = __atomic_load_n(&self->wantOn, __ATOMIC_ACQUIRE);
     const unsigned source = self->guard.source;
-    const int verdict = switch_wake_guard_check(&self->guard, mach_absolute_time(), self->panelOn, self->wantOn);
-    if (verdict == 1)
-        self->wantOn = true;
-    IOLockUnlock(self->requestLock);
+    const int verdict = switch_wake_guard_check(&self->guard, mach_absolute_time(), self->panelOn, on);
     if (verdict < 0) {
         sender->setTimeoutMS(50);  // a timer that came early: look again
         return;
     }
     if (verdict == 0)
         return;
+    __atomic_store_n(&self->wantOn, true, __ATOMIC_RELEASE);
     switch_power_event("SwitchBacklight: %s with the panel off and no display-on request from the render server in "
                        "%u ms: the kernel lights the panel (SpringBoard or backboardd not answering?)",
                        switch_wake_source_name(source), SWITCH_WAKE_GUARD_MS);
@@ -525,7 +549,8 @@ IOReturn SwitchBacklight::setProperties(OSObject *properties)
     // CoreBrightness has its display (logged once). Nothing else is done with it.
 #if DEVELOPMENT || DEBUG
     if (const OSNumber *nvram = OSDynamicCast(OSNumber, dict->getObject("DisplayBrightnessNitsNVRAM"))) {
-        if (!__atomic_exchange_n(&gSawDisplay, true, __ATOMIC_RELAXED)) {
+        if (!__atomic_load_n(&gSawDisplay, __ATOMIC_RELAXED) &&
+            !__atomic_exchange_n(&gSawDisplay, true, __ATOMIC_RELAXED)) {
             IOLog("SwitchBacklight: CoreBrightness made its display (new backlight architecture, NVRAM %u nits): "
                   "libEDR's server starts next\n",
                   nvram->unsigned32BitValue() >> 16);
@@ -537,7 +562,8 @@ IOReturn SwitchBacklight::setProperties(OSObject *properties)
     if (OSNumber *cap = OSDynamicCast(OSNumber, dict->getObject("brightness-nits-cap"))) {
         setProperty("brightness-nits-cap", cap);
 #if DEVELOPMENT || DEBUG
-        if (!__atomic_exchange_n(&gSawNitsCap, true, __ATOMIC_RELAXED)) {
+        if (!__atomic_load_n(&gSawNitsCap, __ATOMIC_RELAXED) &&
+            !__atomic_exchange_n(&gSawNitsCap, true, __ATOMIC_RELAXED)) {
             IOLog("SwitchBacklight: first brightness-nits-cap %u nits (recorded only)\n",
                   cap->unsigned32BitValue() >> 16);
         }
@@ -554,7 +580,7 @@ IOReturn SwitchBacklight::setProperties(OSObject *properties)
         const int32_t requested = static_cast<int32_t>(nits->unsigned32BitValue());
         value = nitsToBrightness(requested);
 #if DEVELOPMENT || DEBUG
-        if (!__atomic_exchange_n(&gSawNits, true, __ATOMIC_RELAXED)) {
+        if (!__atomic_load_n(&gSawNits, __ATOMIC_RELAXED) && !__atomic_exchange_n(&gSawNits, true, __ATOMIC_RELAXED)) {
             // NOLINTBEGIN(bugprone-signed-bitwise): signed 16.16 nits, as CoreBrightness sends them
             IOLog("SwitchBacklight: CoreBrightness sets brightness-nits (first %d.%02d nits, panel %u)\n",
                   requested >> 16, (((requested & 0xffff) * 100) >> 16), toRaw(value));
@@ -566,14 +592,10 @@ IOReturn SwitchBacklight::setProperties(OSObject *properties)
         value = brightness->unsigned32BitValue();
         fadeNS = fade ? fade->unsigned64BitValue() * 1000000000ULL / 65536 : 0;
     }
-    IOLockLock(requestLock);
-    requestValue = value;
-    requestFadeNS = fadeNS;
 #if DEVELOPMENT || DEBUG
-    ++*(nits ? &nitsRequests : &brightnessRequests);
+    __atomic_fetch_add(nits ? &nitsRequests : &brightnessRequests, 1u, __ATOMIC_RELAXED);
 #endif
-    haveRequest = true;
-    IOLockUnlock(requestLock);
+    __atomic_store_n(&requestSlot, packRequest(value, fadeNS), __ATOMIC_RELEASE);
     kick();
     return kIOReturnSuccess;
 }
@@ -581,25 +603,20 @@ IOReturn SwitchBacklight::setProperties(OSObject *properties)
 void SwitchBacklight::requestPower(bool on)
 {
     if (!on)
-        gDisplayOn = false;  // input is ignored from the request on, not only once the panel is dark
-    IOLockLock(requestLock);
-    wantOn = on;
+        __atomic_store_n(&gDisplayOn, false, __ATOMIC_RELEASE);  // input is ignored from the request on
     if (on)
-        switch_wake_guard_display_on(&guard);
-    IOLockUnlock(requestLock);
+        __atomic_store_n(&pendingWakeSource, 0u, __ATOMIC_RELEASE);
+    __atomic_store_n(&wantOn, on, __ATOMIC_RELEASE);
     kick();
 }
 
 // Any thread context (a wake source with the panel off, SwitchWake.cpp). Never blocks on this loop.
 void SwitchBacklight::expectWake(unsigned source)
 {
-    IOLockLock(requestLock);
-    const bool armed = switch_wake_guard_arm(&guard, source, mach_absolute_time(), guardTimeout, gDisplayOn || wantOn);
-    IOLockUnlock(requestLock);
-    if (armed) {
-        guardTimer->setTimeoutMS(SWITCH_WAKE_GUARD_MS);
-        tegra_gm20b_display_expected();
-    }
+    if (__atomic_load_n(&gDisplayOn, __ATOMIC_ACQUIRE) || __atomic_load_n(&wantOn, __ATOMIC_ACQUIRE))
+        return;
+    __atomic_store_n(&pendingWakeSource, source + 1, __ATOMIC_RELEASE);
+    kick();
 }
 
 // The IPSW's iPad's /backlight default-whitepoint-type, which adt_edit.py carries in /chosen: CoreBrightness takes its
@@ -621,14 +638,19 @@ bool SwitchBacklight::start(IOService *provider)
     nanoseconds_to_absolutetime(kSendIntervalNS, &sendInterval);
     sleepEnabled = switch_display_power_enabled();
     nanoseconds_to_absolutetime(SWITCH_WAKE_GUARD_MS * 1000000ULL, &guardTimeout);
-    requestLock = IOLockAlloc();
     loop = IOWorkLoop::workLoop();
     work = loop ? IOTimerEventSource::timerEventSource(this, &SwitchBacklight::workFired) : nullptr;
+    kickSource = loop ? IOInterruptEventSource::interruptEventSource(this, &SwitchBacklight::kickFired) : nullptr;
 #if DEVELOPMENT || DEBUG
     quiet = loop ? IOTimerEventSource::timerEventSource(this, &SwitchBacklight::quietFired) : nullptr;
 #endif
     guardTimer = loop ? IOTimerEventSource::timerEventSource(this, &SwitchBacklight::guardFired) : nullptr;
-    if (!requestLock || !work || !guardTimer || loop->addEventSource(work) != kIOReturnSuccess ||
+    numZero = OSNumber::withNumber(0ULL, 32);
+    numMax = OSNumber::withNumber(kMax, 32);
+    numPanelMax = OSNumber::withNumber(TEGRA_PANEL_BRIGHTNESS_MAX, 32);
+    numMilliNitsMax = OSNumber::withNumber(kMilliNitsMax, 32);
+    if (!work || !kickSource || !guardTimer || !numZero || !numMax || !numPanelMax || !numMilliNitsMax ||
+        loop->addEventSource(work) != kIOReturnSuccess || loop->addEventSource(kickSource) != kIOReturnSuccess ||
         loop->addEventSource(guardTimer) != kIOReturnSuccess
 #if DEVELOPMENT || DEBUG
         || !quiet || loop->addEventSource(quiet) != kIOReturnSuccess
@@ -637,6 +659,7 @@ bool SwitchBacklight::start(IOService *provider)
         IOLog("SwitchBacklight: work loop setup failed\n");
         return false;
     }
+    kickSource->enable();
     // Start from what the boot chain left on the panel; nothing is sent until CoreBrightness asks.
     const int boot = tegra_panel_boot_brightness();
     current = target = boot >= 0 ? toBrightness(static_cast<unsigned>(boot)) : kMax / 2;
@@ -701,6 +724,12 @@ void SwitchBacklight::free()
             loop->removeEventSource(work);
         work->release();
     }
+    if (kickSource) {
+        kickSource->disable();
+        if (loop)
+            loop->removeEventSource(kickSource);
+        kickSource->release();
+    }
 #if DEVELOPMENT || DEBUG
     if (quiet) {
         quiet->cancelTimeout();
@@ -715,9 +744,11 @@ void SwitchBacklight::free()
             loop->removeEventSource(guardTimer);
         guardTimer->release();
     }
+    OSSafeReleaseNULL(numZero);
+    OSSafeReleaseNULL(numMax);
+    OSSafeReleaseNULL(numPanelMax);
+    OSSafeReleaseNULL(numMilliNitsMax);
     OSSafeReleaseNULL(loop);
-    if (requestLock)
-        IOLockFree(requestLock);
     IOService::free();
 }
 
@@ -761,7 +792,7 @@ extern "C" bool switch_display_power_request(bool on)
 
 extern "C" bool switch_display_is_on(void)
 {
-    return gDisplayOn;
+    return __atomic_load_n(&gDisplayOn, __ATOMIC_ACQUIRE);
 }
 
 extern "C" void switch_backlight_expect_wake(unsigned source)

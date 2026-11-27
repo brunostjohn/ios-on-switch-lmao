@@ -33,6 +33,7 @@
 #include <IOKit/IOLocks.h>
 #include <libkern/c++/OSBoolean.h>
 #include <libkern/c++/OSDictionary.h>
+#include <libkern/c++/OSNumber.h>
 #include <libkern/c++/OSString.h>
 #include "SwitchHID.h"
 
@@ -47,9 +48,14 @@ enum : unsigned {
     kPrimaryUsagePage = 199,
     kPrimaryUsage = 200,
     kCopyEventForClient = 205,
+    kCopyPropertyForClient = 206,
     kOpenForClient = 208,
     kCloseForClient = 209,
 };
+
+// IOHIDEventServiceFastPathUserClient::getSharedMemorySize queries QueueSize via slot 206 and refuses opens without
+// an OSNumber >= 5.
+constexpr uint32_t kQueueSize = 4096;
 
 // IOHIDLib.plugin's CFPlugInTypes maps the type to its factory; the path is the one IOHIDFamily's embedded
 // IOHIDEventDriver personality gives its other IOHIDLib types.
@@ -64,10 +70,10 @@ IONotifier *notifier;
 uintptr_t *original;  // the event driver class's vtable, and the copy every motion event driver of the boot gets
 uintptr_t *table;
 uintptr_t originalDispatch;
+uintptr_t originalCopyProperty;
 // copyEventForClient runs on the user client's thread, not the event driver's work loop (IOHIDEventService.h), while
-// dispatchEvent replaces the event on the work loop: taking a reference and dropping the slot's must not interleave.
-// A spin lock around a pointer swap and a retain.
-IOSimpleLock *lock;
+// dispatchEvent replaces the event on the work loop: both run in thread context, never primary IRQ.
+IOLock *lock;
 OSObject *latest;
 #if DEVELOPMENT || DEBUG
 uint64_t copies;
@@ -80,12 +86,14 @@ template <typename R, typename... A> R call(void *object, unsigned slot, A... ar
 
 void keep(OSObject *event)
 {
+    if (!event && !__atomic_load_n(&latest, __ATOMIC_RELAXED))
+        return;
     if (event)
         event->retain();
-    IOSimpleLockLock(lock);
+    IOLockLock(lock);
     const OSObject *replaced = latest;
-    latest = event;
-    IOSimpleLockUnlock(lock);
+    __atomic_store_n(&latest, event, __ATOMIC_RELAXED);
+    IOLockUnlock(lock);
     OSSafeReleaseNULL(replaced);
 }
 
@@ -98,16 +106,26 @@ void dispatch(IOService *driver, OSObject *event, IOOptionBits options)
 
 OSObject *copyEventForClient(IOService *, OSObject *, IOOptionBits, void *)
 {
-    IOSimpleLockLock(lock);
+    if (!__atomic_load_n(&latest, __ATOMIC_RELAXED))
+        return nullptr;
+    IOLockLock(lock);
     OSObject *event = latest;
-    if (event)
+    if (event) {
         event->retain();
-    IOSimpleLockUnlock(lock);
 #if DEVELOPMENT || DEBUG
-    if (event)
-        __atomic_fetch_add(&copies, 1, __ATOMIC_RELAXED);
+        __atomic_store_n(&copies, copies + 1, __ATOMIC_RELAXED);
 #endif
+    }
+    IOLockUnlock(lock);
     return event;
+}
+
+OSObject *copyPropertyForClient(const IOService *driver, const char *key, void *context)
+{
+    if (key && strcmp(key, "QueueSize") == 0)
+        return OSNumber::withNumber(kQueueSize, 32);
+    return reinterpret_cast<OSObject *(*)(const IOService *, const char *, void *)>(originalCopyProperty)(driver, key,
+                                                                                                          context);
 }
 
 bool openForClient(IOService *, IOService *, IOOptionBits, OSDictionary *properties, void **context)
@@ -138,11 +156,11 @@ void publishPlugIn(IOService *driver)
 // The lock and the vtable copy, once a boot: the copy outlives every driver that uses it.
 bool makeTable(uintptr_t *vtable)
 {
-    IOSimpleLock *created = IOSimpleLockAlloc();
+    IOLock *created = IOLockAlloc();
     auto *copy = static_cast<uintptr_t *>(IOMalloc(kSlots * sizeof(uintptr_t)));
     if (!created || !copy) {
         if (created)
-            IOSimpleLockFree(created);
+            IOLockFree(created);
         if (copy)
             IOFree(copy, kSlots * sizeof(uintptr_t));
         IOLog("SwitchHID: device motion fast path off: no memory\n");
@@ -150,8 +168,10 @@ bool makeTable(uintptr_t *vtable)
     }
     memcpy(copy, vtable, kSlots * sizeof(uintptr_t));
     originalDispatch = copy[kDispatch];
+    originalCopyProperty = copy[kCopyPropertyForClient];
     copy[kDispatch] = reinterpret_cast<uintptr_t>(&dispatch);
     copy[kCopyEventForClient] = reinterpret_cast<uintptr_t>(&copyEventForClient);
+    copy[kCopyPropertyForClient] = reinterpret_cast<uintptr_t>(&copyPropertyForClient);
     copy[kOpenForClient] = reinterpret_cast<uintptr_t>(&openForClient);
     copy[kCloseForClient] = reinterpret_cast<uintptr_t>(&closeForClient);
     __atomic_store_n(&lock, created, __ATOMIC_RELEASE);
@@ -179,7 +199,8 @@ bool install(IOService *driver)
         return false;
     keep(nullptr);
     publishPlugIn(driver);
-    __asm__ volatile("dmb ish" ::: "memory");
+    driver->setProperty("NativeSandboxGrantProcess", "backboardd,SpringBoard,locationd");
+    __atomic_thread_fence(__ATOMIC_RELEASE);
     *reinterpret_cast<uintptr_t **>(driver) = table;
 #if DEVELOPMENT || DEBUG
     IOLog("SwitchHID: device motion fast path on (event driver slots 199/200 answer 0xff0c/0x5)\n");

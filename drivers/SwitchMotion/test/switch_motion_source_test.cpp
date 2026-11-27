@@ -92,16 +92,35 @@ TEST(SwitchMotionSource, OrientationDeviceAnswersTheAopPlugIn)
 TEST(SwitchMotionSource, DeviceMotionTakesTheFastPath)
 {
     const std::string fast = SourceText("../../SwitchTouch/SwitchHIDFastPath.cpp");
-    for (const char *slot : {"kDispatch = 198,", "kPrimaryUsagePage = 199,", "kPrimaryUsage = 200,",
-                             "kCopyEventForClient = 205,", "kOpenForClient = 208,", "kCloseForClient = 209,"})
+    for (const char *slot : {
+             "kDispatch = 198,",
+             "kPrimaryUsagePage = 199,",
+             "kPrimaryUsage = 200,",
+             "kCopyEventForClient = 205,",
+             "kCopyPropertyForClient = 206,",
+             "kOpenForClient = 208,",
+             "kCloseForClient = 209,",
+         }) {
         EXPECT_THAT(fast, HasSubstr(slot));
+    }
     EXPECT_THAT(fast, HasSubstr("\"0B842ADD-C395-4352-95F6-6585EB515623\""));
     EXPECT_THAT(fast, HasSubstr("\"IOHIDFamily.kext/PlugIns/IOHIDLib.plugin\""));
+    EXPECT_THAT(fast, HasSubstr("setProperty(\"NativeSandboxGrantProcess\", \"backboardd,SpringBoard,locationd\")"));
     EXPECT_THAT(fast, HasSubstr("#if SWITCH_IPSW_KIND_24B119 || SWITCH_IPSW_KIND_21H461"));
     EXPECT_THAT(fast, HasSubstr("gIOFirstPublishNotification"));
+    EXPECT_THAT(fast, Not(HasSubstr("IOSimpleLock")));
+    EXPECT_THAT(fast, Not(HasSubstr("__atomic_fetch_add")));
     const std::string create =
         Body(SourceText("../../SwitchTouch/SwitchHIDDevice.cpp"), "IOService *switch_hid_create(");
     EXPECT_LT(create.find("switch_hid_fastpath_watch(device)"), create.find("device->start(resources)"));
+}
+
+TEST(SwitchMotionSource, PrimaryIrqFilterAndPackedConfig)
+{
+    const std::string motion = SourceText("../SwitchMotion.cpp");
+    EXPECT_THAT(motion, HasSubstr("IOFilterInterruptEventSource::filterInterruptEventSource("));
+    EXPECT_THAT(motion, Not(HasSubstr("__atomic_fetch_add(&motionReports")));
+    EXPECT_THAT(Body(motion, "void SwitchMotion::post("), Not(HasSubstr("__atomic_load_n")));
 }
 
 // The event system has the event before a copy can answer it; an open asking for the AOP's always-on history, which

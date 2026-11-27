@@ -159,6 +159,7 @@
 #include "SwitchPowerStats.h"
 #include "SwitchMAX77620.h"
 #include "SwitchSocTherm.h"
+#include "SwitchThermalCurve.h"
 #include "SwitchThermalLimits.h"
 #include <os/log.h>
 #include "../../kits/SwitchCAR/SwitchCAR.h"
@@ -262,7 +263,14 @@ constexpr unsigned kAlertBurst = 10;
 constexpr unsigned kSafeDrive = 153;  // of 256, until the first good reading
 constexpr unsigned kFullDrive = 256;
 constexpr int kCriticalMilliC = 90000;
-constexpr unsigned kLevels = 10;
+using switch_thermal::kLevels;
+using switch_thermal::kProfiles;
+using switch_thermal::LimitCache;
+using switch_thermal::Profile;
+using switch_thermal::sensorFor;
+using switch_thermal::skin;
+using switch_thermal::stepFanLevel;
+using switch_thermal::window;
 
 // CPU operating point (see the top of the file).
 constexpr unsigned kPerfMilliVolts = 1120;  // L4T's T210B01 CPU max_millivolts
@@ -309,58 +317,6 @@ constexpr unsigned long kDfllRateHz = 1785000000UL;
 static_assert(kDfllRateHz <= TEGRA_DFLL_CPU_MAX_HZ, "never above Horizon's boost clock");
 constexpr int kDfllFloorWarmMilliC = 20000, kDfllCap1MilliC = 64000, kDfllCap2MilliC = 84000;
 constexpr int kDfllBoundaries[] = {kDfllFloorWarmMilliC, kDfllCap1MilliC, kDfllCap2MilliC};
-
-struct Profile {
-    const char *name;
-    int32_t soc[2], pcb[2];  // skin estimate scale, offset
-    int32_t trip[kLevels];   // m C
-    int32_t hysteresis[kLevels];
-    uint16_t pwm[kLevels];  // of 256
-};
-
-constexpr Profile kProfiles[] = {
-    {"Console",
-     {7831, 57590},
-     {8051, -45213},
-     {0, 36000, 40000, 43000, 49000, 53000, 70000, 80000, 90000, 100000},
-     {0, 0, 3900, 2900, 0, 0, 0, 0, 0, 0},
-     {0, 0, 51, 51, 128, 255, 255, 255, 255, 255}},
-    {"Handheld",
-     {9029, 4274},
-     {7176, -33954},
-     {0, 36000, 40000, 43000, 44000, 45000, 46500, 80000, 90000, 100000},
-     {0, 0, 3900, 2900, 0, 0, 1000, 0, 0, 0},
-     {0, 0, 51, 51, 76, 128, 255, 255, 255, 255}},
-};
-
-int skin(const int32_t coefficient[2], int milliC)
-{
-    return static_cast<int>(
-        (static_cast<int64_t>(milliC) * coefficient[0] + static_cast<int64_t>(coefficient[1]) * 1000) / 10000 + 500);
-}
-
-// The sensor temperature (m C) whose skin estimate is `estimate`: skin() solved for T.
-int sensorFor(const int32_t coefficient[2], int estimate)
-{
-    return static_cast<int>(
-        ((static_cast<int64_t>(estimate) - 500) * 10000 - static_cast<int64_t>(coefficient[1]) * 1000) /
-        coefficient[0]);
-}
-
-// ALERT window in whole degrees around one sensor: high when its estimate reaches `up`, low when it
-// falls to `down`, and never so tight that the current reading already violates it (which would
-// keep the level-triggered line asserted). The TMP451 alerts above the high and at/below the low.
-void window(int milliC, int up, int down, uint8_t *high, uint8_t *low)
-{
-    int h = (up + 999) / 1000;
-    int l = down / 1000;
-    if (h < milliC / 1000 + 1)
-        h = milliC / 1000 + 1;
-    if (l > (milliC + 999) / 1000 - 1)
-        l = (milliC + 999) / 1000 - 1;
-    *high = static_cast<uint8_t>(h > 127 ? 127 : h);
-    *low = static_cast<uint8_t>(l < 0 ? 0 : l);
-}
 
 int readByte(uint8_t reg, uint8_t *value)
 {
@@ -421,6 +377,7 @@ class SwitchThermal : public IOService {
     bool alertArmed = false, sensorReady = false, announced = false, reportedFailure = false;
     bool asleep = false;  // from suspend to resume: SOC_THERM's events start no evaluation
     bool reportedCritical = false;
+    LimitCache limits = {};
     // CPU operating point: wanted, raised now (VDD_CPU above the boot value), or settled for this boot (shutting down,
     // a chip whose CVB rules the raise out, or stopped by perfSteps: never raised again). A thermal trip only holds it
     // down until perfHoldUntil.
@@ -614,6 +571,7 @@ void SwitchThermal::failSafe(const char *what, int err)
     setDrive(kFullDrive);
     publish("FanDrive", kFullDrive);
     sensorReady = false;
+    limits.invalidate();
     storeReading(false, 0, 0);
     restoreCpu(what, CpuDown::Again);  // no raised clocks without a working sensor: up again once it reads
     if (!reportedFailure)
@@ -623,6 +581,7 @@ void SwitchThermal::failSafe(const char *what, int err)
 
 bool SwitchThermal::initSensor()
 {
+    limits.invalidate();
     const uint8_t setup[][2] = {
         {ConfigWrite, 0},  // running, ALERT unmasked, 0..127 C
         {RemoteOffsetHigh, 0xf3}, {RemoteOffsetLow, 0x80},         {RemoteThermLimit, 99},
@@ -720,16 +679,23 @@ bool SwitchThermal::armAlert(int soc, int pcb)
     uint8_t pcbLow = 0;
     window(soc, socUp, socDown, &socHigh, &socLow);
     window(pcb, pcbUp, level ? sensorFor(profile->pcb, down) : -1000, &pcbHigh, &pcbLow);
-    int err = writeByte(RemoteHighWrite, socHigh);
-    if (!err)
+    if (limits.matches(socHigh, socLow, pcbHigh, pcbLow))
+        return true;
+    int err = 0;
+    if (!limits.valid || socHigh != limits.socHigh)
+        err = writeByte(RemoteHighWrite, socHigh);
+    if (!err && (!limits.valid || socLow != limits.socLow))
         err = writeByte(RemoteLowWrite, socLow);
-    if (!err)
+    if (!err && (!limits.valid || pcbHigh != limits.pcbHigh))
         err = writeByte(LocalHighWrite, pcbHigh);
-    if (!err)
+    if (!err && (!limits.valid || pcbLow != limits.pcbLow))
         err = writeByte(LocalLowWrite, pcbLow);
-    if (err)
+    if (err) {
         failSafe("TMP451 limit write failed", err);
-    return err == 0;
+        return false;
+    }
+    limits.update(socHigh, socLow, pcbHigh, pcbLow);
+    return true;
 }
 
 // One evaluation of the fan curve; false if there was no good reading.
@@ -752,16 +718,11 @@ bool SwitchThermal::evaluate()
     const int socSkin = skin(profile->soc, soc);
     const int pcbSkin = skin(profile->pcb, pcb);
     const int estimate = socSkin > pcbSkin ? socSkin : pcbSkin;
+#if DEVELOPMENT || DEBUG
     const unsigned before = level;
-    while (level + 1 < kLevels && estimate >= profile->trip[level + 1])
-        ++level;
-    while (level > 0 && estimate < profile->trip[level] - profile->hysteresis[level])
-        --level;
+#endif
+    level = stepFanLevel(*profile, level, estimate);
     unsigned target = profile->pwm[level];
-    if (level != before) {
-        IOLog("SwitchThermal: fan level %u -> %u (%u/256): skin %d mC, SoC %d mC, PCB %d mC\n", before, level, target,
-              estimate, soc, pcb);
-    }
     if (soc >= kCriticalMilliC) {
         target = kFullDrive;
         if (!reportedCritical)
@@ -770,6 +731,12 @@ bool SwitchThermal::evaluate()
     } else {
         reportedCritical = false;
     }
+#if DEVELOPMENT || DEBUG
+    if (announced && target != drive && !reportedCritical) {
+        IOLog("SwitchThermal: fan level %u -> %u (%u/256): skin %d mC, SoC %d mC, PCB %d mC\n", before, level, target,
+              estimate, soc, pcb);
+    }
+#endif
     setDrive(target);
     if (perfRaised && dfllMode)
         updateDfllThermal(soc);
@@ -1298,6 +1265,7 @@ void SwitchThermal::resume()
             self->fanPowerOn();
             self->setDrive(kSafeDrive);
             self->sensorReady = false;
+            self->limits.invalidate();
             self->resumeDfll();
             // The boot's clocks and VDD_CPU code stay the baseline (the MAX77812 keeps its registers through SC7);
             // PLLX itself is relocked before the next raise.

@@ -208,17 +208,32 @@ void describeBus(char *buffer, size_t size)
 class SwitchALS : public IOService {
     // NOLINTNEXTLINE(misc-explicit-constructor): IOKit's structors macro declares the metaclass constructor
     OSDeclareDefaultStructors(SwitchALS) IOWorkLoop *loop = nullptr;
-    IOTimerEventSource *clock = nullptr;        // every sampleUS while running
+
+    enum class State : uint8_t {
+        Off,
+        Configuring,
+        Running,
+        Broken,
+    };
+
+    IOTimerEventSource *clock = nullptr;        // every sampleUS while active
     IOTimerEventSource *supplyCheck = nullptr;  // kSupplyDeadlineMS for SwitchTouch's first LDO6
+    IOInterruptEventSource *kick = nullptr;     // ReportInterval updated on IOHIDEventDriver's thread
     IOService *hid = nullptr;
+
+    // Written by reportIntervalSet (IOHIDEventDriver's thread), consumed on this work loop.
+    uint32_t requestedSampleUS = 0;
+
+    // Work loop state.
+    State state = State::Off;
     unsigned gain = 2;  // 64x, as bh1730_init_config and hekate
     unsigned errors = 0, unclaimed = 0, skip = 0;
-    bool lit = true, suspended = false, supply = false, identified = false, configured = false;
+    bool lit = true, suspended = false, supply = false, identified = false;
     bool supplied = false;  // LDO6 has come on at least once
-    bool broken = false;    // a sensor or HID path that is not as expected: logged once, sampling off for this boot
     uint64_t supplyAt = 0;  // when LDO6 last came on (switch_als_supply)
-    bool running = false;
-    uint32_t sampleUS = kSampleUS;  // CoreBrightness's report interval, at least kSampleUS (reportIntervalSet)
+    uint32_t sampleUS = 0;  // 0 until a client sets ReportInterval > 0
+    bool hasDispatched = false;
+    uint32_t lastLevel = 0;
 #if defined(SWITCH_STATS_POWER) && SWITCH_STATS_POWER
     unsigned samples = 0, luxMin = ~0u, luxMax = 0;
     unsigned loggedLux = 0, loggedGain = ~0u;  // the last line's (noteStats); ~0u: none yet
@@ -226,8 +241,10 @@ class SwitchALS : public IOService {
 #endif
 
     static void ticked(OSObject *owner, IOTimerEventSource *sender);
+    static void intervalChanged(OSObject *owner, IOInterruptEventSource *sender, int count);
     static void reportIntervalSet(void *context, const uint8_t *report, size_t length);
     static void supplyLate(OSObject *owner, IOTimerEventSource *sender);
+    void armClock(IOTimerEventSource *sender, uint32_t intervalUS);
     void update();
     void giveUp();
     int configure();
@@ -269,44 +286,59 @@ OSDefineMetaClassAndStructors(SwitchALS, IOService)
     static SwitchALS *volatile gALS;
 static volatile bool gSupply;  // LDO6 as SwitchTouch last reported it, for a report that comes before start
 
-// Work loop. The sensor samples while the panel is lit (or waking), the console awake and LDO6 on; otherwise it is
-// powered down (it keeps its registers while LDO6 stays on) and its timer is off. Starting sets it up at once; the
-// first tick is kFirstSampleUS later, a whole conversion after the set-up, because the sensor's registers still hold
-// the last conversion from before it powered down.
-// NOLINTNEXTLINE(misc-no-recursion): giveUp() sets broken first, so its update() only stops the sensor
+void SwitchALS::armClock(IOTimerEventSource *sender, uint32_t intervalUS)
+{
+    const uint32_t leeway = leewayUS(intervalUS);
+    uint64_t intervalAbs = 0;
+    uint64_t leewayAbs = 0;
+    clock_interval_to_absolutetime_interval(intervalUS, kMicrosecondScale, &intervalAbs);
+    clock_interval_to_absolutetime_interval(leeway, kMicrosecondScale, &leewayAbs);
+    sender->setTimeout(kIOTimeOptionsWithLeeway, intervalAbs, leewayAbs);
+}
+
+// Work loop. The sensor samples while a client has asked for a nonzero ReportInterval, the panel is lit (or waking),
+// the console awake and LDO6 on; otherwise it is powered down (RegControl = 0) and its timer is off.
 void SwitchALS::update()
 {
-    const bool want = lit && !suspended && supply && !broken;
-    if (want == __atomic_load_n(&running, __ATOMIC_RELAXED))
-        return;
-    if (want) {
-        errors = 0;
-        configured = false;  // the sensor may have lost power
-        __atomic_store_n(&running, true, __ATOMIC_RELEASE);
-        clock->setTimeoutUS(kFirstSampleUS);
-        const int err = configure();
-        if (err) {
-            failed(err);  // the first tick tries again
-        } else {
-            configured = true;
-        }
+    if (state == State::Broken) {
+        clock->cancelTimeout();
         return;
     }
-    __atomic_store_n(&running, false, __ATOMIC_RELEASE);
-    clock->cancelTimeout();
-    if (configured)
-        (void)writeRegister(RegControl, 0);  // power down; a sensor that is gone shows on the next start
-    configured = false;
+    const bool want = lit && !suspended && supply && sampleUS > 0;
+    if (!want) {
+        const bool wasRunning = state == State::Running;
+        state = State::Off;
+        hasDispatched = false;
+        clock->cancelTimeout();
+        if (wasRunning)
+            (void)writeRegister(RegControl, 0);  // power down; a sensor that is gone shows on the next start
+        return;
+    }
+    if (state != State::Off)
+        return;
+    errors = 0;
+    hasDispatched = false;
+    state = State::Configuring;
+    clock->setTimeoutUS(kFirstSampleUS);
+    const int err = configure();
+    if (err) {
+        failed(err);  // the first tick tries again
+    } else {
+        state = State::Running;
+    }
 }
 
 // Work loop. The ALS is not worth a boot: a part that is not a BH1730, a sensor that does not answer, a supply that
 // never comes and an event path nothing takes each log one line (the caller's) and leave the sensor off; a lost
 // display interrupt still panics.
-// NOLINTNEXTLINE(misc-no-recursion): giveUp() sets broken first, so its update() only stops the sensor
 void SwitchALS::giveUp()
 {
-    broken = true;
-    update();
+    const bool wasRunning = state == State::Running;
+    state = State::Broken;
+    hasDispatched = false;
+    clock->cancelTimeout();
+    if (wasRunning)
+        (void)writeRegister(RegControl, 0);
 }
 
 // First contact, once LDO6 has been on for at least 12 ms (switch_als_supply): I2C2 up (TegraI2C: pinmux, drive,
@@ -329,7 +361,7 @@ int SwitchALS::configure()
         // BH1730FVC PART_ID: part number 0111 in bits 7:4.
         if ((id >> 4) != 7) {
             IOLog("SwitchALS: off: I2C2 0x29 is not a BH1730 (id %#x)\n", id);
-            broken = true;  // sample() turns the sensor off
+            state = State::Broken;
             return -1;
         }
         err = tegra_i2c_write(kBus, kSensor, kSoftwareReset, nullptr, 0);
@@ -337,7 +369,7 @@ int SwitchALS::configure()
             return err;
         identified = true;
         IOLog("SwitchALS: started (BH1730 id %#x after %u failed tries, LDO6 on for %llu ms; a sample every %u us)\n",
-              id, errors, msSince(supplyAt), kSampleUS);
+              id, errors, msSince(supplyAt), sampleUS);
     }
     err = writeRegister(RegGain, static_cast<uint8_t>(gain));
     if (!err)
@@ -375,6 +407,8 @@ void SwitchALS::dispatch(uint32_t level, uint32_t visible, uint32_t ir)
     event->release();
     if (status == kIOReturnSuccess) {
         unclaimed = 0;
+        hasDispatched = true;
+        lastLevel = level;
     } else if (++unclaimed >= kUnclaimedLimit) {
         IOLog("SwitchALS: off: no IOHIDEventDriver took the ALS HID device in %u samples (dispatch %#x)\n",
               kUnclaimedLimit, status);
@@ -415,10 +449,9 @@ void SwitchALS::noteStats(uint32_t level, uint32_t visible, uint32_t ir)
 // kernels add one on the bus and the controller's last failure (TegraI2C) and, if it never answered, one on the lines,
 // the PMC's rails and whoever answers on I2C2 (describeBus, a read of every address). The sampling is stopped first, so
 // the probe runs on an idle bus.
-// NOLINTNEXTLINE(misc-no-recursion): giveUp() sets broken first, so its update() only stops the sensor
 void SwitchALS::failed(int err)
 {
-    if (broken) {
+    if (state == State::Broken) {
         giveUp();  // configure() logged why
         return;
     }
@@ -440,18 +473,20 @@ void SwitchALS::failed(int err)
 #endif
 }
 
-// Work loop, every kSampleUS while running. A sensor update() could not set up is set up here.
+// Work loop, every sampleUS while active. A sensor update() could not set up is set up here.
 void SwitchALS::sample()
 {
     uint8_t data[4] = {};  // DATA0 (visible) and DATA1 (infrared), little endian, in one auto-increment read
-    const int err = configured ? tegra_i2c_read(kBus, kSensor, kCommand | RegData0, data, sizeof(data)) : configure();
+    const bool wasConfiguring = state == State::Configuring;
+    const int err =
+        wasConfiguring ? configure() : tegra_i2c_read(kBus, kSensor, kCommand | RegData0, data, sizeof(data));
     if (err) {
         failed(err);
         return;
     }
     errors = 0;
-    if (!configured) {
-        configured = true;
+    if (wasConfiguring) {
+        state = State::Running;
         return;
     }
     if (skip) {
@@ -462,7 +497,8 @@ void SwitchALS::sample()
     const uint32_t ir = static_cast<uint32_t>(data[3]) << 8 | data[2];
     if (!saturated(visible, ir) || gain == 0) {  // a clipped reading at a higher gain only steps the gain down
         const uint32_t level = lux(visible, ir, gain);
-        dispatch(level, visible, ir);
+        if (shouldReport(hasDispatched, lastLevel, level))
+            dispatch(level, visible, ir);
 #if defined(SWITCH_STATS_POWER) && SWITCH_STATS_POWER
         noteStats(level, visible, ir);
 #endif
@@ -480,19 +516,27 @@ void SwitchALS::sample()
 void SwitchALS::ticked(OSObject *owner, IOTimerEventSource *sender)
 {
     auto *self = static_cast<SwitchALS *>(owner);
-    if (!__atomic_load_n(&self->running, __ATOMIC_ACQUIRE))
+    if (self->state != State::Configuring && self->state != State::Running)
         return;
-    const uint32_t intervalUS = __atomic_load_n(&self->sampleUS, __ATOMIC_RELAXED);
-    const uint32_t leewayUS = intervalUS / 2 < 50000u ? intervalUS / 2 : 50000u;
-    uint64_t intervalAbs = 0, leewayAbs = 0;
-    clock_interval_to_absolutetime_interval(intervalUS, kMicrosecondScale, &intervalAbs);
-    clock_interval_to_absolutetime_interval(leewayUS, kMicrosecondScale, &leewayAbs);
-    sender->setTimeout(kIOTimeOptionsWithLeeway, intervalAbs, leewayAbs);
+    self->armClock(sender, self->sampleUS);
     self->sample();
 }
 
-// The Report Interval feature (report 1: a 32-bit microsecond count), on IOHIDEventDriver's thread: the next tick
-// takes it. The sensor converts no faster than kSampleUS, so a shorter interval is held there, logged once.
+void SwitchALS::intervalChanged(OSObject *owner, IOInterruptEventSource *, int)
+{
+    auto *self = static_cast<SwitchALS *>(owner);
+    const uint32_t prev = self->sampleUS;
+    const uint32_t next = __atomic_load_n(&self->requestedSampleUS, __ATOMIC_ACQUIRE);
+    self->sampleUS = next;
+    if (next > 0)
+        self->hasDispatched = false;
+    self->update();
+    if ((self->state == State::Running || self->state == State::Configuring) && prev > 0 && next > 0 && next < prev)
+        self->armClock(self->clock, next);
+}
+
+// The Report Interval feature (report 1: a 32-bit microsecond count), on IOHIDEventDriver's thread: 0 stops and powers
+// down the sensor; nonzero starts/re-paces on this work loop, clamped at kSampleUS (logged once).
 void SwitchALS::reportIntervalSet(void *context, const uint8_t *report, size_t length)
 {
     auto *self = static_cast<SwitchALS *>(context);
@@ -500,19 +544,22 @@ void SwitchALS::reportIntervalSet(void *context, const uint8_t *report, size_t l
         return;
     const uint32_t asked = static_cast<uint32_t>(report[1]) | static_cast<uint32_t>(report[2]) << 8 |
                            static_cast<uint32_t>(report[3]) << 16 | static_cast<uint32_t>(report[4]) << 24;
+    uint32_t interval = asked;
     if (asked && asked < kSampleUS) {
         switch_refusal("als", "interval-below-conversion",
                        "report interval %u us asked; the BH1730 converts every %u us, so it reports at that", asked,
                        kSampleUS);
+        interval = kSampleUS;
     }
-    __atomic_store_n(&self->sampleUS, asked > kSampleUS ? asked : kSampleUS, __ATOMIC_RELAXED);
+    __atomic_store_n(&self->requestedSampleUS, interval, __ATOMIC_RELEASE);
+    self->kick->interruptOccurred(nullptr, nullptr, 0);
 }
 
 // Work loop: SwitchTouch never turned LDO6 on (it did not start, or the panel never came up).
 void SwitchALS::supplyLate(OSObject *owner, IOTimerEventSource *)
 {
     auto *self = static_cast<SwitchALS *>(owner);
-    if (self->supplied || self->broken)
+    if (self->supplied || self->state == State::Broken)
         return;
     IOLog("SwitchALS: off: LDO6, the sensor's I2C supply, did not come on in %u s (SwitchTouch turns it on with the "
           "touch panel)\n",
@@ -552,10 +599,12 @@ bool SwitchALS::start(IOService *provider)
     loop = IOWorkLoop::workLoop();
     clock = IOTimerEventSource::timerEventSource(kIOTimerEventSourceOptionsPriorityKernel, this, &SwitchALS::ticked);
     supplyCheck = IOTimerEventSource::timerEventSource(this, &SwitchALS::supplyLate);
-    if (!loop || !clock || !supplyCheck || loop->addEventSource(clock) != kIOReturnSuccess ||
-        loop->addEventSource(supplyCheck) != kIOReturnSuccess) {
+    kick = IOInterruptEventSource::interruptEventSource(this, &SwitchALS::intervalChanged);
+    if (!loop || !clock || !supplyCheck || !kick || loop->addEventSource(clock) != kIOReturnSuccess ||
+        loop->addEventSource(supplyCheck) != kIOReturnSuccess || loop->addEventSource(kick) != kIOReturnSuccess) {
         panic("SwitchALS: work loop setup failed");
     }
+    kick->enable();
     hid = switch_hid_create(kSwitchHIDLight);
     switch_hid_set_feature_handler(hid, &SwitchALS::reportIntervalSet, this);
     registerService();
@@ -571,9 +620,12 @@ void SwitchALS::free()
             loop->removeEventSource(clock);
         if (supplyCheck)
             loop->removeEventSource(supplyCheck);
+        if (kick)
+            loop->removeEventSource(kick);
     }
     OSSafeReleaseNULL(clock);
     OSSafeReleaseNULL(supplyCheck);
+    OSSafeReleaseNULL(kick);
     OSSafeReleaseNULL(loop);
     IOService::free();
 }

@@ -133,7 +133,6 @@ host_test(
         ":kernel",
     ],
 )
-
 host_test(
     name = "switch_hid_touch_event_test",
     srcs = ["switch_hid_touch_event_test.cpp"],
@@ -141,5 +140,59 @@ host_test(
     deps = [
         ":headers",
         ":kernel",
+    ],
+)
+
+host_shims(
+    name = "fastpath_kernel",
+    headers = [
+        "IOKit/IOLib.h",
+        "IOKit/IOLocks.h",
+        "IOKit/IOReturn.h",
+        "IOKit/IOService.h",
+        "libkern/c++/OSBoolean.h",
+        "libkern/c++/OSDictionary.h",
+        "libkern/c++/OSNumber.h",
+        "libkern/c++/OSString.h",
+    ],
+    stubs = "switch_hid_fastpath_stubs.h",
+)
+
+host_library(
+    name = "fastpath_headers",
+    hdrs = [
+        "//drivers/NativeMobileDisplay:SwitchPortrait.h",
+        "//drivers/SwitchTouch:SwitchHID.h",
+        "//drivers/SwitchTouch:SwitchHIDFastPath.h",
+    ],
+)
+
+host_test(
+    name = "switch_hid_fastpath_test",
+    srcs = ["switch_hid_fastpath_test.cpp"],
+    additional_compiler_inputs = ["//drivers/SwitchTouch:SwitchHIDFastPath.cpp"],
+    copts = [
+        "-DDEVELOPMENT=1",
+        "-DSWITCH_IPSW_KIND_21H461=1",
+        "-Wno-unused-parameter",
+    ],
+    deps = [
+        ":fastpath_headers",
+        ":fastpath_kernel",
+    ],
+)
+
+host_test(
+    name = "switch_hid_fastpath_24b119_test",
+    srcs = ["switch_hid_fastpath_test.cpp"],
+    additional_compiler_inputs = ["//drivers/SwitchTouch:SwitchHIDFastPath.cpp"],
+    copts = [
+        "-DDEVELOPMENT=1",
+        "-DSWITCH_IPSW_KIND_24B119=1",
+        "-Wno-unused-parameter",
+    ],
+    deps = [
+        ":fastpath_headers",
+        ":fastpath_kernel",
     ],
 )
