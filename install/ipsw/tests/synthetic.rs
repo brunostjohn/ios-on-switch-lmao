@@ -117,10 +117,7 @@ fn other_content_is_refused() {
 #[test]
 fn an_encrypted_member_is_refused() {
     let mut pin = member(b"", b"", false);
-    pin.aea = Some(Aea {
-        key: "base64:".into(),
-        raw_size: 0,
-    });
+    pin.aea = Some(Aea { raw_size: 0 });
     assert!(matches!(
         extract(&b""[..], &pin, &mut io::sink()),
         Err(Error::Encrypted(_))

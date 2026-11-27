@@ -7,10 +7,15 @@ mod pipeline;
 mod segment;
 #[cfg(test)]
 mod tests;
+mod wkms;
 
 pub use index::{Index, Segment};
 pub use key::key_value;
-pub use pipeline::{decrypt, decrypt_member};
+pub use pipeline::{decrypt, decrypt_member, decrypt_member_with_key_fetch};
+pub use wkms::{
+    AuthData, fetch_fcs_key_pem, parse_auth_fields, read_auth_data, unwrap_key, unwrap_member_key,
+    unwrap_member_key_with, validate_fcs_url,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -24,6 +29,12 @@ pub enum Error {
     Unsupported(String),
     #[error("malformed archive: {0}")]
     Malformed(String),
+    #[error("AEA auth data: {0}")]
+    AuthData(String),
+    #[error("fetching Apple decryption key from {url}: {reason}")]
+    KeyFetch { url: String, reason: String },
+    #[error("unwrapping Apple decryption key: {0}")]
+    KeyUnwrap(String),
     #[error("{0} fails its HMAC: a wrong key, or a damaged archive")]
     Authentication(String),
     #[error("segment {cluster}/{index}: {reason}")]

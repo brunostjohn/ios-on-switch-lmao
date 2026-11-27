@@ -10,7 +10,8 @@ use sha2::{Digest, Sha256};
 use switch_catalog::Member;
 
 use crate::index::Index;
-use crate::{Error, Result, key_value};
+use crate::wkms::{fetch_fcs_key_pem, unwrap_member_key_with};
+use crate::{Error, Result};
 
 const BATCH_BYTES: u64 = 32 << 20;
 
@@ -29,19 +30,36 @@ where
     run(archive, key, None, out, content_sha256, progress)
 }
 
-/// A member's archive decrypted with the key its catalog pins give, refused before any segment is read unless it
-/// decrypts to the pinned size, and at the end unless the output is the pinned content.
+/// A member's archive decrypted by unwrapping its WKMS symmetric key from Apple's key server, refused before any
+/// segment is read unless it decrypts to the pinned size, and at the end unless the output is the pinned content.
 pub fn decrypt_member<R, W, P>(archive: R, member: &Member, out: W, progress: P) -> Result<u64>
 where
     R: Read + Seek + Send,
     W: Write + Send,
     P: Fn(u64) + Sync,
 {
+    decrypt_member_with_key_fetch(archive, member, fetch_fcs_key_pem, out, progress)
+}
+
+/// Like [`decrypt_member`], using `fetch` to obtain the private key PEM from the archive's `fcs-key-url`.
+pub fn decrypt_member_with_key_fetch<R, W, P, F>(
+    mut archive: R,
+    member: &Member,
+    fetch: F,
+    out: W,
+    progress: P,
+) -> Result<u64>
+where
+    R: Read + Seek + Send,
+    W: Write + Send,
+    P: Fn(u64) + Sync,
+    F: FnMut(&str) -> Result<Vec<u8>>,
+{
     let aea = member
         .aea
         .as_ref()
         .ok_or_else(|| Error::NotEncrypted(member.member.clone()))?;
-    let key = key_value(&aea.key)?;
+    let key = unwrap_member_key_with(&mut archive, fetch)?;
     run(
         archive,
         &key,

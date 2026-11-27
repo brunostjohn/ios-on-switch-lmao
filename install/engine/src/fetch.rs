@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
@@ -222,6 +223,7 @@ pub fn prepare_members(
     fs::create_dir_all(&ipsw_dir).map_err(|e| EngineError::io_path(&ipsw_dir, e))?;
     fs::create_dir_all(&decoded_dir).map_err(|e| EngineError::io_path(&decoded_dir, e))?;
 
+    let mut fcs_pem_cache = BTreeMap::new();
     let os_container = prepare_disk_member(
         build,
         Role::Os,
@@ -229,6 +231,7 @@ pub fn prepare_members(
         local.ipsw_path.as_deref(),
         &ipsw_dir,
         &decoded_dir,
+        &mut fcs_pem_cache,
         progress,
     )?;
     let system_cryptex = prepare_disk_member(
@@ -238,6 +241,7 @@ pub fn prepare_members(
         local.ipsw_path.as_deref(),
         &ipsw_dir,
         &decoded_dir,
+        &mut fcs_pem_cache,
         progress,
     )?;
     let app_cryptex = prepare_disk_member(
@@ -247,6 +251,7 @@ pub fn prepare_members(
         local.ipsw_path.as_deref(),
         &ipsw_dir,
         &decoded_dir,
+        &mut fcs_pem_cache,
         progress,
     )?;
 
@@ -305,6 +310,7 @@ pub fn prepare_members(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn prepare_disk_member(
     build: &Build,
     role: Role,
@@ -312,6 +318,7 @@ fn prepare_disk_member(
     local_ipsw: Option<&Path>,
     ipsw_dir: &Path,
     decoded_dir: &Path,
+    fcs_pem_cache: &mut BTreeMap<String, Vec<u8>>,
     progress: &mut EngineProgress<'_>,
 ) -> Result<PathBuf> {
     progress.check_cancel()?;
@@ -355,7 +362,7 @@ fn prepare_disk_member(
     if !content_ready {
         progress.log(format!("Decoding {} ({})", role.name(), member.file_name()));
         let tmp = decoded_dir.join(format!("{}.content.tmp", role.name()));
-        decode_stored_to_file(&stored_path, member, &tmp, progress)?;
+        decode_stored_to_file(&stored_path, member, &tmp, fcs_pem_cache, progress)?;
         fs::rename(&tmp, &content_path).map_err(|e| EngineError::io_path(&content_path, e))?;
         save_stamp(&content_stamp, member.content_size(), &content_hex)?;
     }

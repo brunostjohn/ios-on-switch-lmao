@@ -1,5 +1,5 @@
-# switch_aea: an IPSW's Apple Encrypted Archive members (profile 1), decrypted with their catalog key and checked
-# against their catalog pins.
+# switch_aea: an IPSW's Apple Encrypted Archive members (profile 1), decrypted by unwrapping their WKMS key from
+# Apple's key server and checked against their catalog pins.
 #
 #   bazel test //install/aea:switch_aea_test                 archives /usr/bin/aea makes at test time (a Darwin worker)
 #   bazel test //install/aea:header_test                     manual: each archive's headers from Apple's URL against its
@@ -20,6 +20,7 @@ rust_library(
         "//install/catalog:switch_catalog",
         "@installer_crates//:aea-tools",
         "@installer_crates//:aes",
+        "@installer_crates//:aws-lc-rs",
         "@installer_crates//:base64",
         "@installer_crates//:ctr",
         "@installer_crates//:hex",
@@ -27,6 +28,9 @@ rust_library(
         "@installer_crates//:hmac",
         "@installer_crates//:lzfse_rust",
         "@installer_crates//:rayon",
+        "@installer_crates//:reqwest",
+        "@installer_crates//:serde",
+        "@installer_crates//:serde_json",
         "@installer_crates//:sha2",
         "@installer_crates//:thiserror",
     ],

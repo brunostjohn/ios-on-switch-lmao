@@ -30,7 +30,7 @@ fn member_pin(kind: &str, role: &str, key: &str, pin: &Value, member: &Member) {
         "sha256" => assert_eq!(member.sha256.to_string(), text(pin), "{at}"),
         "content_sha256" => assert_eq!(member.content_sha256.to_string(), text(pin), "{at}"),
         "manifest_digest" => assert_eq!(member.manifest_digest.to_string(), text(pin), "{at}"),
-        "aea_key" => assert_eq!(member.aea.as_ref().unwrap().key, text(pin), "{at}"),
+        "aea_key" => assert!(member.aea.is_some(), "{at}: encrypted member must set aea"),
         "aea_raw_size" => assert_eq!(member.aea.as_ref().unwrap().raw_size, number(pin), "{at}"),
         "container" => assert_eq!(member.container.as_ref().unwrap().format, text(pin), "{at}"),
         "container_size" => assert_eq!(member.container.as_ref().unwrap().size, number(pin), "{at}"),
@@ -124,9 +124,24 @@ fn record_pins(kind: &str, pins: &Value, staged: &Value, record: &Record) -> usi
 
 #[test]
 fn every_pin_is_in_its_record() {
-    let catalog = Catalog::parse(&serde_json::to_vec(&json("SWITCH_RECORDS")).unwrap()).unwrap();
+    let raw_records = json("SWITCH_RECORDS");
+    let raw_records_bytes = serde_json::to_vec(&raw_records).unwrap();
+    let raw_records_text = std::str::from_utf8(&raw_records_bytes).unwrap();
+    let catalog = Catalog::parse(&raw_records_bytes).unwrap();
     let ipsws = json("SWITCH_IPSWS");
     let staged = json("SWITCH_STAGED");
+    for (_, pins) in ipsws.as_object().unwrap() {
+        if let Some(members) = pins.get("members").and_then(Value::as_object) {
+            for (_, member_pins) in members {
+                if let Some(key) = member_pins.get("aea_key").and_then(Value::as_str) {
+                    assert!(
+                        !raw_records_text.contains(key),
+                        "records.json must never include pinned AEA decryption keys"
+                    );
+                }
+            }
+        }
+    }
     let pinned: Vec<&String> = ipsws
         .as_object()
         .unwrap()

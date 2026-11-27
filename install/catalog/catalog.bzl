@@ -100,7 +100,7 @@ def _member(kind, role, pin, kernelcache_sha256):
     pin = _merged(kind, role, pin)
     member = {key: pin[key] for key in _COPIED}
     if pin.get("aea_key"):
-        member["aea"] = {"key": pin["aea_key"], "raw_size": pin["aea_raw_size"]}
+        member["aea"] = {"raw_size": pin["aea_raw_size"]}
     if role in _DISK_IMAGES:
         if pin["container"] == "raw":
             size = member["aea"]["raw_size"] if "aea" in member else pin["size"]

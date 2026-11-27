@@ -67,11 +67,11 @@ pub struct Member {
     pub im4p: Option<Im4p>,
 }
 
-/// An Apple Encrypted Archive member's key (`base64:` or `hex:`) and decrypted size.
+/// An Apple Encrypted Archive member's decrypted size; its symmetric key is unwrapped at install time from Apple's
+/// WKMS key server using the archive's auth data.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Aea {
-    pub key: String,
     pub raw_size: u64,
 }
 

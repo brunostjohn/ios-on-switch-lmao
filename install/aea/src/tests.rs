@@ -4,12 +4,30 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use aws_lc_rs::agreement::{ECDH_P256, PrivateKey};
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
-use crate::{Error, Index, Result, decrypt, decrypt_member};
+use crate::wkms::hpke_seal_for_test;
+use crate::{
+    AuthData, Error, Index, Result, decrypt, decrypt_member_with_key_fetch, parse_auth_fields, unwrap_key,
+    validate_fcs_url,
+};
 
 const KEY: [u8; 32] = [0x5a; 32];
+const TEST_FCS_URL: &str = "https://wkms-public.apple.com/fcs-keys/test-vector";
+// Standard RFC 6979 P-256 test private scalar (non-secret).
+const TEST_PKCS8_PEM: &[u8] = b"-----BEGIN PRIVATE KEY-----\n\
+MEECAQAwEwYHKoZIzj0CAQYIKoZIzj0DAQcEJzAlAgEBBCDJr6nYRbp1FmtcIVdn\n\
+sdaTTlDD2zbomxJ7imIrEg9nIQ==\n\
+-----END PRIVATE KEY-----\n";
+const TEST_SEC1_PEM: &[u8] = b"-----BEGIN EC PRIVATE KEY-----\n\
+MDECAQEEIMmvqdhFunUWa1whV2ex1pNOUMPbNuibEnuKYisSD2choAoGCCqGSM49AwEH\n\
+-----END EC PRIVATE KEY-----\n";
+const TEST_PKCS8_DER_B64: &str =
+    "MEECAQAwEwYHKoZIzj0CAQYIKoZIzj0DAQcEJzAlAgEBBCDJr6nYRbp1FmtcIVdnsdaTTlDD2zbomxJ7imIrEg9nIQ==";
 const RUN: usize = 16 << 10;
 // Nine 1 MiB segments and a 1,792-byte compressible tail, which LZFSE writes as an LZVN (bvxn) block.
 const SIZE: usize = (9 << 20) + 1792;
@@ -308,30 +326,120 @@ fn member(case: &Case, raw_size: u64) -> switch_catalog::Member {
         content_sha256: switch_catalog::Digest(sha256(&case.input)),
         deflated: false,
         manifest_digest: switch_catalog::Digest([0; 48]),
-        aea: Some(switch_catalog::Aea {
-            key: format!("hex:{}", hex::encode(KEY)),
-            raw_size,
-        }),
+        aea: Some(switch_catalog::Aea { raw_size }),
         container: None,
         im4p: None,
     }
 }
 
+fn test_public_key_bytes() -> Vec<u8> {
+    let der = STANDARD.decode(TEST_PKCS8_DER_B64).unwrap();
+    let priv_key = PrivateKey::from_private_key_der(&ECDH_P256, &der).unwrap();
+    priv_key.compute_public_key().unwrap().as_ref().to_vec()
+}
+
+fn encode_auth_field(key: &str, value: &[u8]) -> Vec<u8> {
+    let total = 4 + key.len() + 1 + value.len();
+    let mut out = Vec::with_capacity(total);
+    out.extend_from_slice(&(total as u32).to_le_bytes());
+    out.extend_from_slice(key.as_bytes());
+    out.push(0);
+    out.extend_from_slice(value);
+    out
+}
+
+fn fcs_response_json(key: &[u8; 32]) -> Vec<u8> {
+    let (enc, wrapped) = hpke_seal_for_test(&test_public_key_bytes(), key).unwrap();
+    serde_json::json!({
+        "enc-request": STANDARD.encode(enc),
+        "wrapped-key": STANDARD.encode(wrapped),
+    })
+    .to_string()
+    .into_bytes()
+}
+
+fn encrypt_with_wkms(input: Vec<u8>) -> Case {
+    let response = fcs_response_json(&KEY);
+    let url_hex = format!("hex:{}", hex::encode(TEST_FCS_URL.as_bytes()));
+    let resp_hex = format!("hex:{}", hex::encode(&response));
+    encrypt(
+        input,
+        &[
+            "-auth-data-key",
+            "com.apple.wkms.fcs-key-url",
+            "-auth-data-value",
+            &url_hex,
+            "-auth-data-key",
+            "com.apple.wkms.fcs-response",
+            "-auth-data-value",
+            &resp_hex,
+        ],
+    )
+}
+
+#[test]
+fn wkms_hpke_unwraps_pkcs8_and_sec1_and_refuses_tampering() {
+    let response = fcs_response_json(&KEY);
+    let mut blob = encode_auth_field("com.apple.wkms.fcs-key-url", TEST_FCS_URL.as_bytes());
+    blob.extend_from_slice(&encode_auth_field("com.apple.wkms.fcs-response", &response));
+
+    let auth = parse_auth_fields(&blob).unwrap();
+    assert_eq!(auth.fcs_key_url, TEST_FCS_URL);
+    assert_eq!(unwrap_key(&auth, TEST_PKCS8_PEM).unwrap(), KEY);
+    assert_eq!(unwrap_key(&auth, TEST_SEC1_PEM).unwrap(), KEY);
+
+    let mut bad_auth = AuthData { ..auth };
+    bad_auth.wrapped_key[0] ^= 1;
+    assert!(matches!(
+        unwrap_key(&bad_auth, TEST_PKCS8_PEM),
+        Err(Error::KeyUnwrap(_))
+    ));
+
+    let truncated = [64u8, 0, 0, 0, b'k', 0, b'v'];
+    assert!(matches!(parse_auth_fields(&truncated), Err(Error::AuthData(_))));
+
+    assert!(validate_fcs_url(TEST_FCS_URL).is_ok());
+    for bad_url in [
+        "http://wkms-public.apple.com/fcs-keys/x",
+        "https://evilapple.com/fcs-keys/x",
+        "https://user@wkms-public.apple.com/fcs-keys/x",
+        "file:///etc/passwd",
+    ] {
+        assert!(
+            matches!(validate_fcs_url(bad_url), Err(Error::KeyFetch { .. })),
+            "{bad_url}"
+        );
+    }
+}
+
 #[test]
 fn a_member_decrypts_with_its_catalog_pins() {
-    let case = encrypt(mixed(SIZE), &[]);
+    let case = encrypt_with_wkms(mixed(SIZE));
     let mut out = Vec::new();
     let pins = member(&case, SIZE as u64);
+    let mut fetched = Vec::new();
     assert_eq!(
-        decrypt_member(File::open(&case.archive).unwrap(), &pins, &mut out, |_| ()).unwrap(),
+        decrypt_member_with_key_fetch(
+            File::open(&case.archive).unwrap(),
+            &pins,
+            |url| {
+                fetched.push(url.to_owned());
+                Ok(TEST_PKCS8_PEM.to_vec())
+            },
+            &mut out,
+            |_| (),
+        )
+        .unwrap(),
         SIZE as u64
     );
+    assert_eq!(fetched, vec![TEST_FCS_URL]);
     assert!(out == case.input);
 
     let mut written = 0;
-    let error = decrypt_member(
+    let error = decrypt_member_with_key_fetch(
         File::open(&case.archive).unwrap(),
         &member(&case, SIZE as u64 + 1),
+        |_| Ok(TEST_PKCS8_PEM.to_vec()),
         Counting(&mut written),
         |_| (),
     )
@@ -341,7 +449,14 @@ fn a_member_decrypts_with_its_catalog_pins() {
 
     let mut plain = pins.clone();
     plain.aea = None;
-    let error = decrypt_member(File::open(&case.archive).unwrap(), &plain, io::sink(), |_| ()).unwrap_err();
+    let error = decrypt_member_with_key_fetch(
+        File::open(&case.archive).unwrap(),
+        &plain,
+        |_| Ok(TEST_PKCS8_PEM.to_vec()),
+        io::sink(),
+        |_| (),
+    )
+    .unwrap_err();
     assert!(matches!(error, Error::NotEncrypted(_)), "{error}");
 }
 

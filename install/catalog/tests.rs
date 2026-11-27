@@ -77,6 +77,11 @@ fn an_unknown_field_refuses_the_catalog() {
     let mut value = catalog(vec![record("1A1")]);
     value["signature"] = json!("x");
     assert!(matches!(parse(&value), Err(Error::Json(_))));
+
+    let mut value = catalog(vec![record("1A1")]);
+    value["builds"][0]["members"]["os"]["aea"] = json!({"raw_size": 3, "key": "base64:AAAA"});
+    let error = parse(&value).unwrap_err();
+    assert!(matches!(&error, Error::Json(m) if m.contains("key")), "{error}");
 }
 
 #[test]

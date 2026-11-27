@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Each encrypted member's headers, read from Apple's URL with its catalog key: the archive decrypts to the size the
-//! catalog pins.
+//! Each encrypted member's headers, read from Apple's URL and unwrapped via Apple's WKMS key server: the archive
+//! decrypts to the size the catalog pins.
 
 use switch_catalog::Catalog;
 use switch_fetch::{HttpFile, Url};
@@ -16,7 +16,8 @@ fn every_archive_decrypts_to_its_pinned_size() {
             let Some(aea) = &member.aea else { continue };
             let client = reqwest::blocking::Client::new();
             let mut file = HttpFile::new(client, url.clone(), member.offset, member.stored_size, 64 << 10);
-            let key = switch_aea::key_value(&aea.key).unwrap();
+            let key =
+                switch_aea::unwrap_member_key(&mut file).unwrap_or_else(|e| panic!("{} {role} key: {e}", record.build));
             let index =
                 switch_aea::Index::read(&mut file, &key).unwrap_or_else(|e| panic!("{} {role}: {e}", record.build));
             assert_eq!(index.raw_size(), aea.raw_size, "{} {role}", record.build);

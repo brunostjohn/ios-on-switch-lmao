@@ -134,8 +134,9 @@ impl Index {
             let entries = aes_aead_decrypt(&chek, entries, macs, &mac)
                 .map_err(|_| Error::Authentication(format!("cluster {cluster}'s header")))?;
             mac.copy_from_slice(&macs[..MAC_LEN]);
-            let segment_macs = macs[MAC_LEN..].chunks_exact(MAC_LEN);
-            for (index, (entry, segment_mac)) in entries.chunks_exact(ENTRY_LEN).zip(segment_macs).enumerate() {
+            let (segment_macs, _) = macs[MAC_LEN..].as_chunks::<MAC_LEN>();
+            let (entry_chunks, _) = entries.as_chunks::<ENTRY_LEN>();
+            for (index, (entry, &segment_mac)) in entry_chunks.iter().zip(segment_macs.iter()).enumerate() {
                 let raw_len = u32::from_le_bytes(entry[0..4].try_into().unwrap());
                 let stored_len = u32::from_le_bytes(entry[4..8].try_into().unwrap());
                 let expected = (root.raw_size - raw_offset).min(root.segment_size.into()) as u32;
@@ -163,7 +164,7 @@ impl Index {
                     raw_offset,
                     raw_len,
                     checksum: entry[8..].try_into().unwrap(),
-                    mac: segment_mac.try_into().unwrap(),
+                    mac: segment_mac,
                 });
                 offset += u64::from(stored_len);
                 raw_offset += u64::from(raw_len);

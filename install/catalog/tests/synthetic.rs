@@ -39,10 +39,16 @@ fn ios18(template: &Value) -> Value {
     record["ipsw"] =
         json!({"url": "https://updates.cdn-apple.com/2025/iPad_18.7.2_22H124_Restore.ipsw", "size": 9_876_543_210u64});
     record["derived"]["kernel_virt_base"] = json!("0xfffffff007104000");
-    record["members"]["os"]["aea"]["key"] = json!(format!("base64:{}", "A".repeat(43) + "="));
+    record["members"]["os"]["aea"] = json!({"raw_size": 9_000_000_000u64});
     record["members"]["os"]["container"]["format"] = json!("udif");
     record["volumes"]["os_volume_uuid"] = json!("00000000-1111-2222-3333-444444444444");
-    record["assets"] = json!({"boot": {"name": format!("boot-{BUILD}.tar"), "size": 1, "sha256": "ab".repeat(32)}});
+    record["assets"] = json!({
+        "boot": {"name": format!("boot-{BUILD}.tar"), "size": 1, "sha256": "ab".repeat(32)},
+        "overlay": {"name": format!("overlay-{BUILD}.tar"), "size": 2, "sha256": "ac".repeat(32)},
+        "bootstrap": {"name": format!("bootstrap-{BUILD}.tar"), "size": 3, "sha256": "ad".repeat(32)},
+        "gpu": {"name": format!("gpu-{BUILD}.tar"), "size": 4, "sha256": "ae".repeat(32)},
+        "seed": {"name": format!("seed-{BUILD}.tar"), "size": 5, "sha256": "af".repeat(32)},
+    });
     record
 }
 
@@ -75,6 +81,10 @@ fn a_new_build_with_known_steps_plans() {
         assert_ne!(old.offset, new.offset, "{role:?}");
     }
     assert_eq!(build.asset("boot").unwrap().name, format!("boot-{BUILD}.tar"));
+    for role in ["boot", "overlay", "bootstrap", "gpu", "seed"] {
+        assert!(build.asset(role).is_ok(), "missing {role} asset");
+    }
+    assert_eq!(build.member(Role::Os).aea.as_ref().unwrap().raw_size, 9_000_000_000);
     for record in &catalog.builds {
         println!("{}: {:?}", record.build, record.plan().unwrap().steps);
     }

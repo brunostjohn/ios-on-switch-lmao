@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -103,13 +104,28 @@ pub fn decode_stored_to_file(
     stored_path: &Path,
     member: &Member,
     out_path: &Path,
+    fcs_pem_cache: &mut BTreeMap<String, Vec<u8>>,
     progress: &mut EngineProgress<'_>,
 ) -> Result<()> {
     if member.aea.is_some() {
         let archive_file = File::open(stored_path).map_err(|e| EngineError::io_path(stored_path, e))?;
         let out_file = File::create(out_path).map_err(|e| EngineError::io_path(out_path, e))?;
         let writer = BufWriter::with_capacity(4 << 20, out_file);
-        switch_aea::decrypt_member(archive_file, member, writer, |_done| {})?;
+        switch_aea::decrypt_member_with_key_fetch(
+            archive_file,
+            member,
+            |url| {
+                if let Some(cached) = fcs_pem_cache.get(url) {
+                    return Ok(cached.clone());
+                }
+                progress.log(format!("Fetching Apple AEA key from {url}"));
+                let pem = switch_aea::fetch_fcs_key_pem(url)?;
+                fcs_pem_cache.insert(url.to_owned(), pem.clone());
+                Ok(pem)
+            },
+            writer,
+            |_done| {},
+        )?;
         progress.step_progress(
             "prepare",
             member.content_size(),
