@@ -86,8 +86,8 @@ struct Channel {
 };
 
 volatile uint8_t *gChannelHost, *gChannelSync;
-IOLock *gChannelLock;     // lifecycle: suspend, resume, probe channels, stats (always taken before any Channel::lock)
-IOSimpleLock *gStopLock;  // leaf spinlock for shared SYNC_CMDPROC_STOP RMW
+IOLock *gChannelLock;  // lifecycle: suspend, resume, probe channels, stats (always taken before any Channel::lock)
+IOLock *gStopLock;     // leaf lock for shared SYNC_CMDPROC_STOP RMW
 Channel gChannels[TEGRA_HOST1X_CHANNELS];
 bool gRunning;
 SwitchHost1xDisplayStream *gDisplayStream;
@@ -119,9 +119,9 @@ void syncSet(uint32_t offset, uint32_t value)
 
 void syncStopModify(uint32_t setBits, uint32_t clearBits)
 {
-    const IOInterruptState ints = IOSimpleLockLockDisableInterrupt(gStopLock);
+    IOLockLock(gStopLock);
     syncSet(SYNC_CMDPROC_STOP, (syncRead(SYNC_CMDPROC_STOP) & ~clearBits) | setBits);
-    IOSimpleLockUnlockEnableInterrupt(gStopLock, ints);
+    IOLockUnlock(gStopLock);
 }
 
 uint32_t *pushRing(Channel &c)
@@ -382,7 +382,7 @@ void unlockAllChannels(const bool locked[TEGRA_HOST1X_CHANNELS])
 
 bool switch_host1x_channels_alloc(volatile uint8_t *host, volatile uint8_t *sync, IOLock *lock)
 {
-    if (!gStopLock && !(gStopLock = IOSimpleLockAlloc()))
+    if (!gStopLock && !(gStopLock = IOLockAlloc()))
         return false;
     for (uint32_t n = 0; n <= TEGRA_HOST1X_CHANNEL_DISPLAY; n++)
         if (!makeChannel(gChannels[n]))

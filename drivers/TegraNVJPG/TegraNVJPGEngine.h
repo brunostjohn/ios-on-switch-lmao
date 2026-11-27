@@ -20,14 +20,14 @@ extern const SwitchEnginePower kPower;
 extern volatile uint8_t *gJpg;
 extern char gLine[256];
 extern SwitchFalconInterrupt gErrors;
-extern IOLock *gJobLock, *gStateLock, *gFlightLock;
+extern IOLock *gJobLock, *gFlightLock;
 extern SwitchEngineGate<SwitchEngineGateKernel> gGate;
 extern uint32_t gSyncpt, gNext, gPicture, gPowerOns;
 extern uint64_t gPoweredAtUs;
-extern bool gUp, gWedged, gSuspended;
+extern bool gUp, gWedged;
 extern TegraNVJPGBuffer gSetup, gStatus;
 #if TEGRA_NVJPG_STATS
-extern uint64_t gWaitsUnlocked, gStateWaitMaxUs;
+extern uint64_t gWaitsUnlocked;
 #endif
 #if TEGRA_NVJPG_PROBES
 extern uint64_t gCancellations;
@@ -37,7 +37,6 @@ bool powerUp(bool *wasOn);
 bool bootFalcon();
 int answer(uint32_t id, uint32_t from, const char **stage);
 void engineOff();
-void lockState();
-// The falcon's error line (SwitchFalconInterrupt), on its work loop (TegraNVJPGFlight.cpp)
+// The falcon's error line (SwitchFalconInterrupt), on its thread call (TegraNVJPGFlight.cpp)
 void falconFailed(const switch_falcon_error &);
 }  // namespace tegra_nvjpg_engine

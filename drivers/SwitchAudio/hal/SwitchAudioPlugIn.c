@@ -549,15 +549,15 @@ static HRESULT QueryInterface(void *self, REFIID uuid, LPVOID *out);
 static ULONG AddRef(void *self)
 {
     (void)self;
-    return atomic_fetch_add(&gRefs, 1) + 1;
+    return atomic_fetch_add_explicit(&gRefs, 1, memory_order_relaxed) + 1;
 }
 
 static ULONG Release(void *self)
 {
     (void)self;
-    UInt32 r = atomic_load(&gRefs);
+    UInt32 r = atomic_load_explicit(&gRefs, memory_order_relaxed);
     if (r)
-        r = atomic_fetch_sub(&gRefs, 1) - 1;
+        r = atomic_fetch_sub_explicit(&gRefs, 1, memory_order_acq_rel) - 1;
     return r;
 }
 
@@ -1393,7 +1393,8 @@ static OSStatus StartIO(AudioServerPlugInDriverRef d, AudioObjectID o, UInt32 cl
             startedNew = true;
             if (first) {
                 atomic_store_explicit(&gZeroOrigin, nowFrames(), memory_order_release);
-                atomic_fetch_add_explicit(&gZeroSeed, 1, memory_order_acq_rel);
+                atomic_store_explicit(&gZeroSeed, atomic_load_explicit(&gZeroSeed, memory_order_relaxed) + 1,
+                                      memory_order_release);
             }
             os_log(OS_LOG_DEFAULT, "SwitchAudio: %{public}s IO started (volume control %.1f dB)", what,
                    (double)toDb(atomic_load_explicit(&gVolume, memory_order_relaxed)));
@@ -1486,7 +1487,8 @@ static OSStatus GetZeroTimeStamp(AudioServerPlugInDriverRef d, AudioObjectID o, 
         *seed = atomic_load_explicit(&gMicSeed, memory_order_acquire);
         return 0;
     }
-    const SwitchAudioControl *ctrl = __atomic_load_n(&gControl, __ATOMIC_ACQUIRE);
+    // gControl is write-once before StartIO; RT callbacks need no acquire barrier.
+    const SwitchAudioControl *ctrl = gControl;
     const Float64 tpf = atomic_load_explicit(&gTicksPerFrame, memory_order_acquire);
     if (!ctrl || tpf <= 0.0)
         return kAudioHardwareNotRunningError;
@@ -1548,7 +1550,7 @@ static OSStatus DoIOOperation(AudioServerPlugInDriverRef d, AudioObjectID o, Aud
         memset(main, 0, (size_t)frames * channelsOf(stream) * sizeof(Float32));  // silent inputs (top of file)
         return 0;
     }
-    SwitchAudioControl *ctrl = __atomic_load_n(&gControl, __ATOMIC_ACQUIRE);
+    SwitchAudioControl *ctrl = gControl;
     if (!ctrl)
         return 0;
     if (op == kAudioServerPlugInIOOperationWriteMix && (stream == kSpeakerOut || stream == kCodecOut)) {

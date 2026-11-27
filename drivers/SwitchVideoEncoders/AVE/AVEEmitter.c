@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // See AVEEmitter.h.
 #include "AVEEmitter.h"
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 #include <mach/mach_time.h>
+#endif
 #include <os/log.h>
 #include <pthread.h>
 #include <stdlib.h>
@@ -12,6 +14,7 @@ extern os_log_t gLog;
 
 enum {
     kCompletedRing = 16,
+    kTilePool = 16,
 };
 
 typedef struct {
@@ -51,10 +54,38 @@ struct AVEEmitter {
     AVETileStats stats;
     void *statsContext;
     PendingTile *head, *tail;
+    PendingTile tilePool[kTilePool];
+    PendingTile *freeTiles;
     uint64_t pushed, emittedThrough;
     pthread_t drainer;
     uint32_t draining;
 };
+
+static bool isPooledTile(const AVEEmitter *e, const PendingTile *t)
+{
+    return t >= &e->tilePool[0] && t < &e->tilePool[kTilePool];
+}
+
+static PendingTile *allocTileLocked(AVEEmitter *e)
+{
+    PendingTile *t = e->freeTiles;
+    if (t) {
+        e->freeTiles = t->next;
+        memset(t, 0, sizeof(*t));
+        return t;
+    }
+    return calloc(1, sizeof(*t));
+}
+
+static void freeTileLocked(AVEEmitter *e, PendingTile *t)
+{
+    if (isPooledTile(e, t)) {
+        t->next = e->freeTiles;
+        e->freeTiles = t;
+        return;
+    }
+    free(t);
+}
 
 static CompletedJob *findCompletedLocked(AVEEmitter *e, uint32_t fence)
 {
@@ -84,7 +115,8 @@ static void dropUnlocked(AVEEmitter *e)
         e->head = t->next;
         if (t->source)
             CVPixelBufferRelease(t->source);
-        free(t);
+        if (!isPooledTile(e, t))
+            free(t);
     }
     free(e->avcc);
     if (e->format)
@@ -130,11 +162,11 @@ static OSStatus buildTileSample(const AVEEmitter *e, const PendingTile *t, size_
     return status;
 }
 
-static void drainTiles(AVEEmitter *e)
+// Called with e->lock held; returns with e->lock released.
+static void drainTilesLocked(AVEEmitter *e)
 {
     const pthread_t self = pthread_self();
-    pthread_mutex_lock(&e->lock);
-    if (e->draining && !pthread_equal(e->drainer, self)) {
+    if ((e->draining && !pthread_equal(e->drainer, self)) || !e->head || !e->head->done) {
         pthread_mutex_unlock(&e->lock);
         return;
     }
@@ -154,9 +186,14 @@ static void drainTiles(AVEEmitter *e)
         CMSampleBufferRef sample = NULL;
         size_t size = 0;
         const OSStatus status = session ? buildTileSample(e, t, &size, &sample) : t->immediateError;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
         const uint64_t finished = mach_absolute_time();
         if (stats && t->slotIndex >= 0)
             stats(statsContext, status, size, t->copied - t->began, finished - t->copied);
+#else
+        if (stats && t->slotIndex >= 0)
+            stats(statsContext, status, size, 0, 0);
+#endif
         if (session)
             VTEncoderSessionEmitEncodedTile(session, t->tile, status, status ? kVTEncodeInfo_FrameDropped : 0, sample);
         if (sample)
@@ -170,7 +207,7 @@ static void drainTiles(AVEEmitter *e)
         if (t->sequence > e->emittedThrough)
             e->emittedThrough = t->sequence;
         pthread_cond_broadcast(&e->cond);
-        free(t);
+        freeTileLocked(e, t);
     }
     e->draining--;
     pthread_cond_broadcast(&e->cond);
@@ -191,6 +228,10 @@ AVEEmitter *ave_emitter_create(void)
     pthread_mutex_init(&e->lock, NULL);
     pthread_cond_init(&e->cond, NULL);
     e->references = 1;
+    for (uint32_t i = 0; i < kTilePool; i++) {
+        e->tilePool[i].next = e->freeTiles;
+        e->freeTiles = &e->tilePool[i];
+    }
     return e;
 }
 
@@ -239,9 +280,11 @@ void ave_emitter_completed(void *emitter, uint32_t fence, int result, uint32_t e
     if (!matchedTile)
         recordCompletedLocked(e, fence, status);
     pthread_cond_broadcast(&e->cond);
+    if (matchedTile) {
+        drainTilesLocked(e);
+        return;
+    }
     pthread_mutex_unlock(&e->lock);
-    if (matchedTile)
-        drainTiles(e);
 }
 
 bool ave_emitter_await(AVEEmitter *e, uint32_t fence, AVEJobStatus *out)
@@ -323,10 +366,14 @@ void ave_emitter_release_tile_slot(AVEEmitter *e, int slotIndex)
 void ave_emitter_push_tile(AVEEmitter *e, VTEncoderTile tile, CVPixelBufferRef source, int slotIndex, uint32_t fence,
                            uint64_t began, uint64_t copied, OSStatus immediateError)
 {
-    PendingTile *t = calloc(1, sizeof(*t));
+    pthread_mutex_lock(&e->lock);
+    PendingTile *t = allocTileLocked(e);
     if (!t) {
-        if (slotIndex >= 0)
-            ave_emitter_release_tile_slot(e, slotIndex);
+        if (slotIndex >= 0 && (uint32_t)slotIndex < e->slotCount) {
+            e->slotBusy[slotIndex] = false;
+            pthread_cond_broadcast(&e->cond);
+        }
+        pthread_mutex_unlock(&e->lock);
         if (source)
             CVPixelBufferRelease(source);
         return;
@@ -339,8 +386,6 @@ void ave_emitter_push_tile(AVEEmitter *e, VTEncoderTile tile, CVPixelBufferRef s
     t->slotIndex = slotIndex;
     t->immediateError = immediateError;
     t->done = slotIndex < 0;
-
-    pthread_mutex_lock(&e->lock);
     t->sequence = ++e->pushed;
     if (!t->done) {
         CompletedJob *early = findCompletedLocked(e, fence);
@@ -355,10 +400,11 @@ void ave_emitter_push_tile(AVEEmitter *e, VTEncoderTile tile, CVPixelBufferRef s
     else
         e->head = t;
     e->tail = t;
-    const bool ready = e->head->done;
+    if (e->head->done) {
+        drainTilesLocked(e);
+        return;
+    }
     pthread_mutex_unlock(&e->lock);
-    if (ready)
-        drainTiles(e);
 }
 
 void ave_emitter_flush_tiles(AVEEmitter *e)
@@ -370,8 +416,7 @@ void ave_emitter_flush_tiles(AVEEmitter *e)
     const uint64_t target = e->pushed;
     while (!e->closed && e->emittedThrough < target) {
         if (e->head && e->head->done && (!e->draining || pthread_equal(e->drainer, self))) {
-            pthread_mutex_unlock(&e->lock);
-            drainTiles(e);
+            drainTilesLocked(e);
             pthread_mutex_lock(&e->lock);
             continue;
         }

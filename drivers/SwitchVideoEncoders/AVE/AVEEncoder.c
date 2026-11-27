@@ -36,7 +36,9 @@
 // process, a property) are kits/SwitchRefusal's, category AVE: one error line per process and reason.
 #include <CoreFoundation/CoreFoundation.h>
 #include <dispatch/dispatch.h>
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 #include <mach/mach_time.h>
+#endif
 #include <os/log.h>
 #include <pthread.h>
 #include <stdlib.h>
@@ -66,6 +68,7 @@ static Encoder *storage(CMBaseObjectRef object)
     return CMBaseObjectGetDerivedStorage(object);
 }
 
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 static double ticksToMs(uint64_t ticks)
 {
     static mach_timebase_info_data_t base;
@@ -73,6 +76,7 @@ static double ticksToMs(uint64_t ticks)
         mach_timebase_info(&base);
     return (double)ticks * base.numer / base.denom / 1e6;
 }
+#endif
 
 static void replace(CFTypeRef *slot, CFTypeRef value)
 {
@@ -183,8 +187,13 @@ void ave_tile_record_stats(void *context, OSStatus status, size_t bytes, uint64_
     if (status) {
         e->errors++;
     } else {
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
         e->copyTicks += copyTicks;
         e->encodeTicks += encodeTicks;
+#else
+        (void)copyTicks;
+        (void)encodeTicks;
+#endif
         e->frames++;
         e->keyFrames++;
         e->tiles++;
@@ -465,7 +474,9 @@ static OSStatus encodePicture(Encoder *e, VTVideoEncoderFrame frame, CVPixelBuff
 #endif
     for (int attempt = 0; attempt < 2; attempt++) {
         const bool key = plan ? plan->picture.type == H264ENC_IDR : ave_wants_key(e, pts, options, e->sinceKey);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
         const uint64_t began = mach_absolute_time();
+#endif
         if (key && !plan) {
             e->frameNum = 0;
             e->pocCount = 0;
@@ -484,7 +495,7 @@ static OSStatus encodePicture(Encoder *e, VTVideoEncoderFrame frame, CVPixelBuff
         const bool allowTemporal = e->allowTemporal;
         const uint32_t pocCount = e->pocCount;
 
-        TegraNVENCSubmit *submit = malloc(sizeof(*submit));
+        TegraNVENCSubmit *submit = nvenc_submit_buffer(e->client);
         if (!submit)
             return kVTAllocationFailedErr;
         if (hevc) {
@@ -500,13 +511,17 @@ static OSStatus encodePicture(Encoder *e, VTVideoEncoderFrame frame, CVPixelBuff
         pthread_mutex_unlock(&e->lock);
         bool inputRefused = false;
         const bool putOk = ave_input_put_buffer(e, image, &whole, handles.input, e->inputVA, submit, &inputRefused);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
         uint64_t copied = began;
+#endif
         int submitted = -1;
         uint32_t fence = 0, route = TEGRA_NVENC_INPUT_CPU;
         AVEJobStatus job = {0};
         bool waitedOk = false;
         if (putOk) {
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
             copied = mach_absolute_time();
+#endif
             // A job that ends without writing its record must not leave the previous picture's record behind.
             memset(e->auxVA, 0, sizeof(nvenc_pic_stat_s));
             submit->clean[submit->clean_count++] = (TegraNVENCRange){handles.aux, 0, sizeof(nvenc_pic_stat_s), 0};
@@ -527,14 +542,15 @@ static OSStatus encodePicture(Encoder *e, VTVideoEncoderFrame frame, CVPixelBuff
                 sampleStatus =
                     buildSample(e, size, &picture, allowTemporal, pts, duration, plan ? plan->dts : pts, &sample);
         }
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
         const uint64_t finished = mach_absolute_time();
+#endif
 
         pthread_mutex_lock(&e->lock);
         if (inputRefused)
             e->inputRefused++;
         if (putOk)
             ave_input_record_route(e, submit, submitted, route);
-        free(submit);
 
         if (!putOk) {
             e->errors++;
@@ -567,8 +583,10 @@ static OSStatus encodePicture(Encoder *e, VTVideoEncoderFrame frame, CVPixelBuff
             }
             continue;  // retry the same picture as an IDR
         }
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
         e->encodeTicks += finished - copied;
         e->copyTicks += copied - began;
+#endif
         if (!size) {
             e->errors++;
             e->keyPending = true;
@@ -943,6 +961,7 @@ static void finalize(CMBaseObjectRef ref)
     ave_emitter_destroy(e->emitter);
     e->emitter = NULL;
     if (e->frames)
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
         os_log(
             gLog,
             "AVE: session %ux%u in %{public}s ended: %u pictures on NVENC (%u key), %u failed, %llu bytes, inputs "
@@ -951,6 +970,14 @@ static void finalize(CMBaseObjectRef ref)
             e->config.width, e->config.height, getprogname(), e->frames, e->keyFrames, e->errors,
             (unsigned long long)e->bytes, e->inputDirect, e->inputVIC, e->inputBounced, e->inputCopies, e->inputRefused,
             ticksToMs(e->copyTicks) / e->frames, ticksToMs(e->encodeTicks) / e->frames);
+#else
+        os_log(gLog,
+               "AVE: session %ux%u in %{public}s ended: %u pictures on NVENC (%u key), %u failed, %llu bytes, inputs "
+               "%u read in place, %u by VIC (%u through the copy engine), %u copied, %u VIC could not take",
+               e->config.width, e->config.height, getprogname(), e->frames, e->keyFrames, e->errors,
+               (unsigned long long)e->bytes, e->inputDirect, e->inputVIC, e->inputBounced, e->inputCopies,
+               e->inputRefused);
+#endif
     ave_reorder_release(e);
     if (e->client) {
         releaseBuffers(e);

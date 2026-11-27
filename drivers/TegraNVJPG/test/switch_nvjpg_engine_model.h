@@ -46,8 +46,6 @@ struct Engine {
     bool stallDecodes = false, deadAfterReset = false;
     bool scrubNeverEnds = false;  // the falcon's IMEM/DMEM scrubbing never ends: no image loads, no proof is sent
     int boots = 0, partitionPowerOns = 0, teardowns = 0, restarts = 0;
-    // a job's host1x waits and fence armings taken with gStateLock held; the power lock taken inside gStateLock
-    int waitsUnderStateLock = 0, powerUnderStateLock = 0;
     uint32_t syncpt = 369427729, lastBoundUs = 0;
     uint32_t fenceBoundUs = 0;  // the last job fence's bound
     std::vector<std::vector<uint32_t>> streams;
@@ -132,7 +130,6 @@ uint32_t tegra_host1x_syncpt_read(uint32_t)
 
 int tegra_host1x_syncpt_wait(uint32_t, uint32_t threshold, uint32_t boundUs)
 {
-    gEngine.waitsUnderStateLock += gStateLock && gStateLock->locked;
     gEngine.lastBoundUs = boundUs;
     return static_cast<int32_t>(gEngine.syncpt - threshold) >= 0 ? 0 : TEGRA_HOST1X_ETIMEDOUT;
 }
@@ -148,7 +145,6 @@ void switch_host1x_fence_init(switch_host1x_fence *fence, uint32_t syncpt, uint3
 
 int switch_host1x_fence_add(switch_host1x_fence *fence, uint32_t boundUs)
 {
-    gEngine.waitsUnderStateLock += gStateLock && gStateLock->locked;
     gEngine.lastBoundUs = gEngine.fenceBoundUs = boundUs;
     if (const int error = std::exchange(gEngine.armError, 0))
         return error;
@@ -207,7 +203,6 @@ int tegra_host1x_submit_on(uint32_t channel, const uint32_t *words, uint32_t cou
 int switch_host1x_job_begin(uint32_t channel, uint32_t capacity, uint32_t **words)
 {
     static std::vector<uint32_t> arena;
-    gEngine.waitsUnderStateLock += gStateLock && gStateLock->locked;
     EXPECT_EQ(channel, uint32_t(TEGRA_HOST1X_CHANNEL_NVJPG));
     arena.assign(capacity, 0);
     *words = arena.data();
@@ -475,7 +470,7 @@ namespace {
         reg(SWITCH_FALCON_ERR_MAILBOX0) = 8;
         reg(SWITCH_FALCON_ERR_MAILBOX1) = 0x77;
         gEngine.events.push_back("falcon error");
-        EXPECT_TRUE(IOWorkLoop::last()->fire()) << "NVJPG's line must be on during a decode";
+        EXPECT_TRUE(switch_interrupt_nub(kErrorIntid, false)->fire()) << "NVJPG's line must be on during a decode";
     }
     switch_host1x_fence *fence = std::exchange(gEngine.armed, nullptr);
     if (!fence)

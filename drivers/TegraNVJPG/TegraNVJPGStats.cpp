@@ -145,15 +145,14 @@ void tegra_nvjpg_stats_line(void)
     gWindow.windowStart = now;
     IOLockUnlock(gLock);
     uint64_t waitsUnlocked = 0;
-    uint64_t stateWaitMaxUs = 0;
-    tegra_nvjpg_lock_counts(&waitsUnlocked, &stateWaitMaxUs);
+    tegra_nvjpg_lock_counts(&waitsUnlocked);
     char line[280];
     const uint64_t n = w.decodes ? w.decodes : 1;
     snprintf(line, sizeof(line),
              "TegraNVJPG: %llus decodes=%llu refused=%llu failed=%llu engine=%lluus/decode cpu=%lluus/decode "
-             "pixels=%lluK/decode scan=%lluKB/decode unlocked_waits=%llu state_lock_wait_max=%lluus",
+             "pixels=%lluK/decode scan=%lluKB/decode unlocked_waits=%llu",
              (now - w.windowStart) / 1000000, w.decodes, w.refused, w.failed, w.engineUs / n, w.cpuUs / n,
-             w.pixels / n / 1000, w.bytes / n / 1024, waitsUnlocked, stateWaitMaxUs);
+             w.pixels / n / 1000, w.bytes / n / 1024, waitsUnlocked);
     os_log(OS_LOG_DEFAULT, "%s", line);
 }
 

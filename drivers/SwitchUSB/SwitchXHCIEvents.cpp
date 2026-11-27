@@ -106,7 +106,8 @@ bool SwitchXHCI::mailboxFilter(OSObject *owner, IOFilterInterruptEventSource *)
     auto *self = static_cast<SwitchXHCI *>(owner);
     if (gHost.takeMailboxInterrupt()) {
         self->unclaimed = 0;
-        __atomic_fetch_add(&self->mailboxInterrupts, 1, __ATOMIC_RELAXED);
+        __atomic_store_n(&self->mailboxInterrupts, __atomic_load_n(&self->mailboxInterrupts, __ATOMIC_RELAXED) + 1u,
+                         __ATOMIC_RELAXED);
         return true;
     }
     if (++self->unclaimed < kUnclaimedLimit)

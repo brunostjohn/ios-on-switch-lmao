@@ -62,7 +62,7 @@ static int32_t code(Encoder *e, const H264EncConfig *c, const H264EncSurface *s,
     H264EncHandles handles = e->handles;
     handles.input = input;
     const H264EncPicture idr = {.type = H264ENC_IDR, .qp = kProbeQP, .picture_index = pictureIndex};
-    TegraNVENCSubmit *submit = malloc(sizeof(*submit));
+    TegraNVENCSubmit *submit = nvenc_submit_buffer(e->client);
     if (!submit)
         return -1;
     h264enc_fill_submit(c, &layout, &idr, &handles, submit);
@@ -80,7 +80,6 @@ static int32_t code(Encoder *e, const H264EncConfig *c, const H264EncSurface *s,
     submit->clean[submit->clean_count++] = (TegraNVENCRange){e->handles.aux, 0, sizeof(nvenc_pic_stat_s), 0};
     uint32_t fence = 0;
     const int submitted = nvenc_submit(e->client, submit, &fence, NULL);
-    free(submit);
     if (submitted)
         return -2;
     AVEJobStatus job = {0};

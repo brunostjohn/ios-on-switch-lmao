@@ -152,7 +152,8 @@ static void markDone(AVDEmitter *e, Job *job, OSStatus status)
             *done = true;
             if (status && !out->status) {
                 out->status = status;
-                atomic_fetch_add_explicit(&e->errors, 1, memory_order_relaxed);
+                atomic_store_explicit(&e->errors, atomic_load_explicit(&e->errors, memory_order_relaxed) + 1,
+                                      memory_order_relaxed);
             }
         }
         if (out->due == job->fence)
@@ -396,7 +397,8 @@ void avd_emitter_push(AVDEmitter *e, Output *out)
     const OSStatus jobStatus = firstStatus ? firstStatus : status;
     if (jobStatus && !out->status) {
         out->status = jobStatus;
-        atomic_fetch_add_explicit(&e->errors, 1, memory_order_relaxed);
+        atomic_store_explicit(&e->errors, atomic_load_explicit(&e->errors, memory_order_relaxed) + 1,
+                              memory_order_relaxed);
     }
     out->liveNext = e->live;
     if (e->live)
@@ -479,7 +481,8 @@ OSStatus avd_emitter_settle_output(AVDEmitter *e, Output *out)
     const OSStatus jobStatus = firstStatus ? firstStatus : status;
     if (jobStatus && !out->status) {
         out->status = jobStatus;
-        atomic_fetch_add_explicit(&e->errors, 1, memory_order_relaxed);
+        atomic_store_explicit(&e->errors, atomic_load_explicit(&e->errors, memory_order_relaxed) + 1,
+                              memory_order_relaxed);
     }
     const OSStatus result = out->status;
     pthread_mutex_unlock(&e->lock);

@@ -30,6 +30,8 @@ bool nvenc_info(NVENCClient *client, TegraNVENCInfo *info);  // input layout, ch
 int nvenc_alloc(void *client, uint64_t size, uint32_t *handle, void **va);
 void nvenc_free(void *client, uint32_t handle);
 void *nvenc_buffer_va(const NVENCClient *client, uint32_t handle);
+TegraNVENCSubmit *nvenc_submit_buffer(NVENCClient *client);
+TegraNVENCSubmit *nvenc_tile_submit_buffer(NVENCClient *client, uint32_t slot);
 // 0 with the job's fence and how its input arrived (TEGRA_NVENC_INPUT_*, `input` may be null), or the IOReturn.
 int nvenc_submit(void *client, const TegraNVENCSubmit *submit, uint32_t *fence, uint32_t *input);
 int nvenc_wait(void *client, const TegraNVENCWait *wait);

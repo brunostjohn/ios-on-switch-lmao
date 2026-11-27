@@ -4,11 +4,9 @@
 // The command word, FIFO handling and interrupt handling follow Linux spi-tegra114.c (tegra_spi_setup_transfer_one,
 // tegra_spi_start_cpu_based_transfer, tegra_spi_isr, handle_cpu_based_xfer, tegra_spi_clear_fifo; T210 chip data:
 // intr_mask_reg); clock, reset and pinmux bring-up as ../TegraI2C (hekate clock_enable).
-#include <IOKit/IOFilterInterruptEventSource.h>
-#include <IOKit/IOInterruptEventSource.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
-#include <IOKit/IOWorkLoop.h>
+#include <IOKit/IOService.h>
 #include <kern/clock.h>
 #include <kern/sched_prim.h>
 #include <libkern/OSAtomic.h>
@@ -70,9 +68,10 @@ enum : uint32_t {
 
 constexpr uint32_t kRxCountShift = 23, kRxCountMask = 0x7f;
 
-// A block's state (Bus::state): started and waiting for RDY (kActive), RDY seen by the filter (kDone, the bytes
+// A block's state (Bus::state): started and waiting for RDY (kActive), RDY seen by the handler (kDone, the bytes
 // still in the RX FIFO for the waiter), or none (kIdle). Normal completion hands off kActive -> kDone -> kIdle
-// with plain acquire/release stores; a rare timeout quiesces the filter via b.irq->disable() before touching state.
+// with plain acquire/release stores; a rare timeout quiesces the handler via b.irqNub->disableInterrupt(0) before
+// touching state.
 enum : uint32_t {
     kIdle,
     kActive,
@@ -105,16 +104,15 @@ constexpr uint32_t kPinmuxFieldMask = 0x7f, kPinmuxOut = 0, kPinmuxIn = (2u << 2
 struct Bus {
     volatile uint8_t *regs;
     IOLock *lock;  // serializes transfers, recovery and suspend/resume
-    IOFilterInterruptEventSource *irq;
+    IOService *irqNub;
     uint32_t hz, idle;  // bus clock; COMMAND1 between transfers (master, mode, 8-bit words, chip select high)
     bool ready;
-    uint32_t state;  // kIdle, kActive, kDone (shared with filterInterrupt)
-    uint32_t fifo;   // FIFO_STATUS when the filter saw RDY: the RX word count and the error bits
+    uint32_t state;  // kIdle, kActive, kDone (shared with spiInterrupt)
+    uint32_t fifo;   // FIFO_STATUS when the handler saw RDY: the RX word count and the error bits
 };
 
 IOLock *volatile gSetupLock;
 volatile uint8_t *gSpi, *gCar, *gPinmux;
-IOWorkLoop *gLoop;
 Bus gBus[kBuses];
 
 inline uint32_t intid(unsigned bus)
@@ -198,29 +196,20 @@ int configure(Bus &b, const BusInfo &info)
 
 // Primary interrupt context, the bus's SPI (level): RDY ends the block. Status bits are cleared before publishing
 // kDone so the next transfer cannot observe stale TRANS_STATUS/FIFO_ERRORS once the waiter wakes.
-// NOLINTNEXTLINE(misc-const-correctness): IOFilterInterruptEventSource::Filter's signature
-bool filterInterrupt(OSObject *, IOFilterInterruptEventSource *sender)
+void spiInterrupt(OSObject *, void *refCon, IOService *, int)
 {
-    for (Bus &b : gBus) {
-        if (b.irq != sender)
-            continue;
-        const uint32_t trans = switch_mmio_read32(b.regs, TRANS_STATUS);
-        const uint32_t fifo = switch_mmio_read32(b.regs, FIFO_STATUS);
-        switch_mmio_write32(b.regs, TRANS_STATUS, trans);  // write 1 to clear: RDY off, the line low
-        if (fifo & FIFO_ERRORS)
-            switch_mmio_write32(b.regs, FIFO_STATUS, FIFO_ERR | (fifo & FIFO_ERRORS));
-        if ((trans & TRANS_RDY) && __atomic_load_n(&b.state, __ATOMIC_RELAXED) == kActive) {
-            __atomic_store_n(&b.fifo, fifo, __ATOMIC_RELAXED);
-            __atomic_store_n(&b.state, kDone, __ATOMIC_RELEASE);
-            thread_wakeup(reinterpret_cast<event_t>(&b.state));
-        }
-        break;
+    auto &b = *static_cast<Bus *>(refCon);
+    const uint32_t trans = switch_mmio_read32(b.regs, TRANS_STATUS);
+    const uint32_t fifo = switch_mmio_read32(b.regs, FIFO_STATUS);
+    switch_mmio_write32(b.regs, TRANS_STATUS, trans);  // write 1 to clear: RDY off, the line low
+    if (fifo & FIFO_ERRORS)
+        switch_mmio_write32(b.regs, FIFO_STATUS, FIFO_ERR | (fifo & FIFO_ERRORS));
+    if ((trans & TRANS_RDY) && __atomic_load_n(&b.state, __ATOMIC_RELAXED) == kActive) {
+        __atomic_store_n(&b.fifo, fifo, __ATOMIC_RELAXED);
+        __atomic_store_n(&b.state, kDone, __ATOMIC_RELEASE);
+        thread_wakeup(reinterpret_cast<event_t>(&b.state));
     }
-    return false;  // nothing left for the work loop
 }
-
-void noAction(OSObject *, IOInterruptEventSource *, int)
-{}
 
 // Thread context, the block ended by RDY (kDone): its bytes from the RX FIFO (handle_cpu_based_xfer), a word per byte
 // clocked or, packed, per four (TegraSPIWords.h; the last word's bytes past the block's end are not data), counted by
@@ -275,12 +264,12 @@ int sleepForAction(unsigned bus, Bus &b, uint64_t us, uint8_t *rx, size_t len, b
         }
         clock_interval_to_deadline(kGraceMs, kMillisecondScale, &deadline);
     }
-    // Quiesce any in-flight filterInterrupt() before resetting b.state without a hard-IRQ CAS.
-    b.irq->disable();
+    // Quiesce any in-flight spiInterrupt() before resetting b.state without a hard-IRQ CAS.
+    b.irqNub->disableInterrupt(0);
     const bool done = __atomic_load_n(&b.state, __ATOMIC_ACQUIRE) != kActive;
     if (!done)
         __atomic_store_n(&b.state, kIdle, __ATOMIC_RELAXED);
-    b.irq->enable();
+    b.irqNub->enableInterrupt(0);
     return done ? take(b, rx, len, packed) : TEGRA_SPI_ETIMEDOUT;
 }
 
@@ -310,10 +299,10 @@ int block(unsigned bus, Bus &b, unsigned cs, const uint8_t *tx, uint8_t *rx, siz
 // The interrupt is off meanwhile, so the filter never reads an unclocked controller.
 void recover(Bus &b, const BusInfo &info)
 {
-    b.irq->disable();
+    b.irqNub->disableInterrupt(0);
     clockEnable(info);
     (void)configure(b, info);
-    b.irq->enable();
+    b.irqNub->enableInterrupt(0);
 }
 
 #if SWITCH_STATS_IO
@@ -384,11 +373,11 @@ int bringUp(unsigned bus, Bus &b)
     switch_mmio_write32(b.regs, INTR_MASK,
                         switch_mmio_read32(b.regs, INTR_MASK) | INTR_ALL);  // quiet until the event source is in place
     IOService *nub = switch_interrupt_nub(intid(bus), false);
-    b.irq = IOFilterInterruptEventSource::filterInterruptEventSource(gLoop, &noAction, &filterInterrupt, nub, 0);
-    if (!b.irq || gLoop->addEventSource(b.irq) != kIOReturnSuccess) {
+    if (!nub || nub->registerInterrupt(0, nullptr, &spiInterrupt, &b) != kIOReturnSuccess) {
         panic("TegraSPI: cannot attach the SPI%u interrupt (INTID %u)", bus, intid(bus));
     }
-    b.irq->enable();
+    b.irqNub = nub;
+    b.irqNub->enableInterrupt(0);
     switch_mmio_write32(b.regs, INTR_MASK, switch_mmio_read32(b.regs, INTR_MASK) & ~INTR_ALL);
     return TEGRA_SPI_OK;
 }
@@ -408,12 +397,10 @@ extern "C" int tegra_spi_init(unsigned bus)
         gPinmux = switch_mmio_map(kPinmuxPA, kPinmuxSize);
         gSpi = (gCar && gPinmux) ? switch_mmio_map(kSpiPA, kSpiSize) : nullptr;
     }
-    if (!gLoop)
-        gLoop = IOWorkLoop::workLoop();
     Bus &b = gBus[bus - 1];
-    if (!gSpi || !gLoop) {
+    if (!gSpi) {
         result = TEGRA_SPI_ENOMEM;
-    } else if (!b.irq) {
+    } else if (!b.irqNub) {
         if (!b.lock)
             b.lock = IOLockAlloc();
         if (!b.lock) {
@@ -461,12 +448,12 @@ extern "C" void tegra_spi_suspend(unsigned bus)
     if (bus < 1 || bus > kBuses || !kBus[bus - 1].regs)
         return;
     Bus &b = gBus[bus - 1];
-    if (!b.lock || !b.irq)
+    if (!b.lock || !b.irqNub)
         return;
     const BusInfo &info = kBus[bus - 1];
     IOLockLock(b.lock);
     if (b.ready) {
-        b.irq->disable();
+        b.irqNub->disableInterrupt(0);
         switch_mmio_write32(b.regs, INTR_MASK, switch_mmio_read32(b.regs, INTR_MASK) | INTR_ALL);
         switch_mmio_write32(gCar, info.enable + 4, 1u << info.bit);  // clock off
         b.ready = false;
@@ -479,7 +466,7 @@ extern "C" void tegra_spi_resume(unsigned bus)
     if (bus < 1 || bus > kBuses || !kBus[bus - 1].regs)
         return;
     Bus &b = gBus[bus - 1];
-    if (!b.lock || !b.irq)
+    if (!b.lock || !b.irqNub)
         return;
     const BusInfo &info = kBus[bus - 1];
     IOLockLock(b.lock);
@@ -489,7 +476,7 @@ extern "C" void tegra_spi_resume(unsigned bus)
         const int result = configure(b, info);
         if (result != TEGRA_SPI_OK)
             panic("TegraSPI: SPI%u did not come back after sleep (%d)", bus, result);
-        b.irq->enable();
+        b.irqNub->enableInterrupt(0);
         b.ready = true;
     }
     IOLockUnlock(b.lock);
