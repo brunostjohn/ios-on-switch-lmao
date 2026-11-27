@@ -35,7 +35,8 @@ def _parse_file_record(base: Path, manifest_path: Path, line_no: int, fields: li
     if not 0 <= mode <= 0o7777:
         raise ValueError(f'{manifest_path}:{line_no}: invalid mode {mode_str!r}')
     src = base / path
-    if src.is_symlink() or not src.is_file():
+    # Bazel's darwin-sandbox materializes TreeArtifact inputs as absolute symlinks into the execroot.
+    if (src.is_symlink() and not src.readlink().is_absolute()) or not src.is_file():
         raise ValueError(f'{manifest_path}:{line_no}: missing regular file {src}')
     raw = src.read_bytes()
     if len(raw) != want_size:

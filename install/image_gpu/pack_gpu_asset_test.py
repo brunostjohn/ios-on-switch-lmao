@@ -69,6 +69,28 @@ class PackGpuAssetTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 pack_gpu_asset.build_tar(base, 'cd' * 32)
 
+    def test_accepts_absolute_sandbox_symlinks_and_rejects_relative_symlinks(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            real = self._make_base(root / 'real')
+            sandbox = root / 'sandbox'
+            for src in real.rglob('*'):
+                rel = src.relative_to(real)
+                dst = sandbox / rel
+                if src.is_dir():
+                    dst.mkdir(parents=True, exist_ok=True)
+                else:
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    dst.symlink_to(src.resolve())
+            digest = 'ef' * 32
+            self.assertEqual(pack_gpu_asset.build_tar(real, digest), pack_gpu_asset.build_tar(sandbox, digest))
+
+            plist = sandbox / 'ngpu/addons/TegraGM20BMetal.bundle/Info.plist'
+            plist.unlink()
+            plist.symlink_to('TegraGM20BMetal')
+            with self.assertRaises(ValueError):
+                pack_gpu_asset.build_tar(sandbox, digest)
+
 
 if __name__ == '__main__':
     unittest.main()
