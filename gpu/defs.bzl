@@ -101,8 +101,7 @@ def _plugin_objects(ctx, name, stack):
     for language, sources in (("objective-c++", ctx.files.srcs), ("c++", ctx.files.cc_srcs), ("c", ctx.files.c_srcs)):
         compiler = "clang++"
         if language == "objective-c++":
-            # Keep ObjC exceptions enabled for @synchronized until callers migrate off it.
-            cflags = list(_PLUGIN_CFLAGS) + ["-fno-cxx-exceptions"]
+            cflags = list(_PLUGIN_CFLAGS) + ["-fno-exceptions"]
             if is_release:
                 cflags += ["-DNDEBUG", "-flto=thin"]
         elif language == "c++":
