@@ -213,6 +213,27 @@ static bool switch_bootstrap_migration_file(const char *path, uint64_t min, uint
     return valid;
 }
 
+static bool switch_bootstrap_migration_active(const char *path)
+{
+    vnode_t vp = NULLVP;
+    if (switch_bootstrap_lookup_path(path, NULLVP, &vp)) return false;
+    struct vnode_attr va;
+    VATTR_INIT(&va);
+    VATTR_WANTED(&va, va_data_size);
+    char prefix[9] = {0};
+    int resid = 0;
+    const bool valid = vnode_isreg(vp) && vnode_mount(vp) == switch_bootstrap_data &&
+        !vnode_getattr(vp, &va, vfs_context_kernel()) && VATTR_IS_SUPPORTED(&va, va_data_size) &&
+        (va.va_data_size == 74 || va.va_data_size == 72) &&
+        !vn_rdwr(UIO_READ, vp, prefix, (int)sizeof(prefix), 0, UIO_SYSSPACE, IO_NOAUTH,
+                 vfs_context_ucred(vfs_context_kernel()), &resid, vfs_context_proc(vfs_context_kernel())) &&
+        resid == 0 &&
+        ((va.va_data_size == 74 && !memcmp(prefix, "complete ", 9)) ||
+         (va.va_data_size == 72 && !memcmp(prefix, "repair ", 7)));
+    vnode_put(vp);
+    return valid;
+}
+
 void switch_bootstrap_capture(void)
 {
     uint32_t disabled = 0;
@@ -242,7 +263,9 @@ done:
     }
     const bool packaged = switch_bootstrap_migration_file("/private/var/Switch/overlay/usr/share/Switch/bootstrap/manifest.json", 1, 1024 * 1024) &&
         switch_bootstrap_migration_file("/private/var/Switch/overlay/usr/share/Switch/bootstrap/payload.tar", 512, INT64_MAX);
-    const bool pending = switch_bootstrap_migration_file(SWITCH_BOOTSTRAP_BASE "/migration.pending", 0, 4096);
+    const bool pending = packaged &&
+        (switch_bootstrap_migration_file(SWITCH_BOOTSTRAP_BASE "/migration.pending", 0, 4096) ||
+         !switch_bootstrap_migration_active(SWITCH_BOOTSTRAP_BASE "/migration.state"));
     switch_migration_home_prepare(packaged, pending);
 #if DEVELOPMENT || DEBUG
     printf("SwitchBootstrap: captured " SWITCH_IPSW_BUILD " Data volume; recovery %d\n", switch_bootstrap_recovery);

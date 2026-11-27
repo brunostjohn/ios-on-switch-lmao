@@ -152,6 +152,11 @@ static BOOL switch_migration_retryable_phase(NSString *phase)
            [phase isEqualToString:@"runtime"];
 }
 
+static BOOL switch_migration_timeout_retryable_phase(NSString *phase)
+{
+    return switch_migration_retryable_phase(phase) || [phase isEqualToString:@"register-apps"];
+}
+
 static BOOL switch_migration_needs_preparation(NSString *phase)
 {
     return [phase isEqualToString:@"unscheduled"] || [phase isEqualToString:@"preparation"];
@@ -188,10 +193,7 @@ static int switch_migration_defer_unscheduled(NSString *base, NSString *generati
     const int error = switch_migration_write(base, generation, SwitchMigrationFailed, phase, ECANCELED, attempt);
     if (error)
         return error;
-    if (attempt < switch_migration_max_attempts)
-        (void)switch_migration_request(base, generation);
-    else
-        switch_migration_consume(base);
+    (void)switch_migration_request(base, generation);
     return ECANCELED;
 }
 
@@ -221,8 +223,13 @@ static int switch_migration_record_failure(NSString *base, NSString *generation,
         switch_bootstrap_unload_daemons(loaded);
     }
     if (!saved) {
-        switch_migration_clear_native(base);
-        switch_migration_consume(base);
+        if (error == ETIMEDOUT && switch_migration_timeout_retryable_phase(@(phase)) &&
+            attempt < switch_migration_max_attempts) {
+            (void)switch_migration_request(base, generation);
+        } else {
+            switch_migration_clear_native(base);
+            switch_migration_consume(base);
+        }
     }
     os_log_error(OS_LOG_DEFAULT, "SwitchBootstrap: migration %{public}s failed: %d (record %d)", phase, error, saved);
     return saved;
@@ -247,10 +254,15 @@ int switch_migration_boot(NSString *base, NSString *root, NSString *generation)
         switch_bootstrap_readiness(0);
         return error;
     }
+    const BOOL unscheduled =
+        previous == SwitchMigrationFailed && recordedError == ECANCELED && [lastPhase isEqualToString:@"unscheduled"];
     const BOOL cancelled = previous == SwitchMigrationFailed && recordedError == ECANCELED;
+    const BOOL timedOut = previous == SwitchMigrationFailed && recordedError == ETIMEDOUT;
     const BOOL working = previous == SwitchMigrationWorking;
-    const BOOL retrying = (working || cancelled) && switch_migration_retryable_phase(lastPhase) &&
-                          attempt < switch_migration_max_attempts;
+    const BOOL retryablePhase =
+        timedOut ? switch_migration_timeout_retryable_phase(lastPhase) : switch_migration_retryable_phase(lastPhase);
+    const BOOL retrying =
+        unscheduled || ((working || cancelled || timedOut) && retryablePhase && attempt < switch_migration_max_attempts);
     if (!retrying && (working || previous == SwitchMigrationFailed))
         return switch_migration_fail_closed(base, root, generation, previous, lastPhase, attempt, recovery || !home);
     const BOOL install = previous == SwitchMigrationMissing;
@@ -258,34 +270,33 @@ int switch_migration_boot(NSString *base, NSString *root, NSString *generation)
     const BOOL resume = retrying && !retryFull;
     const BOOL fullPrepare = install || retryFull;
     const BOOL migrating = install || retrying;
-    const unsigned activeAttempt = retrying ? attempt + 1 : 1;
+    const unsigned activeAttempt = (retrying && !unscheduled) ? attempt + 1 : 1;
     if (recovery && migrating)
         return switch_migration_recovery(base, root, fullPrepare);
     if (fullPrepare && home) {
-        // Only a scheduled migration can start a package transaction.
+        // Only a scheduled migration can start a package transaction; unscheduled deferrals do not burn attempts.
         if (!install)
             switch_bootstrap_readiness(0);
-        if (retrying) {
-            if (activeAttempt < switch_migration_max_attempts)
-                switch_migration_rearm_native_if_interrupted(base);
-            else
-                switch_migration_clear_native(base);
-        }
+        if (retrying)
+            switch_migration_rearm_native_if_interrupted(base);
+        const unsigned deferredAttempt = (install || unscheduled) ? 1 : attempt;
         return switch_migration_defer_unscheduled(base, generation, install ? "unscheduled" : lastPhase.UTF8String,
-                                                  activeAttempt);
+                                                  deferredAttempt);
     }
     if (retrying)
         switch_migration_rearm_native_if_interrupted(base);
     if (migrating)
         switch_migration_mark_native(base);
     const BOOL resumeRuntime = resume && [lastPhase isEqualToString:@"runtime"];
+    const BOOL resumeRegistration =
+        resume && ([lastPhase isEqualToString:@"registration"] || [lastPhase isEqualToString:@"register-apps"]);
     const BOOL registerApps = (migrating && !resumeRuntime) || !home || recovery;
-    const char *phase = fullPrepare ? "preparation" : lastPhase ? lastPhase.UTF8String : "validation";
+    const char *resumePhase = resumeRegistration ? "registration" : (lastPhase ? lastPhase.UTF8String : "validation");
+    const char *phase = fullPrepare ? "preparation" : resumePhase;
     if (fullPrepare)
         error = switch_migration_write(base, generation, SwitchMigrationWorking, "preparation", 0, activeAttempt);
     else if (resume)
-        error =
-            switch_migration_write(base, generation, SwitchMigrationWorking, lastPhase.UTF8String, 0, activeAttempt);
+        error = switch_migration_write(base, generation, SwitchMigrationWorking, resumePhase, 0, activeAttempt);
     if (!error && !fullPrepare)
         phase = "validation";
     if (!error)
@@ -303,7 +314,7 @@ int switch_migration_boot(NSString *base, NSString *root, NSString *generation)
             switch_migration_clear_native(base);
         if (!error) {
             phase = "register-apps";
-            if (migrating && !resumeRuntime && (!resume || ![lastPhase isEqualToString:@"registration"]))
+            if (migrating && !resumeRuntime && !resumeRegistration)
                 error =
                     switch_migration_write(base, generation, SwitchMigrationWorking, "registration", 0, activeAttempt);
         }
