@@ -59,6 +59,7 @@
 #include <unordered_map>
 #include <map>
 #include <memory>
+#include <set>
 #include "word_wait.h"
 #include <tuple>
 #include <utility>
@@ -650,7 +651,7 @@ public:
     // the shader heap's bound bytes of host memory (the programs copied so far, in steps)
     uint64_t heapBytes() const
     {
-        return heapBound_ - heapCopiesAt_;
+        return heapBound_.load(std::memory_order_relaxed) - heapCopiesAt_;
     }
 
     // the pack's and the shader compiler's store's pages bound in the program window, where larger programs run in place
@@ -1548,7 +1549,8 @@ private:
     };
 
     std::vector<HeapPart> heapParts_;
-    uint64_t heapCopiesAt_ = 0, heapBound_ = 0;
+    uint64_t heapCopiesAt_ = 0;
+    std::atomic<uint64_t> heapBound_{0};
     ProgramPages packPages_;
     uint64_t packWindowVa_ = 0, packWindowBytes_ = 0;
     const uint8_t *packWindowCpu_ = nullptr;
@@ -1669,9 +1671,9 @@ private:
     };
 
     Tier0PipelineSlots tier0Pipelines_;
-    // the pack's, by record index, each made at its first lookup (a process uses a few of the pack's thousands); a node
-    // container, so the pointers pipeline() hands out stay valid
-    std::unordered_map<uint32_t, Pipeline> pipelines_;
+    // the pack's, by record index, each made at its first lookup (a process uses a few of the pack's thousands); owned
+    // individually so placeRecord builds off a private Pipeline while lock_ may drop, and pointers stay valid
+    std::unordered_map<uint32_t, std::unique_ptr<Pipeline>> pipelines_;
     // each own state's (ownPipeline) once a lookup placed it: any recording thread may place it first, the others read
     // it without lock_ after
     std::array<std::atomic<Pipeline *>, std::size(kOwnStates)> own_{};
@@ -1687,6 +1689,11 @@ private:
     Bo slm_;
     std::atomic<uint64_t> slmPerWarp_{0}, slmVa_{0};
     std::vector<Bo> slmOutgrown_;
+    // Off-lock placement state under lock_: deduplicates concurrent grain imports and serializes heap/SLM growth.
+    std::set<std::pair<const uint8_t *, uint64_t>> importingGrains_;
+    bool heapGrowing_ = false, slmGrowing_ = false;
+    uint32_t heapWaiters_ = 0;
+    gm20b::CondVar heapReady_;
     // the per-warp size the channel was last given (commit; 0 on a new channel): the submitting thread's
     uint64_t slmChannel_ = 0;
     uint32_t ctWrite_[8] = {};  // SET_CT_WRITE(i) as the baseline leaves it
@@ -1787,7 +1794,30 @@ private:
         std::vector<uint16_t> farUbos;
     };
 
-    std::map<std::string, CompletedProgram> completedPrograms_;  // by programSlotKey
+    // Never overwrites a live entry whose header/info pointers may already be held by a published Pipeline when two
+    // callers race through placeCompletedSlot across an off-lock heap/SLM allocation.
+    struct CompletedProgramMap {
+        std::map<std::string, CompletedProgram> map;
+        std::deque<CompletedProgram> duplicates;
+
+        auto find(const std::string &key)
+        {
+            return map.find(key);
+        }
+
+        auto end()
+        {
+            return map.end();
+        }
+
+        CompletedProgram &operator[](const std::string &key)
+        {
+            const auto [it, inserted] = map.emplace(key, CompletedProgram{});
+            return inserted ? it->second : duplicates.emplace_back();
+        }
+    };
+
+    CompletedProgramMap completedPrograms_;  // by programSlotKey
     bool placeCompleted(const CapturedProgram &p, PlacedProgram &out);
     static CompletedSlot completedSlot(const CapturedProgram &p);
     bool placeCompletedSlot(const CompletedSlot &slot, PlacedProgram &out);
@@ -2013,12 +2043,11 @@ private:
                                    uint64_t bytes, uint32_t kind, const std::vector<Arena::View> &views, Bo &outBo,
                                    bool &unparkResident, bool &unparkReclaimed, bool &unparkMismatch);
     bool bindArenaOffLock(Arena &a);
-    // lock_ held: [offset, offset + bytes) of `a`'s host range imported and bound at its VAs as one more part
-    bool bindArenaPart(Arena &a, uint64_t offset, uint64_t bytes);
     void unbindArena(Arena &a, DeferredFrees &deferred);  // lock_ held: its import, whole or in parts, detached
     void trimLocked(std::unique_lock<gm20b::Mutex> &l, uint32_t index, const std::atomic<uint32_t> &committed);
-    // lock_ held: the holes a placement of [offset, offset + bytes) reaches bound again; false: no memory for them
-    bool backPlacement(Arena &a, uint64_t offset, uint64_t bytes);
+    // lock_ held through `l` (released across kernel imports/binds): the holes a placement of [offset, offset + bytes)
+    // reaches bound again; false: no memory for them
+    bool backPlacement(std::unique_lock<gm20b::Mutex> &l, uint32_t index, uint64_t offset, uint64_t bytes);
     bool purgeKernelArenaLocked(std::unique_lock<gm20b::Mutex> &l, uint32_t index);
     bool purgeLocked(std::unique_lock<gm20b::Mutex> &l, uint32_t index, const std::atomic<uint32_t> &committed,
                      bool *parkBusy = nullptr);
@@ -2026,8 +2055,8 @@ private:
     void arenaFree(std::unique_lock<gm20b::Mutex> &l, Span &s, DeferredFrees &deferred);  // lock_ held
     const ArenaStorage *arenaStorage(const Arena &arena, uint32_t index, uint64_t offset, uint64_t bytes, uint64_t va,
                                      uint32_t kind) const;
-    // lock_ held: the arena's mapping of `kind` (its own, its pitch view, or a view made now); 0: none
-    uint64_t arenaView(Arena &a, uint32_t kind);
+    // lock_ held through `l` (released across kernel VA/alias calls): the arena's mapping of `kind`; 0: none
+    uint64_t arenaView(std::unique_lock<gm20b::Mutex> &l, uint32_t index, uint32_t kind);
     // The layout every create* but createTexture's own memory gives its kind of texture: t's shape, rows and kind fields
     // with no memory or header, what its memory takes and the PTE kind it is bound with, `chain` a Mips, Volume or Array
     // one's levels. False: the device makes no such texture.

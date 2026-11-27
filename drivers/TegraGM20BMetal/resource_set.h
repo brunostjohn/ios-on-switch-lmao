@@ -4,12 +4,13 @@
 // instead of one use each. The kernel keeps out (and later takes out) what another process, engine or a CPU lease or
 // CpuComplete reaches; that BO stays a use of every job that touches it.
 //
-// Registration (add, promote, a member's free, renew) holds the set's lock and makes the set again with every member,
-// which ends the generation; submitters never take it while the set is unchanged: each keeps a SetView, refreshed when
-// the version moved. The set hears every free of its kernel (Kernel::free, FreeObserver), whoever frees the BO: a member
-// leaves the list and every view before its handle dies and its VA is given back, so no view names an address another BO
-// may be bound at next and no registration names a BO the kernel no longer holds. The kernel keeps the set's pending
-// jobs as its users.
+// Registration (add, promote, a member's free, renew) serializes kernel set updates through a single-owner `syncing_`
+// state while dropping `lock_` across ResourceSetCreate and ResourceSetRelease ioctls, so view(), leaving() and
+// addLater() never stall behind the kernel. Submitters never take `lock_` while the set is unchanged: each keeps a
+// SetView, refreshed when the version moved. The set hears every free of its kernel (Kernel::free, FreeObserver), whoever
+// frees the BO: a member leaves the list and every view before its handle dies and its VA is given back, so no view names
+// an address another BO may be bound at next and no registration names a BO the kernel no longer holds. The kernel keeps
+// the set's pending jobs as its users.
 #pragma once
 #include "lock.h"
 #include <atomic>
@@ -138,17 +139,25 @@ public:
     }
 
 private:
-    bool registerLocked(Kernel &k, const char *when);
-    bool attempt(Kernel &k, std::vector<TegraGM20BAbiSurfaceUse> &uses, int &kr);
-    bool refusedLocked(const std::vector<TegraGM20BAbiSurfaceUse> &uses, const char *when, bool again);
-    void leaveAllLocked();
-    void insertLocked(const Bo &bo, uint32_t access, bool always);
+    class SyncGuard;
+
+    void waitSyncLocked(std::unique_lock<gm20b::Mutex> &l);
+    bool syncLocked(std::unique_lock<gm20b::Mutex> &l, Kernel &k, std::vector<SetMember> &trial, const char *when);
+    bool refusedLocked(const std::vector<TegraGM20BAbiSurfaceUse> &uses, std::vector<SetMember> &trial,
+                       const char *when, bool again);
+    void leaveAllLocked(const std::vector<SetMember> &trial);
+    static void insertInto(std::vector<SetMember> &list, const Bo &bo, uint32_t access, bool always);
     bool eraseLocked(uint64_t handle);
 
-    bool addLocked(Kernel &k, const Candidate *first, const Candidate *last, bool always, const char *when);
+    bool addSyncLocked(std::unique_lock<gm20b::Mutex> &l, Kernel &k, const Candidate *first, const Candidate *last,
+                       bool always, const char *when);
     void dropPendingLocked(uint64_t handle);
 
     mutable gm20b::Mutex lock_;
+    gm20b::CondVar syncDone_;
+    bool syncing_ = false;
+    uint32_t syncWaiters_ = 0;
+    std::vector<uint64_t> leftDuringSync_;
     std::vector<SetMember> members_;                // by va
     std::vector<std::pair<Bo, uint32_t>> pending_;  // addLater's, under lock_
     std::atomic<bool> hasPending_{false};

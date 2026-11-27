@@ -247,34 +247,38 @@ uint64_t Device::compEvictIdleReady(const CompWant &w, bool comptagExhausted, st
 
 void Device::compMake(std::unique_lock<gm20b::Mutex> &l)
 {
+    auto allocAndBind = [&](const CompWant &w, Bo &bo, bool &made) -> int {
+        int kr = k_.allocCompressible(w.bytes, bo);
+        made = kr == KERN_SUCCESS;
+        if (!made)
+            return kr;
+        kr = k_.bindCompressed(bo, w.kind);
+        if (kr != KERN_SUCCESS) {
+            k_.free(bo);
+            bo = {};
+            return kr;
+        }
+        return KERN_SUCCESS;
+    };
     while (!comp_.wanted.empty() && !stopping_) {
         const CompWant w = comp_.wanted.front();
         Bo bo;
+        bool made = false;
         l.unlock();
-        int kr = k_.allocCompressible(w.bytes, bo);
-        bool made = kr == KERN_SUCCESS;
+        int kr = allocAndBind(w, bo, made);
+        if (kr == KERN_SUCCESS)
+            set_.add(k_, bo, TegraGM20BSurfaceWrite);
         l.lock();
         if (stopping_) {
-            if (made) {
+            if (bo.handle) {
                 l.unlock();
                 k_.free(bo);
                 l.lock();
             }
             break;
         }
-        if (made)
-            kr = k_.bindCompressed(bo, w.kind);
         uint64_t evictedBytes = 0;
         if (kr != KERN_SUCCESS && compShortage(kr) && !comp_.ready.empty()) {
-            if (made) {
-                l.unlock();
-                k_.free(bo);
-                l.lock();
-                bo = {};
-                made = false;
-                if (stopping_)
-                    break;
-            }
             if (comp_.fit(w.bytes, w.kind) != comp_.ready.end()) {
                 if (auto it = std::find(comp_.wanted.begin(), comp_.wanted.end(), w); it != comp_.wanted.end())
                     comp_.wanted.erase(it);
@@ -286,25 +290,23 @@ void Device::compMake(std::unique_lock<gm20b::Mutex> &l)
                 l.unlock();
                 for (Bo &e : evict)
                     k_.free(e);
-                kr = k_.allocCompressible(w.bytes, bo);
-                made = kr == KERN_SUCCESS;
+                kr = allocAndBind(w, bo, made);
+                if (kr == KERN_SUCCESS)
+                    set_.add(k_, bo, TegraGM20BSurfaceWrite);
                 l.lock();
                 if (stopping_) {
-                    if (made) {
+                    if (bo.handle) {
                         l.unlock();
                         k_.free(bo);
                         l.lock();
                     }
                     break;
                 }
-                if (made)
-                    kr = k_.bindCompressed(bo, w.kind);
             }
         }
         if (auto it = std::find(comp_.wanted.begin(), comp_.wanted.end(), w); it != comp_.wanted.end())
             comp_.wanted.erase(it);
-        if (made && kr == KERN_SUCCESS) {
-            set_.add(k_, bo, TegraGM20BSurfaceWrite);
+        if (kr == KERN_SUCCESS) {
             compReadyPush(bo, w.kind);
             if (evictedBytes)
                 compGaveBack();
@@ -313,13 +315,6 @@ void Device::compMake(std::unique_lock<gm20b::Mutex> &l)
             SWITCH_METAL_DIAGNOSTIC(stats.compHeld++);
             SWITCH_METAL_DIAGNOSTIC(stats.compHeldBytes += bo.bytes);
             continue;
-        }
-        if (made) {
-            l.unlock();
-            k_.free(bo);
-            l.lock();
-            if (stopping_)
-                break;
         }
         SWITCH_METAL_DIAGNOSTIC(stats.compFailed++);
         const bool shortage = compShortage(kr);

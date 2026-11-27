@@ -37,6 +37,7 @@ constexpr uint64_t kStack = 0x5357495443480005ull;
 
 class Kernel {
 public:
+    std::mutex mu;
     uint32_t flags = TegraGM20BCompilerCapable | TegraGM20BCompilerRegistered | TegraGM20BCompilerStore;
     int called = kIOReturnSuccess, asyncCalled = kIOReturnSuccess, infoCalled = kIOReturnSuccess;
     int waitCalled = kIOReturnSuccess, registerLibraryCalled = kIOReturnSuccess;
@@ -48,6 +49,9 @@ public:
     uint64_t nextLibraryId = 1;
     std::vector<uint64_t> compileWaits;
     std::function<int(uint64_t)> onCompileWait;
+    std::function<void(const TegraGM20BAbiCompilerRegisterLibrary &)> onRegisterLibrary;
+    std::function<void(const TegraGM20BAbiCompile &)> onAsyncCompile;
+    std::function<void()> onCompilerInfo;
     std::function<void()> compiling;  // what the compiler does before it answers
     switch_seed_pack::StoreWriter store;
 
@@ -67,16 +71,24 @@ public:
     // without an answer), `answer` the compiler's
     void deliver(int result, int32_t answer)
     {
-        const Waiting w = waiting.front();
-        waiting.erase(waiting.begin());
+        Waiting w;
+        uint32_t gen = 0;
+        TegraGM20BAbiCompileTimes t = {};
+        {
+            std::lock_guard<std::mutex> l(mu);
+            w = waiting.front();
+            waiting.erase(waiting.begin());
+            gen = generation;
+            t = times;
+        }
         const auto callback = reinterpret_cast<IOAsyncCallback>(uintptr_t(w.reference[kIOAsyncCalloutFuncIndex]));
         uint64_t words[TegraGM20BCompileAnswerWords] = {
             w.cookie,
-            uint64_t(uint32_t(answer)) | uint64_t(generation) << 32,
-            times.compile_start,
-            times.compile_end,
-            times.answered,
-            uint64_t(times.answer_priority) | uint64_t(times.reserved) << 32};
+            uint64_t(uint32_t(answer)) | uint64_t(gen) << 32,
+            t.compile_start,
+            t.compile_end,
+            t.answered,
+            uint64_t(t.answer_priority) | uint64_t(t.reserved) << 32};
         callback(reinterpret_cast<void *>(uintptr_t(w.reference[kIOAsyncCalloutRefconIndex])), result,
                  reinterpret_cast<void **>(words), TegraGM20BCompileAnswerWords);
     }
@@ -85,10 +97,15 @@ public:
     // port, which carries no class
     void send(int32_t answer)
     {
-        const Waiting w = waiting.front();
-        waiting.erase(waiting.begin());
-        uint64_t words[TegraGM20BCompileAnswerWords] = {w.cookie, uint64_t(uint32_t(answer)) | uint64_t(generation)
-                                                                                                   << 32};
+        Waiting w;
+        uint32_t gen = 0;
+        {
+            std::lock_guard<std::mutex> l(mu);
+            w = waiting.front();
+            waiting.erase(waiting.begin());
+            gen = generation;
+        }
+        uint64_t words[TegraGM20BCompileAnswerWords] = {w.cookie, uint64_t(uint32_t(answer)) | uint64_t(gen) << 32};
         const IOReturn result = kIOReturnSuccess;
         alignas(8)
             uint8_t bytes[sizeof(mach_msg_header_t) + sizeof(OSNotificationHeader64) + sizeof result + sizeof words] =
@@ -115,46 +132,87 @@ public:
         return [this](uint32_t method, const void *in, size_t, void *out, size_t outSize, uint64_t *reference,
                       uint32_t port) -> int {
             if (method == TegraGM20BMethodCompile && reference) {
+                const auto req = *static_cast<const TegraGM20BAbiCompile *>(in);
+                std::function<void(const TegraGM20BAbiCompile &)> hook;
+                {
+                    std::lock_guard<std::mutex> l(mu);
+                    hook = onAsyncCompile;
+                }
+                if (hook)
+                    hook(req);
+                std::lock_guard<std::mutex> l(mu);
                 if (waiting.size() >= bound)
                     return kIOReturnNoResources;
                 asyncAsked++;
                 if (asyncCalled != kIOReturnSuccess)
                     return asyncCalled;
                 compiles++;
-                const auto &req = *static_cast<const TegraGM20BAbiCompile *>(in);
                 Waiting w = {req.cookie, {}, port, req.qos, req.flags};
                 memcpy(w.reference, reference, sizeof w.reference);
                 waiting.push_back(w);
                 return kIOReturnSuccess;
             }
             switch (method) {
-            case TegraGM20BMethodCompilerInfo:
+            case TegraGM20BMethodCompilerInfo: {
+                std::function<void()> hook;
+                {
+                    std::lock_guard<std::mutex> l(mu);
+                    hook = onCompilerInfo;
+                }
+                if (hook)
+                    hook();
+                std::lock_guard<std::mutex> l(mu);
                 infos++;
                 if (infoCalled != kIOReturnSuccess)
                     return infoCalled;
                 *static_cast<TegraGM20BAbiCompilerInfoReply *>(out) = {
                     store.mappedBytes(), kStack, flags, generation, {}};
                 return kIOReturnSuccess;
-            case TegraGM20BMethodMap:
+            }
+            case TegraGM20BMethodMap: {
+                std::lock_guard<std::mutex> l(mu);
                 maps++;
                 *static_cast<TegraGM20BAbiMapReply *>(out) = {uint64_t(uintptr_t(store.base())), store.mappedBytes()};
                 return kIOReturnSuccess;
-            case TegraGM20BMethodCompile:
-                compiles++;
-                if (outSize != sizeof(TegraGM20BAbiCompileReply))
-                    return kIOReturnBadArgument;
-                if (compiling)
-                    compiling();
+            }
+            case TegraGM20BMethodCompile: {
+                std::function<void()> hook;
+                {
+                    std::lock_guard<std::mutex> l(mu);
+                    compiles++;
+                    if (outSize != sizeof(TegraGM20BAbiCompileReply))
+                        return kIOReturnBadArgument;
+                    hook = compiling;
+                }
+                if (hook)
+                    hook();
+                std::lock_guard<std::mutex> l(mu);
                 *static_cast<TegraGM20BAbiCompileReply *>(out) = {answer, generation, how, 0, times};
                 return called;
+            }
             case TegraGM20BMethodCompileWait: {
                 const auto &req = *static_cast<const TegraGM20BAbiCompileWait *>(in);
-                if (onCompileWait)
-                    return onCompileWait(req.cookie);
+                std::function<int(uint64_t)> hook;
+                {
+                    std::lock_guard<std::mutex> l(mu);
+                    hook = onCompileWait;
+                }
+                if (hook)
+                    return hook(req.cookie);
+                std::lock_guard<std::mutex> l(mu);
                 compileWaits.push_back(req.cookie);
                 return waitCalled;
             }
             case TegraGM20BMethodCompilerRegisterLibrary: {
+                const auto req = *static_cast<const TegraGM20BAbiCompilerRegisterLibrary *>(in);
+                std::function<void(const TegraGM20BAbiCompilerRegisterLibrary &)> hook;
+                {
+                    std::lock_guard<std::mutex> l(mu);
+                    hook = onRegisterLibrary;
+                }
+                if (hook)
+                    hook(req);
+                std::lock_guard<std::mutex> l(mu);
                 registerLibraries++;
                 if (registerLibraryCalled != kIOReturnSuccess)
                     return registerLibraryCalled;
@@ -743,6 +801,202 @@ TEST_F(RemoteCompile, RegisterLibraryCachesPerSliceAndFallsBackCleanly)
     const unsigned callsAfterUnsupported = kernel.registerLibraries;
     EXPECT_EQ(remote.registerLibrary(lib3.data(), lib3.size(), d3), 0u);
     EXPECT_EQ(kernel.registerLibraries, callsAfterUnsupported);
+}
+
+TEST_F(RemoteCompile, RegisterLibraryRunsDifferentKeysInParallelAndCoalescesSameKey)
+{
+    kernel.flags |= TegraGM20BCompilerLibraries;
+    gm20b::Remote remote(kernel.call(), kStack);
+
+    std::string libA = "library-A-payload", libB = "library-B-payload";
+    std::mutex gateMu;
+    std::condition_variable gateCv;
+    bool aEntered = false, releaseA = false;
+    kernel.onRegisterLibrary = [&](const TegraGM20BAbiCompilerRegisterLibrary &req) {
+        if (req.address == uint64_t(uintptr_t(libA.data()))) {
+            std::unique_lock<std::mutex> l(gateMu);
+            aEntered = true;
+            gateCv.notify_all();
+            gateCv.wait(l, [&] {
+                return releaseA;
+            });
+        }
+    };
+
+    uint64_t idA1 = 0, idA2 = 0, idB = 0;
+    std::thread tA1([&] {
+        idA1 = remote.registerLibrary(libA.data(), libA.size(), 1);
+    });
+    {
+        std::unique_lock<std::mutex> l(gateMu);
+        ASSERT_TRUE(gateCv.wait_for(l, std::chrono::seconds(5), [&] {
+            return aEntered;
+        }));
+    }
+
+    // Different key registers in parallel without blocking on key A's ioctl.
+    idB = remote.registerLibrary(libB.data(), libB.size(), 2);
+    EXPECT_NE(idB, 0u);
+
+    // Same key coalesces onto tA1 without issuing a duplicate ioctl.
+    std::thread tA2([&] {
+        idA2 = remote.registerLibrary(libA.data(), libA.size(), 1);
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(15));
+    {
+        std::lock_guard<std::mutex> l(gateMu);
+        releaseA = true;
+    }
+    gateCv.notify_all();
+    tA1.join();
+    tA2.join();
+
+    EXPECT_NE(idA1, 0u);
+    EXPECT_EQ(idA1, idA2);
+    EXPECT_NE(idA1, idB);
+    EXPECT_EQ(kernel.registerLibraries, 2u);
+}
+
+TEST_F(RemoteCompile, AsyncCompileAndRecheckDropAsyncLockAllowingConcurrentDelivery)
+{
+    gm20b::Remote remote(kernel.call(), kStack);
+
+    std::atomic<int> firstAnswered{0};
+    ASSERT_TRUE(remote.compileAsync("first", true, QOS_CLASS_USER_INTERACTIVE,
+                                    [&](gm20b::Remote::Answer a, const gm20b::Remote::Answered &) {
+                                        if (a == gm20b::Remote::Answer::Made)
+                                            firstAnswered.fetch_add(1, std::memory_order_release);
+                                    }));
+
+    std::mutex gateMu;
+    std::condition_variable gateCv;
+    bool secondEntered = false, releaseSecond = false;
+    kernel.onAsyncCompile = [&](const TegraGM20BAbiCompile &req) {
+        if (req.cookie == 2) {
+            std::unique_lock<std::mutex> l(gateMu);
+            secondEntered = true;
+            gateCv.notify_all();
+            gateCv.wait(l, [&] {
+                return releaseSecond;
+            });
+        }
+    };
+
+    bool secondSent = false;
+    std::thread asker([&] {
+        secondSent = remote.compileAsync("second", true, QOS_CLASS_USER_INTERACTIVE,
+                                         [](gm20b::Remote::Answer, const gm20b::Remote::Answered &) {});
+    });
+    {
+        std::unique_lock<std::mutex> l(gateMu);
+        ASSERT_TRUE(gateCv.wait_for(l, std::chrono::seconds(5), [&] {
+            return secondEntered;
+        }));
+    }
+
+    // Delivery of request 1 must complete immediately while request 2's async compile ioctl is blocked.
+    kernel.deliver(kIOReturnSuccess, TegraGM20BCompileMade);
+    EXPECT_EQ(firstAnswered.load(std::memory_order_acquire), 1);
+
+    {
+        std::lock_guard<std::mutex> l(gateMu);
+        releaseSecond = true;
+    }
+    gateCv.notify_all();
+    asker.join();
+    ASSERT_TRUE(secondSent);
+
+    // Delivery of request 2 must also complete while a kIOReturnNotReady ask is blocked inside recheck().
+    {
+        std::lock_guard<std::mutex> l(kernel.mu);
+        kernel.onAsyncCompile = nullptr;
+        kernel.asyncCalled = kIOReturnNotReady;
+    }
+    bool recheckEntered = false, releaseRecheck = false;
+    {
+        std::lock_guard<std::mutex> l(kernel.mu);
+        kernel.onCompilerInfo = [&] {
+            std::unique_lock<std::mutex> g(gateMu);
+            recheckEntered = true;
+            gateCv.notify_all();
+            gateCv.wait(g, [&] {
+                return releaseRecheck;
+            });
+        };
+    }
+    bool thirdSent = true;
+    std::thread notReadyAsker([&] {
+        thirdSent = remote.compileAsync("third", true, QOS_CLASS_USER_INTERACTIVE,
+                                        [](gm20b::Remote::Answer, const gm20b::Remote::Answered &) {});
+    });
+    {
+        std::unique_lock<std::mutex> l(gateMu);
+        ASSERT_TRUE(gateCv.wait_for(l, std::chrono::seconds(5), [&] {
+            return recheckEntered;
+        }));
+    }
+    kernel.deliver(kIOReturnSuccess, TegraGM20BCompileMade);
+    {
+        std::lock_guard<std::mutex> l(gateMu);
+        releaseRecheck = true;
+    }
+    gateCv.notify_all();
+    notReadyAsker.join();
+    EXPECT_FALSE(thirdSent);
+}
+
+TEST_F(RemoteCompile, ConcurrentAsyncCompileDeliverAndRegisterLibraryUnderTSan)
+{
+    kernel.flags |= TegraGM20BCompilerLibraries;
+    kernel.bound = 2;
+    gm20b::Remote remote(kernel.call(), kStack);
+
+    std::atomic<int> deliveredCount{0};
+    std::atomic<int> submittedCount{0};
+    std::vector<std::string> libs;
+    for (int i = 0; i < 6; ++i)
+        libs.push_back("metallib-" + std::to_string(i));
+
+    std::vector<std::thread> askers;
+    for (int t = 0; t < 4; ++t) {
+        askers.emplace_back([&, t] {
+            for (int i = 0; i < 12; ++i) {
+                const std::string &lib = libs[size_t((i + t) % libs.size())];
+                EXPECT_NE(remote.registerLibrary(lib.data(), lib.size(), uint64_t((i + t) % libs.size()) + 1), 0u);
+                if (remote.compileAsync("req", true, QOS_CLASS_USER_INTERACTIVE,
+                                        [&](gm20b::Remote::Answer, const gm20b::Remote::Answered &) {
+                                            deliveredCount.fetch_add(1, std::memory_order_relaxed);
+                                        }))
+                    submittedCount.fetch_add(1, std::memory_order_relaxed);
+            }
+        });
+    }
+
+    std::atomic<bool> askersDone{false};
+    std::thread deliverer([&] {
+        for (;;) {
+            bool hasWaiting = false;
+            {
+                std::lock_guard<std::mutex> l(kernel.mu);
+                hasWaiting = !kernel.waiting.empty();
+            }
+            if (hasWaiting) {
+                kernel.deliver(kIOReturnSuccess, TegraGM20BCompileMade);
+                continue;
+            }
+            if (askersDone.load(std::memory_order_acquire) &&
+                deliveredCount.load(std::memory_order_acquire) >= submittedCount.load(std::memory_order_acquire))
+                break;
+            std::this_thread::yield();
+        }
+    });
+
+    for (auto &a : askers)
+        a.join();
+    askersDone.store(true, std::memory_order_release);
+    deliverer.join();
+    EXPECT_EQ(deliveredCount.load(), submittedCount.load());
+    EXPECT_EQ(kernel.registerLibraries, libs.size());
 }
 
 // Completion's queue (TegraGM20BMetalComplete.mm) runs each block at its asker's class, below its own default as well as above it,

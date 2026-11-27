@@ -9,10 +9,12 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -34,7 +36,7 @@ struct BuiltPack {
     std::string path;
 };
 
-BuiltPack writeTwoTierPack(const char *name)
+BuiltPack writeTwoTierPack(const char *name, uint32_t tier1SlmLow = 0)
 {
     constexpr uint32_t kInit = 0x1000;
     constexpr uint32_t kPrograms = 0x4000;
@@ -82,6 +84,8 @@ BuiltPack writeTwoTierPack(const char *name)
         }
         for (uint32_t b = 0x80; b < sizes[i]; ++b)
             file[kHeapOffset + offsets[i] + b] = uint8_t(b * 7 + i);
+        if (tier1SlmLow && i == 3)
+            std::memcpy(file.data() + kHeapOffset + programs[i].program + 4, &tier1SlmLow, sizeof tier1SlmLow);
     }
 
     gm20b::PackPipeline pp[5] = {};
@@ -507,6 +511,153 @@ TEST(GM20BDevicePackWindow, ConcurrentTier0AndTier1CreationUnderTSan)
     EXPECT_EQ(dev.heapInPlaceBytes(), 2 * gm20b::kProgramGrain);
     drawState(dev, got[0][0]);
     drawState(dev, got[0][2]);
+}
+
+class IoctlGate {
+public:
+    explicit IoctlGate(uint32_t method) : method_(method)
+    {
+        std::lock_guard<std::mutex> l(mu_);
+        active_ = this;
+        kernel_model::arriving.store(&arrive, std::memory_order_release);
+    }
+
+    ~IoctlGate()
+    {
+        release();
+        kernel_model::arriving.store(nullptr, std::memory_order_release);
+        std::lock_guard<std::mutex> l(mu_);
+        if (active_ == this)
+            active_ = nullptr;
+    }
+
+    bool waitHeld()
+    {
+        std::unique_lock<std::mutex> l(mu_);
+        return cv_.wait_for(l, std::chrono::seconds(5), [&] {
+            return held_;
+        });
+    }
+
+    void release()
+    {
+        std::lock_guard<std::mutex> l(mu_);
+        released_ = true;
+        cv_.notify_all();
+    }
+
+private:
+    static int arrive(uint32_t method, const void *)
+    {
+        std::unique_lock<std::mutex> l(mu_);
+        IoctlGate *g = active_;
+        if (!g || method != g->method_ || g->matched_)
+            return KERN_SUCCESS;
+        g->matched_ = true;
+        g->held_ = true;
+        g->cv_.notify_all();
+        g->cv_.wait(l, [&] {
+            return g->released_;
+        });
+        return KERN_SUCCESS;
+    }
+
+    uint32_t method_ = 0;
+    bool matched_ = false, held_ = false, released_ = false;
+    std::condition_variable cv_;
+    static inline std::mutex mu_;
+    static inline IoctlGate *active_ = nullptr;
+};
+
+TEST(GM20BDevicePackWindow, PlaceInPlaceDropsDeviceLockDuringColdGrainImportAndDeduplicates)
+{
+    const BuiltPack pack = writeTwoTierPack("pack-window-offlock-grain");
+    configureReadyPackImage();
+
+    gm20b::Device dev;
+    std::string err;
+    ASSERT_TRUE(dev.open(pack.path.c_str(), kPackStack, err, gm20b::Device::Role::Client)) << err;
+
+    IoctlGate gate(TegraGM20BMethodBoImport);
+    gm20b::Pipeline *p1 = nullptr, *p2 = nullptr;
+    std::thread t1([&] {
+        p1 = dev.pipeline(kTier1StateA);
+    });
+    ASSERT_TRUE(gate.waitHeld());
+
+    EXPECT_TRUE(dev.lockFree());
+    gm20b::Buffer buf;
+    ASSERT_TRUE(dev.createBuffer(4096, buf));
+    dev.destroyBuffer(buf);
+    EXPECT_NE(dev.pipeline(kTier0StateA), nullptr);
+
+    std::thread t2([&] {
+        p2 = dev.pipeline(kTier1StateA);
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(15));
+    EXPECT_TRUE(dev.lockFree());
+
+    gate.release();
+    t1.join();
+    t2.join();
+    ASSERT_NE(p1, nullptr);
+    EXPECT_EQ(p1, p2);
+    EXPECT_EQ(kernel_model::model.imports.size(), 1u);
+}
+
+TEST(GM20BDevicePackWindow, HeapGrowAndSlmNeedDropDeviceLockDuringIoctls)
+{
+    const BuiltPack pack = writeTwoTierPack("pack-window-offlock-heap-slm", 64);
+    kernel_model::model = {};
+    kernel_model::model.packImage.enabled = false;
+
+    gm20b::Device dev;
+    std::string err;
+    ASSERT_TRUE(dev.open(pack.path.c_str(), kPackStack, err, gm20b::Device::Role::Client)) << err;
+    // Warm up one pool chunk so the concurrent createBuffer probe below exercises Device::lock_ without triggering a
+    // second BoAlloc/BoImport of its own.
+    gm20b::Buffer warm;
+    ASSERT_TRUE(dev.createBuffer(4096, warm));
+    dev.destroyBuffer(warm);
+
+    {
+        IoctlGate importGate(TegraGM20BMethodBoImport);
+        gm20b::Pipeline *pl = nullptr;
+        std::thread worker([&] {
+            pl = dev.pipeline(kTier1StateA);
+        });
+        ASSERT_TRUE(importGate.waitHeld());
+        EXPECT_TRUE(dev.lockFree());
+        gm20b::Buffer probe;
+        ASSERT_TRUE(dev.createBuffer(4096, probe));
+        dev.destroyBuffer(probe);
+        importGate.release();
+        worker.join();
+        ASSERT_NE(pl, nullptr);
+    }
+
+    const BuiltPack packSlm = writeTwoTierPack("pack-window-offlock-slm", 128);
+    kernel_model::model = {};
+    kernel_model::model.packImage.enabled = false;
+    gm20b::Device devSlm;
+    ASSERT_TRUE(devSlm.open(packSlm.path.c_str(), kPackStack, err, gm20b::Device::Role::Client)) << err;
+    gm20b::Buffer warmSlm;
+    ASSERT_TRUE(devSlm.createBuffer(4096, warmSlm));
+    devSlm.destroyBuffer(warmSlm);
+
+    IoctlGate allocGate(TegraGM20BMethodBoAlloc);
+    gm20b::Pipeline *pl = nullptr;
+    std::thread worker([&] {
+        pl = devSlm.pipeline(kTier1StateA);
+    });
+    ASSERT_TRUE(allocGate.waitHeld());
+    EXPECT_TRUE(devSlm.lockFree());
+    gm20b::Buffer probe;
+    ASSERT_TRUE(devSlm.createBuffer(4096, probe));
+    devSlm.destroyBuffer(probe);
+    allocGate.release();
+    worker.join();
+    ASSERT_NE(pl, nullptr);
 }
 
 }  // namespace
