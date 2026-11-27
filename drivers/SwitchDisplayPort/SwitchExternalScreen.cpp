@@ -129,7 +129,6 @@ bool SwitchExternalScreen::begin(SwitchDisplayPort *port, IOWorkLoop *workLoop)
     loop = workLoop;
     setIdentityMatrix(harmonyMatrix);
     setIdentityMatrix(accessibilityMatrix);
-    accessibilityScale = 0x10000u;
     colorLock = IOLockAlloc();
     completion = IOInterruptEventSource::interruptEventSource(this, &completionFired);
     readySource = IOInterruptEventSource::interruptEventSource(this, &readyFired);
@@ -159,6 +158,7 @@ bool SwitchExternalScreen::begin(SwitchDisplayPort *port, IOWorkLoop *workLoop)
     }
     setName("SwitchExternalDisplay");
     setProperty("external", kOSBooleanTrue);
+    setProperty("IOMFBDisplayExternal", kOSBooleanTrue);
     setInternalDisplay(false);
     publishScanoutLimits();
     if (!attach(nub) || !IOMobileFramebufferLegacy::start(nub)) {
@@ -559,13 +559,8 @@ IOReturn SwitchExternalScreen::swapSetColorMatrix(const void *matrix, uint32_t l
     return kIOReturnSuccess;
 }
 
-IOReturn SwitchExternalScreen::setAccessibilityScale(uint32_t scale)
+IOReturn SwitchExternalScreen::setAccessibilityScale(uint32_t)
 {
-    if (!colorLock)
-        return kIOReturnNotReady;
-    IOLockLock(colorLock);
-    accessibilityScale = scale;
-    IOLockUnlock(colorLock);
     return kIOReturnSuccess;
 }
 
@@ -640,7 +635,7 @@ IOReturn SwitchExternalScreen::selectOutput(bool timing, uint32_t value)
 bool SwitchExternalScreen::validateSwap(const OriginalLegacySwapRequest *request)
 {
     const uint64_t geometry = __atomic_load_n(&activeGeometry, __ATOMIC_ACQUIRE);
-    if (!request || !geometry)
+    if (!request)
         return false;
     const auto *bytes = reinterpret_cast<const uint8_t *>(request);
     const uint32_t updated = native_planes::wordAt(bytes, swapUpdated);
@@ -653,6 +648,8 @@ bool SwitchExternalScreen::validateSwap(const OriginalLegacySwapRequest *request
     for (unsigned i = 0; i < kLayers; ++i) {
         if ((updated & (1u << i)) == 0u || !surfaces[i])
             continue;
+        if (!geometry)
+            return false;
         hasSurface[i] = true;
         if (!surfaces[i]->metaCast("IOSurface")) {
             badObject = true;

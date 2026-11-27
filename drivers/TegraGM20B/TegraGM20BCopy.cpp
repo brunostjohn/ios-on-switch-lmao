@@ -370,6 +370,7 @@ extern "C" int switch_gpu_copy_l2_flush(void (*fn)(void *arg, int status), void 
 				SWITCH_GPU_SUBMIT_VISIBILITY_EXPLICIT |
 					SWITCH_GPU_SUBMIT_EXTERNAL_VISIBILITY |
 					SWITCH_GPU_SUBMIT_HOST_WRITTEN |
+					SWITCH_GPU_SUBMIT_L2_FLUSH_INVALIDATE |
 					SWITCH_GPU_SUBMIT_FORCE_FENCE);
 			if (result)
 				switch_gpu_backing_token_release(&job.completion);

@@ -12,12 +12,50 @@
 class SwitchGpuSubmitGate
 {
 public:
+	static constexpr uint32_t kSlots = 8;
+
+	bool enterFast(uint32_t slot)
+	{
+		if (__atomic_load_n(&blocked_, __ATOMIC_RELAXED))
+			return false;
+		__atomic_store_n(&slotActive_[slot], 1u, __ATOMIC_RELEASE);
+		__atomic_thread_fence(__ATOMIC_SEQ_CST);
+		if (!__atomic_load_n(&blocked_, __ATOMIC_RELAXED))
+			return true;
+		__atomic_store_n(&slotActive_[slot], 0u, __ATOMIC_RELEASE);
+		return false;
+	}
+
+	bool enterSlow(uint32_t slot, IOLock *lock)
+	{
+		wake(lock);
+		while (!closed_ && (mutations_ || mutating_))
+			sleep(lock);
+		if (closed_)
+			return false;
+		__atomic_store_n(&slotActive_[slot], 1u, __ATOMIC_RELEASE);
+		return true;
+	}
+
+	void leaveFast(uint32_t slot, IOLock *lock)
+	{
+		__atomic_store_n(&slotActive_[slot], 0u, __ATOMIC_RELEASE);
+		__atomic_thread_fence(__ATOMIC_SEQ_CST);
+		if (!__atomic_load_n(&blocked_, __ATOMIC_RELAXED) || fast())
+			return;
+		IOLockLock(lock);
+		wake(lock);
+		IOLockUnlock(lock);
+	}
+
 	bool enterFast()
 	{
+		if (__atomic_load_n(&blocked_, __ATOMIC_RELAXED))
+			return false;
 		__atomic_add_fetch(&fast_, 1u, __ATOMIC_SEQ_CST);
 		if (!__atomic_load_n(&blocked_, __ATOMIC_SEQ_CST))
 			return true;
-		__atomic_sub_fetch(&fast_, 1u, __ATOMIC_SEQ_CST);
+		__atomic_sub_fetch(&fast_, 1u, __ATOMIC_RELEASE);
 		return false;
 	}
 
@@ -29,14 +67,14 @@ public:
 			sleep(lock);
 		if (closed_)
 			return false;
-		__atomic_add_fetch(&fast_, 1u, __ATOMIC_SEQ_CST);
+		__atomic_add_fetch(&fast_, 1u, __ATOMIC_RELEASE);
 		return true;
 	}
 
 	void leaveFast(IOLock *lock)
 	{
 		if (__atomic_sub_fetch(&fast_, 1u, __ATOMIC_SEQ_CST) ||
-		    !__atomic_load_n(&blocked_, __ATOMIC_SEQ_CST))
+		    !__atomic_load_n(&blocked_, __ATOMIC_SEQ_CST) || anySlotActive())
 			return;
 		IOLockLock(lock);
 		wake(lock);
@@ -120,18 +158,27 @@ private:
 
 	void block()
 	{
-		__atomic_store_n(&blocked_, closed_ || mutations_ || mutating_, __ATOMIC_SEQ_CST);
+		__atomic_store_n(&blocked_, closed_ || mutations_ || mutating_, __ATOMIC_RELEASE);
+		__atomic_thread_fence(__ATOMIC_SEQ_CST);
+	}
+
+	bool anySlotActive() const
+	{
+		for (uint32_t i = 0; i < kSlots; ++i)
+			if (__atomic_load_n(&slotActive_[i], __ATOMIC_ACQUIRE))
+				return true;
+		return false;
 	}
 
 	unsigned fast() const
 	{
-		return __atomic_load_n(&fast_, __ATOMIC_SEQ_CST);
+		return __atomic_load_n(&fast_, __ATOMIC_ACQUIRE) || anySlotActive();
 	}
 
 	unsigned mutations_ = 0, sleepers_ = 0;
 	bool closed_ = false, mutating_ = false;
 	SwitchGpuThreadRef mutator_ = nullptr;
-	// enterFast's submissions: at most one per channel slot, so a byte
+	uint8_t slotActive_[kSlots] = {};
 	uint8_t fast_ = 0;
 	bool blocked_ = false;
 };

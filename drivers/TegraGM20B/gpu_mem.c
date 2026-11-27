@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // The pool, address spaces, memory objects and their import notes.
 #include "gpu_internal.h"
+#include <subdev/mmu/vmm.h>
 
 /* Pool BOs are mapped into processes, and a process maps whole VM pages (four pool pages): each BO starts on one and is
  * padded to one, so its mapping never reaches another BO. */
@@ -155,6 +156,36 @@ int tgm_vm_new(struct tgm_vm **pvm)
 	/* RAW: the client manages [0, 1<<39) with raw binds; nvkm allocates in [1<<39, 1<<40) */
 	ret = nvif_vmm_ctor(&tgm_gpu.mmu, "uvmm", NVIF_CLASS_VMM_GM200, RAW, TGM_KERNEL_VA,
 			    TGM_VA_LIMIT - TGM_KERNEL_VA, &args, sizeof(args), &vm->vmm);
+	if (!ret) {
+		struct nvkm_vmm *vmm = nvkm_uvmm_search(
+			(struct nvkm_client *)tgm_gpu.client.object.priv, vm->vmm.object.handle);
+
+		if (!IS_ERR_OR_NULL(vmm)) {
+			if (vmm->pd && vmm->pd->pt[0]) {
+				struct nvkm_mmu_pt *pd = vmm->pd->pt[0];
+				u32 target = 2;
+
+				switch (nvkm_memory_target(pd->memory)) {
+				case NVKM_MEM_TARGET_VRAM:
+					target = 0;
+					break;
+				case NVKM_MEM_TARGET_HOST:
+					target = 2;
+					break;
+				case NVKM_MEM_TARGET_NCOH:
+					target = 3;
+					break;
+				default:
+					target = 2;
+					break;
+				}
+				vm->tlb_mem_op_c = (u32)(pd->addr & 0xfffff000u) | (target << 10);
+				vm->tlb_mem_op_d = (u32)((pd->addr >> 32) & 0xffu) |
+						   NVB06F_MEM_OP_D_OPERATION_MMU_TLB_INVALIDATE;
+			}
+			nvkm_vmm_unref(&vmm);
+		}
+	}
 	mutex_unlock(&tgm_gpu.lock);
 	if (ret) {
 		mutex_destroy(&vm->map_lock);

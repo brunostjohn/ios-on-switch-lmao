@@ -104,6 +104,10 @@ TEST(ExternalOwnership, FrontReadLivesUntilReplacementAndGenerationChangesRefuse
     EXPECT_NE(lifecycle.find("SwitchExternalScreen::setMatrix("), std::string::npos);
     EXPECT_NE(lifecycle.find("SwitchExternalScreen::swapSetColorMatrix("), std::string::npos);
     EXPECT_NE(lifecycle.find("SwitchExternalScreen::setAccessibilityScale("), std::string::npos);
+    EXPECT_FALSE(Block(lifecycle, "IOReturn SwitchExternalScreen::setAccessibilityScale(").has("colorLock"));
+    EXPECT_TRUE(validate.before("if ((updated & (1u << i)) == 0u || !surfaces[i])", "if (!geometry) return false;"));
+    const auto kick = Block(present, "void SwitchExternalScreen::kickSwapQueue()");
+    EXPECT_TRUE(kick.before("if (!connected || device != 2 || selectedMode < 0)", "drainSwapQueue();"));
 
     const auto header = SourceText("../SwitchExternalScreen.h");
     EXPECT_NE(header.find("kSlotSpan = 68ULL << 20"), std::string::npos);
@@ -121,6 +125,8 @@ TEST(ExternalOwnership, FrontReadLivesUntilReplacementAndGenerationChangesRefuse
 
     const auto beginScreen = Block(lifecycle, "bool SwitchExternalScreen::begin(");
     EXPECT_TRUE(beginScreen.before("setInternalDisplay(false);", "IOMobileFramebufferLegacy::start(nub)"));
+    EXPECT_TRUE(beginScreen.before("setProperty(\"IOMFBDisplayExternal\", kOSBooleanTrue);",
+                                   "IOMobileFramebufferLegacy::start(nub)"));
     EXPECT_FALSE(beginScreen.has("registerService();"));
     EXPECT_TRUE(beginScreen.before("PMinit();", "nub->joinPMtree(this);"));
     EXPECT_TRUE(beginScreen.before("nub->joinPMtree(this);", "registerPowerDriver(this, states, 2)"));

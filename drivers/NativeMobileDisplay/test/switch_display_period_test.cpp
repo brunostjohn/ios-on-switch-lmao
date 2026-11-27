@@ -101,7 +101,7 @@ protected:
     {
         return {::gSimpleLockTakes.load(),
                 d.intMaskLock->takes,
-                gHarnessSimpleLocks - d.intMaskLock->takes,
+                gHarnessSimpleLocks,
                 gRmws,
                 d.vblankSource.signals,
                 d.gpuDoneStore.signals,

@@ -12,7 +12,15 @@ void SwitchExternalScreen::kickSwapQueue()
 {
     if (dcb && switch_abi_load<const void *>(this, vsyncClientList))
         dcb->frameInterrupt(true);
-    if (kicking || !dcb || pending || device != 2)
+    if (kicking || pending)
+        return;
+    if (!connected || device != 2 || selectedMode < 0) {
+        kicking = true;
+        drainSwapQueue();
+        kicking = false;
+        return;
+    }
+    if (!dcb)
         return;
     kicking = true;
     requestFrame();

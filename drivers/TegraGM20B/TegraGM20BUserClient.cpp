@@ -74,6 +74,8 @@ extern "C" bool tegra_gm20b_set_app_gpu_role(int pid, uint32_t role)
 	IOLockLock(lock);
 	const bool ok = gConnections.setRole(pid, role);
 	IOLockUnlock(lock);
+	if (ok)
+		__atomic_fetch_add(&tgm_uc::appRoleGen, 1u, __ATOMIC_RELEASE);
 	return ok;
 }
 
@@ -90,6 +92,8 @@ extern "C" bool tegra_gm20b_get_app_gpu_role(int pid, uint32_t *role)
 
 namespace tgm_uc
 {
+uint32_t appRoleGen = 1;
+
 IOOptionBits boMapOptions(bool coherent, bool system, bool fullView, bool readOnly, uint64_t bytes)
 {
 	IOOptionBits opts = coherent ? kIOMapWriteCombineCache : kIOMapDefaultCache;
@@ -110,6 +114,9 @@ OSDefineMetaClassAndStructors(AGXDeviceUserClient, IOUserClient)
 	task_ = task;
 	proc_selfname(owner_, sizeof(owner_));
 	ownerPid_ = proc_selfpid();
+	roleGen_ = __atomic_load_n(&tgm_uc::appRoleGen, __ATOMIC_ACQUIRE);
+	backgroundRole_ = clientHasPrivilege(task, kIOClientPrivilegeForeground) != kIOReturnSuccess;
+	applyLevel();
 
 	lock_ = IOLockAlloc();
 	unmapLock_ = IOLockAlloc();

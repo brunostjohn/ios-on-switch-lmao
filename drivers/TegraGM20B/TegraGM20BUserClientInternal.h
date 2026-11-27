@@ -82,6 +82,7 @@ using tgm_scan::scanPush;
 
 namespace tgm_uc
 {
+extern uint32_t appRoleGen;
 constexpr uint32_t kMaxChannels = 8;  // fence slots: 64 bytes each in the connection's fence page
 static_assert(kMaxChannels * TegraGM20BFencePageRecordBytes == TegraGM20BFencePageChannelsBytes,
 	      "a channel slot of the fence page for each channel");
@@ -480,6 +481,7 @@ class AGXDeviceUserClient : public IOUserClient
 		SwitchGpuEventJob *events;
 		SubmitPhases phases;
 		SwitchGpuUseCache<KernelMemory> useCache;
+		uint32_t roleChecks;
 		bool gateHeld, setHeld, roomRetry, pushesPrepared, carryHostWritten;
 	};
 
@@ -596,6 +598,7 @@ class AGXDeviceUserClient : public IOUserClient
 	// what the connection's queues asked for (method 18), whether runningboardd denies it the GPU (then the background
 	// priority counts) and the runlist level they give its channels
 	uint32_t priority_ = 2, backgroundPriority_ = 2;
+	uint32_t roleGen_ = 0;
 	bool backgroundRole_ = false;
 	// its task's IOGPUFamily entitlements, read at its first method 18; one line each, once: an ask for RealTime
 	// without rt-priority-spi, an ask for 0 without graphics-restart-no-kill, becoming the compositor
@@ -771,8 +774,8 @@ class AGXDeviceUserClient : public IOUserClient
 	void reholdPromises(const TegraGM20BAbiJobPromises *promises);
 	void keptPromises(const TegraGM20BAbiJobPromises *promises, uint32_t slot,
 			  const switch_gpu_backing_token &job);
-	void leaveSubmitGateForWait(JobScratch &job, switch_gpu_resource_set *set);
-	bool reenterSubmitGate(JobScratch &job);
+	void leaveSubmitGateForWait(uint32_t slot, JobScratch &job, switch_gpu_resource_set *set);
+	bool reenterSubmitGate(uint32_t slot, JobScratch &job);
 	uint32_t collectSiblings(const switch_gpu_resource_set *set, uint32_t slot,
 				 switch_gpu_sibling_wait *siblings) const;
 	IOReturn runJob(const SwitchGpuJobRecord &record, JobScratch &job,

@@ -79,13 +79,16 @@ uint32_t collect_read_promises(const switch_gpu_backing_transaction &transaction
 void unlock_transaction(switch_gpu_backing_transaction *transaction)
 {
 	if (transaction->claimed) {
+		for (uint32_t i = 0; i < transaction->count; ++i)
+			transaction->uses[i].reserved = 0;
 		switch_gpu_backing_unclaim_uses(transaction->uses, transaction->count);
 		transaction->locked = 0;
 	}
 	for (uint32_t i = transaction->count; transaction->locked && i; --i) {
-		if (!(transaction->uses[i - 1].reserved & kUseLocked))
-			continue;
+		const uint32_t flags = transaction->uses[i - 1].reserved;
 		transaction->uses[i - 1].reserved = 0;
+		if (!(flags & kUseLocked))
+			continue;
 		IOLockUnlock(transaction->uses[i - 1].backing->lock);
 		--transaction->locked;
 	}
@@ -227,7 +230,11 @@ bool publish_transaction(switch_gpu_backing_transaction *transaction)
 			backing->host_acquire_handle = transaction->handle;
 			backing->host_acquire_epoch = backing->host_epoch;
 		}
-		const uint32_t slot = access_slot(backing, transaction->completion, access);
+		const uint32_t reserved = transaction->uses[i].reserved;
+		const uint32_t slot =
+			(reserved & kUseHasSlot)
+				? (reserved >> kUseSlotShift)
+				: access_slot(backing, transaction->completion, access);
 		const bool write = (access & SWITCH_GPU_BACKING_WRITE) != 0;
 		const switch_gpu_backing_access *previous =
 			slot < backing->access_count ? &backing->accesses[slot] : nullptr;

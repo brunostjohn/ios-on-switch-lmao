@@ -70,14 +70,17 @@ volatile uint64_t *SwitchMemoryAttachment::generation(IOMemoryDescriptor *memory
 }
 
 namespace {
-OSObject **slotOf(IOMemoryDescriptorReserved *reserved, bool gpu)
-{
-    return gpu ? &reserved->switchGpuRecord : &reserved->switchAttachment;
-}
-
 void clearSlot(IOMemoryDescriptorReserved *reserved, bool gpu)
 {
-    OSObject **slot = slotOf(reserved, gpu);
+    if (gpu) {
+        auto *old = reserved->switchGpuRecord;
+        if (!old)
+            return;
+        reserved->switchGpuRecord = nullptr;
+        old->release();
+        return;
+    }
+    OSObject **slot = &reserved->switchAttachment;
     if (!__atomic_load_n(slot, __ATOMIC_ACQUIRE))
         return;
     IOLock *lock = shardLockFor(reserved);
@@ -90,24 +93,23 @@ void clearSlot(IOMemoryDescriptorReserved *reserved, bool gpu)
 }
 }
 
-OSObject *SwitchMemoryAttachment::copySlot(IOMemoryDescriptor *memory, bool gpu)
+OSObject *SwitchMemoryAttachment::copy(IOMemoryDescriptor *memory)
 {
     if (!memory)
         return nullptr;
     auto *reserved = __atomic_load_n(&memory->reserved, __ATOMIC_ACQUIRE);
-    if (!reserved || !__atomic_load_n(slotOf(reserved, gpu), __ATOMIC_ACQUIRE))
+    if (!reserved || !__atomic_load_n(&reserved->switchAttachment, __ATOMIC_ACQUIRE))
         return nullptr;
     IOLock *lock = shardLockFor(reserved);
     IOLockLock(lock);
-    auto *object = *slotOf(reserved, gpu);
+    auto *object = reserved->switchAttachment;
     if (object)
         object->retain();
     IOLockUnlock(lock);
     return object;
 }
 
-bool SwitchMemoryAttachment::replaceSlot(IOMemoryDescriptor *memory, bool gpu, OSObject *expected,
-                                         OSObject *replacement)
+bool SwitchMemoryAttachment::replace(IOMemoryDescriptor *memory, OSObject *expected, OSObject *replacement)
 {
     if (!memory)
         return false;
@@ -119,36 +121,39 @@ bool SwitchMemoryAttachment::replaceSlot(IOMemoryDescriptor *memory, bool gpu, O
         return false;
     if (replacement)
         replacement->retain();
-    OSObject **slot = slotOf(reserved, gpu);
     IOLockLock(lock);
-    auto *old = *slot;
+    auto *old = reserved->switchAttachment;
     const bool changed = old == expected;
     if (changed)
-        __atomic_store_n(slot, replacement, __ATOMIC_RELEASE);
+        __atomic_store_n(&reserved->switchAttachment, replacement, __ATOMIC_RELEASE);
     IOLockUnlock(lock);
     if (changed ? old != nullptr : replacement != nullptr)
         (changed ? old : replacement)->release();
     return changed;
 }
 
-OSObject *SwitchMemoryAttachment::copy(IOMemoryDescriptor *memory)
+OSObject *SwitchMemoryAttachment::borrowGpu(IOMemoryDescriptor *memory)
 {
-    return copySlot(memory, false);
+    if (!memory)
+        return nullptr;
+    auto *reserved = __atomic_load_n(&memory->reserved, __ATOMIC_ACQUIRE);
+    return reserved ? __atomic_load_n(&reserved->switchGpuRecord, __ATOMIC_ACQUIRE) : nullptr;
 }
 
-bool SwitchMemoryAttachment::replace(IOMemoryDescriptor *memory, OSObject *expected, OSObject *replacement)
+bool SwitchMemoryAttachment::publishGpu(IOMemoryDescriptor *memory, OSObject *made)
 {
-    return replaceSlot(memory, false, expected, replacement);
-}
-
-OSObject *SwitchMemoryAttachment::copyGpu(IOMemoryDescriptor *memory)
-{
-    return copySlot(memory, true);
-}
-
-bool SwitchMemoryAttachment::replaceGpu(IOMemoryDescriptor *memory, OSObject *expected, OSObject *replacement)
-{
-    return replaceSlot(memory, true, expected, replacement);
+    if (!memory || !made)
+        return false;
+    auto *reserved = memory->getKernelReserved();
+    if (!reserved)
+        return false;
+    made->retain();
+    OSObject *expected = nullptr;
+    if (__atomic_compare_exchange_n(&reserved->switchGpuRecord, &expected, made, false, __ATOMIC_RELEASE,
+                                    __ATOMIC_ACQUIRE))
+        return true;
+    made->release();
+    return false;
 }
 
 void SwitchMemoryAttachment::clear(IOMemoryDescriptorReserved *reserved)

@@ -491,7 +491,7 @@ TEST(GM20BPushScanSource, EverySubmissionPathScansItsPushes)
 		      "IOReturn AGXDeviceUserClient::runJobUses(const SwitchGpuJobRecord &record,");
 	EXPECT_TRUE(job.before("const tgm_prof *profile = scanSubmission(slot, fences, pushes, "
 			       "count, prof, true);",
-			       "switch_gpu_chan_exec_events("));
+			       "switch_gpu_chan_exec_events_validated("));
 	EXPECT_TRUE(job.has("&seqno, profile, jobVisibility, releases, keptCount, &transaction);"));
 	const CodeText submission =
 		Block(client(), "const tgm_prof *AGXDeviceUserClient::scanSubmission(");
@@ -861,9 +861,9 @@ TEST(GM20BRoomSource, SubmitJobNeverSleepsWithBackingLocksHeld)
 	EXPECT_TRUE(job.before("switch_gpu_set_note_job(set, slot, &completion);",
 			       "switch_gpu_chan_submit_leave();"));
 	const CodeText submit = Block(client(), "IOReturn AGXDeviceUserClient::takeJob(");
-	EXPECT_TRUE(submit.before("submitGate_.enterFast();", "runJob(record, job, out, why)"));
-	EXPECT_TRUE(
-		submit.before("runJob(record, job, out, why)", "submitGate_.leaveFast(lock_);"));
+	EXPECT_TRUE(submit.before("submitGate_.enterFast(slot);", "runJob(record, job, out, why)"));
+	EXPECT_TRUE(submit.before("runJob(record, job, out, why)",
+				  "submitGate_.leaveFast(slot, lock_);"));
 	const CodeText emit = Block(gpu(), "int chan_exec_body(");
 	EXPECT_TRUE(emit.has("if (!may_wait && !chan_room(chan, entries, words)) return -EAGAIN;"));
 	EXPECT_TRUE(emit.before("chan->chan.defer_kick = true;",
@@ -958,12 +958,11 @@ TEST(GM20BL2Source, InvalidateOnTheGpu)
 	EXPECT_TRUE(exec.before(
 		"bind = !chan->kernel && bind_pending(chan->vm, &bind_target, &bind_va);",
 		"tlb = tgm_tlb_take(&chan->tlb, &chan->vm->tlb) || bind;"));
-	EXPECT_TRUE(exec.before(
-		"NVB06F_MEM_OP_D_OPERATION_L2_SYSMEM_INVALIDATE);",
-		"NVB06F_MEM_OP_D_OPERATION_MMU_TLB_INVALIDATE); } PUSH_KICK(&chan->chan.push);"));
-	EXPECT_TRUE(exec.before(
-		"NVB06F_MEM_OP_D_OPERATION_MMU_TLB_INVALIDATE); } PUSH_KICK(&chan->chan.push);",
-		"job.unprefetched = (l2_on() && host_written) || tlb;"));
+	EXPECT_TRUE(exec.before("NVB06F_MEM_OP_D_OPERATION_L2_SYSMEM_INVALIDATE);",
+				"chan_push_tlb_inval(&chan->chan.push, chan->vm);"));
+	EXPECT_TRUE(exec.before("chan_push_tlb_inval(&chan->chan.push, chan->vm);",
+				"PUSH_KICK(&chan->chan.push);"));
+	EXPECT_TRUE(exec.before("PUSH_KICK(&chan->chan.push);", "job.unprefetched = l2_inval;"));
 	EXPECT_TRUE(Block(gpu(), "void chan_job_entry(")
 			    .has("pushes[i].no_prefetch || (job->unprefetched && !i));"));
 }
@@ -973,7 +972,7 @@ TEST(GM20BL2Source, InvalidateOnTheGpu)
 TEST(GM20BCoherencySource, AJobNamesTheWriterOnceTheSubmissionHasItsSeqno)
 {
 	const CodeText job = Block(client(), "IOReturn AGXDeviceUserClient::runJobUses(");
-	EXPECT_TRUE(job.before("error = switch_gpu_chan_exec_events(",
+	EXPECT_TRUE(job.before("error = switch_gpu_chan_exec_events_validated(",
 			       "tgm_coherency_wrote(job.written[i], tgm_chan_uid(chan), seqno);"));
 	EXPECT_TRUE(job.has("jobVisibility, releases, keptCount, &transaction);"));
 }
@@ -1018,7 +1017,7 @@ TEST(GM20BVisibilitySource, AJobWritingAScannedBackingIsExternal)
 	EXPECT_TRUE(
 		Block(SourceText("../SwitchGpuBacking.cpp"),
 		      "extern \"C\" int switch_gpu_backing_scanned(")
-			.has("__atomic_load_n(&backing->scanout_holds, __ATOMIC_SEQ_CST) != 0"));
+			.has("__atomic_load_n(&backing->scanout_holds, __ATOMIC_ACQUIRE) != 0"));
 }
 
 // Only a connection's maps skip the CPU's L2 and TLB maintenance; every removal keeps it (TegraGM20BTlb.h).
@@ -1202,7 +1201,7 @@ TEST(GM20BViewsSource, AGpuWriteUnderACpuWriteLockIsMergedNotHeldBack)
 	EXPECT_TRUE(job.before("tgm_views_job_writes(job.written, writtenCount);",
 			       "switch_gpu_chan_submit_enter(chan);"));
 	EXPECT_TRUE(job.before("tgm_views_job_writes(job.written, writtenCount);",
-			       "switch_gpu_chan_exec_events("));
+			       "switch_gpu_chan_exec_events_validated("));
 	EXPECT_EQ(clientCode().count("tgm_views_gpu_writes("), 0u);
 }
 
@@ -1812,7 +1811,9 @@ TEST(GM20BVisibilitySource, InternalFenceKeepsExecutionOrderAndExternalFencePubl
 		fence.before("lower_32_bits(chan->visible_gpu)", "lower_32_bits(chan->fence_gpu)"));
 	EXPECT_TRUE(fence.has("RELEASE_WFI, EN"));
 	const CodeText exec = Block(gpu(), "int chan_exec_body(");
-	EXPECT_TRUE(exec.has("if ((l2_on() && host_written) || tlb)"));
+	EXPECT_TRUE(exec.has("l2_inval = (l2_on() && host_written) || tlb || l2_flush_inval;"));
+	EXPECT_TRUE(exec.before("if (tlb || l2_flush_inval) {",
+				"NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY"));
 	EXPECT_TRUE(exec.before("NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY",
 				"NVB06F_MEM_OP_D_OPERATION_L2_SYSMEM_INVALIDATE"));
 	EXPECT_TRUE(exec.has(
@@ -1828,12 +1829,11 @@ TEST(GM20BVisibilitySource, InternalFenceKeepsExecutionOrderAndExternalFencePubl
 	EXPECT_FALSE(internal.has("defer_kick"));
 	EXPECT_TRUE(internal.before("RELEASE_SIZE, 4BYTE));", "PUSH_KICK(push);"));
 	EXPECT_TRUE(exec.before("chan->chan.defer_kick = true;", "last = switch_gpu_job_emit("));
-	EXPECT_TRUE(fence.before("chan->chan.defer_kick = true;", "PUSH_KICK(push);"));
-	EXPECT_TRUE(fence.before("PUSH_KICK(push);", "chan_doorbell(chan);"));
+	EXPECT_TRUE(fence.before("chan_push_nopost(chan);", "chan_doorbell(chan);"));
 	EXPECT_TRUE(fence.before(
 		"job = switch_gpu_jobs_kick_waits(&chan->jobs, first, next, chan->submit_ns, "
 		"!announce, waits);",
-		"PUSH_KICK(push);"));
+		"chan_push_nopost(chan);"));
 	for (const char *signature : {"int tgm_vm_unmap_pages(", "void switch_gpu_vm_unmap("}) {
 		const CodeText unmap = Block(gpu(), signature);
 		EXPECT_TRUE(

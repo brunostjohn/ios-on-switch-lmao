@@ -15,7 +15,14 @@ switch_gpu_backing *expiry_first, *expiry_last;
 uint32_t retirement_pending, retirement_count, scan_remaining;
 uint64_t completion_generation, scan_generation, armed_deadline;
 constexpr uint32_t kRetirementBatch = 64;
+constexpr uint32_t kRetireWatch = 32;
 constexpr uint64_t kRetirementTimeoutNs = 10000000000ULL;
+struct RetireWatch {
+	uint32_t seq;
+	uint32_t valid;
+	uint32_t count;
+	switch_gpu_backing_token tokens[kRetireWatch];
+} retire_watch;
 switch_gpu_backing_engine engines[SWITCH_GPU_ENGINE_COUNT];
 uint32_t engine_ready[SWITCH_GPU_ENGINE_COUNT];
 switch_gpu_backing_visibility visibility[SWITCH_GPU_ENGINE_COUNT];
@@ -414,14 +421,14 @@ extern "C" void switch_gpu_backing_scanout(switch_gpu_backing *backing, int add)
 	if (!backing)
 		return;
 	if (add)
-		__atomic_add_fetch(&backing->scanout_holds, 1u, __ATOMIC_SEQ_CST);
+		__atomic_add_fetch(&backing->scanout_holds, 1u, __ATOMIC_RELEASE);
 	else
-		__atomic_sub_fetch(&backing->scanout_holds, 1u, __ATOMIC_SEQ_CST);
+		__atomic_sub_fetch(&backing->scanout_holds, 1u, __ATOMIC_RELEASE);
 }
 
 extern "C" int switch_gpu_backing_scanned(const switch_gpu_backing *backing)
 {
-	return backing && __atomic_load_n(&backing->scanout_holds, __ATOMIC_SEQ_CST) != 0;
+	return backing && __atomic_load_n(&backing->scanout_holds, __ATOMIC_ACQUIRE) != 0;
 }
 
 extern "C" void switch_gpu_backing_release(switch_gpu_backing *backing)
@@ -436,6 +443,7 @@ extern "C" void switch_gpu_backing_release(switch_gpu_backing *backing)
 		retire_append(backing);
 		expiry_append(backing);
 		++retirement_count;
+		__atomic_store_n(&retire_watch.valid, 0u, __ATOMIC_RELEASE);
 		__atomic_add_fetch(&completion_generation, 1u, __ATOMIC_RELEASE);
 		__atomic_store_n(&retirement_pending, 1u, __ATOMIC_RELEASE);
 		arm_expiry_locked();
@@ -461,7 +469,32 @@ extern "C" void switch_gpu_backing_completed(void)
 		switch_gpu_events_completed();
 	if (switch_gpu_copy_completed)
 		switch_gpu_copy_completed();
-	if (__atomic_load_n(&retirement_pending, __ATOMIC_ACQUIRE)) {
+	if (!__atomic_load_n(&retirement_pending, __ATOMIC_ACQUIRE))
+		return;
+	bool wake = true;
+	if (__atomic_load_n(&retire_watch.valid, __ATOMIC_ACQUIRE)) {
+		const uint32_t s1 = __atomic_load_n(&retire_watch.seq, __ATOMIC_ACQUIRE);
+		if (!(s1 & 1u)) {
+			const uint32_t count =
+				__atomic_load_n(&retire_watch.count, __ATOMIC_RELAXED);
+			switch_gpu_backing_token tokens[kRetireWatch];
+			const uint32_t n = count <= kRetireWatch ? count : 0u;
+			for (uint32_t i = 0; i < n; ++i)
+				tokens[i] = retire_watch.tokens[i];
+			__atomic_thread_fence(__ATOMIC_ACQUIRE);
+			if (n && __atomic_load_n(&retire_watch.seq, __ATOMIC_RELAXED) == s1 &&
+			    __atomic_load_n(&retire_watch.valid, __ATOMIC_ACQUIRE)) {
+				wake = false;
+				for (uint32_t i = 0; i < n; ++i) {
+					if (switch_gpu_backing_token_status(&tokens[i]) != 0) {
+						wake = true;
+						break;
+					}
+				}
+			}
+		}
+	}
+	if (wake) {
 		__atomic_add_fetch(&completion_generation, 1u, __ATOMIC_RELEASE);
 		switch_gpu_backing_schedule_retirement();
 	}
@@ -485,7 +518,12 @@ extern "C" void switch_gpu_backing_retire(void)
 	if (!registry)
 		return;
 	switch_gpu_backing *ready = nullptr;
+	switch_gpu_backing_token watched[kRetireWatch];
+	uint32_t watched_count = 0;
+	bool watch_overflow = false;
 	IOLockLock(registry);
+	__atomic_store_n(&retire_watch.valid, 0u, __ATOMIC_RELEASE);
+	const bool full_pass_start = scan_remaining == 0;
 	if (!scan_remaining) {
 		scan_remaining = retirement_count;
 		scan_generation = __atomic_load_n(&completion_generation, __ATOMIC_ACQUIRE);
@@ -495,13 +533,33 @@ extern "C" void switch_gpu_backing_retire(void)
 		auto *backing = retire_pop();
 		--scan_remaining;
 		const bool claimed = switch_gpu_backing_enter(backing);
-		bool pending = false;
-		for (uint32_t i = 0; backing->refs == 1 && i < backing->access_count; ++i)
-			pending |=
-				switch_gpu_backing_token_status(&backing->accesses[i].token) == 0;
-		if (pending) {
+		switch_gpu_backing_token blocker = {};
+		for (uint32_t i = 0; backing->refs == 1 && i < backing->access_count; ++i) {
+			if (switch_gpu_backing_token_status(&backing->accesses[i].token) == 0) {
+				blocker = backing->accesses[i].token;
+				break;
+			}
+		}
+		if (blocker.engine) {
 			retire_append(backing);
 			switch_gpu_backing_leave(backing, claimed);
+			if (full_pass_start && !watch_overflow) {
+				bool merged = false;
+				for (uint32_t k = 0; k < watched_count; ++k) {
+					if (switch_gpu_backing_same_timeline(watched[k], blocker)) {
+						if (switch_gpu_backing_later(watched[k], blocker))
+							watched[k] = blocker;
+						merged = true;
+						break;
+					}
+				}
+				if (!merged) {
+					if (watched_count < kRetireWatch)
+						watched[watched_count++] = blocker;
+					else
+						watch_overflow = true;
+				}
+			}
 			continue;
 		}
 		--retirement_count;
@@ -523,6 +581,16 @@ extern "C" void switch_gpu_backing_retire(void)
 	const bool again = retiring && (scan_remaining ||
 					scan_generation != __atomic_load_n(&completion_generation,
 									   __ATOMIC_ACQUIRE));
+	if (full_pass_start && retiring && !again && !watch_overflow && watched_count) {
+		const uint32_t seq = __atomic_load_n(&retire_watch.seq, __ATOMIC_RELAXED);
+		__atomic_store_n(&retire_watch.seq, seq + 1u, __ATOMIC_RELAXED);
+		__atomic_thread_fence(__ATOMIC_RELEASE);
+		__atomic_store_n(&retire_watch.count, watched_count, __ATOMIC_RELAXED);
+		for (uint32_t k = 0; k < watched_count; ++k)
+			retire_watch.tokens[k] = watched[k];
+		__atomic_store_n(&retire_watch.seq, seq + 2u, __ATOMIC_RELEASE);
+		__atomic_store_n(&retire_watch.valid, 1u, __ATOMIC_RELEASE);
+	}
 	arm_expiry_locked();
 	IOLockUnlock(registry);
 	const bool batch = ready && switch_gpu_memory_retire_begin && switch_gpu_memory_retire_end;

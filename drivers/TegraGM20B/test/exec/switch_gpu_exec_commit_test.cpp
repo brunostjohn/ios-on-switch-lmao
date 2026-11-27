@@ -468,8 +468,8 @@ TEST_F(ExecCommit, AContenderEntersOnceTheRecordsSeqnoIsSubmittedAndBeforeGpPut)
 	expect_published();
 }
 
-// Raised by idle_wake's backstop in the job's fence: a PLL switch that may sleep on the clock's mutex, never under the
-// ownership order every CPU backing operation takes.
+// Raised by switch_gpu_chan_submit_enter before taking backing locks: a PLL switch that may sleep on the clock's mutex,
+// never under the ownership order every CPU backing operation takes.
 TEST_F(ExecCommit, AnIdleClockGoesUpOutsideTheOwnershipOrderBeforeTheDoorbell)
 {
 	struct Raise {
@@ -478,7 +478,6 @@ TEST_F(ExecCommit, AnIdleClockGoesUpOutsideTheOwnershipOrderBeforeTheDoorbell)
 		bool ordered, after_doorbell;
 	} raise = {&kicks, 0, false, false};
 
-	ASSERT_EQ(begin({{written, SWITCH_GPU_BACKING_WRITE, 0}}), 0);
 	switch_exec_idle_low(
 		[](void *context) {
 			auto *r = static_cast<Raise *>(context);
@@ -489,7 +488,10 @@ TEST_F(ExecCommit, AnIdleClockGoesUpOutsideTheOwnershipOrderBeforeTheDoorbell)
 		},
 		&raise);
 
+	switch_gpu_chan_submit_enter(switch_exec_chan_tgm(consumer));
+	ASSERT_EQ(begin({{written, SWITCH_GPU_BACKING_WRITE, 0}}), 0);
 	const int result = exec(&kPush, 1);
+	switch_gpu_chan_submit_leave();
 	switch_exec_idle_low(nullptr, nullptr);
 
 	EXPECT_EQ(result, 0);

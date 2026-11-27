@@ -405,8 +405,7 @@ static int present_copy(uint64_t src_va, uint64_t stride, int32_t src_block_log2
 		PUSH_NVSQ(push, NV906F, NVB06F_FB_FLUSH, 0);
 		PUSH_NVSQ(push, NV906F, NVB06F_MEM_OP_C, 0, NVB06F_MEM_OP_D,
 			  NVB06F_MEM_OP_D_OPERATION_L2_SYSMEM_INVALIDATE);
-		PUSH_NVSQ(push, NV906F, NVB06F_MEM_OP_C, NVB06F_MEM_OP_C_TLB_INVALIDATE_PDB_ALL,
-			  NVB06F_MEM_OP_D, NVB06F_MEM_OP_D_OPERATION_MMU_TLB_INVALIDATE);
+		chan_push_tlb_inval(push, chan->vm);
 		/* NOLINTEND(bugprone-signed-bitwise,bugprone-branch-clone) */
 	}
 	if (dst_va)
