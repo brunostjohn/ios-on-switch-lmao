@@ -29,6 +29,7 @@ struct InstancePool {
     std::atomic<Class> cls{nullptr};
     size_t size = 0;
     void (*dropped)(void *) = nullptr;
+    bool threadCache = false;
     gm20b::TakePool<void *, kKeptMost> blocks;
     std::atomic<uint64_t> made{0}, freed{0};
     // instances alive now, and the most alive at once: a dealloc keeps its block while fewer than that are kept
@@ -38,12 +39,39 @@ struct InstancePool {
 InstancePool gPools[kPools];
 std::atomic<uint32_t> gPoolCount{0};
 
-InstancePool *poolOf(Class cls)
+void returnToPool(InstancePool *pool, void *block);
+
+struct ThreadPoolCache {
+    Class cls[kPools] = {};
+    void *slot[kPools] = {};
+    InstancePool *owner[kPools] = {};
+    uint32_t count = 0;
+
+    ~ThreadPoolCache()
+    {
+        for (uint32_t i = 0; i < count; i++)
+            if (slot[i] && owner[i]) {
+                returnToPool(owner[i], slot[i]);
+                slot[i] = nullptr;
+            }
+    }
+};
+
+ThreadPoolCache &threadCache()
+{
+    static thread_local ThreadPoolCache cache;
+    return cache;
+}
+
+InstancePool *poolOf(Class cls, uint32_t *indexOut = nullptr)
 {
     const uint32_t n = gPoolCount.load(std::memory_order_acquire);
     for (uint32_t i = 0; i < n; i++)
-        if (gPools[i].cls.load(std::memory_order_relaxed) == cls)
+        if (gPools[i].cls.load(std::memory_order_relaxed) == cls) {
+            if (indexOut)
+                *indexOut = i;
             return &gPools[i];
+        }
     return nullptr;
 }
 
@@ -78,10 +106,43 @@ void show(void *block, size_t size)
 #endif
 }
 
+void returnToPool(InstancePool *pool, void *block)
+{
+    pool->alive.fetch_sub(1, std::memory_order_relaxed);
+    uint32_t node = 0;
+    void **slot = kKeepsBlocks && pool->blocks.kept() < pool->most.load(std::memory_order_relaxed)
+                      ? pool->blocks.room(node)
+                      : nullptr;
+    if (!slot) {
+        pool->freed.fetch_add(1, std::memory_order_relaxed);
+        free(block);
+        return;
+    }
+    *slot = block;
+    hide(block, pool->size);
+    pool->blocks.keep(node);
+}
+
 id pooledAlloc(id self, SEL, void *)
 {
     Class cls = reinterpret_cast<Class>(self);
-    InstancePool *pool = poolOf(cls);
+    if (kKeepsBlocks) {
+        ThreadPoolCache &tc = threadCache();
+        for (uint32_t i = 0; i < tc.count; i++) {
+            if (tc.cls[i] == cls) {
+                if (void *block = tc.slot[i]) {
+                    tc.slot[i] = nullptr;
+                    const size_t size = tc.owner[i]->size;
+                    show(block, size);
+                    memset(block, 0, size);
+                    return objc_constructInstance(cls, block);
+                }
+                break;
+            }
+        }
+    }
+    uint32_t idx = 0;
+    InstancePool *pool = poolOf(cls, &idx);
     if (!pool)
         return class_createInstance(cls, 0);
     uint32_t node;
@@ -107,7 +168,26 @@ id pooledAlloc(id self, SEL, void *)
 void pooledDealloc(id self, SEL)
 {
     Class cls = object_getClass(self);
-    InstancePool *pool = poolOf(cls);
+    if (kKeepsBlocks) {
+        ThreadPoolCache &tc = threadCache();
+        for (uint32_t i = 0; i < tc.count; i++) {
+            if (tc.cls[i] == cls) {
+                InstancePool *pool = tc.owner[i];
+                if (pool->dropped)
+                    pool->dropped(self);
+                objc_destructInstance(self);
+                if (!tc.slot[i]) {
+                    hide(self, pool->size);
+                    tc.slot[i] = self;
+                    return;
+                }
+                returnToPool(pool, self);
+                return;
+            }
+        }
+    }
+    uint32_t idx = 0;
+    InstancePool *pool = poolOf(cls, &idx);
     if (!pool) {
         if (InstancePool *ancestor = ancestorPool(cls); ancestor && ancestor->dropped)
             ancestor->dropped(self);
@@ -117,24 +197,23 @@ void pooledDealloc(id self, SEL)
     if (pool->dropped)
         pool->dropped(self);
     objc_destructInstance(self);
-    pool->alive.fetch_sub(1, std::memory_order_relaxed);
-    uint32_t node = 0;
-    void **slot = kKeepsBlocks && pool->blocks.kept() < pool->most.load(std::memory_order_relaxed)
-                      ? pool->blocks.room(node)
-                      : nullptr;
-    if (!slot) {
-        pool->freed.fetch_add(1, std::memory_order_relaxed);
-        free(self);
-        return;
+    if (kKeepsBlocks && pool->threadCache) {
+        ThreadPoolCache &tc = threadCache();
+        if (tc.count < kPools) {
+            const uint32_t at = tc.count++;
+            tc.cls[at] = cls;
+            tc.owner[at] = pool;
+            hide(self, pool->size);
+            tc.slot[at] = self;
+            return;
+        }
     }
-    *slot = self;
-    hide(self, pool->size);
-    pool->blocks.keep(node);
+    returnToPool(pool, self);
 }
 
 }  // namespace
 
-bool gm20bPoolInstances(Class cls, void (*dropped)(void *object))
+bool gm20bPoolInstances(Class cls, void (*dropped)(void *object), bool threadCache)
 {
     static gm20b::Mutex lock;
     std::lock_guard<gm20b::Mutex> l(lock);
@@ -144,6 +223,7 @@ bool gm20bPoolInstances(Class cls, void (*dropped)(void *object))
     InstancePool &pool = gPools[at];
     pool.size = class_getInstanceSize(cls);
     pool.dropped = dropped;
+    pool.threadCache = threadCache;
     pool.cls.store(cls, std::memory_order_relaxed);
     gPoolCount.store(at + 1, std::memory_order_release);
     // the dealloc first: an instance NSObject's alloc made meanwhile is a block of the class's size too

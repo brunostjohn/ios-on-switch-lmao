@@ -157,6 +157,7 @@ bool RenderEncoder::writeClipControl(Push &p, const Pipeline &pl, const Raster &
     } else {
         unclampDepthRange(p);
     }
+    clipDirty_ = false;
     return true;
 }
 

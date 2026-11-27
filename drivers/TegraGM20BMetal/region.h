@@ -34,7 +34,11 @@ public:
         pending_.clear();
         overflowLimit_ = {};
         boxCount_ = 0;
-        tiles_.fill(0);
+        if (uint64_t rows = dirtyTileRows_) {
+            for (; rows; rows &= rows - 1)
+                tiles_[uint32_t(__builtin_ctzll(rows))] = 0;
+            dirtyTileRows_ = 0;
+        }
         tileOnly_ = false;
         outOfGrid_ = false;
         outOfGridBox_ = {};
@@ -286,6 +290,7 @@ private:
             const uint32_t ty0 = box.y0 >> kTileShift;
             const uint32_t ty1 = std::min(box.y1 - 1, kGridMax - 1) >> kTileShift;
             const uint64_t mask = rowMask(tx0, tx1);
+            dirtyTileRows_ |= rowMask(ty0, ty1);
             for (uint32_t ty = ty0; ty <= ty1; ++ty)
                 tiles_[ty] |= mask;
         }
@@ -342,6 +347,7 @@ private:
     PixelBox overflowLimit_ = {};
     std::array<PixelBox, kMaxDraws> boxes_ = {};
     std::array<uint64_t, kTileGrid> tiles_ = {};
+    uint64_t dirtyTileRows_ = 0;
     PixelBox outOfGridBox_ = {};
     uint32_t boxCount_ = 0;
     bool tileOnly_ = false;

@@ -81,8 +81,10 @@ public:
 
     void clear()
     {
-        queries_.clear();
-        taken_.reset();
+        if (!queries_.empty()) {
+            queries_.clear();
+            taken_.reset();
+        }
         open_ = counting_ = false;
     }
 

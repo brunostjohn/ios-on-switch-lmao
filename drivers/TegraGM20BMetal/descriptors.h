@@ -3,6 +3,7 @@
 
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <utility>
 #include <vector>
 #include "spill_table.h"
@@ -26,11 +27,11 @@ public:
     // `bytes`: the upload's size; a set of other bytes is uploaded again whatever its words
     template <typename Upload> uint64_t resolve(const DescriptorWords &words, Upload upload, uint32_t bytes = 256)
     {
-        if (!address_ || words_ != words || bytes_ != bytes) {
+        if (!address_ || bytes_ != bytes || memcmp(words_.data(), words.data(), bytes) != 0) {
             const uint64_t address = upload(words);
             if (!address)
                 return 0;
-            words_ = words;
+            memcpy(words_.data(), words.data(), bytes);
             bytes_ = bytes;
             address_ = address;
         }
@@ -73,8 +74,13 @@ public:
         const bool same = value_.address && pipeline_ == pipeline;
         if (same && !moved)
             return &value_;
-        if (!same)
-            value_ = {};
+        if (!same) {
+            memset(value_.words.data(), 0, bytes);
+            value_.residualMask = 0;
+            value_.spilled[0].mask = 0;
+            value_.spilled[1].mask = 0;
+            value_.address = 0;
+        }
         pipeline_ = nullptr;  // until this build succeeds
         if (!build(value_, same ? moved : ~0u))
             return nullptr;
@@ -105,6 +111,13 @@ public:
     {
         value_ = {};
         pipeline_ = nullptr;
+        snapshot_.forget();
+    }
+
+    void resetLight()
+    {
+        pipeline_ = nullptr;
+        value_.address = 0;
         snapshot_.forget();
     }
 
@@ -180,6 +193,13 @@ public:
         ubos_[ubo] = bound;
         ubosBound_ |= 1u << ubo;
         return true;
+    }
+
+    void reset()
+    {
+        pipeline_ = nullptr;
+        address_ = 0;
+        ubosBound_ = 0;
     }
 
 private:

@@ -60,6 +60,7 @@ static void splice(SwitchMetalCommandBuffer *cb, SwitchMetalSubRecorder *s)
         cb->_bytes.chunks.append(s->_bytes.chunks.ownData(), s->_bytes.chunks.ownData() + s->_bytes.chunks.size());
         cb->_bytes.at = cb->_bytes.chunks.size();  // a later setBytes takes a chunk of its own: these are full
         cb->_bytes.used = 0;
+        cb->_bytes.resetCursor();
         s->_bytes = {};
     }
     cb->_passes.append(s->_passes.ownData(), s->_passes.ownData() + s->_passes.size());

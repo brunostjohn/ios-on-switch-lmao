@@ -14,9 +14,11 @@ uint64_t RenderEncoder::drawUnits(uint32_t instances) const
 
 BandGrid RenderEncoder::drawBands(uint32_t vertices, uint32_t instances, uint64_t units) const
 {
+    if (dev_->compositorClass())
+        return {};
     const Pipeline &pl = *emitted_;
     const uint64_t budget = dev_->bandBudgetNs();
-    if (!budget || dev_->compositorClass() || pl.vertexStores)
+    if (!budget || pl.vertexStores)
         return {};
     const bool hasProgress = dev_->channelProgressVa() != 0;
     if (!hasProgress && cb_->bands >= kBandsPerCommandBuffer)

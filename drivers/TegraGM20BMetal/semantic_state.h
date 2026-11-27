@@ -23,6 +23,7 @@ template <typename T> class StateSnapshots {
     GrowList<T> values_;
     GrowList<uint32_t> changed_;  // each value's slots that may differ from the value before it
     uint32_t pending_ = ~0u;      // the slots edited since the last capture
+    bool dirty_ = false;
 
 public:
     const T &current() const
@@ -35,10 +36,15 @@ public:
         return values_[index];
     }
 
-    // The writer's
-    const T &own(uint32_t index)
+    // The writer's (and a single reader after commit)
+    const T &own(uint32_t index) const
     {
         return values_.own(index);
+    }
+
+    const T *valuesData(bool own) const
+    {
+        return own ? values_.ownData() : values_.data();
     }
 
     uint64_t generation() const
@@ -62,6 +68,7 @@ public:
             return false;
         ++generation_;
         pending_ = ~0u;
+        dirty_ = true;
         return true;
     }
 
@@ -72,6 +79,7 @@ public:
             return false;
         ++generation_;
         pending_ |= slot < 32 ? 1u << slot : ~0u;
+        dirty_ = true;
         return true;
     }
 
@@ -96,9 +104,12 @@ public:
 
     void resetCurrent()
     {
+        if (!dirty_)
+            return;
         current_ = {};
         ++generation_;
         pending_ = ~0u;
+        dirty_ = false;
     }
 
     void clear()
@@ -106,8 +117,9 @@ public:
         values_.clear();
         changed_.clear();
         pending_ = ~0u;
-        if (generation_)
+        if (generation_ || dirty_)
             current_ = {};
+        dirty_ = false;
         generation_ = 0;
         captured_ = std::numeric_limits<uint64_t>::max();
         index_ = kNoSnapshot;

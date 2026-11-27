@@ -30,13 +30,7 @@ void RenderEncoder::continuePass(uint8_t stores, uint8_t discards)
         pass_.color[i].discard = discards & (1u << i);
     }
     pipeline_ = nullptr;
-    for (auto &stage : bufs_)
-        for (auto &binding : stage)
-            binding = {};
-    for (auto &stage : textures_)
-        std::fill(std::begin(stage), std::end(stage), nullptr);
-    for (auto &stage : samplers_)
-        std::fill(std::begin(stage), std::end(stage), nullptr);
+    clearTouchedBindings();
     invalidateDescriptors();
     setDepthStencil(nullptr);
     setStencilReference(0, 0);
@@ -44,6 +38,7 @@ void RenderEncoder::continuePass(uint8_t stores, uint8_t discards)
     setScissor(0, 0, areaW_, areaH_);
     raster_ = {};
     depthClamp_ = false;
+    clipDirty_ = true;
     setDepthBias(0, 0, 0);
     const float blend[4] = {};
     setBlendColor(blend);
@@ -91,20 +86,25 @@ void RenderEncoder::clears(std::vector<Clear> &out, bool fused)
     std::vector<bool> &tiles = tiles_;
     tiles.clear();
     if (reach == Draws && !whole_ && perRow && rows) {
-        bool every = false;
-        for (const auto &r : rects_)
-            every |= r[0] < kTile && r[1] < kTile && (r[2] + kTile - 1) / kTile >= perRow &&
-                     (r[3] + kTile - 1) / kTile >= rows;
-        if (!every) {
-            tiles.assign(size_t(perRow) * rows, false);
-            for (const auto &r : rects_)
-                for (uint32_t ty = r[1] / kTile; ty < std::min(rows, (r[3] + kTile - 1) / kTile); ty++)
-                    for (uint32_t tx = r[0] / kTile; tx < std::min(perRow, (r[2] + kTile - 1) / kTile); tx++)
-                        tiles[size_t(ty) * perRow + tx] = true;
-            if (std::find(tiles.begin(), tiles.end(), false) == tiles.end())
-                tiles.clear();  // every tile after all
-            else if (std::find(tiles.begin(), tiles.end(), true) == tiles.end())
+        if (!trackRects_) {
+            if (reached_.empty())
                 reach = Nothing;
+        } else {
+            bool every = false;
+            for (const auto &r : rects_)
+                every |= r[0] < kTile && r[1] < kTile && (r[2] + kTile - 1) / kTile >= perRow &&
+                         (r[3] + kTile - 1) / kTile >= rows;
+            if (!every) {
+                tiles.assign(size_t(perRow) * rows, false);
+                for (const auto &r : rects_)
+                    for (uint32_t ty = r[1] / kTile; ty < std::min(rows, (r[3] + kTile - 1) / kTile); ty++)
+                        for (uint32_t tx = r[0] / kTile; tx < std::min(perRow, (r[2] + kTile - 1) / kTile); tx++)
+                            tiles[size_t(ty) * perRow + tx] = true;
+                if (std::find(tiles.begin(), tiles.end(), false) == tiles.end())
+                    tiles.clear();  // every tile after all
+                else if (std::find(tiles.begin(), tiles.end(), true) == tiles.end())
+                    reach = Nothing;
+            }
         }
     }
     static const float zero[4] = {};

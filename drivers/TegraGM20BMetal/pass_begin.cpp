@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <type_traits>
 
 #include "gm20b_gpu_internal.h"
 
@@ -49,29 +50,46 @@ uint64_t CommandBuffer::zcullSlot(uint64_t zetaVa, uint64_t bytes, int &slot)
     return slot < 0 ? 0 : d.zcullSlots_.va(slot);
 }
 
-void RenderEncoder::remake()
+void RenderEncoder::clearTouchedBindings()
 {
-    auto *const bytes = reinterpret_cast<unsigned char *>(this);
-    const size_t keptFrom = size_t(reinterpret_cast<unsigned char *>(&bufs_) - bytes),
-                 keptTo = size_t(reinterpret_cast<unsigned char *>(&touched_ + 1) - bytes);
-    const Touched touched = touched_[0];
-    this->~RenderEncoder();
-    // what value-initialisation does before the members' own initialisers: zero, here around the kept tables
-    memset(bytes, 0, keptFrom);
-    memset(bytes + keptTo, 0, sizeof(RenderEncoder) - keptTo);
-    new (this) RenderEncoder(Again{});
     for (uint32_t stage = 0; stage < 3; stage++)
-        for (uint32_t slots = touched.buffers[stage]; slots; slots &= slots - 1)
+        for (uint32_t slots = touched_.buffers[stage]; slots; slots &= slots - 1)
             bufs_[stage][__builtin_ctz(slots)] = Bound{};
     using Words = SlotMaskWords<StageTextureMask>;
     for (uint32_t at = 0; at < 2; at++) {
         for (size_t w = 0; w < Words::kWords; w++)
-            for (uint32_t slots = Words::word(touched.textures[at], w); slots; slots &= slots - 1)
+            for (uint32_t slots = Words::word(touched_.textures[at], w); slots; slots &= slots - 1)
                 textures_[at][32 * w + __builtin_ctz(slots)] = nullptr;
-        for (uint32_t slots = touched.samplers[at]; slots; slots &= slots - 1)
+        for (uint32_t slots = touched_.samplers[at]; slots; slots &= slots - 1)
             samplers_[at][__builtin_ctz(slots)] = nullptr;
     }
-    touched_[0] = Touched{};
+    for (uint32_t slots = touched_.strides; slots; slots &= slots - 1)
+        vertexStrides_[__builtin_ctz(slots)] = UINT32_MAX;
+    touched_ = Touched{};
+}
+
+void RenderEncoder::remake()
+{
+    static_assert(std::is_trivially_destructible_v<RenderEncoderPass>,
+                  "RenderEncoderPass must be trivially destructible");
+    auto *const pass = static_cast<RenderEncoderPass *>(this);
+    new (pass) RenderEncoderPass();
+    clearTouchedBindings();
+    descriptors_.resetLight();
+    spillUploads_[0].forget();
+    spillUploads_[1].forget();
+    wideDescriptors_.forget();
+    descriptorBinding_.reset();
+    views_.reset();
+    visibility_.clear();
+    written_.clear();
+    planned_.reset();
+    bodies_.clear();
+    splitPlan_.clear();
+    rects_.clear();
+    initialClears_.clear();
+    tiles_.clear();
+    geometryCache_.clear();
 }
 
 RenderEncoder *CommandBuffer::render(const PassDesc &pass, const char **why)
@@ -85,27 +103,11 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass, const char **why)
         "no memory for a pass's attachment backing: MTLCommandBufferErrorOutOfMemory (MTLCommandBuffer.h)";
     SWITCH_METAL_ENCODE_SPAN(PassBegin);
     RenderEncoder &e = render_;
-    // a pass's lists keep the last one's capacity: no allocation a steady frame
-    std::vector<RenderEncoder::Body> bodies = std::move(e.bodies_);
-    std::vector<std::array<uint32_t, 4>> rects = std::move(e.rects_);
-    SplitPassPlan splitPlan = std::move(e.splitPlan_);
-    std::vector<RenderEncoder::Clear> clears = std::move(e.initialClears_);
-    std::vector<bool> tiles = std::move(e.tiles_);
-    std::vector<GeometryAnalysis> written = e.written_.release();
-    bodies.clear();
-    rects.clear();
-    splitPlan.clear();
-    clears.clear();
     e.remake();
-    e.bodies_ = std::move(bodies);
-    e.rects_ = std::move(rects);
-    e.splitPlan_ = std::move(splitPlan);
-    e.initialClears_ = std::move(clears);
-    e.tiles_ = std::move(tiles);
-    e.written_.adopt(std::move(written));
     e.cb_ = this;
     e.dev_ = dev_;
     e.pass_ = pass;
+    e.mayFetch_ = pass.mayFetch;
     SWITCH_METAL_PROFD(e.prologueMark_ = dev_->spans_.reserve());
     SWITCH_METAL_DIAGNOSTIC(if (drawTimes_) e.timePassBegin());
     // the render hardware takes one memory layout for all of a pass's color targets (nvk_rendering_linear): block-linear when
@@ -347,10 +349,18 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass, const char **why)
         SWITCH_METAL_DIAGNOSTIC(zcullCounts_.carried += carried);
     }
     // DontCare can become a clear after later draws establish readBits_. Treat its deferred prologue write like Clear.
-    for (uint32_t j = 0; j < pass.count && j < 8; j++)
-        if (e.pass_.color[j].texture && e.pass_.color[j].load != ColorAttachment::Load)
+    bool trackRects = false;
+    for (uint32_t j = 0; j < pass.count && j < 8; j++) {
+        const ColorAttachment &a = e.pass_.color[j];
+        if (!a.texture)
+            continue;
+        if (a.load != ColorAttachment::Load)
             e.attachmentWrites_.rop |= uint8_t(1u << j);
-    if (e.attachmentWrites_.rop) {
+        if (!e.memoryless_[j] && a.store && a.load == ColorAttachment::DontCare)
+            trackRects = true;
+    }
+    e.trackRects_ = trackRects;
+    if (e.attachmentWrites_.rop && e.mayFetch_) {
         DrawGeometry cleared;
         cleared.limit = {0, 0, e.areaW_, e.areaH_};
         e.written_.add(cleared);

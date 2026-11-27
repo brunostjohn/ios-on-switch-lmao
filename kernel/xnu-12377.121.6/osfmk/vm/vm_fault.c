@@ -119,6 +119,7 @@
 #include <vm/vm_memtag.h>
 #endif /* HAS_MTE */
 #include <switch/prefetch_vm.h>
+#include <switch/tiled_fault.h>
 
 #include <sys/codesign.h>
 #include <sys/code_signing.h>
@@ -5014,6 +5015,7 @@ vm_fault_internal(
 
 	bool     rtfault = (cthread->sched_mode == TH_MODE_REALTIME);
 	bool     page_sleep_needed = false;
+	ppnum_t  switch_tiled_checked_pn = 0;
 	uint64_t fstart = 0;
 
 	if (rtfault) {
@@ -5705,6 +5707,34 @@ FastPmapEnter:
 				}
 				assertf(VM_PAGE_OBJECT(m) == m_object, "m=%p m_object=%p object=%p", m, m_object, object);
 				assert(VM_PAGE_OBJECT(m) != VM_OBJECT_NULL);
+				if (__improbable(!caller_pmap && !wired && !fault_info->fi_change_wiring &&
+				    wire_tag == VM_KERN_MEMORY_NONE && physpage_p == NULL &&
+				    vml_ctx_for_vaddr == NULL && map != kernel_map && original_map != kernel_map &&
+				    m->vmp_hashed && !m->vmp_busy &&
+				    VM_PAGE_GET_PHYS_PAGE(m) != switch_tiled_checked_pn &&
+				    switch_vm_tiled_page_maybe(VM_PAGE_GET_PHYS_PAGE(m)))) {
+					const ppnum_t tiled_pn = VM_PAGE_GET_PHYS_PAGE(m);
+					const uint64_t tiled_pa = ((uint64_t)tiled_pn << PAGE_SHIFT) + fault_phys_offset;
+					vm_object_unlock(object);
+					if (top_object != VM_OBJECT_NULL) {
+						vm_object_unlock(top_object);
+						top_object = VM_OBJECT_NULL;
+					}
+					vm_fault_unlock_ctx(ctx, vml_ctx_for_vaddr);
+					const int tiled_rc = switch_vm_tiled_cpu_fault(original_map, real_vaddr, tiled_pa, caller_prot);
+					if (tiled_rc < 0) {
+						kr = KERN_MEMORY_ERROR;
+						goto done;
+					}
+					if (tiled_rc > 1) {
+						kr = KERN_SUCCESS;
+						goto done;
+					}
+					if (tiled_rc == 0) {
+						switch_tiled_checked_pn = tiled_pn;
+					}
+					goto RetryFault;
+				}
 				need_retry = false;
 				switch_device = vm_page_is_private(m);
 				if (caller_pmap) {
@@ -7020,6 +7050,31 @@ handle_copy_delay:
 		}
 		assertf(VM_PAGE_OBJECT(m) == m_object, "m=%p m_object=%p", m, m_object);
 		assert(VM_PAGE_OBJECT(m) != VM_OBJECT_NULL);
+		if (__improbable(!caller_pmap && !wired && !fault_info->fi_change_wiring &&
+		    wire_tag == VM_KERN_MEMORY_NONE && physpage_p == NULL &&
+		    vml_ctx_for_vaddr == NULL && map != kernel_map && original_map != kernel_map &&
+		    VM_PAGE_GET_PHYS_PAGE(m) != switch_tiled_checked_pn &&
+		    switch_vm_tiled_page_maybe(VM_PAGE_GET_PHYS_PAGE(m)))) {
+			const ppnum_t tiled_pn = VM_PAGE_GET_PHYS_PAGE(m);
+			const uint64_t tiled_pa = ((uint64_t)tiled_pn << PAGE_SHIFT) + fault_phys_offset;
+			vm_page_wakeup_done(m_object, m);
+			vm_fault_cleanup(m_object, top_page);
+			vm_object_deallocate(object);
+			vm_fault_unlock_ctx(ctx, vml_ctx_for_vaddr);
+			const int tiled_rc = switch_vm_tiled_cpu_fault(original_map, real_vaddr, tiled_pa, caller_prot);
+			if (tiled_rc < 0) {
+				kr = KERN_MEMORY_ERROR;
+				goto done;
+			}
+			if (tiled_rc > 1) {
+				kr = KERN_SUCCESS;
+				goto done;
+			}
+			if (tiled_rc == 0) {
+				switch_tiled_checked_pn = tiled_pn;
+			}
+			goto RetryFault;
+		}
 		need_retry = false;
 		switch_device = vm_page_is_private(m);
 		if (caller_pmap) {

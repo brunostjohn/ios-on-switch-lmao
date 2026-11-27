@@ -79,6 +79,7 @@ SWITCH_OBJECTS = {
         ("osfmk/vm/vm_map.c", "security/dyld_policy.c", [], ["12377.121.6"]),
         ("osfmk/vm/vm_shared_region.c", "vm/fvariant.c", ["-include", "{owner_header}"], ["12377.121.6"]),
         ("osfmk/vm/vm_map.c", "vm/park_vm.c", []),
+        ("osfmk/vm/vm_fault.c", "vm/tiled_fault.c", []),
         ("osfmk/arm/model_dep.c", "diag/threads.c", []),
         ("osfmk/ipc/ipc_kmsg.c", "diag/frames.c", []),
         ("osfmk/arm64/arm_vm_init.c", "ram/ram.c", [_KERNEL_VIRT_BASE]),

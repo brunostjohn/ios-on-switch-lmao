@@ -1266,7 +1266,7 @@ public:
 
     std::shared_ptr<const ProbeWords> armedProbe()
     {
-        if (!probeArmed.load(std::memory_order_acquire))
+        if (!probeArmed.load(std::memory_order_relaxed))
             return nullptr;
         std::lock_guard<gm20b::Mutex> hold(probeLock);
         return probeWords;

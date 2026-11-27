@@ -80,6 +80,7 @@ __attribute__((objc_externally_retained)) bool SwitchMetalRangeEncode::open(Swit
     ahead_ = !whole;
     abandoned_ = false;
     veto_ = 0;
+    namedBytesChunk_ = UINT32_MAX;
     sampledShadows_ = whole && cb->_sampledShadows;
     standIns_ = whole && cb->_standIns;
     gm20b::Device &d = *d_;
@@ -416,9 +417,10 @@ void SwitchMetalRangeEncode::reset()
     serialCompute_ = computeUnit_ = continuing_ = encoderShadows_ = encoderTracked_ = false;
     kernelShadows_ = {};
     stateCursor_ = {};
+    namedBytesChunk_ = UINT32_MAX;
     fused_ = {};
     fusedAt_ = renderBegin_ = encoder_ = freshAt_ = SIZE_MAX;
-    planned_ = {};
+    planned_.reset();
     standInLoads_.clear();
     planesWritten_.clear();
     overlapStores_.clear();

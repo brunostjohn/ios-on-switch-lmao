@@ -214,23 +214,32 @@ static void forwardCall(SwitchMetalEncoder *e, SEL selector, const void *argumen
                    baseInstance:0];
 }
 
-- (void)setRenderPipelineState:(id<MTLRenderPipelineState>)state
+- (void)setRenderPipelineState:(__unsafe_unretained id<MTLRenderPipelineState>)state
 {
     SWITCH_API(ApiState);
-    SwitchMetalPipeline *p = (SwitchMetalPipeline *)state;
-    if (![(id)p isKindOfClass:[SwitchMetalPipeline class]])
+    static const Class pipeCls = [SwitchMetalPipeline class];
+    __unsafe_unretained SwitchMetalPipeline *p = (SwitchMetalPipeline *)state;
+    if (!gm20bIsClass(p, pipeCls))
         return gm20bCallInvalid(_cb, PredStateForeign, 0, 0,
                                 state ? "a render state not made by this device" : "a nil render state");
-    __unsafe_unretained SwitchMetalPipeline *next = p;
-    const bool changed = _pipe != next;
+    __unsafe_unretained SwitchMetalCommandBuffer *cb = _cb;
+    const bool changed = _pipe != p;
     if (changed)
         _formSamplers[0] = _formSamplers[1] = 0;
-    _pipe = next;
-    _drawn = _pipe ? _pipe->_raw : nullptr;
+    _pipe = p;
+    gm20b::Pipeline *drawn = p->_raw;
+    _drawn = drawn;
     _drawnVariant = nullptr;
     _eligibility++;
-    setBinding(_cb, OpPipeline, 0, 0, state, 0);
-    if (changed)
+    if (!cb->_commandLog) {
+        gm20bRetain(cb, state);
+        cb->_plan.bindPipeline((__bridge void *)state, drawn);
+    } else {
+        setBinding(cb, OpPipeline, 0, 0, state, uintptr_t(drawn));
+    }
+    if (changed && (_hasForms || (_cubicMask[0] | _cubicMask[1]) ||
+                    (drawn && (drawn->writtenSlots || drawn->fetchBits || drawn->rec->shaderTests.flags)) ||
+                    cb->_passes.own(_passAt).xrPlaneBinds))
         [self prepareDrawnRecord];
 }
 
@@ -267,7 +276,8 @@ static void forwardCall(SwitchMetalEncoder *e, SEL selector, const void *argumen
              "a state's samples its pass draws nothing defined for: the draw skipped");
         return NO;
     }
-    [self drawnRecord];
+    if (_hasForms || _pipe->_raw != _drawn || _drawnVariant || _cb->_passes.own(_passAt).xrPlaneBinds)
+        [self drawnRecord];
     _checkedEligibility = _eligibility;
     _checkedEpoch = _cb->_plan.stateEpoch();
     _checkedPipeline = _pipe->_raw;
@@ -277,6 +287,10 @@ static void forwardCall(SwitchMetalEncoder *e, SEL selector, const void *argumen
 - (void)setScissorRect:(MTLScissorRect)r
 {
     SWITCH_API(ApiState);
+    if (!_cb->_commandLog) {
+        _cb->_plan.bindScissor(uint32_t(r.x), uint32_t(r.y), uint32_t(r.width), uint32_t(r.height));
+        return;
+    }
     Cmd m = cmd(OpScissor);
     m.a = uint32_t(r.x);
     m.b = uint32_t(r.y);
@@ -314,19 +328,22 @@ static void forwardCall(SwitchMetalEncoder *e, SEL selector, const void *argumen
 
 - (void)setDepthStencilState:(id<MTLDepthStencilState>)s
 {
-    if (s && ![(id)s isKindOfClass:[SwitchMetalDepthStencil class]])
+    static const Class dsCls = [SwitchMetalDepthStencil class];
+    if (s && !gm20bIsClass(s, dsCls))
         return gm20bCallInvalid(_cb, PredStateForeign, 0, 0, "a depth/stencil state not made by this device");
     _ds = s ? ((SwitchMetalDepthStencil *)s)->_raw.desc() : gm20b::DepthStencilDesc();
     _eligibility++;
+    SwitchMetalPass &pass = _cb->_passes.own(_passAt);
     if (gm20b::testsHiddenZeta(_ds))
-        _cb->_passes[_passAt].testsHiddenZeta = true;
+        pass.testsHiddenZeta = true;
     if (!gm20b::stencilNoop(_ds.front) || !gm20b::stencilNoop(_ds.back))
-        _cb->_passes[_passAt].testsStencil = true;
+        pass.testsStencil = true;
     setBinding(_cb, OpDepthStencil, 0, 0, s, 0);
-    const uint32_t zeta = _zeta ? _zeta : _cb->_passes[_passAt].testsHiddenZeta ? gm20b::kZetaFormat : 0;
+    const uint32_t zeta = _zeta ? _zeta : pass.testsHiddenZeta ? gm20b::kZetaFormat : 0;
     if (const gm20b::Pipeline *pl = _pipe ? _pipe->_raw : nullptr;
-        pl && _forms.fragmentTests != gm20b::drawnTests(pl->fetchBits && pl->depthFormat && !pl->storageBits,
-                                                        pl->rec->shaderTests, _ds, gm20b::testedZeta(zeta)))
+        pl && _cb->_renderSlots.forms.fragmentTests !=
+                  gm20b::drawnTests(pl->fetchBits && pl->depthFormat && !pl->storageBits, pl->rec->shaderTests, _ds,
+                                    gm20b::testedZeta(zeta)))
         [self prepareDrawnRecord];
 }
 
@@ -405,13 +422,26 @@ static void recordDraw(__unsafe_unretained SwitchMetalRenderEncoder *e, MTLPrimi
                        NSUInteger count, NSUInteger instances, NSUInteger base)
 {
     SWITCH_API(ApiDraw);
-    if (![e checkDraw])
+    e->_drew = true;
+    __unsafe_unretained SwitchMetalCommandBuffer *cb = e->_cb;
+    if (!e->_pipe || cb->_encFailed || e->_checkedEligibility != e->_eligibility ||
+        e->_checkedEpoch != cb->_plan.stateEpoch() || e->_checkedPipeline != e->_pipe->_raw) {
+        if (![e checkDraw])
+            return;
+    } else {
+        SWITCH_METAL_DIAGNOSTIC(if (e->_pipe->_caCatchAll)
+                                    gm20b::gCaCatchAllDraws.fetch_add(1, std::memory_order_relaxed));
+    }
+    if (!cb->_commandLog) {
+        gm20bRecordDraw(cb, uint8_t(type), uint32_t(start), uint32_t(count), uint32_t(instances), uint32_t(base),
+                        e->_drawn);
         return;
+    }
     Cmd m = cmd(OpDraw, uint8_t(type));
     m.a = uint32_t(start);
     m.b = uint32_t(count);
     m.c = uint64_t(instances) << 32 | uint32_t(base);
-    [e->_cb record:m];
+    [cb record:m];
 }
 
 - (void)drawPrimitives:(MTLPrimitiveType)type

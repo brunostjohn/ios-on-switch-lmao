@@ -216,10 +216,10 @@ void RenderEncoder::end()
         clears(initialClears_);
     const std::vector<Clear> &cl = initialClears_;
     const uint32_t layers = std::max(pass_.layers, 1u);
-    const std::vector<uint32_t> &restore = extrasAtBegin_ ? extrasAtBegin_->restore : std::vector<uint32_t>();
+    const uint32_t restoreCount = extrasAtBegin_ ? uint32_t(extrasAtBegin_->restore.size()) : 0u;
     const uint32_t room = 160 + SWITCH_GM20B_KIND_SWITCH_WORDS + 8 * 32 * layers + uint32_t(cl.size()) * 48 +
                           3 * (kZetaTargetWords + kZetaClearWords + 24) + kZcullRegionWords + kSampleWords +
-                          kTurnWordsMethods + uint32_t(restore.size()) + kSpanMarkWords +
+                          kTurnWordsMethods + restoreCount + kSpanMarkWords +
                           startStampCount_ * counters::kTimestampWords + kDrawStampWords +
                           (separate_.stencil ? 64 + 128 * layers : 0) + (zetaShadowOf_ ? zetaShadowWords(layers) : 0) +
                           (rasterSamples_ > samples_ ? 3 * kSampleWords + kTirWords + 16 : 0) + kTimedPassWords;
@@ -228,10 +228,11 @@ void RenderEncoder::end()
     uint32_t *start = reinterpret_cast<uint32_t *>(d.alloc(d.push_, totalRoom * 4, 256, va));
     Push p{start, start + totalRoom};
     SWITCH_METAL_DIAGNOSTIC(if (cb_->drawTimes_) d.emitDrawTime(p, betweenTime_));
-    p.raw(restore.data(), uint32_t(restore.size()));
+    if (restoreCount)
+        p.raw(extrasAtBegin_->restore.data(), restoreCount);
     const BarrierEngine before = cb_->lastEngine_;
     const BarrierForms forms = cb_->barrierForms();
-    const PassUses uses = passUses();
+    const PassUses &uses = passUses();
     const bool hadBufferWrites =
         cb_->passBufferWrites_ || planned_.bufferWrites || passWritesMemory_ || (!uses.known && !rot_.turned());
     cb_->passBufferWrites_ = false;
