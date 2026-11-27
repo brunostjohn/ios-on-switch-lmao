@@ -2020,6 +2020,23 @@ static void dfll_set_frequency_request(struct tegra_dfll *td,
  * -EPERM if the DFLL driver has not yet been initialized, or -EINVAL
  * if @rate is outside the DFLL's tunable range.
  */
+static bool dfll_needs_calibration(struct tegra_dfll *td)
+{
+	int floor_idx = td->thermal_floor_index;
+	u8 out_min = dfll_get_output_min(td);
+	bool calibrated = dfll_tune_target(td, td->last_req.rate) > DFLL_TUNE_LOW
+		? (td->tune_high_dvco_rate_floors[floor_idx] != 0)
+		: (td->dvco_rate_floors[floor_idx] != 0);
+
+	if (!calibrated)
+		return true;
+	if (td->last_req.dvco_target_rate <= td->dvco_rate_min + td->ref_rate / 2)
+		return true;
+	if (td->last_req.lut_index <= out_min)
+		return true;
+	return false;
+}
+
 static int dfll_request_rate(struct tegra_dfll *td, unsigned long rate)
 {
 	int ret;
@@ -2034,8 +2051,6 @@ static int dfll_request_rate(struct tegra_dfll *td, unsigned long rate)
 
 	req.rate = rate;
 
-	/* Calibrate dfll minimum rate */
-	dfll_calibrate(td);
 	dvco_min_updated = dfll_one_shot_calibrate_floors(td);
 
 	/* Update minimum dvco rate if we are crossing tuning threshold */
@@ -2060,9 +2075,14 @@ static int dfll_request_rate(struct tegra_dfll *td, unsigned long rate)
 	if (td->mode == DFLL_CLOSED_LOOP) {
 		dfll_set_close_loop_config(td, &td->last_req);
 		dfll_set_frequency_request(td, &td->last_req);
-		/* SWITCH: every request, so each is checked against its DVCO floor once settled */
-		td->calibration_retries = 0;
-		calibration_timer_update(td);
+		/* SWITCH: defer opportunistic calibration to the timer, and only arm it when uncalibrated or
+		 * near/at the DVCO floor so upward ramps never block on monitor sleeps. */
+		if (dfll_needs_calibration(td)) {
+			td->calibration_retries = 0;
+			calibration_timer_update(td);
+		} else {
+			del_timer(&td->calibration_timer);
+		}
 	}
 
 	return 0;

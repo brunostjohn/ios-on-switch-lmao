@@ -54,6 +54,11 @@ void switch_linux_wakeup_one(const void *event);
 void *switch_linux_mutex_alloc(void);
 void switch_linux_mutex_free(void *mutex);
 void *switch_linux_mutex_of(void **slot);
+static inline void *switch_linux_mutex_fast(void **slot)
+{
+    void *mutex = __atomic_load_n(slot, __ATOMIC_RELAXED);
+    return __builtin_expect(mutex != (void *)0, 1) ? mutex : (switch_linux_mutex_of)(slot);
+}
 void switch_linux_mutex_lock(void *mutex);
 void switch_linux_mutex_unlock(void *mutex);
 bool switch_linux_mutex_trylock(void *mutex);
@@ -63,6 +68,15 @@ bool switch_linux_mutex_sleep(void *mutex, const void *event, uint64_t deadline_
 void *switch_linux_rwsem_alloc(void);
 void switch_linux_rwsem_free(void *rwsem);
 void *switch_linux_rwsem_of(void **slot);
+static inline void *switch_linux_rwsem_fast(void **slot)
+{
+    void *rwsem = __atomic_load_n(slot, __ATOMIC_RELAXED);
+    return __builtin_expect(rwsem != (void *)0, 1) ? rwsem : (switch_linux_rwsem_of)(slot);
+}
+#if defined(KERNEL) && !defined(SWITCH_LINUX_IMPL)
+#define switch_linux_mutex_of(slot) switch_linux_mutex_fast(slot)
+#define switch_linux_rwsem_of(slot) switch_linux_rwsem_fast(slot)
+#endif
 void switch_linux_down_read(void *rwsem);
 void switch_linux_up_read(void *rwsem);
 void switch_linux_down_write(void *rwsem);

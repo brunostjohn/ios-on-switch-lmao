@@ -143,6 +143,7 @@
 #include <pexpert/pexpert.h>
 #include <kern/clock.h>
 #include <kern/thread.h>
+#include <mach/thread_policy.h>
 #include <machine/machine_routines.h>
 #include <sys/errno.h>
 #include <sys/reboot.h>
@@ -169,6 +170,9 @@
 extern "C" int tegra_gm20b_bringup_busy(void);  // drivers/TegraGM20B/TegraGM20B.cpp
 // NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
 extern "C" int reboot_kernel(int howto, char *message);  // bsd/kern/kern_shutdown.c, reboot(2)'s kernel half
+// NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
+extern "C" kern_return_t thread_policy_set(thread_t thread, thread_policy_flavor_t flavor, thread_policy_t policy_info,
+                                           mach_msg_type_number_t count);
 
 namespace {
 constexpr vm_offset_t kCarPA = 0x60006000, kGpioPA = 0x6000D000, kPinmuxPA = 0x70003000;
@@ -367,8 +371,10 @@ unsigned rampUpUvPerUs(uint8_t glbCfg2)
 class SwitchThermal : public IOService {
     // NOLINTNEXTLINE(misc-explicit-constructor): IOKit's structors macro declares the metaclass constructor
     OSDeclareDefaultStructors(SwitchThermal) IOWorkLoop *loop = nullptr;
+    IOWorkLoop *govLoop = nullptr;
     IOTimerEventSource *timer = nullptr;
     IOInterruptEventSource *alert = nullptr;
+    IOInterruptEventSource *govRestore = nullptr;
     volatile uint8_t *car = nullptr, *gpio = nullptr, *pinmux = nullptr, *pwm = nullptr, *pmc = nullptr;
     volatile uint8_t *fuse = nullptr, *apbMisc = nullptr;
     const Profile *profile = &kProfiles[0];
@@ -386,6 +392,7 @@ class SwitchThermal : public IOService {
     bool pllxLost = false;                           // SC7 left PLLX as the warm boot set it
     bool dfllMode = false, dfllPrepared = false;     // the CPU raises on the DFLL (no switch-no-dfll, the DFLL fits)
     bool governed = false;                           // on the DFLL, the clock follows the load (switchperf)
+    bool govActive = false;                          // published to govLoop while DFLL is up and governed
     bool dfllResume = false;                         // SC7 lost the DFLL's registers and restoring them failed
     unsigned long dfllRefusedHz = 0;                 // the last rate the DFLL refused, logged once until a rate lands
     int dfllRefusedErr = 0;
@@ -429,6 +436,8 @@ class SwitchThermal : public IOService {
     static void governorLimits();
     static void governorSignal(void *ctx, unsigned cpu);
     static void governorFired(OSObject *owner, IOInterruptEventSource *sender, int count);
+    static void governorRestoreFired(OSObject *owner, IOInterruptEventSource *sender, int count);
+    void syncGovLoop() const;
     void applyGovernor();
     static void alertReleased(OSObject *owner, IOTimerEventSource *sender);
     void trace(const char *format, ...) const __printflike(2, 3);
@@ -1122,11 +1131,15 @@ bool SwitchThermal::startGovernor(char *why, size_t len)
         snprintf(why, len, "the DFLL table ends at %u kHz, not %lu", count ? khz[count - 1] : 0, kDfllRateHz / 1000);
         return false;
     }
+    if (!govLoop) {
+        snprintf(why, len, "no governor work loop");
+        return false;
+    }
     for (IOInterruptEventSource *&source : governor) {
         if (source)
             continue;
         source = IOInterruptEventSource::interruptEventSource(this, &SwitchThermal::governorFired);
-        if (!source || loop->addEventSource(source) != kIOReturnSuccess) {
+        if (!source || govLoop->addEventSource(source) != kIOReturnSuccess) {
             OSSafeReleaseNULL(source);
             snprintf(why, len, "no work loop source");
             return false;
@@ -1134,8 +1147,11 @@ bool SwitchThermal::startGovernor(char *why, size_t len)
         source->enable();
     }
     const unsigned top = count - 1;
-    if (!switchperf::start(khz, mv, count, top, &SwitchThermal::governorSignal, this, why, len))
+    __atomic_store_n(&govActive, true, __ATOMIC_RELEASE);
+    if (!switchperf::start(khz, mv, count, top, &SwitchThermal::governorSignal, this, why, len)) {
+        __atomic_store_n(&govActive, false, __ATOMIC_RELEASE);
         return false;
+    }
     governorLimits();
     size_t n = static_cast<size_t>(snprintf(why, len, "CPU governor: %u points (L4T CVB, MHz@mV):", count));
     for (unsigned i = 0; i < count && n < len; ++i)
@@ -1148,7 +1164,7 @@ bool SwitchThermal::startGovernor(char *why, size_t len)
 }
 
 // From any context (switchperf's decisions: the scheduler's callout, a hint's interrupt or thread), on `cpu` with
-// interrupts masked: wake the work loop through that CPU's own source, whose producer count it alone increments.
+// interrupts masked: wake the governor work loop through that CPU's own source, whose producer count it alone increments.
 void SwitchThermal::governorSignal(void *ctx, unsigned cpu)
 {
     const auto *self = static_cast<SwitchThermal *>(ctx);
@@ -1158,17 +1174,36 @@ void SwitchThermal::governorSignal(void *ctx, unsigned cpu)
     self->governor[cpu]->interruptOccurred(nullptr, nullptr, 0);
 }
 
-// Work loop: the point switchperf decided, onto the DFLL. A rate it refuses fails that request alone (dfllRefused).
-// A DFLL that is no longer enabled (-EPERM) is a state bug: one line, the CPU back on PLLX, and the next raise starts
-// the DFLL and the governor again.
+// Wait for any in-flight governor action on govLoop to finish; always called from loop (lock order: loop -> govLoop).
+void SwitchThermal::syncGovLoop() const
+{
+    if (!govLoop)
+        return;
+    govLoop->runAction(
+        [](OSObject *, void *, void *, void *, void *) -> IOReturn {
+            return kIOReturnSuccess;
+        },
+        const_cast<SwitchThermal *>(this));  // NOLINT(cppcoreguidelines-pro-type-const-cast)
+}
+
+void SwitchThermal::governorRestoreFired(OSObject *owner, IOInterruptEventSource *, int)
+{
+    auto *self = OSDynamicCast(SwitchThermal, owner);
+    if (self)
+        self->restoreCpu("governor off", CpuDown::Again);
+}
+
+// Governor work loop: the point switchperf decided, onto the DFLL. A rate it refuses fails that request alone
+// (dfllRefused). A DFLL that is no longer enabled (-EPERM) is a state bug: one line, and loop takes the CPU back to
+// PLLX so the next raise starts the DFLL and the governor again.
 void SwitchThermal::governorFired(OSObject *owner, IOInterruptEventSource *, int)
 {
     auto *self = OSDynamicCast(SwitchThermal, owner);
     if (!self || !switchperf::running())
         return;
 #if DEVELOPMENT || DEBUG
-    if (self->dfllLandingRuns) {
-        self->governorPending = true;
+    if (__atomic_load_n(&self->dfllLandingRuns, __ATOMIC_ACQUIRE)) {
+        __atomic_store_n(&self->governorPending, true, __ATOMIC_RELEASE);
         return;
     }
 #endif
@@ -1179,7 +1214,7 @@ void SwitchThermal::applyGovernor()
 {
     char line[960];
     const unsigned index = switchperf::take(line, sizeof(line));
-    const bool onDfll = perfRaised && dfllMode && governed;
+    const bool onDfll = __atomic_load_n(&govActive, __ATOMIC_ACQUIRE);
 #if SWITCH_STATS_POWER
     if (line[0]) {
         os_log(OS_LOG_DEFAULT, "%s", line);  // log only, never the boot console
@@ -1202,7 +1237,8 @@ void SwitchThermal::applyGovernor()
         return;
     }
     IOLog("SwitchPerf: the DFLL is not enabled under the governor (set_rate %d); the CPU goes back on PLLX\n", err);
-    restoreCpu("governor off", CpuDown::Again);
+    if (govRestore)
+        govRestore->interruptOccurred(nullptr, nullptr, 0);
 }
 
 // drivers/TegraGM20B's bring-up thread, at the bring-up's end (done or failed): a CPU raise that waited for it is
@@ -1310,6 +1346,8 @@ void SwitchThermal::restoreCpu(const char *why, CpuDown down)
     if (down == CpuDown::ForGood)
         perfSettled = true;
     switchperf::stop();  // no more decisions; the DFLL is about to go
+    __atomic_store_n(&govActive, false, __ATOMIC_RELEASE);
+    syncGovLoop();
     if (dfllMode) {
         char because[160] = "";
         const int err = tegra_dfll_cpu_disable_to_pllx(because, sizeof(because));
@@ -1458,14 +1496,21 @@ void SwitchThermal::timerFired(OSObject *owner, IOTimerEventSource *sender)
         sender->setTimeoutMS(ms);
 }
 
-// SOC_THERM's work loop: a die group moved a degree, so the curve is evaluated again on this service's loop.
+// Shared work loop with SOC_THERM: a die group moved a degree, so evaluate directly when already on our loop.
 void SwitchThermal::socThermMoved(void *ctx, enum switch_soctherm_group group, int millic)
 {
     auto *self = static_cast<SwitchThermal *>(ctx);
     if (group == SWITCH_SOCTHERM_PLLX && millic >= SWITCH_THERMAL_SHUTDOWN_PLLX_MILLIC)
         thermalShutdown(SWITCH_THERMAL_PLLX, millic);
-    if (!__atomic_load_n(&self->asleep, __ATOMIC_ACQUIRE))
-        self->timer->setTimeoutMS(1);
+    if (__atomic_load_n(&self->asleep, __ATOMIC_ACQUIRE))
+        return;
+    if (self->loop && self->loop->inGate() && self->announced) {
+        const bool ok = self->evaluate();
+        if (const uint32_t ms = self->nextTickMS(ok))
+            self->timer->setTimeoutMS(ms);
+        return;
+    }
+    self->timer->setTimeoutMS(1);
 }
 
 namespace {
@@ -1575,13 +1620,27 @@ bool SwitchThermal::start(IOService *provider)
     unsigned noDfll = 0;
     dfllMode = governed = PE_parse_boot_argn("switch-no-dfll", &noDfll, sizeof(noDfll)) == 0 || noDfll == 0u;
     loop = IOWorkLoop::workLoop();
+    govLoop = IOWorkLoop::workLoop();
+    if (govLoop) {
+        if (thread_t govThread = govLoop->getThread()) {
+            thread_set_thread_name(govThread, "SwitchPerfGovernor");
+            // BASEPRI_PREEMPT (92) - BASEPRI_KERNEL (81) = 11: decouples governor DFLL ramps from slow TMP451 I2C.
+            thread_precedence_policy_data_t policy = {.importance = 11};
+            (void)thread_policy_set(govThread, THREAD_PRECEDENCE_POLICY, reinterpret_cast<thread_policy_t>(&policy),
+                                    THREAD_PRECEDENCE_POLICY_COUNT);
+        }
+    }
     timer = loop ? IOTimerEventSource::timerEventSource(this, &SwitchThermal::timerFired) : nullptr;
     alertRelease = loop ? IOTimerEventSource::timerEventSource(this, &SwitchThermal::alertReleased) : nullptr;
-    if (!timer || !alertRelease || loop->addEventSource(timer) != kIOReturnSuccess ||
-        loop->addEventSource(alertRelease) != kIOReturnSuccess) {
+    govRestore = loop ? IOInterruptEventSource::interruptEventSource(this, &SwitchThermal::governorRestoreFired)
+                      : nullptr;
+    if (!timer || !alertRelease || !govRestore || loop->addEventSource(timer) != kIOReturnSuccess ||
+        loop->addEventSource(alertRelease) != kIOReturnSuccess ||
+        loop->addEventSource(govRestore) != kIOReturnSuccess) {
         IOLog("SwitchThermal: work loop setup failed, fan left at %u/256\n", drive);
         return false;
     }
+    govRestore->enable();
     // The ALERT interrupt is required. Its source stays disabled until evaluate() has programmed the
     // first window, so a line still asserted from whatever state the sensor was left in cannot storm.
     IOService *nub = tegra_gpio_interrupt_nub(TEGRA_GPIO_TEMP_ALERT, TEGRA_GPIO_LEVEL_LOW);
@@ -1596,6 +1655,7 @@ bool SwitchThermal::start(IOService *provider)
     publish("FanDrive", drive);
     registerService();
     timer->setTimeoutMS(1);
+    switch_soctherm_use_workloop(loop);
     if (switch_soctherm_listen(&SwitchThermal::socThermMoved, this))
         IOLog("SwitchThermal: no SOC_THERM events; the fan curve follows the TMP451 ALERT alone\n");
     return true;
@@ -1604,13 +1664,21 @@ bool SwitchThermal::start(IOService *provider)
 void SwitchThermal::free()
 {
     switchperf::stop();
+    __atomic_store_n(&govActive, false, __ATOMIC_RELEASE);
+    syncGovLoop();
     for (IOInterruptEventSource *source : governor) {
         if (!source)
             continue;
         source->disable();
-        if (loop)
-            loop->removeEventSource(source);
+        if (govLoop)
+            govLoop->removeEventSource(source);
         source->release();
+    }
+    if (govRestore) {
+        govRestore->disable();
+        if (loop)
+            loop->removeEventSource(govRestore);
+        govRestore->release();
     }
     if (alert) {
         alert->disable();
@@ -1627,6 +1695,7 @@ void SwitchThermal::free()
             loop->removeEventSource(source);
         source->release();
     }
+    OSSafeReleaseNULL(govLoop);
     OSSafeReleaseNULL(loop);
     IOService::free();
 }

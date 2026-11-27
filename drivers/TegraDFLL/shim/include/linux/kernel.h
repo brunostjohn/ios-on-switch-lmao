@@ -230,9 +230,19 @@ static inline s64 ktime_ms_delta(const ktime_t later, const ktime_t earlier) { r
 typedef struct { void *slot; } spinlock_t;
 #define __SPIN_LOCK_UNLOCKED(x) { NULL }
 #define DEFINE_SPINLOCK(x) spinlock_t x = __SPIN_LOCK_UNLOCKED(x)
-#define spin_lock_init(l) do { (l)->slot = NULL; } while (0)
-#define spin_lock_irqsave(l, flags) do { (flags) = 0; switch_linux_mutex_lock(switch_linux_mutex_of(&(l)->slot)); } while (0)
-#define spin_unlock_irqrestore(l, flags) do { (void)(flags); switch_linux_mutex_unlock(switch_linux_mutex_of(&(l)->slot)); } while (0)
+#define spin_lock_init(l) do { (l)->slot = NULL; (void)switch_linux_mutex_of(&(l)->slot); } while (0)
+#define spin_lock_irqsave(l, flags) \
+	do { \
+		void *mtx_ = __atomic_load_n(&(l)->slot, __ATOMIC_RELAXED); \
+		(flags) = 0; \
+		switch_linux_mutex_lock(mtx_ ? mtx_ : switch_linux_mutex_of(&(l)->slot)); \
+	} while (0)
+#define spin_unlock_irqrestore(l, flags) \
+	do { \
+		void *mtx_ = __atomic_load_n(&(l)->slot, __ATOMIC_RELAXED); \
+		(void)(flags); \
+		switch_linux_mutex_unlock(mtx_ ? mtx_ : switch_linux_mutex_of(&(l)->slot)); \
+	} while (0)
 #define lockdep_assert_held(l) do { } while (0)
 
 #endif
