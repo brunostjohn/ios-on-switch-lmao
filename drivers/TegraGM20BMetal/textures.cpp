@@ -365,10 +365,6 @@ bool Device::createLaidOut(const TextureAsk &ask, Texture &t, const ArenaAt *at)
 
 void Device::destroyTexture(Texture &t)
 {
-#if SWITCH_METAL_DIAGNOSTICS
-    if (glassMemOn.load(std::memory_order_relaxed))
-        glassMem->forget(t.storageRange().va ? t.storageRange().va : t.va, t.view ? t.tic : 0);
-#endif
     if (t.view) {
         // its stand-in's and pool image's views are its own (viewCompanions); every other pointer is its texture's
         if (t.sampled)

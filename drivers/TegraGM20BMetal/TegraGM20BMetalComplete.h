@@ -233,15 +233,17 @@ private:
     Compiler::Outcome remoteKernel(id facadeFunction, MTLComputePipelineDescriptor *descriptor,
                                    const NmbDirectDispatch &dispatch, const CacheKey &k, ComputeRecord &record,
                                    std::string &why, bool &taken);
-#if SWITCH_METAL_DIAGNOSTICS
+#if SWITCH_METAL_STATS
     void logRemote(const Ask &a, const CacheKey &k, RecordCache::Found found, const char *how, const Obtained &o);
+#endif
+#if SWITCH_METAL_DIAGNOSTICS
     void logInProcessCa(const Ask &a, const CacheKey &k, RecordCache::Found found);
     gm20b::Mutex inProcessCaLock_;  // debug-only miss path: serializes once-per-label deduplication across threads
     std::set<std::string> inProcessCaSeen_;
 #endif
 };
 
-#if SWITCH_METAL_DIAGNOSTICS
+#if SWITCH_METAL_STATS
 // A state's label and whole key in parts no log line cuts (a message stops near 1 KiB), logged whatever became of the
 // state, beside its "a state the pack lacks" line, which keeps 400 characters of the key: tools/gpu/logharvest.py joins
 // them into precompile corpus lines

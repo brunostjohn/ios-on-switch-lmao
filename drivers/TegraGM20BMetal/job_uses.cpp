@@ -213,11 +213,6 @@ void CommandBuffer::use(const Texture &texture, bool write)
     // a write into a copied no-copy texture goes on to its caller's pages (TegraGM20BMetalEncodeBlit.mm copyToCallerPages)
     externalWrites_ |= (cachedHost || texture.callerPages || view->nativeGeneration != 0) && write;
     volatileWrites_ |= write && hostVisible && gpuVolatile && !texture.callerPages;
-#if SWITCH_METAL_DIAGNOSTICS
-    if (write && dev_->glassMemLive_)
-        dev_->glassMem->wrote(storage.va ? storage.va : view->va, dev_->commitCount_,
-                              dev_->stats.memEvents.load(std::memory_order_relaxed));
-#endif
     if (view->va)
         useStorage(storage.bytes ? storage.va : view->va, storage.bytes ? storage.bytes : 1, write, cachedHost,
                    storage.arena);

@@ -89,7 +89,6 @@ bool Device::newChunk(uint64_t size, bool dedicated, std::unique_lock<gm20b::Mut
     chunks_[c] = std::move(ch);
     SWITCH_METAL_DIAGNOSTIC(stats.poolBytes += size);
     SWITCH_METAL_DIAGNOSTIC(stats.poolChunks++);
-    SWITCH_METAL_DIAGNOSTIC(glassMemEvent(dedicated ? "pool chunk made (dedicated)" : "pool chunk made", size));
     index = c;
     return true;
 }
@@ -350,7 +349,6 @@ void Device::freeChunk(Chunk &ch, DeferredFrees &deferred)
 {
     SWITCH_METAL_DIAGNOSTIC(stats.poolBytes -= ch.bytes);
     SWITCH_METAL_DIAGNOSTIC(stats.poolChunks--);
-    SWITCH_METAL_DIAGNOSTIC(glassMemEvent("chunk freed", ch.bytes));
     deferred.add({ch.bo, ch.pitchVa, ch.pitchVa ? ch.bytes : 0, nullptr, 0, nullptr, ch.bytes, 0, RetireKind::Chunk});
     ch = Chunk();
 }
@@ -612,8 +610,6 @@ bool Device::newTiledChunk(std::vector<Chunk> &chunks, uint32_t kind, uint64_t s
     chunks[c] = std::move(ch);
     SWITCH_METAL_DIAGNOSTIC(stats.poolBytes += size);
     SWITCH_METAL_DIAGNOSTIC(stats.poolChunks++);
-    SWITCH_METAL_DIAGNOSTIC(
-        glassMemEvent(kind == fx::kBlockLinearKind ? "block-linear chunk made" : "zeta chunk made", size));
     index = c;
     return true;
 }

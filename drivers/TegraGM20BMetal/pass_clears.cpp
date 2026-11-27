@@ -17,35 +17,6 @@
 
 namespace gm20b {
 
-#if SWITCH_METAL_DIAGNOSTICS
-// What this pass reached of each colour target it stores into (a shadow target's own image, not its pool image): its
-// load, the box of its draws' pixels (the render area where they were not counted), its render area and its clears'
-// extent from the origin
-void RenderEncoder::glassMemReached(const std::vector<Clear> &cl)
-{
-    uint32_t box[4] = {0, 0, areaW_, areaH_};
-    if (drew_ && !whole_ && !rects_.empty()) {
-        box[0] = box[1] = UINT32_MAX;
-        box[2] = box[3] = 0;
-        for (const auto &r : rects_)
-            for (int k = 0; k < 4; k++)
-                box[k] = k < 2 ? std::min(box[k], r[k]) : std::max(box[k], r[k]);
-    }
-    for (uint32_t j = 0; j < pass_.count && j < 8; j++) {
-        const Texture *t = shadowOf_[j] ? shadowOf_[j] : pass_.color[j].texture;
-        if (!t || memoryless_[j] || !pass_.color[j].store)
-            continue;
-        GlassMemReach reach{"dlc"[pass_.color[j].load], box[0], box[1], box[2], box[3], areaW_, areaH_, 0, 0};
-        for (const Clear &c : cl)
-            if (c.target == j && !c.x0 && !c.y0) {
-                reach.clearW = std::max(reach.clearW, c.x1);
-                reach.clearH = std::max(reach.clearH, c.y1);
-            }
-        dev_->glassMem->reached(t->va, reach, dev_->commitCount_);
-    }
-}
-#endif
-
 void RenderEncoder::continuePass(uint8_t stores, uint8_t discards)
 {
     // Clear reach is a Metal encoder property, including its empty-draw behavior.

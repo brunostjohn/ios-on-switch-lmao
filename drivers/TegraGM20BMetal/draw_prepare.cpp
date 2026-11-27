@@ -861,10 +861,6 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         (primitive == 3 || primitive == 4) && drawCount == (primitive == 3 ? 6u : 4u) &&
         WrittenRegion::nonOverlappingQuad(geometryAnalysis, primitive == 3));
     SWITCH_METAL_ENCODE_END(barrierSpan);
-#if SWITCH_METAL_DIAGNOSTICS
-    if (pipeline_ && __atomic_load_n(&pipeline_->caName, __ATOMIC_ACQUIRE))
-        probeDraw(*pipeline_, *pl, primitive, first, count, indexed, {x[0], y[0], x[1], y[1]});
-#endif
     SWITCH_METAL_DIAGNOSTIC(cb_->counts_.interlockDraws += pl->storageBits != 0);
     SWITCH_METAL_DIAGNOSTIC(cb_->counts_.rasterOrderedDraws += pl->rec && (pl->rec->flags & PipelineRasterOrdered));
 #if SWITCH_METAL_DIAGNOSTICS

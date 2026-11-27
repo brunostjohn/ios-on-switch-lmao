@@ -67,12 +67,12 @@ struct Asked : Work {
     std::string request;  // what the log keeps of a client's request ("": the log's own, which it keeps already)
     int32_t pid = 0;      // the process that asked first, whose share of the store the record takes
     dispatch_semaphore_t done = nullptr;  // signalled once it ran, for the replay that waits on it
-#if SWITCH_DEBUG
+#if SWITCH_DEBUG && SWITCH_METAL_STATS
     uint64_t takenNs = 0, preparedNs = 0;  // the kernel handed it over, and it was prepared
 #endif
 };
 
-#if SWITCH_DEBUG
+#if SWITCH_DEBUG && SWITCH_METAL_STATS
 // When the take thread's request came out of the kernel (0: the replay's own)
 thread_local uint64_t tTakenNs;
 #endif
@@ -105,7 +105,7 @@ void idle()
     pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0);
     malloc_zone_pressure_relief(nullptr, 0);
     pthread_set_qos_class_self_np(QOS_CLASS_BACKGROUND, 0);
-#if SWITCH_DEBUG
+#if SWITCH_DEBUG && SWITCH_METAL_STATS
     logFootprint(logger(), "idle");
 #endif
 }
@@ -248,7 +248,7 @@ bool Service::filedAsPlain(const Prepared &p, const std::string &entry, bool wri
 
 void Service::persist()
 {
-#if SWITCH_DEBUG
+#if SWITCH_DEBUG && SWITCH_METAL_STATS
     const uint64_t began = uptimeNs();
 #endif
     if (!store_.persist())
@@ -258,7 +258,7 @@ void Service::persist()
                      errno);
     if (!log_.persist())
         os_log_error(logger(), "SwitchShaderCompiler: the request log not synced (%d)", errno);
-#if SWITCH_DEBUG
+#if SWITCH_DEBUG && SWITCH_METAL_STATS
     static uint32_t syncs = 0;  // the persister's serial queue alone runs this
     os_log(logger(), "SwitchShaderCompiler: store and request log synced in %llu us (sync %u)",
            (unsigned long long)((uptimeNs() - began) / 1000), ++syncs);
@@ -313,7 +313,7 @@ int32_t Service::run(Work &work)
             switch_refusal_key_with(switch_refusal_key("m2v", line.reason), switch_refusal_key(line.text.c_str(), "")),
             "m2v", line.reason, "%s", line.text.c_str());
     }
-#if SWITCH_DEBUG
+#if SWITCH_DEBUG && SWITCH_METAL_STATS
     logJob(logger(), result, asked.takenNs, asked.preparedNs, unsigned(workerClass), asked.pid, p.key.key);
 #endif
     return packed(result, false, workerClass);
@@ -353,7 +353,7 @@ bool Service::submit(Prepared prepared, std::string request, const Waiter &waite
     work->pid = pid;
     work->request = std::move(request);
     work->done = done;
-#if SWITCH_DEBUG
+#if SWITCH_DEBUG && SWITCH_METAL_STATS
     work->takenNs = tTakenNs;
     work->preparedNs = uptimeNs();
 #endif
@@ -382,8 +382,10 @@ void Service::take(uint64_t stack)
                      error);
         exit(1);
     }
-#if SWITCH_DEBUG
+#if SWITCH_DEBUG && SWITCH_METAL_STATS
     tTakenNs = uptimeNs();
+#endif
+#if SWITCH_DEBUG
     dieIfArmedFor(reply.pid);
 #endif
     const bool waited = reply.flags & TegraGM20BCompileWaited;
@@ -498,7 +500,7 @@ void Service::open(uint64_t stack)
         os_log_error(logger(), "SwitchShaderCompiler: running without its sandbox: %{public}s", why.c_str());
     os_log(logger(), "SwitchShaderCompiler: serving at %llu ms of uptime",
            (unsigned long long)(clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1000000));
-#if SWITCH_DEBUG
+#if SWITCH_DEBUG && SWITCH_METAL_STATS
     logFootprint(logger(), "serving");
 #endif
 }

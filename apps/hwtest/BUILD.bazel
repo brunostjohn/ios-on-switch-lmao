@@ -845,7 +845,6 @@ cc_library(
         "//drivers/TegraGM20BMetal:device_stamps.cpp",
         "//drivers/TegraGM20BMetal:draw.cpp",
         "//drivers/TegraGM20BMetal:draw_prepare.cpp",
-        "//drivers/TegraGM20BMetal:draw_probes.cpp",
         "//drivers/TegraGM20BMetal:draw_times.cpp",
         "//drivers/TegraGM20BMetal:draw_inputs.cpp",
         "//drivers/TegraGM20BMetal:draw_shader_tests.cpp",

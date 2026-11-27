@@ -216,10 +216,6 @@ void RenderEncoder::end()
         clears(initialClears_);
     const std::vector<Clear> &cl = initialClears_;
     const uint32_t layers = std::max(pass_.layers, 1u);
-#if SWITCH_METAL_DIAGNOSTICS
-    if (d.glassMemLive_)
-        glassMemReached(cl);
-#endif
     const std::vector<uint32_t> &restore = extrasAtBegin_ ? extrasAtBegin_->restore : std::vector<uint32_t>();
     const uint32_t room = 160 + SWITCH_GM20B_KIND_SWITCH_WORDS + 8 * 32 * layers + uint32_t(cl.size()) * 48 +
                           3 * (kZetaTargetWords + kZetaClearWords + 24) + kZcullRegionWords + kSampleWords +

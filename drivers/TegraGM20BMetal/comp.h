@@ -286,7 +286,6 @@ struct CompQueue {
     // refused for a shortage since this process last gave compressed memory back, which alone may change the answer
     std::vector<CompWant> refused;
     std::vector<std::unique_ptr<CompMem>> mems;
-    bool loggedOn = false;
 
     // Not to be asked for: asked already or made at least as large, or refused for a shortage nothing has eased since
     bool asked(const CompWant &w) const

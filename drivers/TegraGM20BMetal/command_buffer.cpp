@@ -90,11 +90,6 @@ CommandBuffer *Device::begin()
         freeMovedPlain();
     growRing(push_, kSizes[0].push);
     growRing(upload_, kSizes[0].upload);
-#if SWITCH_METAL_DIAGNOSTICS
-    if (glassMemOn.load(std::memory_order_relaxed) || glassMemLive_ || glassMemBusyCount_)
-        glassMemFrame();
-    cb_.glassMemSlot_ = -1;
-#endif
     CommandBuffer &cb = cb_;
     cb.dev_ = this;
     cb.segments_.clear();
@@ -421,10 +416,6 @@ bool CommandBuffer::commit(uint32_t &seqno)
         emitSlm(p, slmVa, slmArea(slmGiven, d.k_.info().tpc_count));
         segments_.insert(0, {va, uint32_t(p.at - head), 0});
     }
-#if SWITCH_METAL_DIAGNOSTICS
-    if (!segments_.empty() && d.glassMemLive_)
-        glassMemTail();
-#endif
     if (!segments_.empty()) {
         uint64_t va;
         auto *tail = reinterpret_cast<uint32_t *>(d.alloc(d.push_, (kTiledCacheFlushWords + kStampWords) * 4, 4, va));
@@ -587,14 +578,6 @@ bool CommandBuffer::commit(uint32_t &seqno)
     seqno = d.lastSubmitted();
     d.scrubsSubmitted(*this, seqno);
     parkZcull();
-#if SWITCH_METAL_DIAGNOSTICS
-    if (glassMemSlot_ >= 0) {
-        d.glassMemCbs_[glassMemSlot_].seqno = seqno;
-        d.glassMemBusy_[glassMemSlot_] = true;
-        d.glassMemBusyCount_++;
-        glassMemSlot_ = -1;
-    }
-#endif
     if (slmGiven)
         d.slmChannel_ = slmGiven;
     d.retire(d.push_, seq);

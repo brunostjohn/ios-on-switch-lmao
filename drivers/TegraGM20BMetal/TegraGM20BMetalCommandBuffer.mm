@@ -598,9 +598,6 @@ static void deferPresent(SwitchMetalCommandBuffer *cb, id<MTLDrawable> drawable,
     if (_active)
         [(SwitchMetalEncoder *)_active endEncoding];
     gm20bSnapshotResidencySets(self);
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    glassProbeCommitted(self);
-#endif
     [(SwitchMetalDevice *)_device gm20bCommit:self];
 #if SWITCH_FRAME_TIMELINE
     _frame.mark(switch_frame::Back);

@@ -319,10 +319,6 @@ struct Texture {
     // the command buffer (CommandBuffer::serial) that last blended into it through a rung-2 form (rule fetch.blend's
     // accumulates), 0: none; read and written relaxed, from any encoding thread
     mutable uint64_t ropBlendSerial = 0;
-#if SWITCH_METAL_DIAGNOSTICS
-    // A pass, copy, dispatch or upload of this process wrote it (glass_probe.h)
-    bool probeWritten = false;
-#endif
 
     // A mipmapped texture's levels (r12, fx): `chain` is the block-linear image of every level, NIL's layout, and this texture
     // is its level 0 (va, span, pitch and block height level 0's; its header, tic, the chain's). The 2D engine fills the later

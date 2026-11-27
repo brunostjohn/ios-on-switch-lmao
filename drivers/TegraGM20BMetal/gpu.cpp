@@ -408,10 +408,6 @@ bool Device::open(const char *packPath, uint64_t stack, std::string &err, Role r
     role_ = role;
     sizes_ = kSizes[role == Role::RenderServer ? 0 : 1];
     k_.observeFrees(set_);
-#if SWITCH_METAL_DIAGNOSTICS
-    if (role == Role::RenderServer)
-        glassMem = std::make_unique<GlassMem>();
-#endif
     openFailure_ = OpenFailure::Structural;
     SWITCH_METAL_CREATION_STAMP(loadBegan);
     if (!pack_.load(packPath, stack, err))
@@ -757,22 +753,9 @@ bool Device::place(uint32_t prog, uint32_t &program, uint64_t &data)
         const uint64_t fileOffset = pack_.header()->section[PackHeap].offset + p.heapOffset;
         const bool inPlace = packWindowBytes_ != 0 || p.bytes >= k_.info().page_size ||
                              packPages_.bound(fileOffset, p.bytes + kHeapSlack);
-#if SWITCH_METAL_DIAGNOSTICS
-        const size_t importsBefore = inPlaceImports_.size();
-#endif
         if (!(inPlace && placeInPlace(packPages_, file, fileOffset, p.bytes, false, at)) &&
             !heapPlace(pack_.section<uint8_t>(PackHeap) + p.heapOffset, p.bytes, at))
             return false;
-#if SWITCH_METAL_DIAGNOSTICS
-        if (const size_t added = inPlaceImports_.size() - importsBefore; added && packPieceLogs_ < 16) {
-            ++packPieceLogs_;
-            const uint32_t tier = packWindowContainsProgram(p, pack_.header()->tier0[PackHeap]) ? 0u : 1u;
-            const char *proc = getprogname();
-            os_log(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "gm20b"),
-                   "SwitchMetal: %{public}s: pack piece import: tier %u, %zu piece(s) at heap 0x%x",
-                   proc ? proc : "unknown", tier, added, p.heapOffset);
-        }
-#endif
         it = placedCold_.emplace(prog, uint32_t(at)).first;
         SWITCH_METAL_DIAGNOSTIC(stats.programsPlaced++);
     }
@@ -797,11 +780,6 @@ bool Device::slmNeed(uint64_t perWarp)
     slm_ = area;
     slmVa_.store(area.va, std::memory_order_relaxed);
     slmPerWarp_.store(perWarp, std::memory_order_release);
-#if SWITCH_METAL_DIAGNOSTICS
-    os_log(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "gm20b"),
-           "SwitchMetal: shader local memory: %llu bytes a warp, %llu KiB", (unsigned long long)perWarp,
-           (unsigned long long)(a.bytes >> 10));
-#endif
     return true;
 }
 

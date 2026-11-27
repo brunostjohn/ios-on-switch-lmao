@@ -464,40 +464,6 @@ static bool refusedTexture(const gm20b::shapes::TextureShape &s)
     return false;
 }
 
-#if SWITCH_METAL_DIAGNOSTICS
-// The first texture of a kind the driver holds in memory of its own, once per process
-static void announceTexture(gm20b::shapes::Route route, const gm20b::shapes::TextureShape &s, const gm20b::Texture &t)
-{
-    using Route = gm20b::shapes::Route;
-    if (route == Route::Chain) {
-        static std::atomic<bool> said{false};
-        if (!said.exchange(true))
-            os_log(gm20bLog(), "SwitchMetal: mip chain on (%llu levels of %llux%llu, %llu bytes)",
-                   (unsigned long long)s.levels, (unsigned long long)s.width, (unsigned long long)s.height,
-                   (unsigned long long)t.chain->layout.bytes);
-    } else if (route == Route::StoredSamples) {
-        const bool zeta = gm20b::shapes::storedSamples(s) == gm20b::shapes::StoredSamples::Zeta;
-        static std::atomic<bool> said[2];
-        if (!said[zeta].exchange(true))
-            os_log(gm20bLog(),
-                   "SwitchMetal: stored %llux multisampled %{public}s on (first %llux%llu format %u: %llu bytes of "
-                   "%{public}s)",
-                   (unsigned long long)s.samples, zeta ? "depth/stencil" : "colour", (unsigned long long)s.width,
-                   (unsigned long long)s.height, s.format, (unsigned long long)(zeta ? t.storage.bytes : t.span.bytes),
-                   zeta ? "zeta memory" : "block-linear memory");
-    } else if (route == Route::StoredZeta) {
-        static std::atomic<bool> said{false};
-        if (!said.exchange(true))
-            os_log(
-                gm20bLog(),
-                "SwitchMetal: stored one-sample depth/stencil on (first %llux%llu format %u, %u layers: %llu bytes of "
-                "%{public}s zeta memory)",
-                (unsigned long long)s.width, (unsigned long long)s.height, s.format, unsigned(t.layers),
-                (unsigned long long)t.storage.bytes, t.comptags ? "compressed" : "plain");
-    }
-}
-#endif
-
 - (id<MTLTexture>)gm20bNewTexture:(MTLTextureDescriptor *)d tiled:(bool)tiled
 {
     if (refuseTurnedOffSurface(d))
@@ -539,9 +505,7 @@ static void announceTexture(gm20b::shapes::Route route, const gm20b::shapes::Tex
     t->_kind = route == Route::Memoryless ? SwitchMetalTextureMemoryless : SwitchMetalTexturePool;
     const uint32_t kind = tiled || route != Route::Plain ? privateCompressedKind(d) : 0;
     t->_gm20bOk = gm20b::shapes::create(*gRM->raw, s, route, tiled, kind, t->_raw);
-    if (t->_gm20bOk)
-        SWITCH_METAL_DIAGNOSTIC(announceTexture(route, s, t->_raw));
-    else if (route == Route::StoredZeta)
+    if (!t->_gm20bOk && route == Route::StoredZeta)
         SWITCH_REFUSE_DETAIL("gm20b", "zeta.owned", d.pixelFormat,
                              "a stored %lux%lu depth/stencil texture of format %lu: no zeta memory or texture header "
                              "for it",

@@ -11,7 +11,7 @@ static constexpr uint32_t kLocationAccessibility = 2, kLocationHarmony = 9;
 extern "C" void native_legacy_frame_end_hold(void);
 extern "C" void native_legacy_frame_end_release(void);
 
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_STATS_FRAME) && SWITCH_STATS_FRAME
 // The first matrices IOMobileFramebuffer hands over, in thousandths, rows as received: what Core Animation's colour
 // requests become before the CSC (one line each, the first kLoggedMatrices of a boot).
 static void logMatrix(const char *call, uint32_t location, const Matrix &m)
@@ -122,7 +122,7 @@ void TegraDisplayColor::commit(bool paletteChanged)
     Snapshot &next = unit.spare();
     build(inputs, next.tables);
     memcpy(next.palette, palette, sizeof(palette));
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_STATS_FRAME) && SWITCH_STATS_FRAME
     if (memcmp(loggedCsc, next.tables.csc, sizeof(loggedCsc)) != 0) {
         memcpy(loggedCsc, next.tables.csc, sizeof(loggedCsc));
         logCsc(next.tables, inputs);
@@ -199,7 +199,7 @@ IOReturn TegraDisplayColor::setMatrix(uint32_t location, const void *matrix)
         return kIOReturnBadArgument;
     Matrix value;
     memcpy(&value, matrix, sizeof(value));
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_STATS_FRAME) && SWITCH_STATS_FRAME
     logMatrix("setMatrix", location, value);
 #endif
     return change([&] {
@@ -274,7 +274,7 @@ IOReturn TegraDisplayColor::swapSetColorMatrix(const void *matrix, uint32_t loca
             return kIOReturnUnsupported;
         memcpy(&value, &words[3], sizeof(value));
     }
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_STATS_FRAME) && SWITCH_STATS_FRAME
     logMatrix("swapSetColorMatrix", location, value);
 #endif
     return change([&] {

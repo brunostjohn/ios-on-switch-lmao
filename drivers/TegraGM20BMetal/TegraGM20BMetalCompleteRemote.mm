@@ -25,7 +25,7 @@ struct RequestSources {
     std::map<const LibrarySource *, uint32_t> seen;
 };
 
-#if SWITCH_METAL_DIAGNOSTICS
+#if SWITCH_METAL_STATS
 const char *classText(uint32_t qos)
 {
     return qos == QOS_CLASS_USER_INTERACTIVE ? "UI"
@@ -213,7 +213,7 @@ std::string Completion::packKeyOf(const CompileRequest &r)
 // The wait split where it went (obtained.h; -1 for a part not measured): the request queued until its compile
 // started, the compile, the compiler's answer after it, this thread's wake after that, and the store lookup. The split
 // stays inside the parentheses: tools/gpu/logharvest.py reads the name and key after "for a compile slot: ".
-#if SWITCH_METAL_DIAGNOSTICS
+#if SWITCH_METAL_STATS
 void Completion::logRemote(const Ask &a, const CacheKey &k, RecordCache::Found found, const char *how,
                            const Obtained &o)
 {
@@ -287,9 +287,9 @@ bool Completion::remoteNow(const Ask &a, const CacheKey &k, Compiler::State &sta
         case AskFailure::NotStored:
             return failure = kNotStored, false;
         }
-        SWITCH_METAL_DIAGNOSTIC(logRemote(a, k, found, "by the shader compiler", tObtained));
+        SWITCH_METAL_STAT(logRemote(a, k, found, "by the shader compiler", tObtained));
     } else {
-        SWITCH_METAL_DIAGNOSTIC(logRemote(a, k, found, "from the shader compiler's store", tObtained));
+        SWITCH_METAL_STAT(logRemote(a, k, found, "from the shader compiler's store", tObtained));
     }
     compiler_->keep(k, found, record, why);
     state = found == RecordCache::Found::Record ? Compiler::State::Ready : Compiler::State::Refused;
@@ -327,8 +327,8 @@ bool Completion::remoteLater(const Ask &a, const CacheKey &k,
     RuntimeRecord record;
     std::string why;
     if (const RecordCache::Found found = fromStore(store, packKey, record, why); found != RecordCache::Found::None) {
-        SWITCH_METAL_DIAGNOSTIC(logRemote(a, k, found, "from the shader compiler's store",
-                                          Obtained{"store", 0, uint32_t(qos_class_self())}));
+        SWITCH_METAL_STAT(logRemote(a, k, found, "from the shader compiler's store",
+                                    Obtained{"store", 0, uint32_t(qos_class_self())}));
         settle(found, record, why);
         return true;
     }
@@ -337,7 +337,7 @@ bool Completion::remoteLater(const Ask &a, const CacheKey &k,
         return true;
     }
     const std::string request = encodeRequest(r);
-#if SWITCH_METAL_DIAGNOSTICS
+#if SWITCH_METAL_STATS
     const uint64_t began = nowUs();
 #else
     const uint64_t began = 0;
@@ -355,7 +355,7 @@ bool Completion::remoteLater(const Ask &a, const CacheKey &k,
                                                  : RecordCache::Found::None;
             switch (askNext(answer, found != RecordCache::Found::None, again, remote_->declined())) {
             case AskNext::Use: {
-#if SWITCH_METAL_DIAGNOSTICS
+#if SWITCH_METAL_STATS
                 Obtained o{"compiled", nowUs() - began, asked.qos, answered.how};
                 const TegraGM20BAbiCompileTimes &t = answered.times;
                 o.split(began, t.compile_start, t.compile_end, t.answered, answered.at, began + o.waitUs);
@@ -449,7 +449,7 @@ Compiler::Outcome Completion::remoteKernel(id facadeFunction, MTLComputePipeline
         return Compiler::Outcome::Failed;
     }
     taken = true;
-#if SWITCH_METAL_DIAGNOSTICS
+#if SWITCH_METAL_STATS
     logComputeHarvest("kernel harvest", k, r);
 #endif
     return found == RecordCache::Found::Record ? Compiler::Outcome::Made : Compiler::Outcome::Refused;
@@ -583,7 +583,7 @@ bool Completion::facts(id facadeFunction, MTLComputePipelineDescriptor *descript
         return failure = kInexpressible, false;
     RecordCache::Found found = stored();
     Remote::Answer answer = Remote::Answer::Unavailable;
-#if SWITCH_METAL_DIAGNOSTICS
+#if SWITCH_METAL_STATS
     const bool fromStore = found != RecordCache::Found::None;
     const uint64_t began = nowUs();
 #endif
@@ -614,7 +614,7 @@ bool Completion::facts(id facadeFunction, MTLComputePipelineDescriptor *descript
     }
     if (found == RecordCache::Found::Refusal)
         return failure = "the shader compiler made no compute state of the kernel: " + refusal, false;
-#if SWITCH_METAL_DIAGNOSTICS
+#if SWITCH_METAL_STATS
     os_log(gm20bLog(),
            "SwitchMetal: a compute state the pack lacks answered %{public}s in %llu ms: max %u width %u memory %u: "
            "%{public}.300s",

@@ -132,7 +132,6 @@ bool Device::restoreArenaLocked(std::unique_lock<gm20b::Mutex> &l, uint32_t inde
         a.purged = false;
         purgedArenas_--;
         SWITCH_METAL_DIAGNOSTIC(stats.poolBytes += bytes);
-        SWITCH_METAL_DIAGNOSTIC(glassMemEvent("heap restored", bytes));
         SWITCH_METAL_DIAGNOSTIC(stats.arenaRestores++);
         SWITCH_METAL_DIAGNOSTIC(stats.hostZeroedBytes += (wc && !kernelBo) ? bytes : 0);
     } else if (unparkMismatch) {
@@ -469,10 +468,6 @@ bool Device::arenaBuffer(uint32_t arena, uint64_t length, Buffer &b, std::option
 
 void Device::arenaRelease(Texture &t)
 {
-#if SWITCH_METAL_DIAGNOSTICS
-    if (t.arena && glassMemOn.load(std::memory_order_relaxed))
-        glassMem->forget(t.storageRange().va);
-#endif
     DeferredFrees deferred(*this);
     std::unique_lock<gm20b::Mutex> l(lock_);
     if (t.arena)
@@ -588,7 +583,6 @@ bool Device::purgeLocked(std::unique_lock<gm20b::Mutex> &l, uint32_t index, cons
         retiring_.heapBytes.fetch_add(bytes, std::memory_order_relaxed);
     else
         deferred.add({{}, 0, 0, nullptr, 0, nullptr, bytes, 0, RetireKind::GpuHeap});
-    SWITCH_METAL_DIAGNOSTIC(glassMemEvent("heap purged", bytes));
     l.unlock();
     deferred.flush();
     if (wc) {
@@ -755,7 +749,6 @@ void Device::trimLocked(std::unique_lock<gm20b::Mutex> &l, uint32_t index, const
         a.parts = std::move(parts);
         a.holes = std::move(holes);
         SWITCH_METAL_DIAGNOSTIC(stats.poolBytes += partsBytes);
-        SWITCH_METAL_DIAGNOSTIC(glassMemEvent("heap trimmed", rangeBytes(a.holes)));
     } else if (whole) {
         a.bo = wholeBo;
         SWITCH_METAL_DIAGNOSTIC(stats.poolBytes += bytes);

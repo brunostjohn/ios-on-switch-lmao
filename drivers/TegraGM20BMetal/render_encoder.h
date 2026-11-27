@@ -725,12 +725,6 @@ private:
     bool matrixConstants(const Pipeline &pl, const char **why);
     uint32_t colorTargets() const;
     StorageFallback storageFallback(const Pipeline &pl) const;
-#if SWITCH_METAL_DIAGNOSTICS
-    void probeDraw(const Pipeline &bound, Pipeline &drawn, uint32_t primitive, int32_t first, uint32_t count,
-                   bool indexed, const PixelBox &limit);
-    void probeGlassDraw(const Pipeline &bound, const Pipeline &drawn, const PixelBox &limit);
-    void glassMemSample(const Pipeline &bound, const Pipeline &drawn);
-#endif
     bool orderedFetch(const Pipeline &pl, const FetchDraw &shape) const;
     void fetchDraw(uint32_t primitive, bool indexed, uint32_t first, uint32_t count, uint32_t instances, uint32_t root,
                    uint32_t baseInstance);
@@ -761,9 +755,6 @@ private:
     // the pass's clears into `out`; the tiles its draws reach in tiles_ (both keep the last pass's capacity)
     void clears(std::vector<Clear> &out, bool fused = false);
     bool drawnClear(uint32_t j, const float *value, std::vector<Clear> &out) const;
-#if SWITCH_METAL_DIAGNOSTICS
-    void glassMemReached(const std::vector<Clear> &cl);
-#endif
     std::vector<Clear> initialClears_;
     std::vector<bool> tiles_;
     bool clearsSealed_ = false;

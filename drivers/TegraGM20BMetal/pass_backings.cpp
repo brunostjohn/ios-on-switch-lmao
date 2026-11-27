@@ -89,7 +89,6 @@ Device::Backing *Device::plainBacking(std::unique_lock<gm20b::Mutex> &l, const T
             mem = existing;
         } else {
             SWITCH_METAL_DIAGNOSTIC(stats.backingBytes += made->span.bytes);
-            SWITCH_METAL_DIAGNOSTIC(glassMemEvent("memoryless plain memory made", made->span.bytes));
             plainMems_.push_back(std::move(made));
             mem = plainMems_.back().get();
             // the views of its tag's smaller memory: no pass takes them again (an animated layer seldom asks a size twice), so it
@@ -151,7 +150,6 @@ void Device::freePlainSpan(PlainMem &mem, DeferredFrees &deferred)
 void Device::dropPlain(PlainMem *mem, DeferredFrees &deferred)
 {
     SWITCH_METAL_DIAGNOSTIC(stats.backingBytes -= mem->span.bytes);
-    SWITCH_METAL_DIAGNOSTIC(glassMemEvent("memoryless plain memory freed", mem->span.bytes));
     freePlainSpan(*mem, deferred);
     plainMems_.erase(std::find_if(plainMems_.begin(), plainMems_.end(), [&](const std::unique_ptr<PlainMem> &p) {
         return p.get() == mem;
@@ -261,7 +259,6 @@ Texture *Device::copyScratch(std::unique_lock<gm20b::Mutex> &l, DeferredFrees &d
             mem = existing;
         } else {
             SWITCH_METAL_DIAGNOSTIC(stats.backingBytes += made->span.bytes);
-            SWITCH_METAL_DIAGNOSTIC(glassMemEvent("copy scratch plain memory made", made->span.bytes));
             plainMems_.push_back(std::move(made));
             mem = plainMems_.back().get();
             for (Backing *b : backings_)

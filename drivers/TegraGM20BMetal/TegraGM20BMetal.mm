@@ -277,16 +277,7 @@ static void observeBackground()
                             object:nil
                              queue:nil
                         usingBlock:^(NSNotification *) {
-#if SWITCH_METAL_DIAGNOSTICS
-                            const uint64_t began = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
-#endif
                             gRawRelease.backgrounded();
-#if SWITCH_METAL_DIAGNOSTICS
-                            // the release runs on the posting thread (UIKit's main), ahead of the app's snapshot
-                            os_log(gm20bLog(), "SwitchMetal: background release %llu us on %s thread",
-                                   (clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - began) / 1000,
-                                   pthread_main_np() ? "the main" : "another");
-#endif
                         }];
     for (NSString *name in
          @[ @"UIApplicationWillEnterForegroundNotification", @"NSExtensionHostWillEnterForegroundNotification" ])
@@ -447,7 +438,7 @@ id<MTLDevice> metal_device_open(const char *packPath, uint64_t stack, uint64_t r
         });
     }
     watchFetchBarrierWay(dev);
-    watchGlassProbe(dev);
+    watchDebugSwitches(dev);
     watchFrameWeights(dev);
 #endif
     // what both threads hold up is the frame: they follow its committing threads (follow.h)

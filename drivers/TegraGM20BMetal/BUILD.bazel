@@ -316,7 +316,6 @@ ios_binary(
         "device_stamps.cpp",
         "draw.cpp",
         "draw_prepare.cpp",
-        "draw_probes.cpp",
         "draw_times.cpp",
         "draw_inputs.cpp",
         "draw_shader_tests.cpp",
