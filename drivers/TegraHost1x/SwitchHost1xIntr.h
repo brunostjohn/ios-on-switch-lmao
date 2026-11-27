@@ -20,6 +20,6 @@ uint32_t switch_host1x_fences_fail(uint32_t id, int status);
 void switch_host1x_fences_resume(uint32_t id);
 // Whether a fence or waiter is queued on syncpoint `id` (tegra_host1x_syncpt_free's check). Thread context.
 bool switch_host1x_fence_names(uint32_t id);
-// The syncpoint interrupt's primary filter: the filter waiters whose thresholds passed. Reads syncpoint values only;
-// the action acks and re-arms.
-void switch_host1x_intr_filter();
+// Primary interrupt filter: runs filter waiters, acks/re-arms syncpoints, wakes thread waiters; returns true only if
+// callbacks were queued for the work loop.
+bool switch_host1x_intr_filter();

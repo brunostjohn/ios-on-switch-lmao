@@ -21,6 +21,7 @@ constexpr uint64_t kWindowBytes = 4ULL << 20;
 std::map<uint32_t, uint32_t> gRegisters;
 std::map<uint32_t, uint32_t> gPtbByAsid;
 std::vector<uint32_t> gDetached;
+std::vector<std::pair<uint32_t, uint32_t>> gFlushes;
 unsigned gDmaLive;
 bool gGpubHardwired = true;
 uint64_t gNextDmaPa = 0x90000000ULL;
@@ -32,6 +33,7 @@ protected:
         gRegisters.clear();
         gPtbByAsid.clear();
         gDetached.clear();
+        gFlushes.clear();
         gDmaLive = 0;
     }
 
@@ -270,6 +272,35 @@ TEST_F(SmmuEngineTest, MapRespectsReserveHeadroomAndUnmapsExactCount)
 
     engine.release();
 }
+
+TEST_F(SmmuEngineTest, FreshMapDoesNoMcFlushAndUnmapFlushesBothAtomsOfEveryGranule)
+{
+    TegraSMMUEngine engine;
+    ASSERT_TRUE(engine.init(TEGRA_SMMU_ASID_VIC, kWindowBase, kWindowBytes, 0));
+    gFlushes.clear();
+
+    uint64_t pages[16];
+    for (uint32_t i = 0; i < 16; ++i)
+        pages[i] = 0x80000000ULL + (uint64_t(i) << 12);
+
+    const uint64_t iova = engine.map(pages, 16, true);
+    ASSERT_NE(iova, 0u);
+    EXPECT_TRUE(gFlushes.empty()) << "fresh map in pre-reserved 64 KiB window needs no PTC/TLB flush";
+
+    // Unmapping a 1-page mapping in a 64 KiB granule must still flush both 32-byte PTE atoms (64 bytes) and TLB.
+    engine.unmap(iova, 1);
+    uint32_t ptcWrites = 0, tlbWrites = 0;
+    for (const auto &[offset, value] : gFlushes) {
+        if (offset == 0x34)
+            ++ptcWrites;
+        else if (offset == 0x30)
+            ++tlbWrites;
+    }
+    EXPECT_EQ(ptcWrites, 2u);
+    EXPECT_EQ(tlbWrites, 1u);
+
+    engine.release();
+}
 }  // namespace
 
 bool switch_dma_alloc(switch_dma_buffer *out, size_t size, uint64_t, IOOptionBits)
@@ -313,6 +344,8 @@ void switch_mmio_model_write32(uintptr_t address, uint32_t value)
     gRegisters[offset] = value;
     if (offset == kPtbData)
         gPtbByAsid[gRegisters[kPtbAsid] & 0x7fu] = value;
+    if (offset == 0x34 || offset == 0x30)
+        gFlushes.emplace_back(offset, value);
 }
 
 uint16_t switch_mmio_model_read16(uintptr_t address)

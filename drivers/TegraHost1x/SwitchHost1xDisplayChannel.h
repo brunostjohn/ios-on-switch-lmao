@@ -10,7 +10,8 @@ int displayProducerStatus(const switch_gpu_backing_token &token)
 void displaySignaled(switch_host1x_fence *fence, int failure)
 {
     auto *stream = reinterpret_cast<SwitchHost1xDisplayStream *>(fence);
-    IOLockLock(gChannelLock);
+    IOLock *lock = gChannels[TEGRA_HOST1X_CHANNEL_DISPLAY].lock;
+    IOLockLock(lock);
     int status = stream->status ? stream->status : failure;
     for (uint32_t i = 0; i < stream->count && !status; ++i) {
         const int result = displayProducerStatus(stream->producers[i]);
@@ -23,7 +24,7 @@ void displaySignaled(switch_host1x_fence *fence, int failure)
     stream->bridge = nullptr;
     if (gDisplayStream == stream)
         gDisplayStream = nullptr;
-    IOLockUnlock(gChannelLock);
+    IOLockUnlock(lock);
     if (bridge) {
         // The bridge may hold the producers' last reference: their reason is read before it goes.
         const int produced = switch_gpu_bridge_status(bridge);
@@ -86,8 +87,11 @@ void switch_host1x_display_channel_stopped_locked()
 
 void switch_host1x_channels_release_failed(uint32_t id, uint32_t threshold)
 {
+    IOLock *lock = gChannels[TEGRA_HOST1X_CHANNEL_DISPLAY].lock;
+    IOLockLock(lock);
     displayCancelLocked(false, id);
     releaseLocked(id, threshold);
+    IOLockUnlock(lock);
 }
 
 int switch_host1x_display_start(SwitchHost1xDisplayStream *stream)
@@ -107,13 +111,16 @@ int switch_host1x_display_submit(SwitchHost1xDisplayStream *stream, const switch
 {
     if (!stream || !stream->syncpt || (count && !producers) || (!count && !bridge) ||
         count > SwitchHost1xDisplayStream::kProducers || !registers || !values || !stores || stores > 4 || !completed ||
-        !gChannelLock)
+        !validChannel(TEGRA_HOST1X_CHANNEL_DISPLAY))
         return TEGRA_HOST1X_EINVAL;
     uint32_t bridgeSyncpt = 0, bridgeThreshold = 0;
     if (bridge)
         switch_gpu_bridge_syncpoint(bridge, &bridgeSyncpt, &bridgeThreshold);
-    IOLockLock(gChannelLock);
-    int error = !gRunning ? TEGRA_HOST1X_ENODEV : gDisplayStream ? TEGRA_HOST1X_EAGAIN : 0;
+    Channel &channel = gChannels[TEGRA_HOST1X_CHANNEL_DISPLAY];
+    IOLockLock(channel.lock);
+    int error = !__atomic_load_n(&gRunning, __ATOMIC_ACQUIRE) ? TEGRA_HOST1X_ENODEV
+                : gDisplayStream                              ? TEGRA_HOST1X_EAGAIN
+                                                              : 0;
     // In the hold that publishes the stream: a failure is stored before the release that would cancel the stream, and
     // that release takes this lock, so it either finds the stream published or its failure is read here. The stored
     // failure trails a producer's own by up to one retire pass, so the producers are read too (their timeline's lock is
@@ -135,7 +142,6 @@ int switch_host1x_display_submit(SwitchHost1xDisplayStream *stream, const switch
                 error = result;
         }
     }
-    Channel &channel = gChannels[TEGRA_HOST1X_CHANNEL_DISPLAY];
     const uint32_t capacity = (count + (bridge ? 1 : 0)) * SWITCH_HOST1X_WAIT_WORDS + 1 + 2 * (stores + 2) + 1;
     uint32_t at = SwitchHost1xArena::kNone;
     if (!error) {
@@ -189,18 +195,19 @@ int switch_host1x_display_submit(SwitchHost1xDisplayStream *stream, const switch
             endReservation(channel);
         }
     }
-    IOLockUnlock(gChannelLock);
+    IOLockUnlock(channel.lock);
     return error;
 }
 
 int switch_host1x_display_cancel(SwitchHost1xDisplayStream *stream)
 {
-    if (!stream || !gChannelLock)
+    if (!stream || !validChannel(TEGRA_HOST1X_CHANNEL_DISPLAY))
         return TEGRA_HOST1X_EINVAL;
-    IOLockLock(gChannelLock);
+    IOLock *lock = gChannels[TEGRA_HOST1X_CHANNEL_DISPLAY].lock;
+    IOLockLock(lock);
     if (gDisplayStream == stream)
         displayCancelLocked(true);
     const int status = stream->status;
-    IOLockUnlock(gChannelLock);
+    IOLockUnlock(lock);
     return status;
 }

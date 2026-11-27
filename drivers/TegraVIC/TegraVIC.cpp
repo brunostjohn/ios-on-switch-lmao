@@ -563,7 +563,7 @@ extern "C" uint64_t switch_vic_mapping_create(const uint64_t *pages, uint32_t co
         gMappingSpace.release(address, bytes);
         address = 0;
     }
-    switch_smmu_publish(gDomain, kAsid, SWITCH_DCACHE_CLEAN);
+    switch_smmu_publish_fresh(gDomain, kAsid, SWITCH_DCACHE_CLEAN);
     IOLockUnlock(gMappingLock);
     return address;
 }
@@ -573,7 +573,7 @@ extern "C" void switch_vic_mapping_destroy(uint64_t address, uint32_t count)
     IOLockLock(gMappingLock);
     if (gMappingSpace.release(address, static_cast<uint64_t>(count + kTailPages) * SWITCH_HW_PAGE_SIZE)) {
         gDomain.unmap(address, count + kTailPages);
-        switch_smmu_publish(gDomain, kAsid, SWITCH_DCACHE_CLEAN);
+        switch_smmu_publish_granules(gDomain, kAsid, SWITCH_DCACHE_CLEAN);
     }
     IOLockUnlock(gMappingLock);
 }

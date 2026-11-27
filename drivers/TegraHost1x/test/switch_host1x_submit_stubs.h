@@ -68,6 +68,29 @@ inline void IOLockUnlock(IOLock *lock)
     lock->give();
 }
 
+struct IOSimpleLock {
+    std::mutex mutex;
+};
+
+using IOInterruptState = bool;
+
+inline IOSimpleLock *IOSimpleLockAlloc()
+{
+    return new IOSimpleLock{};
+}
+
+inline IOInterruptState IOSimpleLockLockDisableInterrupt(IOSimpleLock *lock) __attribute__((no_thread_safety_analysis))
+{
+    lock->mutex.lock();
+    return true;
+}
+
+inline void IOSimpleLockUnlockEnableInterrupt(IOSimpleLock *lock, IOInterruptState)
+    __attribute__((no_thread_safety_analysis))
+{
+    lock->mutex.unlock();
+}
+
 inline void IOLockWakeup(IOLock *, void *, bool)
 {}
 

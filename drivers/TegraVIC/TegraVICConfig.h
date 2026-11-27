@@ -510,6 +510,12 @@ static const TegraVICTraits kTegraVICTraits = {
 #define TEGRA_VIC_MAX_METHODS 12
 
 typedef struct {
+    uint32_t method[TEGRA_VIC_MAX_METHODS], value[TEGRA_VIC_MAX_METHODS];
+    uint32_t count;
+    uint64_t pixels;  // read plus written: the engine's wait bound scales with it
+} TegraVICMethods;
+
+typedef struct {
     uint8_t config[TEGRA_VIC_CONFIG_BYTES];
     uint32_t method[TEGRA_VIC_MAX_METHODS], value[TEGRA_VIC_MAX_METHODS];
     uint32_t count;
@@ -610,11 +616,11 @@ static inline void tegra_vic_slot_surface(uint8_t *cfg, uint32_t surf, const Teg
                   sf->planes > 1 ? (bl ? src->rows[1] : tegra_vic_plane_rows(sf, height, 1)) - 1 : 16383);
 }
 
-// Builds the configuration and methods for one job. `configAddr`, `filterAddr` are where the configuration and the
-// filter structure sit in VIC's address space. Returns 0, or why the job is refused (nothing is written then).
-static inline const char *tegra_vic_build(const TegraVICImage *src, const TegraVICImage *dst, const TegraVICOp *op,
-                                          const TegraVICTraits *t, uint64_t configAddr, uint64_t filterAddr,
-                                          TegraVICJob *job)
+// Builds the configuration and methods for one job directly into `configOut` and `methodsOut` (or validates only when
+// `configOut` is null). `configAddr`, `filterAddr` are where the configuration and filter sit in VIC's address space.
+static inline const char *tegra_vic_build_into(const TegraVICImage *src, const TegraVICImage *dst, const TegraVICOp *op,
+                                               const TegraVICTraits *t, uint64_t configAddr, uint64_t filterAddr,
+                                               uint8_t *configOut, TegraVICMethods *methodsOut)
 {
     if (dst->blockLinear && !t->blockLinearOut)
         return "block-linear destination this engine has not proven";
@@ -690,8 +696,17 @@ static inline const char *tegra_vic_build(const TegraVICImage *src, const TegraV
                      (!op->fill && src->format->kind != TEGRA_VIC_KIND_RGB && src->standard > TEGRA_VIC_YCC_2020)))
         return "YCbCr matrix requires color conversion outside VIC's contract";
 
-    memset(job, 0, sizeof(*job));
-    uint8_t *c = job->config;
+    const bool swap = transpose != 0 && t->preTransposeRects != 0;
+    const bool swapSurface = transpose != 0 && t->preTransposeSurface != 0;
+    if (swapSurface && (!dst->format->vicTransposed || dst->blockLinear))
+        return dst->blockLinear ? "transposed block-linear destination this engine has not proven"
+                                : "transposed output this format has no layout for";
+    if (!configOut || !methodsOut)
+        return NULL;  // NOLINT(modernize-use-nullptr): C too (vic_host.c)
+
+    memset(configOut, 0, TEGRA_VIC_CONFIG_BYTES);
+    memset(methodsOut, 0, sizeof(*methodsOut));
+    uint8_t *c = configOut;
     TEGRA_VIC_SET(c, TEGRA_VIC_PIPE, PIPE_DOWNSAMPLE_HORIZ, 4);  // 1.0, U9.2
     TEGRA_VIC_SET(c, TEGRA_VIC_PIPE, PIPE_DOWNSAMPLE_VERT, 4);
 
@@ -699,11 +714,6 @@ static inline const char *tegra_vic_build(const TegraVICImage *src, const TegraV
     // proves), they are swapped for a transposed job. The surface before the transpose is all of OutputSurfaceConfig
     // (hekate's programming): its size, and the planes' memory geometry with width and height exchanged, since the
     // engine writes composed pixel (x, y) to memory row x, column y (LumaHeight + 1 elements a row, LumaWidth + 1 rows).
-    const bool swap = transpose != 0 && t->preTransposeRects != 0;
-    const bool swapSurface = transpose != 0 && t->preTransposeSurface != 0;
-    if (swapSurface && (!dst->format->vicTransposed || dst->blockLinear))
-        return dst->blockLinear ? "transposed block-linear destination this engine has not proven"
-                                : "transposed output this format has no layout for";
     const uint32_t dw = tegra_vic_padded_width(dst->format, dst->width);
     const uint32_t dh = tegra_vic_padded_height(dst->format, dst->height);
     const uint32_t ow = swapSurface ? dh : dw;
@@ -844,11 +854,11 @@ static inline const char *tegra_vic_build(const TegraVICImage *src, const TegraV
     }
 
     uint32_t n = 0;
-#define TEGRA_VIC_METHOD(m, v)         \
-    do {                               \
-        job->method[n] = (m);          \
-        job->value[n] = (uint32_t)(v); \
-        n++;                           \
+#define TEGRA_VIC_METHOD(m, v)                \
+    do {                                      \
+        methodsOut->method[n] = (m);          \
+        methodsOut->value[n] = (uint32_t)(v); \
+        n++;                                  \
     } while (0)
     TEGRA_VIC_METHOD(TEGRA_VIC_M_SET_APPLICATION_ID, 1);
     TEGRA_VIC_METHOD(TEGRA_VIC_M_SET_CONTROL_PARAMS, (TEGRA_VIC_CONFIG_BYTES / 16u) << 16 |
@@ -874,9 +884,37 @@ static inline const char *tegra_vic_build(const TegraVICImage *src, const TegraV
     }
     TEGRA_VIC_METHOD(TEGRA_VIC_M_EXECUTE, TEGRA_VIC_EXECUTE_AWAKEN);
 #undef TEGRA_VIC_METHOD
-    job->count = n;
-    job->pixels = (uint64_t)op->dstW * op->dstH + (op->fill ? 0 : (op->srcW >> 16) * (op->srcH >> 16));
+    methodsOut->count = n;
+    methodsOut->pixels = (uint64_t)op->dstW * op->dstH + (op->fill ? 0 : (op->srcW >> 16) * (op->srcH >> 16));
     return NULL;  // NOLINT(modernize-use-nullptr): C too (vic_host.c)
+}
+
+// Builds the configuration and methods for one job. `configAddr`, `filterAddr` are where the configuration and the
+// filter structure sit in VIC's address space. Returns 0, or why the job is refused (nothing is written then).
+static inline const char *tegra_vic_build(const TegraVICImage *src, const TegraVICImage *dst, const TegraVICOp *op,
+                                          const TegraVICTraits *t, uint64_t configAddr, uint64_t filterAddr,
+                                          TegraVICJob *job)
+{
+    if (!job)
+        return tegra_vic_build_into(src, dst, op, t, configAddr, filterAddr, NULL,
+                                    NULL);  // NOLINT(modernize-use-nullptr): C too (vic_host.c)
+    TegraVICMethods methods;
+    const char *why = tegra_vic_build_into(src, dst, op, t, configAddr, filterAddr, job->config, &methods);
+    if (why)
+        return why;
+    memcpy(job->method, methods.method, sizeof(job->method));
+    memcpy(job->value, methods.value, sizeof(job->value));
+    job->count = methods.count;
+    job->pixels = methods.pixels;
+    return NULL;  // NOLINT(modernize-use-nullptr): C too (vic_host.c)
+}
+
+// Validation-only check without zeroing or bit-packing the 1552-byte VIC config structure.
+static inline const char *tegra_vic_validate(const TegraVICImage *src, const TegraVICImage *dst, const TegraVICOp *op,
+                                             const TegraVICTraits *t, uint64_t configAddr, uint64_t filterAddr)
+{
+    return tegra_vic_build_into(src, dst, op, t, configAddr, filterAddr, NULL,
+                                NULL);  // NOLINT(modernize-use-nullptr): C too (vic_host.c)
 }
 
 #ifdef __cplusplus

@@ -135,36 +135,41 @@ extern "C" void switch_gpu_bridge_syncpoint(const switch_gpu_bridge *bridge, uin
     }
 }
 
+inline bool displayLockHeld()
+{
+    return gChannels[TEGRA_HOST1X_CHANNEL_DISPLAY].lock && gChannels[TEGRA_HOST1X_CHANNEL_DISPLAY].lock->held;
+}
+
 extern "C" int switch_gpu_bridge_status(const switch_gpu_bridge *bridge)
 {
     auto *b = const_cast<switch_gpu_bridge *>(bridge);
-    b->lockedWhenAsked |= gSubmitLock->held;
+    b->lockedWhenAsked |= displayLockHeld();
     ++b->statusReads;
     return b->status;
 }
 
 extern "C" int switch_gpu_bridge_failed(const switch_gpu_bridge *bridge)
 {
-    const_cast<switch_gpu_bridge *>(bridge)->failedReadUnlocked |= !gSubmitLock->held;
+    const_cast<switch_gpu_bridge *>(bridge)->failedReadUnlocked |= !displayLockHeld();
     return __atomic_load_n(&bridge->failed, __ATOMIC_ACQUIRE);
 }
 
 extern "C" int switch_gpu_bridge_source_failure(const switch_gpu_bridge *bridge)
 {
-    const_cast<switch_gpu_bridge *>(bridge)->sourceReadLocked |= static_cast<bool>(gSubmitLock->held);
+    const_cast<switch_gpu_bridge *>(bridge)->sourceReadLocked |= displayLockHeld();
     return bridge->sourceFailure;
 }
 
 extern "C" int switch_gpu_bridge_why(const switch_gpu_bridge *bridge)
 {
-    EXPECT_FALSE(gSubmitLock->held);
+    EXPECT_FALSE(displayLockHeld());
     const_cast<switch_gpu_bridge *>(bridge)->whyReadAfterRelease |= bridge->releases != 0;
     return bridge->why;
 }
 
 extern "C" void switch_gpu_bridge_release(switch_gpu_bridge **bridge)
 {
-    EXPECT_FALSE(gSubmitLock->held);
+    EXPECT_FALSE(displayLockHeld());
     ++(*bridge)->releases;
     *bridge = nullptr;
 }
@@ -343,8 +348,10 @@ extern "C" void switch_host1x_errors_rearm(uint32_t channel)
     gRearmed.push_back(channel);
 }
 
-void switch_host1x_intr_filter()
-{}
+bool switch_host1x_intr_filter()
+{
+    return false;
+}
 
 extern "C" void switch_host1x_fence_init(switch_host1x_fence *fence, uint32_t syncpt, uint32_t threshold,
                                          void (*signaled)(switch_host1x_fence *, int))
@@ -430,7 +437,7 @@ struct DisplayCompletion {
     static void heard(void *context, int status)
     {
         auto &done = *static_cast<DisplayCompletion *>(context);
-        EXPECT_FALSE(gSubmitLock->held);
+        EXPECT_FALSE(displayLockHeld());
         ++done.calls;
         done.status = status;
     }

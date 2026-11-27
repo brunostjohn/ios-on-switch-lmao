@@ -25,7 +25,8 @@ void SwitchEMC::hint()
         HintSlot &slot = hints[cpu];
         const uint64_t now = mach_absolute_time();
         __atomic_store_n(&slot.until, now + holdTicks, __ATOMIC_RELAXED);
-        if (!__atomic_load_n(&gTopHeld, __ATOMIC_ACQUIRE)) {
+        if (!__atomic_load_n(&gTopHeld, __ATOMIC_ACQUIRE) && !__atomic_load_n(&gRaisePending, __ATOMIC_ACQUIRE)) {
+            __atomic_store_n(&gRaisePending, true, __ATOMIC_RELEASE);
 #if SWITCH_STATS_POWER
             if (!__atomic_load_n(&slot.asked, __ATOMIC_RELAXED))
                 __atomic_store_n(&slot.asked, now, __ATOMIC_RELAXED);

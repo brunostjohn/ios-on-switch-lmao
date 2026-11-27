@@ -4,6 +4,8 @@
 #include <vector>
 #include "switch_vic_backing_stubs.h"
 #include "../SwitchNativePicture.h"
+#define SWITCH_DCACHE_OP(op, address) ((void)(address))
+#define SWITCH_DCACHE_BARRIER()       ((void)0)
 #include "../SwitchVICTransform.cpp"
 #include "../SwitchVICTurn.cpp"
 
@@ -16,8 +18,11 @@ OSObject inputObject, outputObject;
 IOMemoryDescriptor inputMemory, outputMemory;
 switch_gpu_backing inputPitch, inputNative, outputPitch;
 volatile uint64_t inputGeneration = 1, outputGeneration = 1, payloadGeneration = 1;
-bool nativeInput = true, immediate = false, dstTiled = false, dstCompressed = false;
+bool nativeInput = true, immediate = false, dstTiled = false, dstCompressed = false, allowStaged = false;
 int admission = 0, mappings = 0, gates = 0, pitchInputs = 0, notifications = 0;
+uint32_t stagedSubmits = 0, stagedReleases = 0;
+uint8_t stagedArena[3][kSwitchVICConfigStride];
+SwitchVICStagedJob submittedStaged;
 void (*pending)(void *, int);
 void *pendingContext;
 TegraVICJob submittedJob;
@@ -164,6 +169,45 @@ uint64_t switch_vic_mapping_address(const SwitchVICMapping *mapping)
     return mapping->address;
 }
 
+bool switch_vic_config_reserve(uint32_t count, uint8_t *slots, uint8_t **vas)
+{
+    if (!allowStaged || !count || count > 3)
+        return false;
+    for (uint32_t i = 0; i < count; ++i) {
+        slots[i] = static_cast<uint8_t>(i);
+        vas[i] = stagedArena[i];
+    }
+    return true;
+}
+
+void switch_vic_config_release(const uint8_t *, uint32_t count)
+{
+    stagedReleases += count;
+}
+
+int switch_vic_submit_staged(const SwitchVICStagedJob *jobs, uint32_t count, const TegraVICAcquire *acquire,
+                             const SwitchVICOwnership &ownership, void (*completion)(void *, int), void *context,
+                             uint32_t *, SwitchVICEvents *, switch_gpu_backing_token *)
+{
+    ++stagedSubmits;
+    EXPECT_EQ(count, 1u);
+    submittedAcquire = acquire ? *acquire : TegraVICAcquire{};
+    EXPECT_TRUE(gates > 0 || ownership.leaseCount > 0) << "a submission holds its surfaces";
+    submittedStaged = jobs[0];
+    declaredUses.assign(ownership.uses, ownership.uses + ownership.useCount);
+    declaredGuards.assign(ownership.guards, ownership.guards + ownership.guardCount);
+    declaredLeases.assign(ownership.leases, ownership.leases + ownership.leaseCount);
+    if (admission)
+        return admission;
+    if (immediate)
+        completion(context, 0);
+    else {
+        pending = completion;
+        pendingContext = context;
+    }
+    return 0;
+}
+
 int switch_vic_submit_checked(const TegraVICJob *jobs, uint32_t count, const TegraVICAcquire *acquire,
                               const SwitchVICOwnership &ownership, void (*completion)(void *, int), void *context,
                               uint32_t *, SwitchVICEvents *)
@@ -242,7 +286,9 @@ protected:
         immediate = false;
         dstTiled = false;
         dstCompressed = false;
+        allowStaged = false;
         admission = mappings = gates = pitchInputs = notifications = 0;
+        stagedSubmits = stagedReleases = 0;
         pending = nullptr;
         pendingContext = nullptr;
         declaredUses.clear();
@@ -645,5 +691,30 @@ TEST_F(TurnDefer, ARecordedTurnsRowsAreMadeByTheCopysJob)
         EXPECT_EQ(copy.value[i], turn.value[i]) << i;
     }
     EXPECT_EQ(copy.pixels, turn.pixels);
+}
+
+TEST_F(SwitchVICTransformTest, ZeroCopyStagedPathBuildsDirectlyIntoReservedConfigSlot)
+{
+    immediate = true;
+    ASSERT_EQ(submit(), 1);
+    const TegraVICJob baseline = submittedJob;
+
+    allowStaged = true;
+    memset(stagedArena, 0, sizeof(stagedArena));
+    ASSERT_EQ(submit(), 1);
+    EXPECT_EQ(stagedSubmits, 1u);
+    EXPECT_EQ(stagedReleases, 0u);
+    EXPECT_EQ(submittedStaged.slot, 0u);
+    EXPECT_EQ(memcmp(stagedArena[0], baseline.config, TEGRA_VIC_CONFIG_BYTES), 0);
+    ASSERT_EQ(submittedStaged.methods.count, baseline.count);
+    for (uint32_t i = 0; i < baseline.count; ++i) {
+        EXPECT_EQ(submittedStaged.methods.method[i], baseline.method[i]);
+        EXPECT_EQ(submittedStaged.methods.value[i], baseline.value[i]);
+    }
+    EXPECT_EQ(submittedStaged.methods.pixels, baseline.pixels);
+
+    admission = SWITCH_GPU_BACKING_STALE;
+    EXPECT_EQ(submit(), SWITCH_GPU_BACKING_STALE);
+    EXPECT_EQ(stagedReleases, 1u);
 }
 }  // namespace

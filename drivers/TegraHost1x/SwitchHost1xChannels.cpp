@@ -73,6 +73,7 @@ enum : uint32_t {  // sync unit
 };
 
 struct Channel {
+    IOLock *lock = nullptr;
     switch_dma_buffer pushMemory = {}, arenaMemory = {};
     SwitchHost1xPush push;
     SwitchHost1xArena arena{SWITCH_HOST1X_ARENA_WORDS};
@@ -85,7 +86,8 @@ struct Channel {
 };
 
 volatile uint8_t *gChannelHost, *gChannelSync;
-IOLock *gChannelLock;
+IOLock *gChannelLock;     // lifecycle: suspend, resume, probe channels, stats (always taken before any Channel::lock)
+IOSimpleLock *gStopLock;  // leaf spinlock for shared SYNC_CMDPROC_STOP RMW
 Channel gChannels[TEGRA_HOST1X_CHANNELS];
 bool gRunning;
 SwitchHost1xDisplayStream *gDisplayStream;
@@ -115,6 +117,13 @@ void syncSet(uint32_t offset, uint32_t value)
     switch_mmio_write32(gChannelSync, offset, value);
 }
 
+void syncStopModify(uint32_t setBits, uint32_t clearBits)
+{
+    const IOInterruptState ints = IOSimpleLockLockDisableInterrupt(gStopLock);
+    syncSet(SYNC_CMDPROC_STOP, (syncRead(SYNC_CMDPROC_STOP) & ~clearBits) | setBits);
+    IOSimpleLockUnlockEnableInterrupt(gStopLock, ints);
+}
+
 uint32_t *pushRing(Channel &c)
 {
     return reinterpret_cast<uint32_t *>(c.pushMemory.va);
@@ -128,7 +137,7 @@ uint32_t *arenaWords(Channel &c)
 void wake(Channel &c)
 {
     if (c.waiters)
-        IOLockWakeup(gChannelLock, &c, false);
+        IOLockWakeup(c.lock, &c, false);
 }
 
 // The jobs in flight on a channel share its engine's syncpoint, so the walk reads it once.
@@ -146,17 +155,18 @@ void reclaim(Channel &c)
 
 void roomSignaled(switch_host1x_fence *fence, int)
 {
-    IOLockLock(gChannelLock);
     for (Channel &c : gChannels) {
         if (&c.room != fence)
             continue;
+        IOLockLock(c.lock);
         c.roomArmed = false;
         wake(c);
+        IOLockUnlock(c.lock);
+        return;
     }
-    IOLockUnlock(gChannelLock);
 }
 
-// Lock held. A fence its callback is already on the way for is left to it.
+// Channel lock held. A fence its callback is already on the way for is left to it.
 void dropJobs(Channel &c)
 {
 #if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
@@ -179,9 +189,9 @@ void endReservation(Channel &c)
     wake(c);
 }
 
-// Lock held, the words in the channel's reservation: Linux push_buffer_push + cdma_flush for one GATHER.
+// Channel lock held, the words in the channel's reservation: Linux push_buffer_push + cdma_flush for one GATHER.
 int gatherLocked(uint32_t channel, const uint32_t *first, uint32_t count, bool fenced, uint32_t syncpt,
-                 uint32_t threshold, [[maybe_unused]] bool copied)
+                 uint32_t threshold, [[maybe_unused]] bool copied, bool streamCleaned = false)
 {
     Channel &c = gChannels[channel];
     if (!c.arena.reserved())
@@ -190,15 +200,17 @@ int gatherLocked(uint32_t channel, const uint32_t *first, uint32_t count, bool f
     const uint32_t at = from >= base && from - base < SWITCH_HOST1X_ARENA_WORDS * 4
                             ? static_cast<uint32_t>((from - base) / 4)
                             : SwitchHost1xArena::kNone;
-    if (!gRunning || from % 4 || !c.arena.commit(at, count, fenced, syncpt, threshold)) {
+    const bool running = __atomic_load_n(&gRunning, __ATOMIC_ACQUIRE);
+    if (!running || from % 4 || !c.arena.commit(at, count, fenced, syncpt, threshold)) {
         endReservation(c);
-        return gRunning ? TEGRA_HOST1X_EINVAL : TEGRA_HOST1X_ENODEV;
+        return running ? TEGRA_HOST1X_EINVAL : TEGRA_HOST1X_ENODEV;
     }
 #if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
     if (fenced)
         switch_host1x_syncpt_owed(syncpt, threshold);
 #endif
-    switch_dcache_clean_lines(first, count * 4);
+    if (!streamCleaned)
+        switch_dcache_clean_lines(first, count * 4);
     const uint32_t slot = c.push.push(pushRing(c), count, static_cast<uint32_t>(c.arenaMemory.pa + at * 4));
     switch_dcache_clean(pushRing(c) + slot / 4, 8);  // its DSB also completes the stream's clean
     switch_emc_gpu_submit();
@@ -212,7 +224,7 @@ int gatherLocked(uint32_t channel, const uint32_t *first, uint32_t count, bool f
 
 void teardownLocked(uint32_t channel)
 {
-    syncSet(SYNC_CMDPROC_STOP, syncRead(SYNC_CMDPROC_STOP) | 1u << channel);
+    syncStopModify(1u << channel, 0);
     channelWrite(channel, CH_DMACTRL, DMACTRL_STOP);
     syncSet(SYNC_CH_TEARDOWN, 1u << channel);
 }
@@ -222,7 +234,7 @@ void restartLocked(uint32_t channel)
     channelWrite(channel, CH_DMACTRL, DMACTRL_STOP);
     channelWrite(channel, CH_DMAPUT, gChannels[channel].push.put);
     channelWrite(channel, CH_DMACTRL, DMACTRL_STOP | DMACTRL_GETRST | DMACTRL_INITGET);
-    syncSet(SYNC_CMDPROC_STOP, syncRead(SYNC_CMDPROC_STOP) & ~(1u << channel));
+    syncStopModify(0, 1u << channel);
     channelWrite(channel, CH_DMACTRL, 0);
     dropJobs(gChannels[channel]);
     switch_host1x_errors_rearm(channel);
@@ -278,17 +290,20 @@ void startCounters(uint32_t channel)
 // The counters are read only with the channels running: a failed submit also gets here, with host1x suspended.
 void statsLine()
 {
+    const uint64_t now = switch_now_us();
+    if (!gGatherStats.maybeDue(now))
+        return;
     char line[320];
     SwitchHost1xChannelCounters counters[TEGRA_HOST1X_CHANNELS];
-    const uint64_t now = switch_now_us();
     IOLockLock(gChannelLock);
+    const bool running = __atomic_load_n(&gRunning, __ATOMIC_ACQUIRE);
     bool due = gGatherStats.due(now);
-    if (due && gRunning)
+    if (due && running)
         for (uint32_t n = 0; n < TEGRA_HOST1X_CHANNELS; n++)
             counters[n] = {channelCounter(n, CH_TICKCOUNT_HI, CH_TICKCOUNT_LO),
                            channelCounter(n, CH_STALLCOUNT_HI, CH_STALLCOUNT_LO)};
     if (due)
-        due = gGatherStats.line(now, gRunning ? counters : nullptr, line, sizeof(line));
+        due = gGatherStats.line(now, running ? counters : nullptr, line, sizeof(line));
     IOLockUnlock(gChannelLock);
     if (due)
         os_log(OS_LOG_DEFAULT, "%s", line);
@@ -308,6 +323,8 @@ bool validChannel(uint32_t channel)
 
 bool allocChannelMemory(Channel &c)
 {
+    if (!c.lock && !(c.lock = IOLockAlloc()))
+        return false;
     return (c.pushMemory.va || switch_dma_alloc(&c.pushMemory, SwitchHost1xPush::kBytes + 4)) &&
            (c.arenaMemory.va || switch_dma_alloc(&c.arenaMemory, SWITCH_HOST1X_ARENA_WORDS * 4));
 }
@@ -328,7 +345,7 @@ bool programChannel(uint32_t n)
     memset(ring, 0, SwitchHost1xPush::kBytes + 4);
     ring[SwitchHost1xPush::kBytes / 4] = SwitchHost1xPush::restart(0);
     switch_dcache_clean(ring, SwitchHost1xPush::kBytes + 4);
-    syncSet(SYNC_CMDPROC_STOP, syncRead(SYNC_CMDPROC_STOP) & ~(1u << n));
+    syncStopModify(0, 1u << n);
     channelWrite(n, CH_DMACTRL, DMACTRL_STOP);
 #if SWITCH_HOST1X_STATS
     startCounters(n);
@@ -345,10 +362,28 @@ bool programChannel(uint32_t n)
     dropJobs(c);
     return stuck;
 }
+
+void lockAllChannels(bool locked[TEGRA_HOST1X_CHANNELS])
+{
+    for (uint32_t n = 0; n < TEGRA_HOST1X_CHANNELS; ++n) {
+        locked[n] = channelMade(gChannels[n]);
+        if (locked[n])
+            IOLockLock(gChannels[n].lock);
+    }
+}
+
+void unlockAllChannels(const bool locked[TEGRA_HOST1X_CHANNELS])
+{
+    for (uint32_t n = TEGRA_HOST1X_CHANNELS; n-- > 0;)
+        if (locked[n])
+            IOLockUnlock(gChannels[n].lock);
+}
 }  // namespace
 
 bool switch_host1x_channels_alloc(volatile uint8_t *host, volatile uint8_t *sync, IOLock *lock)
 {
+    if (!gStopLock && !(gStopLock = IOSimpleLockAlloc()))
+        return false;
     for (uint32_t n = 0; n <= TEGRA_HOST1X_CHANNEL_DISPLAY; n++)
         if (!makeChannel(gChannels[n]))
             return false;
@@ -374,9 +409,11 @@ uint32_t switch_host1x_channels_buffers(const switch_dma_buffer **out, uint32_t 
 
 void switch_host1x_channels_program(uint32_t clockKHz)
 {
+    bool locked[TEGRA_HOST1X_CHANNELS];
+    lockAllChannels(locked);
     uint32_t stuck = 0;
     for (uint32_t n = 0; n < TEGRA_HOST1X_CHANNELS; n++)
-        if (channelMade(gChannels[n]) && programChannel(n))
+        if (locked[n] && programChannel(n))
             stuck |= 1u << n;
     gFilterStuck = stuck;
 #if SWITCH_HOST1X_STATS
@@ -384,7 +421,8 @@ void switch_host1x_channels_program(uint32_t clockKHz)
 #else
     (void)clockKHz;
 #endif
-    gRunning = true;
+    __atomic_store_n(&gRunning, true, __ATOMIC_RELEASE);
+    unlockAllChannels(locked);
 }
 
 #if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
@@ -401,9 +439,11 @@ extern "C" int switch_host1x_probe_channels_take(void)
             !switch_host1x_channels_confine_channel(&gChannels[n].pushMemory, &gChannels[n].arenaMemory)) {
             result = TEGRA_HOST1X_ENOMEM;
         } else {
-            __atomic_store_n(&gChannels[n].made, true, __ATOMIC_RELEASE);
-            if (gRunning && programChannel(n))
+            IOLockLock(gChannels[n].lock);
+            if (__atomic_load_n(&gRunning, __ATOMIC_ACQUIRE) && programChannel(n))
                 gFilterStuck |= 1u << n;
+            __atomic_store_n(&gChannels[n].made, true, __ATOMIC_RELEASE);
+            IOLockUnlock(gChannels[n].lock);
         }
     }
     IOLockUnlock(gChannelLock);
@@ -418,10 +458,13 @@ uint32_t switch_host1x_channels_filter_stuck()
 
 void switch_host1x_channels_stop()
 {
+    bool locked[TEGRA_HOST1X_CHANNELS];
+    lockAllChannels(locked);
     for (uint32_t n = 0; n < TEGRA_HOST1X_CHANNELS; n++)
-        if (channelMade(gChannels[n]))
+        if (locked[n])
             channelWrite(n, CH_DMACTRL, DMACTRL_STOP);
-    gRunning = false;
+    __atomic_store_n(&gRunning, false, __ATOMIC_RELEASE);
+    unlockAllChannels(locked);
 }
 
 extern "C" int switch_host1x_job_reserve(uint32_t channel, uint32_t capacity, uint32_t **words)
@@ -431,8 +474,8 @@ extern "C" int switch_host1x_job_reserve(uint32_t channel, uint32_t capacity, ui
     if (!validChannel(channel))
         return TEGRA_HOST1X_ENODEV;
     Channel &c = gChannels[channel];
-    IOLockLock(gChannelLock);
-    int ret = gRunning ? TEGRA_HOST1X_OK : TEGRA_HOST1X_ENODEV;
+    IOLockLock(c.lock);
+    int ret = __atomic_load_n(&gRunning, __ATOMIC_ACQUIRE) ? TEGRA_HOST1X_OK : TEGRA_HOST1X_ENODEV;
     if (!ret) {
         reclaim(c);
         const uint32_t at = c.arena.reserve(capacity);
@@ -441,7 +484,7 @@ extern "C" int switch_host1x_job_reserve(uint32_t channel, uint32_t capacity, ui
         else
             *words = arenaWords(c) + at;
     }
-    IOLockUnlock(gChannelLock);
+    IOLockUnlock(c.lock);
     return ret;
 }
 
@@ -455,9 +498,9 @@ extern "C" int switch_host1x_job_wait_room(uint32_t channel, uint32_t capacity)
         return TEGRA_HOST1X_ENODEV;
     Channel &c = gChannels[channel];
     int ret = TEGRA_HOST1X_OK;
-    IOLockLock(gChannelLock);
+    IOLockLock(c.lock);
     while (!ret) {
-        if (!gRunning) {
+        if (!__atomic_load_n(&gRunning, __ATOMIC_ACQUIRE)) {
             ret = TEGRA_HOST1X_ENODEV;
             break;
         }
@@ -480,10 +523,10 @@ extern "C" int switch_host1x_job_wait_room(uint32_t channel, uint32_t capacity)
         gGatherStats.waited(channel);
 #endif
         ++c.waiters;
-        IOLockSleep(gChannelLock, &c, THREAD_UNINT);
+        IOLockSleep(c.lock, &c, THREAD_UNINT);
         --c.waiters;
     }
-    IOLockUnlock(gChannelLock);
+    IOLockUnlock(c.lock);
     return ret;
 }
 
@@ -503,9 +546,15 @@ extern "C" int switch_host1x_job_submit(uint32_t channel, const uint32_t *first,
 {
     if (!validChannel(channel))
         return TEGRA_HOST1X_EINVAL;
-    IOLockLock(gChannelLock);
-    const int ret = gatherLocked(channel, first, count, true, syncpt, threshold, false);
-    IOLockUnlock(gChannelLock);
+    Channel &c = gChannels[channel];
+    const uintptr_t from = reinterpret_cast<uintptr_t>(first), base = reinterpret_cast<uintptr_t>(arenaWords(c));
+    const bool validRange = first && count && count <= SWITCH_HOST1X_ARENA_WORDS && !(from & 3) && from >= base &&
+                            (from - base) <= static_cast<uintptr_t>(SWITCH_HOST1X_ARENA_WORDS - count) * 4;
+    if (validRange)
+        switch_dcache_clean_lines(first, count * 4);
+    IOLockLock(c.lock);
+    const int ret = gatherLocked(channel, first, count, true, syncpt, threshold, false, validRange);
+    IOLockUnlock(c.lock);
 #if SWITCH_HOST1X_STATS
     statsLine();
 #endif
@@ -516,9 +565,10 @@ extern "C" void switch_host1x_job_cancel(uint32_t channel)
 {
     if (!validChannel(channel))
         return;
-    IOLockLock(gChannelLock);
-    endReservation(gChannels[channel]);
-    IOLockUnlock(gChannelLock);
+    Channel &c = gChannels[channel];
+    IOLockLock(c.lock);
+    endReservation(c);
+    IOLockUnlock(c.lock);
 }
 
 namespace {
@@ -529,8 +579,8 @@ int copy(uint32_t channel, const uint32_t *words, uint32_t count, bool fenced, u
     if (!validChannel(channel))
         return TEGRA_HOST1X_ENODEV;
     Channel &c = gChannels[channel];
-    IOLockLock(gChannelLock);
-    int ret = gRunning ? TEGRA_HOST1X_OK : TEGRA_HOST1X_ENODEV;
+    IOLockLock(c.lock);
+    int ret = __atomic_load_n(&gRunning, __ATOMIC_ACQUIRE) ? TEGRA_HOST1X_OK : TEGRA_HOST1X_ENODEV;
     if (!ret) {
         reclaim(c);
         const uint32_t at = c.arena.reserve(count);
@@ -541,7 +591,7 @@ int copy(uint32_t channel, const uint32_t *words, uint32_t count, bool fenced, u
             ret = gatherLocked(channel, arenaWords(c) + at, count, fenced, syncpt, threshold, true);
         }
     }
-    IOLockUnlock(gChannelLock);
+    IOLockUnlock(c.lock);
     return ret;
 }
 }  // namespace
@@ -587,11 +637,11 @@ extern "C" void tegra_host1x_channel_teardown(uint32_t channel)
 {
     if (!validChannel(channel))
         return;
-    IOLockLock(gChannelLock);
-    if (gRunning) {
+    Channel &c = gChannels[channel];
+    IOLockLock(c.lock);
+    if (__atomic_load_n(&gRunning, __ATOMIC_ACQUIRE))
         teardownLocked(channel);
-    }
-    IOLockUnlock(gChannelLock);
+    IOLockUnlock(c.lock);
 }
 
 // Linux cdma_resume with nothing left to run: GET is set to PUT (INITGET loads it from PUT), so the torn-down stream
@@ -600,11 +650,11 @@ extern "C" void tegra_host1x_channel_restart(uint32_t channel)
 {
     if (!validChannel(channel))
         return;
-    IOLockLock(gChannelLock);
-    if (gRunning) {
+    Channel &c = gChannels[channel];
+    IOLockLock(c.lock);
+    if (__atomic_load_n(&gRunning, __ATOMIC_ACQUIRE))
         restartLocked(channel);
-    }
-    IOLockUnlock(gChannelLock);
+    IOLockUnlock(c.lock);
 }
 
 #include "SwitchHost1xDisplayChannel.h"
@@ -616,11 +666,10 @@ void switch_host1x_channels_failed(uint32_t channel, char *line, size_t size)
     if (!validChannel(channel))
         return;
     size_t used = 0;
-    // Under the submit lock: a restart (which resumes these syncpoints) cannot come between the stop and the failures.
-    IOLockLock(gChannelLock);
+    Channel &c = gChannels[channel];
+    IOLockLock(c.lock);
     if (channel == TEGRA_HOST1X_CHANNEL_DISPLAY)
         switch_host1x_display_channel_stopped_locked();
-    Channel &c = gChannels[channel];
     c.arena.forEachFenced([&](uint32_t syncpt, uint32_t) {
         bool seen = false;
         for (uint32_t i = 0; i < c.stoppedCount; ++i)
@@ -635,5 +684,5 @@ void switch_host1x_channels_failed(uint32_t channel, char *line, size_t size)
                                           : 0;
         used += n > 0 ? static_cast<size_t>(n) : 0;
     }
-    IOLockUnlock(gChannelLock);
+    IOLockUnlock(c.lock);
 }

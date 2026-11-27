@@ -113,11 +113,11 @@ void signaled(switch_host1x_fence *fence, int status)
     gOrder.push_back("callback " + std::to_string(fence->threshold));
 }
 
-// A filter waiter's fn: in the filter, under its simple lock, never under the list's IOLock, with preemption off.
+// A filter waiter's fn: in the filter, under its simple lock, never with interrupts re-enabled, with preemption off.
 void filtered(void *ctx)
 {
     gOrder.push_back("filter " + std::to_string(reinterpret_cast<uintptr_t>(ctx)));
-    if (!gFilterLock->held || gFilterLock->disabled || gLock->held || !switch_test_preemption_off)
+    if (!gLock->held || gLock->disabled || !switch_test_preemption_off)
         gOrder.push_back("wrong context");
 }
 
@@ -223,7 +223,7 @@ struct Host1xFence : testing::Test {
                 value(id) = 0;
         }
         switch_test_sleep = nullptr;
-        switch_test_kicks = switch_test_wakeups = 0;
+        switch_test_kicks = switch_test_wakeups = switch_test_bounds_cancels = 0;
         switch_test_now = 1000;
         switch_test_bounds_at = 0;
         gBoundsAt = 0;
@@ -560,10 +560,40 @@ TEST_F(Host1xFence, TheFilterRunsWithPreemptionOffAndNothingThatBlocks)
     EXPECT_EQ(gOrder, std::vector<std::string>{"filter 30"});
     EXPECT_EQ(switch_test_preemption_off, 0);
     IOSimpleLock held{};
+    IOLock blocking{};
     IOSimpleLockLock(&held);
-    EXPECT_THROW(IOLockLock(gLock), std::runtime_error);
+    EXPECT_THROW(IOLockLock(&blocking), std::runtime_error);
     IOSimpleLockUnlock(&held);
     interrupt(184);
+}
+
+TEST_F(Host1xFence, FilterHandlesPureWaitersWithoutWakingWorkLoopAndCancelsBoundsTimer)
+{
+    value(185) = 0;
+    switch_host1x_filter_handle handle = 0;
+    ASSERT_EQ(switch_host1x_filter_wait(185, 2, filtered, tag(40), &handle), TEGRA_HOST1X_OK);
+    value(185) = 2;
+    reg(0xe80 + 4 * (185 / 32)) = 1u << (185 % 32);
+    EXPECT_FALSE(switch_host1x_intr_filter()) << "filter waiter retires directly in filter without work-loop bounce";
+    reg(0xe80 + 4 * (185 / 32)) = 0;
+    EXPECT_EQ(gOrder, std::vector<std::string>{"filter 40"});
+    EXPECT_FALSE(switch_host1x_fence_names(185));
+
+    value(186) = 0;
+    switch_host1x_fence cb;
+    switch_host1x_fence_init(&cb, 186, 3, signaled);
+    ASSERT_EQ(switch_host1x_fence_add(&cb, 5000), TEGRA_HOST1X_OK);
+    EXPECT_NE(switch_test_bounds_at, 0u);
+    const uint32_t cancelsBefore = switch_test_bounds_cancels;
+    value(186) = 3;
+    reg(0xe80 + 4 * (186 / 32)) = 1u << (186 % 32);
+    EXPECT_TRUE(switch_host1x_intr_filter()) << "callback fence queues hand-off and wakes work loop";
+    reg(0xe80 + 4 * (186 / 32)) = 0;
+    EXPECT_EQ(switch_test_bounds_cancels, cancelsBefore + 1u)
+        << "idle bounds timer cancelled when last bounded fence retires";
+    EXPECT_EQ(switch_test_bounds_at, 0u);
+    switch_host1x_intr_handle();
+    EXPECT_EQ(gSignals[3].calls, 1);
 }
 }  // namespace
 

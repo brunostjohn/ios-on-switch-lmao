@@ -10,10 +10,11 @@
 //     (0x6000401c) first, as irq-tegra.c's doorbell_handler -> ack_doorbell does, then runs mail.c's handler.
 //   * outbound, CPU -> BPMP: `outgoing-doorbell = <6>`: FIR_SET bit 6 (tegra_ring_doorbell, CPU_OB_DOORBELL 4).
 // Each inbound doorbell is an IOFilterInterruptEventSource on this service's work loop: the filter (primary
-// interrupt context) only clears the FIR bit; the action runs mail.c's bpmp_handle_irq() in thread context, so the
-// vendored code's spin locks and complete() never run at interrupt level. ArmGIC gates the LIC CPU_IER bit with the
-// SPI. A doorbell that cannot be claimed panics; one that never comes for an answered request panics from mail.c
-// (bpxnu_doorbell_lost). No polled mode.
+// interrupt context) clears the FIR bit and runs mail.c's bpmp_handle_irq() directly, avoiding an extra prio-81
+// work-loop hop (mail.c, mailman.c, and shim/linux.c synchronize thread paths with spin_lock_irqsave, and
+// complete()/up() only wake waiters via thread_wakeup_one). ArmGIC gates the LIC CPU_IER bit with the SPI. A doorbell
+// that cannot be claimed panics; one that never comes for an answered request panics from mail.c (bpxnu_doorbell_lost).
+// No polled mode.
 #include <IOKit/IOLib.h>
 #include <IOKit/IOService.h>
 #include <IOKit/IOWorkLoop.h>
@@ -90,7 +91,8 @@ OSDefineMetaClassAndStructors(TegraBPMPDoorbells, IOService)
 	return -1;
 }
 
-// Primary interrupt context: acknowledge the forced interrupt so the level drops, then hand over to the work loop.
+// Primary interrupt context: clear the forced interrupt before reading SHMEM so a concurrent BPMP reply re-raises
+// the line, then run bpmp_handle_irq() directly to wake thread-channel waiters without a work-loop bounce.
 bool TegraBPMPDoorbells::filter(OSObject *owner, IOFilterInterruptEventSource *sender)
 {
 	const auto *self = static_cast<TegraBPMPDoorbells *>(owner);
@@ -99,15 +101,13 @@ bool TegraBPMPDoorbells::filter(OSObject *owner, IOFilterInterruptEventSource *s
 		return false;
 	licWrite(ICTLR_CPU_IEP_FIR_CLR, 1u << kInboundSpi[i]);
 	(void)licRead(ICTLR_CPU_IEP_FIR);
-	return true;
+	if (auto *handler = __atomic_load_n(&gDoorbells[i].handler, __ATOMIC_ACQUIRE))
+		handler(gDoorbells[i].data);
+	return false;
 }
 
-void TegraBPMPDoorbells::action(OSObject *owner, IOInterruptEventSource *sender, int count)
+void TegraBPMPDoorbells::action(OSObject *, IOInterruptEventSource *, int)
 {
-	const auto *self = static_cast<TegraBPMPDoorbells *>(owner);
-	const int i = self->indexOf(sender);
-	if (i >= 0 && gDoorbells[i].handler)
-		gDoorbells[i].handler(gDoorbells[i].data);
 }
 
 bool TegraBPMPDoorbells::claim()
@@ -140,8 +140,8 @@ int tegra_register_doorbell_handler(unsigned int doorbell_id, void (*handler)(vo
 {
 	if (doorbell_id >= kDoorbells)
 		return -22;  // -EINVAL, as irq-tegra.c
-	gDoorbells[doorbell_id].handler = handler;
 	gDoorbells[doorbell_id].data = data;
+	__atomic_store_n(&gDoorbells[doorbell_id].handler, handler, __ATOMIC_RELEASE);
 	return 0;
 }
 

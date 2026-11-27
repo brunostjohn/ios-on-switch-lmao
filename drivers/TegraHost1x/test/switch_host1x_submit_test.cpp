@@ -117,6 +117,7 @@ TEST_F(Host1xSubmit, AJobsArenaRoomComesBackOnlyOnceItsFencePasses)
         ASSERT_EQ(gFencesAdded.size(), 1u);
         EXPECT_EQ(gFencesAdded[0]->threshold, 101u);
         EXPECT_FALSE(gSubmitLock->held);
+        EXPECT_FALSE(gChannels[channel].lock->held);
         syncpoint(170) = 101;
         gFencesAdded[0]->signaled(gFencesAdded[0], 0);
     };
@@ -810,12 +811,14 @@ TEST_F(Host1xSubmit, ACpuIncrementThatDoesNotTakePanics)
     gCpuIncrements = true;
     gStuckSyncpt = stream.syncpt;
     EXPECT_THROW(tegra_host1x_syncpt_release_failed(gFailedProducer, from + 1, 1), std::runtime_error);
+    IOLockUnlock(gChannels[TEGRA_HOST1X_CHANNEL_DISPLAY].lock);
     IOLockUnlock(gSubmitLock);
     stream.fence.signaled(&stream.fence, 0);
     EXPECT_EQ(done.status, SwitchHost1xDisplayStream::kCancelled);
 
     gStuckSyncpt = gFailedProducer;
     EXPECT_THROW(tegra_host1x_syncpt_release_failed(gFailedProducer, from + 1, 1), std::runtime_error);
+    IOLockUnlock(gChannels[TEGRA_HOST1X_CHANNEL_DISPLAY].lock);
     IOLockUnlock(gSubmitLock);
 }
 
@@ -955,19 +958,29 @@ TEST_F(Host1xSubmit, AStoppedDisplayChannelAsksTheDisplayBeforeAnyFenceFails)
     EXPECT_THROW(switch_host1x_channels_failed(TEGRA_HOST1X_CHANNEL_DISPLAY, line, sizeof(line)), std::runtime_error)
         << "an accepted swap out: the display panics";
     EXPECT_TRUE(gFencesFailed.empty()) << "before any fence failed";
-    ASSERT_TRUE(gChannelLock->held) << "inside the submit lock";
-    IOLockUnlock(gChannelLock);
+    ASSERT_TRUE(gChannels[TEGRA_HOST1X_CHANNEL_DISPLAY].lock->held) << "inside the display channel lock";
+    IOLockUnlock(gChannels[TEGRA_HOST1X_CHANNEL_DISPLAY].lock);
     EXPECT_NE(stream.status, SwitchHost1xDisplayStream::kCancelled) << "host1x no longer cancels the stream";
 
     EXPECT_NO_THROW(switch_host1x_channels_failed(TEGRA_HOST1X_CHANNEL_VIC, line, sizeof(line)))
         << "another channel's error does not ask the display";
-    EXPECT_FALSE(gChannelLock->held);
+    EXPECT_FALSE(gChannels[TEGRA_HOST1X_CHANNEL_VIC].lock->held);
 
     syncpoint(stream.syncpt) = stream.fence.threshold;
     gFencesFailed.clear();
     EXPECT_NO_THROW(switch_host1x_channels_failed(TEGRA_HOST1X_CHANNEL_DISPLAY, line, sizeof(line)))
         << "the stream ran to its syncpoint: nothing out";
     EXPECT_FALSE(gFencesFailed.empty()) << "then the channel's fenced jobs fail as usual";
-    EXPECT_FALSE(gChannelLock->held) << "one hold, released at the end";
+    EXPECT_FALSE(gChannels[TEGRA_HOST1X_CHANNEL_DISPLAY].lock->held) << "one hold, released at the end";
     EXPECT_EQ(done.calls, 0u);
+}
+
+TEST_F(Host1xSubmit, DisplayAndEngineChannelsUseIndependentLocks)
+{
+    EXPECT_NE(gChannels[TEGRA_HOST1X_CHANNEL_DISPLAY].lock, gChannels[TEGRA_HOST1X_CHANNEL_VIC].lock);
+    IOLockLock(gChannels[TEGRA_HOST1X_CHANNEL_VIC].lock);
+    const uint32_t before = doorbell(TEGRA_HOST1X_CHANNEL_DISPLAY);
+    ASSERT_NE(job(TEGRA_HOST1X_CHANNEL_DISPLAY, 1, 1), nullptr);
+    EXPECT_EQ(doorbell(TEGRA_HOST1X_CHANNEL_DISPLAY), before + 8);
+    IOLockUnlock(gChannels[TEGRA_HOST1X_CHANNEL_VIC].lock);
 }

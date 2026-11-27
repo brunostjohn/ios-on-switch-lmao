@@ -69,9 +69,8 @@ IOLock *gSubmitLock;  // every channel's push buffer and arena, and suspend/resu
 // whose power-on values are arbitrary non-zero bits, so bringUp cannot probe it for boot-chain syncpoints.
 SwitchHost1xSyncptPool gPool = {{1ULL << 0 | 1ULL << 9, 0, 0}, {}, {}, {}, 0, 0, 2};
 #if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
-// Debug kernels: the highest threshold a channel's fenced job was given per syncpoint, which a free must have reached.
-uint32_t gOwed[kSyncpts];
-bool gOwedSet[kSyncpts];
+// Debug kernels: bit 32 = set, bits 31:0 = highest threshold a channel's fenced job was given per syncpoint.
+uint64_t gOwed[kSyncpts];
 #endif
 int gState;                 // 0 not started, 1 up, 2 suspended, < 0 failed
 uint32_t gSaved[kSyncpts];  // syncpoint values across SC7, which resets the sync unit
@@ -93,14 +92,10 @@ void interruptOccurred(OSObject *, IOInterruptEventSource *, int)
     switch_host1x_intr_handle();
 }
 
-// Primary interrupt context: the filter waiters, then true, which masks the line until the action has acked and
-// re-armed (a passed threshold stays disabled until re-armed, as in mainline intr.c). The action owns the status and
-// enable writes because the armed set they are masked with is its lock's.
 // NOLINTNEXTLINE(misc-const-correctness): IOFilterInterruptEventSource::Filter's signature
 bool syncptFilter(OSObject *, IOFilterInterruptEventSource *)
 {
-    switch_host1x_intr_filter();
-    return true;
+    return switch_host1x_intr_filter();
 }
 
 int fail(const char *why, uint32_t value)
@@ -232,9 +227,13 @@ extern "C" int tegra_host1x_syncpt_alloc_named(uint32_t *id, const char *caller)
 #if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
 void switch_host1x_syncpt_owed(uint32_t id, uint32_t threshold)
 {
-    if (id < kSyncpts && (!gOwedSet[id] || static_cast<int32_t>(threshold - gOwed[id]) > 0)) {
-        gOwed[id] = threshold;
-        gOwedSet[id] = true;
+    if (id >= kSyncpts)
+        return;
+    const uint64_t next = (1ULL << 32) | threshold;
+    uint64_t cur = __atomic_load_n(&gOwed[id], __ATOMIC_RELAXED);
+    while (!(cur >> 32) || static_cast<int32_t>(threshold - static_cast<uint32_t>(cur)) > 0) {
+        if (__atomic_compare_exchange_n(&gOwed[id], &cur, next, true, __ATOMIC_RELEASE, __ATOMIC_RELAXED))
+            break;
     }
 }
 
@@ -242,7 +241,7 @@ void switch_host1x_syncpt_owed(uint32_t id, uint32_t threshold)
 void switch_host1x_syncpt_dropped(uint32_t id)
 {
     if (id < kSyncpts)
-        gOwedSet[id] = false;
+        __atomic_store_n(&gOwed[id], 0ULL, __ATOMIC_RELEASE);
 }
 #endif
 
@@ -253,10 +252,10 @@ extern "C" void tegra_host1x_syncpt_free(uint32_t id)
 #if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
     const uint32_t reached = tegra_host1x_syncpt_read(id);
     if (id < kSyncpts && gPool.owns(id)) {
-        if (gOwedSet[id] && static_cast<int32_t>(gOwed[id] - reached) > 0)
+        const uint64_t owed = __atomic_exchange_n(&gOwed[id], 0ULL, __ATOMIC_ACQ_REL);
+        if ((owed >> 32) && static_cast<int32_t>(static_cast<uint32_t>(owed) - reached) > 0)
             panic("TegraHost1x: syncpoint %u freed at %u while a job a channel ran still takes it to %u", id, reached,
-                  gOwed[id]);
-        gOwedSet[id] = false;
+                  static_cast<uint32_t>(owed));
     }
 #endif
     if (!gPool.free(id))
