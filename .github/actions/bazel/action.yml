@@ -55,7 +55,7 @@ runs:
     - uses: actions/cache/restore@v6.1.0
       with:
         path: ~/Library/Caches/switch-ios-bazel/disk
-        key: bazel-disk-${{ inputs.cache }}-${{ github.sha }}
+        key: bazel-disk-${{ inputs.cache }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: bazel-disk-${{ inputs.cache }}-
     - shell: bash
       run: touch "$RUNNER_TEMP/bazel-disk-cache-start"

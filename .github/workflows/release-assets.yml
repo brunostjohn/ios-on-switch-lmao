@@ -65,7 +65,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        worker: [1, 2, 3]
+        worker: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: actions/cache/restore@v6.1.0
@@ -243,13 +243,14 @@ jobs:
           name: seed-smoke
           path: ${{ runner.temp }}/seed-smoke
           if-no-files-found: error
-      - if: inputs.upload && !cancelled()
-        uses: ./.github/actions/bazel-save
-        with:
-          cache: release
       - name: Stop ephemeral Buildbarn coordinator
         if: always() && needs.rbe-prepare.outputs.enabled == 'true'
         run: ./tools/remote/ci/stop-coordinator.sh
+      - if: ${{ (success() || failure()) && inputs.upload }}
+        uses: ./.github/actions/bazel-save
+        with:
+          cache: release
+          prune: ${{ job.status == 'success' }}
   bazelisk-only:
     needs: build
     runs-on: xcode-27
