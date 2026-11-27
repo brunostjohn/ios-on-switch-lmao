@@ -17,8 +17,6 @@
 // No polled mode.
 #include <IOKit/IOLib.h>
 #include <IOKit/IOService.h>
-#include <IOKit/IOWorkLoop.h>
-#include <IOKit/IOFilterInterruptEventSource.h>
 #include "../../ArmGIC/SwitchInterrupts.h"
 #include "include/bpxnu.h"
 #include "../../../kits/SwitchMMIO/SwitchMMIOKernel.h"
@@ -64,17 +62,22 @@ inline void licWrite(uint32_t offset, uint32_t value)
 {
 	switch_mmio_write32(lic(), offset, value);
 }
+// NOLINTNEXTLINE(misc-const-correctness): IOInterruptAction's signature
+void doorbellInterrupt(OSObject *, void *refCon, IOService *, int)
+{
+	const unsigned i = static_cast<unsigned>(reinterpret_cast<uintptr_t>(refCon));
+	licWrite(ICTLR_CPU_IEP_FIR_CLR, 1u << kInboundSpi[i]);
+	(void)licRead(ICTLR_CPU_IEP_FIR);
+	if (auto *handler = __atomic_load_n(&gDoorbells[i].handler, __ATOMIC_ACQUIRE))
+		handler(gDoorbells[i].data);
+}
 }  // namespace
 
 // NOLINTNEXTLINE(misc-use-internal-linkage): OSDefineMetaClassAndStructors needs the class's external linkage
 class TegraBPMPDoorbells : public IOService
 {
 	// NOLINTNEXTLINE(misc-explicit-constructor): IOKit's structors macro declares the metaclass constructor
-	OSDeclareDefaultStructors(TegraBPMPDoorbells) IOWorkLoop *loop = nullptr;
-	IOFilterInterruptEventSource *sources[kDoorbells] = {};
-	static bool filter(OSObject *owner, IOFilterInterruptEventSource *sender);
-	static void action(OSObject *owner, IOInterruptEventSource *sender, int count);
-	int indexOf(IOInterruptEventSource *sender) const;
+	OSDeclareDefaultStructors(TegraBPMPDoorbells)
 
 public:
 	bool claim();
@@ -82,54 +85,25 @@ public:
 
 OSDefineMetaClassAndStructors(TegraBPMPDoorbells, IOService)
 
-	int TegraBPMPDoorbells::indexOf(IOInterruptEventSource *sender) const
-{
-	for (unsigned i = 0; i < kDoorbells; ++i) {
-		if (sources[i] == sender)
-			return static_cast<int>(i);
-	}
-	return -1;
-}
-
-// Primary interrupt context: clear the forced interrupt before reading SHMEM so a concurrent BPMP reply re-raises
-// the line, then run bpmp_handle_irq() directly to wake thread-channel waiters without a work-loop bounce.
-bool TegraBPMPDoorbells::filter(OSObject *owner, IOFilterInterruptEventSource *sender)
-{
-	const auto *self = static_cast<TegraBPMPDoorbells *>(owner);
-	const int i = self->indexOf(sender);
-	if (i < 0)
-		return false;
-	licWrite(ICTLR_CPU_IEP_FIR_CLR, 1u << kInboundSpi[i]);
-	(void)licRead(ICTLR_CPU_IEP_FIR);
-	if (auto *handler = __atomic_load_n(&gDoorbells[i].handler, __ATOMIC_ACQUIRE))
-		handler(gDoorbells[i].data);
-	return false;
-}
-
-void TegraBPMPDoorbells::action(OSObject *, IOInterruptEventSource *, int)
-{
-}
-
 bool TegraBPMPDoorbells::claim()
 {
-	loop = IOWorkLoop::workLoop();
-	if (!loop)
-		return false;
+	IOService *nubs[kDoorbells] = {};
 	for (unsigned i = 0; i < kDoorbells; ++i) {
 		const uint32_t intid = 32 + kInboundSpi[i];
 		IOService *nub = switch_interrupt_nub(intid, false);
-		if (!nub)
-			panic("TegraBPMP: no interrupt for BPMP doorbell %u (INTID %u)", i, intid);
-		sources[i] = IOFilterInterruptEventSource::filterInterruptEventSource(
-			this, &TegraBPMPDoorbells::action, &TegraBPMPDoorbells::filter, nub, 0);
-		if (!sources[i] || loop->addEventSource(sources[i]) != kIOReturnSuccess) {
+		// NOLINTNEXTLINE(clang-analyzer-osx.cocoa.RetainCount): ArmGIC owns its interrupt nubs
+		if (!nub || nub->registerInterrupt(0, nullptr, &doorbellInterrupt,
+						   reinterpret_cast<void *>(uintptr_t{i})) != kIOReturnSuccess) {
 			panic("TegraBPMP: cannot attach BPMP doorbell %u (INTID %u)", i, intid);
 		}
+		nubs[i] = nub;
 	}
 	// A doorbell the BPMP forced before this point is not cleared: it fires as soon as its source is enabled and
 	// mail.c then answers whatever inbound mail it signalled, as Linux does after request_irq().
-	for (IOFilterInterruptEventSource *source : sources)
-		source->enable();
+	for (unsigned i = 0; i < kDoorbells; ++i) {
+		if (nubs[i]->enableInterrupt(0) != kIOReturnSuccess)
+			panic("TegraBPMP: cannot enable BPMP doorbell %u (INTID %u)", i, 32 + kInboundSpi[i]);
+	}
 	return true;
 }
 

@@ -273,8 +273,9 @@ static void dvco_reset_set(bool assert)
 {
 	u32 v = switch_mmio_read32(car, RST_DFLL_DVCO);
 
-	switch_mmio_write32_flush(car, RST_DFLL_DVCO,
-				  assert ? (v | DVCO_RESET) : (v & ~DVCO_RESET));
+	switch_mmio_write32(car, RST_DFLL_DVCO,
+			    assert ? (v | DVCO_RESET) : (v & ~DVCO_RESET));
+	(void)switch_mmio_read32(car, RST_DFLL_DVCO);
 }
 
 static struct reset_control dvco_reset = {.name = "dvco", .set = dvco_reset_set};
@@ -438,7 +439,8 @@ static unsigned int cl_dvfs_gate_refcnt;
 
 static void cl_dvfs_gate_on(void)
 {
-	switch_mmio_write32_flush(car, CLK_ENB_W_SET, W_DVFS);
+	switch_mmio_write32(car, CLK_ENB_W_SET, W_DVFS);
+	(void)switch_mmio_read32(car, CLK_OUT_ENB_W);
 	udelay(2);
 }
 
@@ -452,11 +454,13 @@ static void cl_dvfs_sources(void)
 	for (i = 0; i < ARRAY_SIZE(sources); i++) {
 		u32 v = switch_mmio_read32(car, sources[i]);
 
-		switch_mmio_write32_flush(car, sources[i], (v & ~DVFS_DIVISOR) | DFLL_SRC_51MHZ);
+		switch_mmio_write32(car, sources[i], (v & ~DVFS_DIVISOR) | DFLL_SRC_51MHZ);
+		(void)switch_mmio_read32(car, sources[i]);
 		udelay(2);
-		switch_mmio_write32_flush(car, sources[i],
-					  (SRC_PLLP << CLK_SRC_SHIFT) | DVFS_MASTER_CLKEN |
-						  DFLL_SRC_51MHZ);
+		switch_mmio_write32(car, sources[i],
+				    (SRC_PLLP << CLK_SRC_SHIFT) | DVFS_MASTER_CLKEN |
+					    DFLL_SRC_51MHZ);
+		(void)switch_mmio_read32(car, sources[i]);
 		udelay(2);
 	}
 }
@@ -471,7 +475,8 @@ static int cl_dvfs_bring_up(char *why, size_t len)
 	cl_dvfs_gate_on();
 	if (switch_mmio_read32(car, RST_DEVICES_W) & W_DVFS) {
 		cl_dvfs_sources();
-		switch_mmio_write32_flush(car, RST_DEV_W_CLR, W_DVFS);
+		switch_mmio_write32(car, RST_DEV_W_CLR, W_DVFS);
+		(void)switch_mmio_read32(car, RST_DEVICES_W);
 		udelay(2);
 		return 0;
 	}
@@ -581,7 +586,8 @@ static int cclk_g_set_parent(struct clk_hw *hw, u8 index)
 	BUG_ON(state != SUPER_STATE_RUN_BIT && state != SUPER_STATE_IDLE_BIT);
 	val &= ~(0xfu << shift);
 	val |= (u32)(index & 0xf) << shift;
-	switch_mmio_write32_flush(car, CCLKG_BURST_POLICY, val);
+	switch_mmio_write32(car, CCLKG_BURST_POLICY, val);
+	(void)switch_mmio_read32(car, CCLKG_BURST_POLICY);
 	udelay(2);
 	return 0;
 }

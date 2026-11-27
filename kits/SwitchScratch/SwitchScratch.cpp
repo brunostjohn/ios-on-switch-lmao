@@ -108,6 +108,10 @@ switch_scratch *switch_scratch_get(uint64_t bytes, task_t owner)
             found = *p;
             *p = found->next;
             gKeptBytes -= found->bytes;
+#if DEVELOPMENT || DEBUG
+            gHeld += found->bytes;
+            gPeak = gHeld > gPeak ? gHeld : gPeak;
+#endif
             break;
         }
     }
@@ -124,17 +128,17 @@ switch_scratch *switch_scratch_get(uint64_t bytes, task_t owner)
         found->memory->setPurgeable(kIOMemoryPurgeableNonVolatile, &was);
     } else {
         found = create(bytes);
+        if (!found)
+            return nullptr;
+#if DEVELOPMENT || DEBUG
+        IOLockLock(gLock);
+        gHeld += found->bytes;
+        gPeak = gHeld > gPeak ? gHeld : gPeak;
+        IOLockUnlock(gLock);
+#endif
     }
-    if (!found)
-        return nullptr;
     charge(found->memory, owner);
     found->handout = __atomic_add_fetch(&gHandouts, 1, __ATOMIC_RELAXED);
-#if DEVELOPMENT || DEBUG
-    IOLockLock(gLock);
-    gHeld += found->bytes;
-    gPeak = gHeld > gPeak ? gHeld : gPeak;
-    IOLockUnlock(gLock);
-#endif
     return found;
 }
 
@@ -149,6 +153,10 @@ switch_scratch *switch_scratch_reclaim(switch_scratch *s, uint64_t handout, task
         if (*p == s && s->handout == handout) {
             *p = s->next;
             gKeptBytes -= s->bytes;
+#if DEVELOPMENT || DEBUG
+            gHeld += s->bytes;
+            gPeak = gHeld > gPeak ? gHeld : gPeak;
+#endif
             kept = true;
             break;
         }
@@ -162,12 +170,6 @@ switch_scratch *switch_scratch_reclaim(switch_scratch *s, uint64_t handout, task
     *intact = was != kIOMemoryPurgeableEmpty;
     charge(s->memory, owner);
     s->handout = __atomic_add_fetch(&gHandouts, 1, __ATOMIC_RELAXED);
-#if DEVELOPMENT || DEBUG
-    IOLockLock(gLock);
-    gHeld += s->bytes;
-    gPeak = gHeld > gPeak ? gHeld : gPeak;
-    IOLockUnlock(gLock);
-#endif
     return s;
 }
 

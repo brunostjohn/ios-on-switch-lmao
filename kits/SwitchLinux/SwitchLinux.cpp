@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
+#define SWITCH_LINUX_IMPL 1
 #include "SwitchLinux.h"
 #include <os/log.h>
 #include <IOKit/IOLib.h>
@@ -152,9 +153,8 @@ extern "C" uint64_t switch_linux_abstime_to_ns(uint64_t abstime)
     return switch_abs_to_ns(abstime);
 }
 
-// Linux's udelay busy-waits. XNU's delay sleeps on a timer unless the CPU reports an idle-exit latency, which ArmCpu does
-// not (ml_delay_should_spin), so a two-microsecond PLL settle under tgm_idle.clk became a timer, a wake and a core to
-// win at the caller's priority (idle clock raises of 58-393 ms). A delay that short spins; a longer one still sleeps.
+// Short Linux udelay() hardware settles spin directly without going through XNU's timer/sleep machinery;
+// longer delays delegate to delay_for_interval(), which spins when interrupts or preemption are off.
 constexpr uint64_t kSpinDelayUs = 20;
 
 extern "C" void switch_linux_udelay(uint64_t us)
@@ -163,9 +163,7 @@ extern "C" void switch_linux_udelay(uint64_t us)
         delay_for_interval(static_cast<uint32_t>(us), NSEC_PER_USEC);
         return;
     }
-    uint64_t interval = 0;
-    nanoseconds_to_absolutetime(us * NSEC_PER_USEC, &interval);
-    const uint64_t end = mach_absolute_time() + interval;
+    const uint64_t end = mach_absolute_time() + switch_abs_from_us(us);
     while (mach_absolute_time() < end) {
 #if defined(__aarch64__)
         __asm__ volatile("yield");
