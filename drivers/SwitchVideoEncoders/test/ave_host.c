@@ -41,21 +41,62 @@ enum {
 struct NVENCClient {
     uint8_t *va[MAX_HANDLES];
     uint64_t size[MAX_HANDLES];
+    dispatch_queue_t queue;
+    NVENCDone done;
+    void *doneContext;
+    bool listening;
 };
 
 static uint32_t gLayout = TEGRA_NVENC_LAYOUT_PITCH, gChroma = TEGRA_NVENC_CHROMA_OFFSET;
 static bool gSurfaceInput;
+static bool gCompletionFeature = true;
+static bool gAsyncListen = true;
 static int gRefuseSurfaces;  // 1: every surface (kIOReturnUnsupported); 2: every other one, for now (NotReady)
-static int gOpens, gSubmits, gRefused, gSkipped, gPcm, gIdr, gP, gB, gVIC;
+static int gOpens, gSubmits, gWaits, gRefused, gSkipped, gPcm, gIdr, gP, gB, gVIC;
 static int gRefuseB;  // the engine answers the first gRefuseB B pictures it is given from when it is set with an
 static int gBSeen;    // error, as NVENC would ones it cannot code (gBSeen counts them)
 static int gRefusePFirst, gRefusePLast;  // and P pictures gRefusePFirst..gRefusePLast from when they are set (gPSeen)
 static int gPSeen;
-static uint32_t gFailWait;  // the job whose Wait answers a failure: a producer of its input was cancelled
+static uint32_t gFailWait;  // the job whose Wait/completion answers a failure: a producer of its input was cancelled
 static const char *gRefusal;
 static TegraNVENCSubmit gFirstP;  // a good P submit, for the refusal cases
 static uint64_t gFirstPAvail[TEGRA_NVENC_MAX_ENTRIES];
 static bool gHaveP;
+
+static pthread_mutex_t gHoldLock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t gHoldCond = PTHREAD_COND_INITIALIZER;
+static bool gHoldCompletions;
+static int gHeldCompletions;
+
+typedef struct {
+    NVENCClient *client;
+    NVENCDone done;
+    void *context;
+    uint32_t fence;
+    int result;
+    uint32_t errorStatus, ucodeErrorStatus, totalBitCount;
+} FakeCompletion;
+
+static void noopWork(void *ctx)
+{
+    (void)ctx;
+}
+
+static void deliverFakeCompletion(void *ctx)
+{
+    FakeCompletion *fc = ctx;
+    pthread_mutex_lock(&gHoldLock);
+    if (gHoldCompletions) {
+        gHeldCompletions++;
+        pthread_cond_broadcast(&gHoldCond);
+        while (gHoldCompletions)
+            pthread_cond_wait(&gHoldCond, &gHoldLock);
+    }
+    pthread_mutex_unlock(&gHoldLock);
+    if (fc->client->listening)
+        fc->done(fc->context, fc->fence, fc->result, fc->errorStatus, fc->ucodeErrorStatus, fc->totalBitCount);
+    free(fc);
+}
 
 bool nvenc_service_wait(void)
 {
@@ -69,10 +110,23 @@ NVENCClient *nvenc_open(int *error)
     return calloc(1, sizeof(NVENCClient));
 }
 
+void nvenc_stop_listening(NVENCClient *c)
+{
+    if (!c || !c->queue)
+        return;
+    c->listening = false;
+    dispatch_sync_f(c->queue, NULL, noopWork);
+    dispatch_release(c->queue);
+    c->queue = NULL;
+    c->done = NULL;
+    c->doneContext = NULL;
+}
+
 void nvenc_close(NVENCClient *c)
 {
     if (!c)
         return;
+    nvenc_stop_listening(c);
     for (int i = 0; i < MAX_HANDLES; i++)
         free(c->va[i]);
     free(c);
@@ -88,9 +142,33 @@ bool nvenc_info(NVENCClient *c, TegraNVENCInfo *info)
     info->input_layout = gLayout;
     info->chroma_mode = gChroma;
     info->p_frames = 1;
-    info->features = gSurfaceInput ? TEGRA_NVENC_FEATURE_SURFACE_INPUT : 0;
+    info->jobs_in_flight = 4;
+    info->features = (gSurfaceInput ? TEGRA_NVENC_FEATURE_SURFACE_INPUT : 0) |
+                     (gCompletionFeature ? TEGRA_NVENC_FEATURE_COMPLETION : 0);
     info->surface_row_align = gSurfaceInput ? 256 : 0;
     return true;
+}
+
+void *nvenc_buffer_va(const NVENCClient *c, uint32_t handle)
+{
+    return c && handle < MAX_HANDLES ? c->va[handle] : NULL;
+}
+
+bool nvenc_listen(NVENCClient *c, dispatch_queue_t queue, NVENCDone done, void *context)
+{
+    if (!c || !gCompletionFeature || !gAsyncListen || c->listening)
+        return false;
+    c->queue = queue;
+    dispatch_retain(queue);
+    c->done = done;
+    c->doneContext = context;
+    c->listening = true;
+    return true;
+}
+
+bool nvenc_completions_on_port(const NVENCClient *c)
+{
+    return c && c->listening;
 }
 
 int nvenc_alloc(void *ctx, uint64_t size, uint32_t *handle, void **va)
@@ -120,6 +198,7 @@ void nvenc_free(void *ctx, uint32_t handle)
 int nvenc_wait(void *ctx, const TegraNVENCWait *w)
 {
     (void)ctx;
+    gWaits++;
     return gFailWait && w->fence == gFailWait ? kIOReturnError : 0;
 }
 
@@ -320,6 +399,28 @@ static int fakeVIC(NVENCClient *c, const TegraNVENCSubmit *s)
     return offGrid ? TEGRA_NVENC_INPUT_BOUNCED : TEGRA_NVENC_INPUT_VIC;
 }
 
+static void queueCompletion(NVENCClient *c, const TegraNVENCSubmit *s, uint32_t fence)
+{
+    if (!c->listening || !c->queue || !c->done)
+        return;
+    nvenc_pic_stat_s stat = {0};
+    const TegraNVENCEntry *status = find(s, NVC5B7_SET_OUT_ENC_STATUS);
+    if (status && status->value < MAX_HANDLES && c->va[status->value])
+        memcpy(&stat, c->va[status->value] + status->offset, sizeof(stat));
+    FakeCompletion *fc = malloc(sizeof(*fc));
+    *fc = (FakeCompletion){
+        .client = c,
+        .done = c->done,
+        .context = c->doneContext,
+        .fence = fence,
+        .result = gFailWait && fence == gFailWait ? -5 : 0,
+        .errorStatus = stat.error_status,
+        .ucodeErrorStatus = stat.ucode_error_status,
+        .totalBitCount = stat.total_bit_count,
+    };
+    dispatch_async_f(c->queue, fc, deliverFakeCompletion);
+}
+
 int nvenc_submit(void *ctx, const TegraNVENCSubmit *s, uint32_t *fence, uint32_t *input)
 {
     NVENCClient *c = ctx;
@@ -352,6 +453,7 @@ int nvenc_submit(void *ctx, const TegraNVENCSubmit *s, uint32_t *fence, uint32_t
         if (tile_check_engine(s, c->va, gChroma))
             return -1;
         *fence = (uint32_t)++gSubmits;
+        queueCompletion(c, s, *fence);
         return 0;
     }
     const nvenc_h264_drv_pic_setup_s *p = (const nvenc_h264_drv_pic_setup_s *)s->setup;
@@ -363,6 +465,7 @@ int nvenc_submit(void *ctx, const TegraNVENCSubmit *s, uint32_t *fence, uint32_t
     if (engine(c, s))
         return -1;
     *fence = (uint32_t)++gSubmits;
+    queueCompletion(c, s, *fence);
     return 0;
 }
 
@@ -809,6 +912,98 @@ static void rateControl(void)
     EXPECT(rc_qp(&rc, false) == 22 && rc_qp(&rc, true) == 20, "constant quality 0.8 -> QP %d", rc_qp(&rc, false));
 }
 
+typedef struct {
+    VTCompressionSessionRef session;
+    CVPixelBufferRef image;
+    OSStatus status;
+} OffLockEncodeArg;
+
+static void offLockOutput(void *refcon, void *sourceRefCon, OSStatus status, VTEncodeInfoFlags flags,
+                          CMSampleBufferRef sample)
+{
+    (void)sourceRefCon, (void)flags;
+    int *emitted = refcon;
+    if (!status && sample)
+        (*emitted)++;
+}
+
+static void *offLockEncodeThread(void *arg)
+{
+    OffLockEncodeArg *a = arg;
+    a->status =
+        VTCompressionSessionEncodeFrame(a->session, a->image, CMTimeMake(0, 30), CMTimeMake(1, 30), NULL, NULL, NULL);
+    return NULL;
+}
+
+static void releaseHeldCompletions(void *ctx, int submitsBefore)
+{
+    (void)ctx, (void)submitsBefore;
+    pthread_mutex_lock(&gHoldLock);
+    gHoldCompletions = false;
+    pthread_cond_broadcast(&gHoldCond);
+    pthread_mutex_unlock(&gHoldLock);
+}
+
+static void offLockPropertyCheck(CFDictionaryRef spec)
+{
+    gLayout = TEGRA_NVENC_LAYOUT_TILED16;
+    gChroma = TEGRA_NVENC_CHROMA_OFFSET;
+    gSurfaceInput = true;
+    gRefuseSurfaces = 0;
+    gCompletionFeature = true;
+    gAsyncListen = true;
+
+    int emitted = 0;
+    VTCompressionSessionRef session = NULL;
+    OSStatus status = VTCompressionSessionCreate(NULL, 320, 240, kCMVideoCodecType_H264, spec, NULL, NULL,
+                                                 offLockOutput, &emitted, &session);
+    EXPECT(!status && session, "off-lock check session create");
+    if (status || !session)
+        return;
+    VTSessionSetProperty(session, kVTCompressionPropertyKey_H264EntropyMode, kVTH264EntropyMode_CAVLC);
+    VTSessionSetProperty(session, kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse);
+    CVPixelBufferRef frame = encode_check_frame(0);
+
+    pthread_mutex_lock(&gHoldLock);
+    gHoldCompletions = true;
+    gHeldCompletions = 0;
+    pthread_mutex_unlock(&gHoldLock);
+
+    OffLockEncodeArg arg = {session, frame, noErr};
+    pthread_t th;
+    pthread_create(&th, NULL, offLockEncodeThread, &arg);
+
+    pthread_mutex_lock(&gHoldLock);
+    while (gHeldCompletions == 0)
+        pthread_cond_wait(&gHoldCond, &gHoldLock);
+    pthread_mutex_unlock(&gHoldLock);
+
+    // While EncodeFrame is blocked waiting on NVENC completion, property calls must not block on e->lock.
+    int32_t bitrate = 1500000;
+    CFNumberRef num = CFNumberCreate(NULL, kCFNumberSInt32Type, &bitrate);
+    const OSStatus setStatus = VTSessionSetProperty(session, kVTCompressionPropertyKey_AverageBitRate, num);
+    CFRelease(num);
+    CFTypeRef readBack = NULL;
+    const OSStatus copyStatus =
+        VTSessionCopyProperty(session, kVTCompressionPropertyKey_AverageBitRate, NULL, &readBack);
+    int32_t readVal = 0;
+    if (readBack && CFGetTypeID(readBack) == CFNumberGetTypeID())
+        CFNumberGetValue(readBack, kCFNumberSInt32Type, &readVal);
+    if (readBack)
+        CFRelease(readBack);
+
+    releaseHeldCompletions(NULL, 0);
+    pthread_join(th, NULL);
+    VTCompressionSessionCompleteFrames(session, kCMTimeInvalid);
+    VTCompressionSessionInvalidate(session);
+    CFRelease(session);
+    CVPixelBufferRelease(frame);
+
+    EXPECT(!arg.status && !setStatus && !copyStatus && readVal == bitrate && emitted == 1,
+           "off-lock property access during in-flight encode (set %d copy %d read %d emitted %d)", (int)setStatus,
+           (int)copyStatus, readVal, emitted);
+}
+
 int main(void)
 {
     gLog = os_log_create("com.brunostjohn.switch.ave", "host-test");
@@ -958,7 +1153,6 @@ int main(void)
     const bool probed = probe_check(spec, probeLine, sizeof(probeLine));
     printf("%s\n", probeLine);
     EXPECT(probed, "SwitchEncoderLayoutProbe");
-    CFRelease(spec);
     for (unsigned r = 0; r < sizeof(runs) / sizeof(runs[0]); r++) {
         gLayout = runs[r].layout;
         gChroma = runs[r].chroma;
@@ -977,6 +1171,42 @@ int main(void)
         EXPECT(ok == runs[r].ok && gRefused == refused && strstr(line, runs[r].tiles),
                "tile check, layout %u, surfaces %d refused %d", gLayout, gSurfaceInput, gRefuseSurfaces);
     }
+    EXPECT(gWaits == 0, "async completion mode used %d nvenc_wait calls, expected 0", gWaits);
+    offLockPropertyCheck(spec);
+    EXPECT(gWaits == 0, "off-lock async check used %d nvenc_wait calls, expected 0", gWaits);
+
+    // Async tile pipelining: all 4 tiles submit concurrently with kVTEncodeInfo_Asynchronous before any completes.
+    gLayout = TEGRA_NVENC_LAYOUT_TILED16;
+    gChroma = TEGRA_NVENC_CHROMA_OFFSET;
+    gSurfaceInput = true;
+    gRefuseSurfaces = 0;
+    tile_check_row_alignment = 256;
+    pthread_mutex_lock(&gHoldLock);
+    gHoldCompletions = true;
+    gHeldCompletions = 0;
+    pthread_mutex_unlock(&gHoldLock);
+    char pipelineLine[256];
+    const bool pipelined = tile_pipeline_check(CFSTR("com.brunostjohn.switch.ave-host"), releaseHeldCompletions, NULL,
+                                               pipelineLine, sizeof(pipelineLine));
+    printf("tile pipeline: %s\n", pipelineLine);
+    EXPECT(pipelined && gWaits == 0, "async tile pipeline failed or issued Wait (%d)", gWaits);
+
+    // Single-wait fallback mode: TEGRA_NVENC_FEATURE_COMPLETION on, listener disabled -> exactly 1 Wait per job.
+    gAsyncListen = false;
+    const int fallbackSubmitsBefore = gSubmits, fallbackWaitsBefore = gWaits;
+    char fallbackLine[512];
+    const bool fallbackFrameOk = encode_check(spec, kVTH264EntropyMode_CAVLC, 99.0, fallbackLine, sizeof(fallbackLine));
+    const bool fallbackTileOk =
+        tile_check(CFSTR("com.brunostjohn.switch.ave-host"), pipelineLine, sizeof(pipelineLine));
+    const int fallbackSubmits = gSubmits - fallbackSubmitsBefore;
+    const int fallbackWaits = gWaits - fallbackWaitsBefore;
+    printf("single-wait fallback: %d submits, %d waits\n", fallbackSubmits, fallbackWaits);
+    EXPECT(fallbackFrameOk && fallbackTileOk && fallbackSubmits == 34 && fallbackWaits == fallbackSubmits,
+           "single-wait fallback expected %d waits for %d submits, got %d", fallbackSubmits, fallbackSubmits,
+           fallbackWaits);
+    gAsyncListen = true;
+
+    CFRelease(spec);
     gSurfaceInput = false;
     gRefuseSurfaces = 0;
     encode_check_client_buffers = false;
