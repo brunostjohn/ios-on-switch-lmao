@@ -372,3 +372,18 @@ TEST(SwitchMemoryAttachment, GpuRecordHasItsOwnSlotAndEndsWithTheDescriptor)
     EXPECT_EQ(representation->refs, 1u);
     representation->release();
 }
+
+TEST(SwitchMemoryAttachment, UncontendedReservationsSkipWakeups)
+{
+    IOMemoryDescriptor memory;
+    const unsigned before = switchWakeups.load();
+    for (unsigned i = 0; i != 64; ++i) {
+        ASSERT_EQ(SwitchMemoryAttachment::enterCpu(&memory, false), 0);
+        EXPECT_EQ(SwitchMemoryAttachment::cpuUsers(&memory), 1u);
+        SwitchMemoryAttachment::leaveCpu(&memory);
+        EXPECT_EQ(SwitchMemoryAttachment::cpuUsers(&memory), 0u);
+        ASSERT_EQ(SwitchMemoryAttachment::enterExclusive(&memory, false), 0);
+        SwitchMemoryAttachment::leaveExclusive(&memory);
+    }
+    EXPECT_EQ(switchWakeups.load(), before);
+}
