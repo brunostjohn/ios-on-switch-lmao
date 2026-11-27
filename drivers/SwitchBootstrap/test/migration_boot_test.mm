@@ -317,7 +317,7 @@ static void switch_test_interrupted_retries(void)
     assert(switch_test_run() == ECANCELED);
     assert(([switch_test_calls isEqual:@[ @"not-ready", @"failed:preparation" ]]));
     assert(switch_test_receipt == SwitchMigrationFailed && switch_test_recorded_error == ECANCELED &&
-           switch_test_attempt == 2);
+           switch_test_attempt == 1);
     assert([[NSString stringWithContentsOfFile:pending encoding:NSASCIIStringEncoding
                                          error:nil] isEqual:[switch_test_generation stringByAppendingString:@"\n"]]);
     switch_test_home = 0;
@@ -354,18 +354,98 @@ static void switch_test_interrupted_retries(void)
     assert(!switch_test_run());
     assert(switch_test_receipt == SwitchMigrationComplete && switch_test_ready);
 
+    // Repeated unscheduled deferrals never delete migration.pending or permanently fail-close.
     switch_test_reset();
     switch_test_home = 1;
-    for (unsigned expected = 1; expected <= switch_migration_max_attempts; ++expected) {
+    for (unsigned boot = 1; boot <= switch_migration_max_attempts + 2; ++boot) {
         [switch_test_calls removeAllObjects];
         assert(switch_test_run() == ECANCELED);
         assert(switch_test_receipt == SwitchMigrationFailed && [switch_test_phase isEqual:@"unscheduled"] &&
-               switch_test_recorded_error == ECANCELED && switch_test_attempt == expected);
+               switch_test_recorded_error == ECANCELED && switch_test_attempt == 1);
+        assert([files fileExistsAtPath:pending]);
+    }
+    switch_test_home = 0;
+    [switch_test_calls removeAllObjects];
+    assert(!switch_test_run());
+    assert(switch_test_receipt == SwitchMigrationComplete && switch_test_ready);
+    assert(![files fileExistsAtPath:pending]);
+
+    // Self-heal a device stuck in legacy failed unscheduled 89 3 state.
+    switch_test_reset(SwitchMigrationFailed);
+    switch_test_phase = @"unscheduled";
+    switch_test_recorded_error = ECANCELED;
+    switch_test_attempt = switch_migration_max_attempts;
+    switch_test_home = 1;
+    unlink(pending.fileSystemRepresentation);
+    assert(switch_test_run() == ECANCELED);
+    assert(switch_test_receipt == SwitchMigrationFailed && [switch_test_phase isEqual:@"unscheduled"] &&
+           switch_test_attempt == 1);
+    assert([files fileExistsAtPath:pending]);
+    switch_test_home = 0;
+    [switch_test_calls removeAllObjects];
+    assert(!switch_test_run());
+    assert(switch_test_receipt == SwitchMigrationComplete && switch_test_ready);
+
+    // ETIMEDOUT during preparation re-arms migration.pending and retries up to switch_migration_max_attempts.
+    switch_test_reset();
+    switch_test_failure = @"packages";
+    switch_test_failure_code = ETIMEDOUT;
+    for (unsigned expected = 1; expected <= switch_migration_max_attempts; ++expected) {
+        [switch_test_calls removeAllObjects];
+        assert(switch_test_run() == ETIMEDOUT);
+        assert(switch_test_receipt == SwitchMigrationFailed && [switch_test_phase isEqual:@"preparation"] &&
+               switch_test_recorded_error == ETIMEDOUT && switch_test_attempt == expected);
         assert([files fileExistsAtPath:pending] == (expected < switch_migration_max_attempts));
     }
     [switch_test_calls removeAllObjects];
-    assert(switch_test_run() == ECANCELED);
-    assert(([switch_test_calls isEqual:@[ @"not-ready" ]]));
+    switch_test_failure = nil;
+    assert(!switch_test_run());
+    assert(([switch_test_calls isEqual:@[ @"not-ready", @"validate", @"repair-register" ]]));
+    assert(switch_test_receipt == SwitchMigrationFailed && !switch_test_ready);
+
+    // ETIMEDOUT during preparation recovers cleanly on the next boot.
+    switch_test_reset();
+    switch_test_failure = @"packages";
+    switch_test_failure_code = ETIMEDOUT;
+    assert(switch_test_run() == ETIMEDOUT);
+    assert([files fileExistsAtPath:pending] && switch_test_attempt == 1);
+    switch_test_failure = nil;
+    [switch_test_calls removeAllObjects];
+    assert(!switch_test_run());
+    assert(switch_test_receipt == SwitchMigrationComplete && switch_test_ready);
+    assert(![files fileExistsAtPath:pending]);
+
+    // ETIMEDOUT during register-apps resumes at registration instead of re-extracting packages.
+    switch_test_reset();
+    switch_test_failure = @"register";
+    switch_test_failure_code = ETIMEDOUT;
+    assert(switch_test_run() == ETIMEDOUT);
+    assert(switch_test_receipt == SwitchMigrationFailed && [switch_test_phase isEqual:@"register-apps"] &&
+           switch_test_recorded_error == ETIMEDOUT && switch_test_attempt == 1);
+    assert([files fileExistsAtPath:pending]);
+    switch_test_failure = nil;
+    switch_test_home = 1;
+    [switch_test_calls removeAllObjects];
+    assert(!switch_test_run());
+    assert(([switch_test_calls isEqual:@[
+        @"working:registration", @"validate-prepared", @"not-ready", @"register", @"working:runtime", @"runtime",
+        @"ready", @"complete"
+    ]]));
+    assert(switch_test_receipt == SwitchMigrationComplete && switch_test_ready);
+    assert(![files fileExistsAtPath:pending]);
+
+    // ETIMEDOUT during runtime re-arms migration.pending and resumes at runtime.
+    switch_test_reset();
+    switch_test_expire_runtime = true;
+    assert(switch_test_run() == ETIMEDOUT);
+    assert([files fileExistsAtPath:pending]);
+    switch_test_expire_runtime = false;
+    switch_test_home = 1;
+    [switch_test_calls removeAllObjects];
+    assert(!switch_test_run());
+    assert(([switch_test_calls
+        isEqual:@[ @"working:runtime", @"validate-prepared", @"not-ready", @"runtime", @"ready", @"complete" ]]));
+    assert(switch_test_receipt == SwitchMigrationComplete && switch_test_ready);
     assert(![files fileExistsAtPath:pending]);
 
     for (NSString *phase in @[ @"preparation", @"native-migration", @"registration", @"runtime" ]) {
@@ -421,7 +501,7 @@ static void switch_test_native_rearm(void)
     assert([[NSData data] writeToFile:native atomically:YES]);
     assert([[NSData data] writeToFile:switch_test_marker atomically:YES]);
     assert(switch_test_run() == ECANCELED);
-    assert(switch_test_attempt == 2);
+    assert(switch_test_attempt == 1);
     assert(![files fileExistsAtPath:native] && ![files fileExistsAtPath:switch_test_marker]);
 }
 
