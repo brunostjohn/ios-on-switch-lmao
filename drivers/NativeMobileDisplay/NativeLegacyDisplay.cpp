@@ -719,7 +719,6 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     static constexpr unsigned kLegacyVtableSlots = 358, kSwapSubmitSlot = 178;
 #endif
     typedef IOReturn (*SwapSubmitFn)(IOMobileFramebufferLegacy *, void *, IOUserClient *, uint32_t *);
-    static inline IOSimpleLock *swapZeroLock = nullptr;
     static inline switch_display::SwapZeroLayerState swapZeroLayer;
     static inline const uintptr_t *originalLegacyVtable = nullptr;
     static inline uintptr_t *patchedLegacyVtable = nullptr;
@@ -727,37 +726,24 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     static IOReturn swapSubmitFilter(IOMobileFramebufferLegacy *fb, void *swap, IOUserClient *client, uint32_t *out)
     {
         const auto original = reinterpret_cast<SwapSubmitFn>(originalLegacyVtable[kSwapSubmitSlot]);
-        if (!swap || !swapZeroLock)
+        if (!swap)
             return original(fb, swap, client, out);
         auto *bytes = static_cast<unsigned char *>(swap);
-        IOSimpleLockLock(swapZeroLock);
         const switch_display::SwapZeroLayerState::Call call = swapZeroLayer.begin(bytes);
-        IOSimpleLockUnlock(swapZeroLock);
         const IOReturn status = original(fb, swap, client, out);
-        IOSimpleLockLock(swapZeroLock);
         swapZeroLayer.finish(bytes, call, status == kIOReturnSuccess);
-        IOSimpleLockUnlock(swapZeroLock);
         return status;
     }
 
     static void resetSwapZeroLayer()
     {
-        if (!swapZeroLock)
-            return;
-        IOSimpleLockLock(swapZeroLock);
         swapZeroLayer.reset();
-        IOSimpleLockUnlock(swapZeroLock);
     }
 
     void installSwapSubmitFilter()
     {
         if (patchedLegacyVtable)
             return;
-        if (!swapZeroLock) {
-            swapZeroLock = IOSimpleLockAlloc();
-            if (!swapZeroLock)
-                return;
-        }
         const uintptr_t *table = *reinterpret_cast<uintptr_t *const *>(this);
         uintptr_t *raw = static_cast<uintptr_t *>(IOMalloc((kLegacyVtableSlots + 2) * sizeof(uintptr_t)));
         if (!raw)
@@ -778,10 +764,6 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
             IOFree(patchedLegacyVtable - 2, (kLegacyVtableSlots + 2) * sizeof(uintptr_t));
             patchedLegacyVtable = nullptr;
             originalLegacyVtable = nullptr;
-        }
-        if (swapZeroLock) {
-            IOSimpleLockFree(swapZeroLock);
-            swapZeroLock = nullptr;
         }
     }
 
@@ -842,6 +824,17 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     uint64_t validatedAt[kValidated] = {};  // when each was first accepted (mach time): the client's submission
     FrameTimeline validatedTl[kValidated] = {};
     uint32_t validatedEvicted = 0, validatedStale = 0;  // the gate's
+    static inline uint32_t validatedCount = 0;
+    static inline uint64_t oneSecondTicks = 0, lastPruneFrame = 0;
+
+    struct ValidatedLayers {
+        bool valid;
+        bool present[native_planes::kLayers];
+        OSObject *surfaces[native_planes::kLayers];
+        native_planes::Layer layers[native_planes::kLayers];
+    };
+
+    static inline ValidatedLayers validatedLayers[kValidated] = {};
 
     // validateSwap runs on the client's thread outside the family's gate (21H461's and 24B119's swap_submit call it
     // between their gated actions), so its verdicts reach the table through this ring and only the gate touches the
@@ -850,7 +843,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     // publishes it, and the gate drains the slots in ticket order. Static: the instance is at the 16 KiB a kalloc_type
     // class may have.
     // What the gate needs of a verdict: the swap, when it came, the decision and the refusal's reason, the swap's
-    // timeline, and an accepted overlay swap's layers for the gate's bandwidth admission.
+    // timeline, and an accepted overlay swap's layers for the gate's bandwidth admission and plane selection.
     struct Verdict {
         const OriginalLegacySwapRequest *request;
         uint64_t at;
@@ -858,6 +851,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         uint32_t reason, width, height;
         FrameTimeline tl;
         bool present[native_planes::kLayers];
+        OSObject *surfaces[native_planes::kLayers];
         native_planes::Layer layers[native_planes::kLayers];
     };
 
@@ -867,23 +861,55 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     static inline uint32_t verdictsDropped = 0;      // the publishers': verdicts a full ring dropped
     static inline uint32_t verdictsDroppedSeen = 0;  // the gate's
 
+    int validatedIndex(const OriginalLegacySwapRequest *request) const
+    {
+        if (!request || !validatedCount)
+            return -1;
+        for (unsigned i = 0; i < kValidated; ++i) {
+            if (validated[i] == request)
+                return static_cast<int>(i);
+        }
+        return -1;
+    }
+
+    const native_planes::Layer *validatedLayerOf(const OriginalLegacySwapRequest *request, unsigned i,
+                                                 OSObject *surface) const
+    {
+        const int slot = validatedIndex(request);
+        if (slot < 0 || !validatedLayers[slot].valid || !validatedLayers[slot].present[i] ||
+            validatedLayers[slot].surfaces[i] != surface)
+            return nullptr;
+        return &validatedLayers[slot].layers[i];
+    }
+
+    void cacheValidatedLayers(const Verdict &verdict)
+    {
+        const int slot = validatedIndex(verdict.request);
+        if (slot < 0)
+            return;
+        ValidatedLayers &dst = validatedLayers[slot];
+        dst.valid = true;
+        memcpy(dst.present, verdict.present, sizeof(dst.present));
+        memcpy(dst.surfaces, verdict.surfaces, sizeof(dst.surfaces));
+        for (unsigned i = 0; i < native_planes::kLayers; ++i)
+            dst.layers[i] = verdict.layers[i];
+    }
+
     bool isValidated(const OriginalLegacySwapRequest *request) const
     {
-        if (!request)
-            return false;
-        for (const auto *entry : validated) {
-            if (entry == request)
-                return true;
-        }
-        return false;
+        return validatedIndex(request) >= 0;
     }
 
     void removeValidated(const OriginalLegacySwapRequest *request)
     {
         frameInfo->tickets.retire(request);
-        for (auto &entry : validated) {
-            if (entry == request)
-                entry = nullptr;
+        for (unsigned i = 0; i < kValidated; ++i) {
+            if (validated[i] == request) {
+                validated[i] = nullptr;
+                validatedLayers[i].valid = false;
+                if (validatedCount)
+                    --validatedCount;
+            }
         }
     }
 
@@ -896,6 +922,12 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         while (slot < kValidated && validated[slot])
             ++slot;
         if (slot == kValidated) {
+            pruneValidated(true);
+            slot = 0;
+            while (slot < kValidated && validated[slot])
+                ++slot;
+        }
+        if (slot == kValidated) {
             slot = 0;
             for (unsigned i = 1; i < kValidated; ++i) {
                 if (validatedAt[i] < validatedAt[slot])
@@ -903,10 +935,14 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
             }
             ++validatedEvicted;
         }
-        if (validated[slot])
+        if (validated[slot]) {
             frameInfo->tickets.retire(validated[slot]);
+        } else {
+            ++validatedCount;
+        }
         validated[slot] = request;
         validatedAt[slot] = now;
+        validatedLayers[slot].valid = false;
         uint32_t id = 0;
         uint64_t requested = 0;
         const auto *bytes = reinterpret_cast<const unsigned char *>(request);
@@ -918,17 +954,28 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
 
     // Under the gate: entries older than a second whose swap is neither in the family's queue, nor its current swap, nor in
     // flight here (a younger one may be a swap validateSwap just accepted that the family has not queued yet).
-    void pruneValidated()
+    void pruneValidated(bool force = false)
     {
+        if (const uint32_t evicted = validatedEvicted) {
+            validatedEvicted = 0;
+            IOLog("SwitchDisplay: the accepted-swap table was full: %u entries replaced (%u stale ones dropped so "
+                  "far)\n",
+                  evicted, validatedStale);
+        }
+        if (!validatedCount)
+            return;
+        if (!force && validatedCount < kValidated / 2 && frameEnds - lastPruneFrame < 60)
+            return;
+        lastPruneFrame = frameEnds;
+        if (!oneSecondTicks)
+            nanoseconds_to_absolutetime(1000000000ULL, &oneSecondTicks);
         const OriginalLegacySwapRequest *current = nullptr;
         memcpy(&current, reinterpret_cast<const unsigned char *>(this) + swapQueueCurrent,
                sizeof(const OriginalLegacySwapRequest *));
-        uint64_t second = 0;
-        nanoseconds_to_absolutetime(1000000000ULL, &second);
         const uint64_t now = mach_absolute_time();
         for (unsigned i = 0; i < kValidated; ++i) {
             const OriginalLegacySwapRequest *&entry = validated[i];
-            if (!entry || now - validatedAt[i] < second || entry == current || entry == gpuRequest ||
+            if (!entry || now - validatedAt[i] < oneSecondTicks || entry == current || entry == gpuRequest ||
                 (copyQueued && entry == job.request))
                 continue;
             bool queued = false;
@@ -938,13 +985,10 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
                 continue;
             frameInfo->tickets.retire(entry);
             entry = nullptr;
+            validatedLayers[i].valid = false;
+            if (validatedCount)
+                --validatedCount;
             ++validatedStale;
-        }
-        if (const uint32_t evicted = validatedEvicted) {
-            validatedEvicted = 0;
-            IOLog("SwitchDisplay: the accepted-swap table was full: %u entries replaced (%u stale ones dropped so "
-                  "far)\n",
-                  evicted, validatedStale);
         }
     }
 
@@ -1101,6 +1145,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         bool tiled;  // the GPU renders it block-linear (TegraScanoutCopy.h): window A scans it so
         SwitchNativeScanout *read = nullptr;
         uint64_t allocationId = 0, allocationGeneration = 0, sourceOffset = 0;
+        addr64_t firstPa = 0;
     };
 
     DirectSlot slots[kSlots] = {};
@@ -3877,9 +3922,10 @@ public:
 #if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
         noteSurface(surface, memory);
 #endif
-        const int blockLog2 = surfaceBlockLog2(memory);
+        const addr64_t firstPa = directFirstPa(memory);
+        const int blockLog2 = surfaceBlockLog2Pa(firstPa);
         const bool tiled = blockLog2 >= 0;
-        const bool compressed = tiled && surfaceCompressed(memory);
+        const bool compressed = tiled && surfaceCompressedPa(firstPa);
         // A block-linear frame in other blocks than window A's reaches the screen only through the GPU copy, which reads
         // its layout: window A cannot scan it, nor a CPU copy take its bytes as they are.
         const bool asScanned = !tiled || blockLog2 == static_cast<int>(kScanBlockLog2);
@@ -5035,11 +5081,12 @@ public:
                 for (unsigned i = 0; !reason && i < native_planes::kLayers; ++i) {
                     if (!hasSurface[i] || !native_planes::isUi(layers[i], width, height))
                         continue;
-                    const IOMemoryDescriptor *memory = native_legacy_surface_descriptor(surfaces[i]);
-                    if (!memory || !memory->metaCast("IOMemoryDescriptor") ||
-                        !native_legacy_surface_bounds(width, height, native_legacy_surface_stride(surfaces[i]),
-                                                      native_legacy_surface_allocation(surfaces[i]),
-                                                      memory->getLength())) {
+                    const uint64_t stride = layers[i].surface.stride[0] == 0xffffffffu
+                                                ? native_legacy_surface_stride(surfaces[i])
+                                                : layers[i].surface.stride[0];
+                    if (!layers[i].surface.descriptorBytes ||
+                        !native_legacy_surface_bounds(width, height, stride, layers[i].surface.allocation,
+                                                      layers[i].surface.descriptorBytes)) {
                         reason = 4;
                         surface = surfaces[i];
                     }
@@ -5049,8 +5096,10 @@ public:
                     verdict.width = width;
                     verdict.height = height;
                     memcpy(verdict.present, hasSurface, sizeof(verdict.present));
-                    for (unsigned i = 0; i < native_planes::kLayers; ++i)
+                    for (unsigned i = 0; i < native_planes::kLayers; ++i) {
+                        verdict.surfaces[i] = hasSurface[i] ? surfaces[i] : nullptr;
                         verdict.layers[i] = layers[i];
+                    }
                 }
                 accepted = (reason == 0u);
                 if (reason == native_planes::kTransformed)
@@ -5119,6 +5168,8 @@ public:
             if (verdict.accepted) {
                 native_legacy_swap_stage(0);
                 noteSubmitted(verdict.request, verdict.at, verdict.tl);
+                if (verdict.admit)
+                    cacheValidatedLayers(verdict);
                 return;
             }
             removeValidated(verdict.request);

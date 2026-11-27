@@ -193,8 +193,10 @@ TEST(DisplayPlanesSource, PlaneSlotsHoldTheSurfaceTheyScan)
                     .before("planeNativeSlotFor(layer.surface", "planeBuildingSlots |= uint64_t(1) << unsigned(slot)"));
     const CodeText native(SourceText("../SwitchNativePlaneDisplay.h"));
     EXPECT_TRUE(native.before("switch_native_scanout_acquire(surface", "planeMapSnapshot(scanout, image)"));
-    EXPECT_TRUE(native.has("surfaceLayout(surface, block)"));
+    EXPECT_TRUE(native.has("surfaceLayout(surface, block, &scanout)"));
     const CodeText layout = Block(planes, "static const tgm_layout *surfaceLayout(");
+    EXPECT_TRUE(
+        layout.before("scanout->allocation.pages[scanout->pitchOffset / 4096]", "memory->prepare(kIODirectionOut)"));
     EXPECT_TRUE(layout.before("memory->prepare(kIODirectionOut)",
                               "memory->getPhysicalSegment(0, &length, kIOMemoryMapperNone)"));
     EXPECT_TRUE(layout.before("memory->getPhysicalSegment(0, &length, kIOMemoryMapperNone)",
