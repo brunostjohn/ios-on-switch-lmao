@@ -34,6 +34,7 @@
 #include <IOKit/IOCatalogue.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOWorkLoop.h>
+#include <kern/clock.h>
 #include <libkern/OSKextLib.h>
 #include <libkern/c++/OSArray.h>
 #include <libkern/c++/OSDictionary.h>
@@ -43,6 +44,7 @@
 #include "SwitchHID.h"
 #include "SwitchHIDFastPath.h"
 #include "SwitchHIDMotionAccess.h"
+#include "SwitchHIDTouchEvent.h"
 #include "../SwitchPower/SwitchPower.h"
 #include "../../kits/SwitchRefusal/SwitchRefusal.h"
 
@@ -79,27 +81,35 @@ constexpr uint32_t kProbeScore = 10000;  // over AppleUserHIDEventDriver's 1 and
 #define TOUCH_Y_SIZE 0x66, 0x03 /* 870: 87.0 mm */
 #endif
 static_assert(kSwitchTouchReportWidth == (SWITCH_PORTRAIT_NATIVE ? 720 : 1280), "touch descriptor X range");
-#define FINGER                                                                                                       \
-    0x05, 0x0d, 0x09, 0x22, 0xa1, 0x02,                                /* Digitizer: Finger, Collection (Logical) */ \
-        0x09, 0x42, 0x09, 0x47, 0x09, 0x34,                            /* Tip Switch, Touch Valid, Untouch */        \
-        0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x03, 0x81, 0x02,    /* 3 x 1 bit, Input (Data, Var, Abs) */       \
-        0x95, 0x05, 0x81, 0x03,                                        /* 5 bits padding */                          \
-        0x09, 0x51, 0x25, 0x09, 0x75, 0x08, 0x95, 0x01, 0x81, 0x02,    /* Contact Identifier, 0..9 */                \
-        0x05, 0x01, 0x09, 0x30, 0x26, TOUCH_X_MAX, 0x75, 0x10,         /* Generic Desktop X, 16 bits */              \
-        0x46, TOUCH_X_SIZE, 0x65, 0x11, 0x55, 0x0e, 0x81, 0x02,        /* 0 .. its millimetres, Input */             \
-        0x09, 0x31, 0x26, TOUCH_Y_MAX, 0x46, TOUCH_Y_SIZE, 0x81, 0x02, /* Y */                                       \
-        0x45, 0x00, 0x65, 0x00, 0x55, 0x00,                            /* the next finger's items: no unit */        \
+// clang-format off: one line per descriptor item group, as kDeviceMotionDescriptor reads
+#define FINGER                                                                                                          \
+    0x05, 0x0d, 0x09, 0x22, 0xa1, 0x02,                                /* Digitizer: Finger, Collection (Logical) */    \
+        0x09, 0x42, 0x09, 0x47, 0x09, 0x34, 0x09, 0x32,                /* Tip Switch, Touch Valid, Untouch, In Range */ \
+        0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x04, 0x81, 0x02,    /* 4 x 1 bit, Input (Data, Var, Abs) */          \
+        0x95, 0x04, 0x81, 0x03,                                        /* 4 bits padding */                             \
+        0x09, 0x51, 0x25, 0x09, 0x75, 0x08, 0x95, 0x01, 0x81, 0x02,    /* Contact Identifier, 0..9 */                   \
+        0x05, 0x01, 0x09, 0x30, 0x26, TOUCH_X_MAX, 0x75, 0x10,         /* Generic Desktop X, 16 bits */                 \
+        0x46, TOUCH_X_SIZE, 0x65, 0x11, 0x55, 0x0e, 0x81, 0x02,        /* 0 .. its millimetres, Input */                \
+        0x09, 0x31, 0x26, TOUCH_Y_MAX, 0x46, TOUCH_Y_SIZE, 0x81, 0x02, /* Y */                                          \
+        0x45, 0x00, 0x65, 0x00, 0x55, 0x00,                            /* the next finger's items: no unit */           \
         0xc0
 const uint8_t kTouchDescriptor[] = {
-    0x05,   0x0d,   0x09,   0x04,   0xa1,   0x01,   0x85,   0x01,  // Digitizer: Touch Screen, Collection (Application), Report ID 1
-    FINGER, FINGER, FINGER, FINGER, FINGER, FINGER, FINGER, FINGER, FINGER, FINGER, 0xc0,
+    0x05, 0x0d, 0x09, 0x04, 0xa1, 0x01, 0x85, 0x01,  // Digitizer: Touch Screen, Collection (Application), Report ID 1
+    FINGER, FINGER, FINGER, FINGER, FINGER, FINGER, FINGER, FINGER, FINGER, FINGER,
+    0x05, 0x0d, 0x09, 0x54, 0x15, 0x00, 0x25, 0x0a,  // Digitizer: Contact Count, 0..10
+    0x75, 0x08, 0x95, 0x01, 0x81, 0x02,              // 8 bits, Input (Data, Var, Abs)
+    0x09, 0x56, 0x15, 0x00, 0x27, 0xff, 0xff, 0x00,  // Relative Scan Time, 0..65535
+    0x00, 0x66, 0x01, 0x10, 0x55, 0x0c,              // SI Time (s), exponent -4 (100 us)
+    0x75, 0x10, 0x95, 0x01, 0x81, 0x02,              // 16 bits, Input (Data, Var, Abs)
+    0xc0,
 };
+// clang-format on
 #undef FINGER
 #undef TOUCH_X_MAX
 #undef TOUCH_Y_MAX
 #undef TOUCH_X_SIZE
 #undef TOUCH_Y_SIZE
-static_assert(sizeof(SwitchTouchReport) == 1 + kSwitchTouchSlots * 6, "touch report layout");
+static_assert(sizeof(SwitchTouchReport) == 1 + kSwitchTouchSlots * 6 + 3, "touch report layout");
 
 const uint8_t kButtonsDescriptor[] = {
     0x05, 0x0c, 0x09, 0x01, 0xa1, 0x01, 0x85, 0x01,  // Consumer: Consumer Control, Collection (Application), Report ID 1
@@ -406,6 +416,8 @@ class SwitchHIDDevice : public IOHIDDevice {
     const Profile *profile = nullptr;
     IOService *eventDriver = nullptr;
     bool edgeInstalled = false;
+    SwitchHIDTouchState touchState = {};
+    uint32_t edgeContacts = 0;
     SwitchHIDFeatureHandler featureHandler = nullptr;
     void *featureContext = nullptr;
     // Temperature sensors: their own Product and LocationID, and the copyEvent handler (SwitchHID.h).
@@ -502,6 +514,8 @@ public:
         setProperty("ProductID", static_cast<unsigned long long>(profile->productID), 32);
         setProperty("Manufacturer", "Nintendo");
         setProperty("Built-In", true);
+        if (profile == &kProfiles[kSwitchHIDTouch])
+            setProperty("ReportInterval", static_cast<unsigned long long>(kSwitchTouchReportIntervalUs), 32);
         if (profile == &kProfiles[kSwitchHIDOrientation])
             addAopPlugIn();
         return IOHIDDevice::start(provider);
@@ -552,10 +566,46 @@ public:
         }
     }
 
+    void setEdgeContacts(uint32_t contacts)
+    {
+        edgeContacts = contacts;
+    }
+
+    // Dispatches a digitizer collection directly to IOHIDEventDriver::dispatchEvent, bypassing handleReportWithTime's
+    // 60-element HID report parsing and this device's second work-loop gate. Returns false only if the one-time
+    // IOHIDEvent self-check fails, so postAt/post fall back to handleReportWithTime.
+    bool postTouchDirect(const SwitchTouchReport &report, uint64_t timestamp, IOReturn *result)
+    {
+        if (touchState.broken)
+            return false;
+        if (!eventDriver)
+            eventDriver = edge::findDriver(this);
+        if (!eventDriver) {
+            *result = kIOReturnNotReady;
+            return true;
+        }
+        OSObject *event = switch_hid_touch_build_event(report, edgeContacts, timestamp, touchState);
+        if (!event) {
+            if (touchState.broken)
+                return false;
+            *result = kIOReturnSuccess;
+            return true;
+        }
+        edge::call<void, OSObject *, IOOptionBits>(eventDriver, edge::kDispatch, event, 0);
+        event->release();
+        *result = kIOReturnSuccess;
+        return true;
+    }
+
     IOReturn post(const void *report, size_t length)
     {
         if (length != profile->reportSize)
             return kIOReturnBadArgument;
+        IOReturn directResult = kIOReturnSuccess;
+        if (profile == &kProfiles[kSwitchHIDTouch] &&
+            postTouchDirect(*static_cast<const SwitchTouchReport *>(report), mach_absolute_time(), &directResult)) {
+            return directResult;
+        }
         installEdge();
         memcpy(buffer->getBytesNoCopy(), report, length);
         return handleReport(buffer, 0 /* kIOHIDReportTypeInput */, 0);
@@ -570,6 +620,11 @@ public:
     {
         if (length != profile->reportSize)
             return kIOReturnBadArgument;
+        IOReturn directResult = kIOReturnSuccess;
+        if (profile == &kProfiles[kSwitchHIDTouch] &&
+            postTouchDirect(*static_cast<const SwitchTouchReport *>(report), timestamp, &directResult)) {
+            return directResult;
+        }
         installEdge();
         memcpy(buffer->getBytesNoCopy(), report, length);
         // Under the work loop's gate, as handleReport's WORKLOOP_LOCK takes it (runAction closes and opens it).
@@ -982,6 +1037,8 @@ void switch_hid_set_feature_handler(IOService *device, SwitchHIDFeatureHandler h
 void switch_hid_set_edge_contacts(IOService *device, uint32_t contacts)
 {
     edge::contacts = contacts;
+    if (auto *hid = OSDynamicCast(SwitchHIDDevice, device))
+        hid->setEdgeContacts(contacts);
 }
 
 // NOLINTEND(misc-const-correctness)

@@ -34,6 +34,7 @@ enum SwitchHIDKind : unsigned {
 // the landscape frame iOS draws in (0..1279 left to right, 0..719 top to bottom); the descriptor's logical range
 // is the whole panel, so backboardd scales them to whatever logical size the UI uses.
 constexpr unsigned kSwitchTouchSlots = 10, kSwitchTouchWidth = 1280, kSwitchTouchHeight = 720;
+constexpr uint32_t kSwitchTouchReportIntervalUs = 8000;
 // Portrait-native (SwitchPortrait.h): reports carry the panel's own frame instead, the one iOS is given as its screen
 // (0..719 left to right, 0..1279 top to bottom of the portrait panel): landscape (x, y) is reported as (y, 1279 - x),
 // the display's own mapping. backboardd's digitizer-to-panel rotation is 0, and iOS turns touches into its landscape
@@ -43,7 +44,8 @@ constexpr unsigned kSwitchTouchReportWidth = SWITCH_PORTRAIT_NATIVE ? kSwitchTou
 
 enum : unsigned {
     kSwitchTouchTip = 1u << 0,
-    kSwitchTouchValid = 1u << 1
+    kSwitchTouchValid = 1u << 1,
+    kSwitchTouchInRange = 1u << 3
 };  // bit 2 (Untouch) stays 0
 
 struct __attribute__((packed)) SwitchTouchSlot {
@@ -54,6 +56,8 @@ struct __attribute__((packed)) SwitchTouchSlot {
 struct __attribute__((packed)) SwitchTouchReport {
     uint8_t id;  // 1
     SwitchTouchSlot slot[kSwitchTouchSlots];
+    uint8_t contactCount;
+    uint16_t scanTime;  // 100 us units
 };
 
 // Buttons, report ID 1: one bit per Consumer usage (Power 0x30, Volume Increment 0xE9, Volume Decrement 0xEA, Menu 0x40:

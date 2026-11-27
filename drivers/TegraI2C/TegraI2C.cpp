@@ -171,6 +171,7 @@ struct Bus {
     bool dmaOn, dmaFailed;
     bool chainOn;     // chained write-then-read and drain-at-end short reads, after the owner's check passed
     bool dmaUnheard;  // a wait ended because the channel's first end of count never reached the CPU
+    bool fifoClean;   // FIFO_CONTROL has FIFO_TX_TRIG_8 and the last transfer left both FIFOs empty (under irqLock)
     // tegra_i2c_get_counters: interrupt actions, transfers, reads by DMA.
     volatile uint32_t interrupts, transfers, dmaReads;
     // Diagnostics (tegra_i2c_describe): the last failed packet's INT_STATUS and PACKET_TRANSFER_STATUS, as the action
@@ -233,6 +234,8 @@ bool multiMasterBus(unsigned bus)
 // Register handshakes without an interrupt of their own (FIFO flush, config load): a few microseconds.
 bool waitClear(const Bus &b, uint32_t reg, uint32_t bits, uint32_t us)
 {
+    if ((r32(b.regs, reg) & bits) == 0u)
+        return true;
     for (const uint64_t end = nowUs() + us; r32(b.regs, reg) & bits;) {
         if (nowUs() > end)
             return (r32(b.regs, reg) & bits) == 0u;
@@ -492,6 +495,7 @@ int configure(unsigned bus, Bus &b)
     w32(b.regs, SL_CNFG, r32(b.regs, SL_CNFG) | SL_CNFG_NACK | SL_CNFG_NEWSL);
     w32(b.regs, SL_ADDR1, 0xfc);
     w32(b.regs, SL_ADDR2, 0);
+    b.fifoClean = false;
     w32(b.regs, FIFO_CONTROL, FIFO_FLUSH);
     if (!waitClear(b, FIFO_CONTROL, FIFO_FLUSH, 2000) || !loadConfig(b)) {
         IOLog("TegraI2C: I2C%u config load timed out\n", bus);
@@ -567,12 +571,26 @@ int bringUp(unsigned bus, Bus &b)
     return configure(bus, b);
 }
 
-// Flush the FIFOs, then queue one packet: header and, for a write, as much payload as fits.
+// Avoids a FIFO_FLUSH + waitClear spin-poll between consecutive clean transfers when FIFO_CONTROL already holds
+// FIFO_TX_TRIG_8 and hardware reports both FIFOs empty (TX free == kFifoWords, RX full == 0). Caller holds irqLock.
+bool ensureFifosClean(Bus &b)
+{
+    if (b.fifoClean && r32(b.regs, FIFO_STATUS) == (kFifoWords << 4))
+        return true;
+    w32(b.regs, FIFO_CONTROL, FIFO_TX_TRIG_8 | FIFO_FLUSH);
+    if (!waitClear(b, FIFO_CONTROL, FIFO_FLUSH, 2000)) {
+        b.fifoClean = false;
+        return false;
+    }
+    b.fifoClean = true;
+    return true;
+}
+
+// Flush the FIFOs if needed, then queue one packet: header and, for a write, as much payload as fits.
 int startPacket(Bus &b, uint8_t addr, const uint8_t *out, uint8_t *in, size_t len, bool repeatStart)
 {
     w32(b.regs, INT_STATUS, r32(b.regs, INT_STATUS));
-    w32(b.regs, FIFO_CONTROL, FIFO_TX_TRIG_8 | FIFO_FLUSH);
-    if (!waitClear(b, FIFO_CONTROL, FIFO_FLUSH, 2000))
+    if (!ensureFifosClean(b))
         return TEGRA_I2C_ETIMEDOUT;
     b.tx = out;
     b.rx = in;
@@ -613,6 +631,8 @@ int packet(unsigned bus, Bus &b, uint8_t addr, const uint8_t *out, uint8_t *in, 
         result = sleepForAction(bus, b, 5000 + static_cast<uint64_t>(len + 2) * 18 * 1000000 / b.hz);
         w32(b.regs, INT_STATUS, r32(b.regs, INT_STATUS));
     }
+    if (result != TEGRA_I2C_OK)
+        b.fifoClean = false;
     b.tx = nullptr;
     b.rx = nullptr;
     IOLockUnlock(b.irqLock);
@@ -620,9 +640,9 @@ int packet(unsigned bus, Bus &b, uint8_t addr, const uint8_t *out, uint8_t *in, 
 }
 
 // A write of at most kChainMaxWrite bytes and a read after a repeated START, as one submission on a chained bus (file
-// comment): flush, both packets queued (L4T tegra_i2c_prepare_buffer: no per-packet interrupt in a multi-packet
-// transfer), errors and ALL_PACKETS_DONE unmasked, the RX request only for a PIO read longer than the RX FIFO. With
-// `dma` the read's words go by the bus's APB DMA channel (started before the headers, as L4T
+// comment): flush if needed, both packets queued (L4T tegra_i2c_prepare_buffer: no per-packet interrupt in a
+// multi-packet transfer), errors and ALL_PACKETS_DONE unmasked, the RX request only for a PIO read longer than the RX
+// FIFO. With `dma` the read's words go by the bus's APB DMA channel (started before the headers, as L4T
 // tegra_i2c_start_dma_xfer) into its buffer, and the wait also needs the channel's end of count. One budget for
 // both packets.
 int chain(unsigned bus, Bus &b, uint8_t addr, const uint8_t *out, size_t outLen, uint8_t *in, size_t inLen, bool dma)
@@ -631,8 +651,7 @@ int chain(unsigned bus, Bus &b, uint8_t addr, const uint8_t *out, size_t outLen,
     const uint32_t words = static_cast<uint32_t>((inLen + 3) / 4);
     IOLockLock(b.irqLock);
     w32(b.regs, INT_STATUS, r32(b.regs, INT_STATUS));
-    w32(b.regs, FIFO_CONTROL, FIFO_TX_TRIG_8 | FIFO_FLUSH);
-    int result = waitClear(b, FIFO_CONTROL, FIFO_FLUSH, 2000) ? TEGRA_I2C_OK : TEGRA_I2C_ETIMEDOUT;
+    int result = ensureFifosClean(b) ? TEGRA_I2C_OK : TEGRA_I2C_ETIMEDOUT;
     if (result == TEGRA_I2C_OK) {
         b.tx = nullptr;
         b.rx = dma ? nullptr : in;
@@ -673,6 +692,8 @@ int chain(unsigned bus, Bus &b, uint8_t addr, const uint8_t *out, size_t outLen,
             b.dmaReads = b.dmaReads + 1;
         }
     }
+    if (result != TEGRA_I2C_OK)
+        b.fifoClean = false;
     b.tx = nullptr;
     b.rx = nullptr;
     b.dmaActive = false;
@@ -718,6 +739,7 @@ bool openDma(const BusInfo &info, Bus &b, char *why, size_t whySize)
 // the same budget packet() gives the interrupt. The caller holds irqLock when it could take it.
 int pollPacket(Bus &b, uint8_t addr, const uint8_t *out, uint8_t *in, size_t len, bool repeatStart)
 {
+    b.fifoClean = false;
     int result = startPacket(b, addr, out, in, len, repeatStart);
     const uint64_t end = nowUs() + 5000 + static_cast<uint64_t>(len + 2) * 18 * 1000000 / b.hz;
     while (result == TEGRA_I2C_OK) {
@@ -732,6 +754,7 @@ int pollPacket(Bus &b, uint8_t addr, const uint8_t *out, uint8_t *in, size_t len
             result = TEGRA_I2C_ETIMEDOUT;
     }
     w32(b.regs, INT_STATUS, r32(b.regs, INT_STATUS));
+    b.fifoClean = false;
     b.tx = nullptr;
     b.rx = nullptr;
     return result;
@@ -742,6 +765,7 @@ int pollPacket(Bus &b, uint8_t addr, const uint8_t *out, uint8_t *in, size_t len
 void recover(unsigned bus, Bus &b)
 {
     IOLockLock(b.irqLock);
+    b.fifoClean = false;
     if (b.owned && !b.multiMaster) {
         clockEnable(kBus[bus - 1]);
         IOLockUnlock(b.irqLock);
@@ -875,6 +899,7 @@ extern "C" void tegra_i2c_resume(void)
         }
         if (b.irq)
             b.irq->enable();
+        b.fifoClean = false;
         const int result = adopted ? TEGRA_I2C_OK : configure(bus, b);
         if (adopted) {
             w32(b.regs, CNFG,

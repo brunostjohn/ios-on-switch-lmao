@@ -77,3 +77,19 @@ TEST(SwitchTouchSource, TimedPostsTakeTheTablesCallOnEveryBuild)
         EXPECT_THAT(table, Not(HasSubstr("\"handleReportWithTime\": \"0x0\""))) << kind;
     }
 }
+
+TEST(SwitchTouchSource, DirectTouchEventContainsBuildOffsetsAndNoHotPathLogs)
+{
+    const std::string source = SourceText("../SwitchHIDTouchEvent.cpp");
+    EXPECT_THAT(source, HasSubstr("SWITCH_IPSW_KIND_21H461"));
+    EXPECT_THAT(source, HasSubstr("SWITCH_IPSW_KIND_24B119"));
+    EXPECT_THAT(source, HasSubstr("#error"));
+    const std::string alloc = Body(source, "OSObject *allocDigitizerEvent(");
+    ASSERT_FALSE(alloc.empty());
+    EXPECT_THAT(alloc, Not(HasSubstr("os_log")));
+    EXPECT_THAT(alloc, Not(HasSubstr("kprintf")));
+    const std::string direct = Between(SourceText("../SwitchHIDDevice.cpp"), "    bool postTouchDirect(", "\n    }\n");
+    ASSERT_FALSE(direct.empty());
+    EXPECT_THAT(direct, Not(HasSubstr("runAction")));
+    EXPECT_THAT(direct, Not(HasSubstr("IOLog")));
+}

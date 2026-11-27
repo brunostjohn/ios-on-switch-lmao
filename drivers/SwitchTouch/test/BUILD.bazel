@@ -36,6 +36,7 @@ host_library(
         "//drivers/NativeMobileDisplay:SwitchPortrait.h",
         "//drivers/SwitchPower:SwitchPower.h",
         "//drivers/SwitchTouch:SwitchHID.h",
+        "//drivers/SwitchTouch:SwitchHIDTouchEvent.h",
         "//drivers/SwitchTouch:SwitchTouch.h",
         "//drivers/SwitchTouch:SwitchTouchFilter.h",
         "//drivers/SwitchTouch:SwitchTouchTrace.h",
@@ -97,6 +98,7 @@ host_test(
     srcs = ["switch_touch_source_test.cpp"],
     data = [
         "//drivers/SwitchTouch:SwitchHIDDevice.cpp",
+        "//drivers/SwitchTouch:SwitchHIDTouchEvent.cpp",
         "//drivers/SwitchTouch:SwitchTouch.cpp",
         "//kits/SwitchABI:kinds/21H461/IOHIDDevice.json",
         "//kits/SwitchABI:kinds/24B119/IOHIDDevice.json",
@@ -126,6 +128,16 @@ host_test(
 host_test(
     name = "switch_touch_trace_test",
     srcs = ["switch_touch_trace_test.cpp"],
+    deps = [
+        ":headers",
+        ":kernel",
+    ],
+)
+
+host_test(
+    name = "switch_hid_touch_event_test",
+    srcs = ["switch_hid_touch_event_test.cpp"],
+    defines = ["SWITCH_IPSW_KIND_21H461=1"],
     deps = [
         ":headers",
         ":kernel",
