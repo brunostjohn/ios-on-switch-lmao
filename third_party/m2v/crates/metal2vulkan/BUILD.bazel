@@ -522,3 +522,22 @@ rust_test(
     },
     deps = ["//third_party/m2v/crates/metal2vulkan-devtools"],
 )
+
+rust_test(
+    name = "undef_pointer_phi_test",
+    args = ["tests::engine_arena::undef_pointer_phi::"],
+    compile_data = glob(["tests/**"]),
+    crate = ":metal2vulkan",
+    data = [
+        "//third_party/m2v:translation_test_inputs",
+        "@gpu_llvm_as//:bin/llvm-as",
+        "@spirv_tools//:spirv-dis",
+        "@spirv_tools//:spirv-val",
+    ],
+    env = {
+        "METAL2VULKAN_LLVM_AS": "$(rootpath @gpu_llvm_as//:bin/llvm-as)",
+        "METAL2VULKAN_SPIRV_DIS": "$(rootpath @spirv_tools//:spirv-dis)",
+        "METAL2VULKAN_SPIRV_VAL": "$(rootpath @spirv_tools//:spirv-val)",
+    },
+    deps = ["//third_party/m2v/crates/metal2vulkan-devtools"],
+)
