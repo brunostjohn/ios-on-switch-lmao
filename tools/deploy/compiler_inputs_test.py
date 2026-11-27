@@ -88,6 +88,12 @@ class CompilerInputsTest(unittest.TestCase):
                 deploy._checked(args, mock.Mock())
             resolve.assert_not_called()
 
+    def test_missing_hwtest_in_package_is_refused_cleanly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with self.assertRaisesRegex(ValueError, 'does not include SwitchHWTest.app'):
+                deploy.compiler_inputs.load(root, root, '24B119')
+
 
 if __name__ == '__main__':
     unittest.main()

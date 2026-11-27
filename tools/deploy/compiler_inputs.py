@@ -14,6 +14,8 @@ def load(source: Path, package: Path, build: str) -> dict[str, bytes]:
     if build != '24B119':
         raise ValueError('these compiler inputs require the 24B119 development build')
     executable = package / 'overlay/Applications/SwitchHWTest.app/SwitchHWTest'
+    if not executable.is_file():
+        raise ValueError(f'{package} does not include SwitchHWTest.app')
     result = {}
     with executable.open('rb') as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as app:
         for state in STATES:
