@@ -51,12 +51,12 @@ void TegraSMMURamViewEnv::flush(uint32_t asid, const switch_smmu_table_flush *ta
     switch_smmu_flush_tables(asid, tables, count);
 }
 
-bool TegraSMMURamView::init(uint32_t asidLow, uint32_t asidHigh)
+bool TegraSMMURamView::init(uint32_t asidLow, uint32_t asidHigh, bool needLock)
 {
-    if (lock_)
+    if (ready_)
         return true;
-    IOLock *lock = IOLockAlloc();
-    if (!lock || !switch_dma_alloc(&low_, TegraSMMUDomain::kPage) ||
+    IOLock *lock = needLock ? IOLockAlloc() : nullptr;
+    if ((needLock && !lock) || !switch_dma_alloc(&low_, TegraSMMUDomain::kPage) ||
         !switch_dma_alloc(&high_, TegraSMMUDomain::kPage) ||
         !core_.init(&env_, asidLow, reinterpret_cast<uint32_t *>(low_.va), low_.pa, asidHigh,
                     reinterpret_cast<uint32_t *>(high_.va), high_.pa)) {
@@ -67,6 +67,7 @@ bool TegraSMMURamView::init(uint32_t asidLow, uint32_t asidHigh)
         return false;
     }
     lock_ = lock;
+    ready_ = true;
     return true;
 }
 
@@ -74,7 +75,7 @@ int TegraSMMURamView::attach(uint32_t asidReg, uint32_t translationReg, uint32_t
                              uint32_t asid2, uint32_t ptb2, char *line, size_t size)
 {
     const uint32_t fault = tegra_smmu_fault_ptb();
-    if (!lock_ || !fault) {
+    if (!ready_ || !fault) {
         snprintf(line, size, "no memory for the view's directories or the fault directory");
         return -1;
     }
@@ -87,7 +88,7 @@ int TegraSMMURamView::attach(uint32_t asidReg, uint32_t translationReg, uint32_t
 int TegraSMMURamView::attachNarrow(uint32_t asidReg, uint32_t translationReg, uint32_t translationBits, char *line,
                                    size_t size)
 {
-    if (!lock_) {
+    if (!ready_) {
         snprintf(line, size, "no memory for the view's directories");
         return -1;
     }
@@ -97,29 +98,32 @@ int TegraSMMURamView::attachNarrow(uint32_t asidReg, uint32_t translationReg, ui
 bool TegraSMMURamView::reserveTables(uint64_t limit)
 {
     using Core = TegraSMMUIdentityCore<TegraSMMURamViewEnv>;
-    IOLockLock(lock_);
-    env_.chunkTables =
-        static_cast<uint32_t>(((limit < Core::kRamEnd ? limit : Core::kRamEnd) - Core::kRamBase) / Core::kSpan);
-    const bool made = core_.makeTables(limit);
-    env_.chunkTables = TegraSMMURamViewEnv::kChunkTables;
-    core_.commit();
-    IOLockUnlock(lock_);
+    bool made = false;
+    locked([&](auto &core) {
+        env_.chunkTables =
+            static_cast<uint32_t>(((limit < Core::kRamEnd ? limit : Core::kRamEnd) - Core::kRamBase) / Core::kSpan);
+        made = core.makeTables(limit);
+        env_.chunkTables = TegraSMMURamViewEnv::kChunkTables;
+        core.commit();
+    });
     return made;
 }
 
 bool TegraSMMURamView::hold(uint64_t pa, uint64_t bytes)
 {
-    IOLockLock(lock_);
-    const bool held = core_.hold(pa, bytes);
-    IOLockUnlock(lock_);
+    bool held = false;
+    locked([&](auto &core) {
+        held = core.hold(pa, bytes);
+    });
     return held;
 }
 
 void TegraSMMURamView::release(uint64_t pa, uint64_t bytes)
 {
-    IOLockLock(lock_);
-    const bool released = core_.release(pa, bytes);
-    IOLockUnlock(lock_);
+    bool released = false;
+    locked([&](auto &core) {
+        released = core.release(pa, bytes);
+    });
     if (!released)
         panic("TegraSMMU: ASID %u: release of %#llx + %#llx, a page of which has no holder", core_.halves[0].asid,
               static_cast<unsigned long long>(pa), static_cast<unsigned long long>(bytes));
@@ -127,34 +131,34 @@ void TegraSMMURamView::release(uint64_t pa, uint64_t bytes)
 
 void TegraSMMURamView::commit()
 {
-    IOLockLock(lock_);
-    core_.commit();
-    IOLockUnlock(lock_);
+    locked([](auto &core) {
+        core.commit();
+    });
 }
 
 bool TegraSMMURamView::holdPages(const uint64_t *pages, uint32_t count)
 {
-    IOLockLock(lock_);
     uint32_t held = 0;
-    while (held < count && core_.hold(pages[held], TegraSMMUDomain::kPage))
-        ++held;
-    if (held < count) {
-        for (uint32_t i = 0; i < held; ++i)
-            (void)core_.release(pages[i], TegraSMMUDomain::kPage);
-    }
-    core_.commit();
-    IOLockUnlock(lock_);
+    locked([&](auto &core) {
+        while (held < count && core.hold(pages[held], TegraSMMUDomain::kPage))
+            ++held;
+        if (held < count) {
+            for (uint32_t i = 0; i < held; ++i)
+                (void)core.release(pages[i], TegraSMMUDomain::kPage);
+        }
+        core.commit();
+    });
     return held == count;
 }
 
 void TegraSMMURamView::releasePages(const uint64_t *pages, uint32_t count)
 {
-    IOLockLock(lock_);
     bool released = true;
-    for (uint32_t i = 0; i < count; ++i)
-        released &= core_.release(pages[i], TegraSMMUDomain::kPage);
-    core_.commit();
-    IOLockUnlock(lock_);
+    locked([&](auto &core) {
+        for (uint32_t i = 0; i < count; ++i)
+            released &= core.release(pages[i], TegraSMMUDomain::kPage);
+        core.commit();
+    });
     if (!released)
         panic("TegraSMMU: ASID %u: release of %u pages from %#llx, one of which has no holder", core_.halves[0].asid,
               count, static_cast<unsigned long long>(count ? pages[0] : 0));

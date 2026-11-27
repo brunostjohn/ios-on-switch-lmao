@@ -7483,7 +7483,6 @@ done:
 #ifndef XNU_OWNER_DATA_VOLUME_UUID
 #error Supply the observed scratch volume UUID for the IOKit backend
 #endif
-extern int native_ram_block_volume_seed(const char *, dev_t *, char *, size_t, uint64_t *, uint64_t *, uint8_t *);
 #if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
 #include "storage/block_backend.h"
 #include <sys/fcntl.h>
@@ -7618,10 +7617,11 @@ native_owner_data_prepare(proc_t p, user_addr_t scratch)
 			(void)msleep((void *)&native_owner_data_stage, NULL, PWAIT, "switchData", &interval);
 		}
 		if (!switch_raw && size != UINT64_C(17179869184)) goto done;
-	} else
+	}
+#else
+	error = ENOENT;
+	goto done;
 #endif
-	if (!native_ram_block_volume_seed(XNU_OWNER_DATA_VOLUME_UUID, &device, device_path,
-	    sizeof(device_path), &base, &size, native_owner_data_seed_sha256)) { error = ENOENT; goto done; }
 	/* Logical capacity is independent of the optional RAM seed representation. */
 	if (!size || size > UINT64_C(0x10000000000) || (size & 4095)) goto done;
 #else

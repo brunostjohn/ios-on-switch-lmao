@@ -49,7 +49,6 @@ void stateLoadAfterItsEngineWentOff()
 {
     gAhb = switch_mmio_map(kAhbArbPA, 0x1000);
     gMc = switch_mmio_map(kMcPA, 0x1000);
-    gLoop = IOWorkLoop::workLoop();
     gQueue = IOLockAlloc();
     ASSERT_TRUE(engineUp(gEngines[0]));
     ASSERT_TRUE(engineUp(gEngines[1]));
@@ -74,7 +73,6 @@ void engineUpOnly(unsigned index)
 {
     gAhb = switch_mmio_map(kAhbArbPA, 0x1000);
     gMc = switch_mmio_map(kMcPA, 0x1000);
-    gLoop = IOWorkLoop::workLoop();
     gQueue = IOLockAlloc();
     ASSERT_TRUE(engineUp(gEngines[index]));
 }
@@ -184,4 +182,74 @@ void chunkedInPlaceAesAndConditionWakeup()
 TEST(TegraSEBringUp, ChunkedInPlaceAesAndConditionWakeup)
 {
     switch_ios::test::ExpectPassesInFreshProcess(chunkedInPlaceAesAndConditionWakeup);
+}
+
+namespace {
+void bootSkipsBounceBuffersAndDigestHook()
+{
+    ASSERT_TRUE(se_model::finishes([] {
+        seThread(nullptr, THREAD_AWAKENED);
+    }));
+    ASSERT_TRUE(gReady);
+    for (unsigned i = 0; i < kEngines; ++i) {
+        EXPECT_EQ(gEngines[i].bounceIn.va, nullptr);
+        EXPECT_EQ(gEngines[i].bounceOut.va, nullptr);
+        EXPECT_EQ(gSmmuOwnedAdded[i], 0u);
+    }
+    EXPECT_EQ(switch_digest_compress_hook, nullptr);
+}
+
+void inPlaceAndAliasedCbcDecryptPreservesIv()
+{
+    ASSERT_TRUE(se_model::finishes([] {
+        seThread(nullptr, THREAD_AWAKENED);
+    }));
+    ASSERT_TRUE(gReady);
+    gAlg[CBC].on = true;
+    se_model::engines[0].fillOut = 0xaa;
+    se_model::engines[1].fillOut = 0xaa;
+
+    switch_dma_buffer buf;
+    ASSERT_TRUE(switch_dma_alloc(&buf, 4096, 0, 0));
+    uint8_t expectedIv[16];
+    for (unsigned i = 0; i < 16; ++i)
+        expectedIv[i] = static_cast<uint8_t>(0x10 + i);
+    memset(buf.va, 0x55, 4096);
+    memcpy(buf.va + 4096 - 16, expectedIv, 16);
+
+    uint8_t iv[16] = {};
+    gForced[0] = current_thread();
+    forceOnly(&gEngines[0]);
+    EXPECT_EQ(tegra_se_aes(TEGRA_SE_CBC, false, kKey, 16, iv, buf.va, buf.va, 4096), 0);
+    EXPECT_EQ(memcmp(iv, expectedIv, 16), 0);
+    EXPECT_EQ(buf.va[4096 - 1], 0xaa);
+    EXPECT_NE(gEngines[0].bounceIn.va, nullptr);
+    EXPECT_NE(gEngines[0].bounceOut.va, nullptr);
+    EXPECT_EQ(gSmmuOwnedAdded[0], 2u);
+
+    std::vector<uint8_t> aliasMirror(4096, 0x77);
+    memcpy(aliasMirror.data() + 4096 - 16, expectedIv, 16);
+    se_model::aliases.push_back({reinterpret_cast<uintptr_t>(aliasMirror.data()), static_cast<uint32_t>(buf.pa), 4096});
+    memset(buf.va, 0x77, 4096);
+    memcpy(buf.va + 4096 - 16, expectedIv, 16);
+    memset(iv, 0, sizeof iv);
+    EXPECT_EQ(tegra_se_aes(TEGRA_SE_CBC, false, kKey, 16, iv, aliasMirror.data(), buf.va, 4096), 0);
+    EXPECT_EQ(memcmp(iv, expectedIv, 16), 0);
+    EXPECT_EQ(buf.va[4096 - 1], 0xaa);
+
+    forceOnly(nullptr);
+    gForced[0] = nullptr;
+    se_model::aliases.clear();
+    switch_dma_free(&buf);
+}
+}  // namespace
+
+TEST(TegraSEBringUp, BootSkipsBounceBuffersAndDigestHook)
+{
+    switch_ios::test::ExpectPassesInFreshProcess(bootSkipsBounceBuffersAndDigestHook);
+}
+
+TEST(TegraSEBringUp, InPlaceAndAliasedCbcDecryptPreservesIv)
+{
+    switch_ios::test::ExpectPassesInFreshProcess(inPlaceAndAliasedCbcDecryptPreservesIv);
 }

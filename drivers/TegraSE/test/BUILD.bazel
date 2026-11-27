@@ -6,17 +6,19 @@ lint_files()
 host_test(
     name = "tegra_se_source_test",
     srcs = ["tegra_se_source_test.cpp"],
-    data = ["//drivers/TegraSE:TegraSE.cpp"],
+    data = [
+        "//drivers/TegraSE:TegraSE.cpp",
+        "//drivers/TegraSE:TegraSESmmu.cpp",
+    ],
 )
 
 host_shims(
     name = "kernel",
     headers = [
         "IOKit/IOBufferMemoryDescriptor.h",
-        "IOKit/IOFilterInterruptEventSource.h",
         "IOKit/IOLib.h",
         "IOKit/IOLocks.h",
-        "IOKit/IOWorkLoop.h",
+        "IOKit/IOService.h",
         "corecrypto/ccdigest.h",
         "corecrypto/ccmode_impl.h",
         "kern/clock.h",

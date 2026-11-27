@@ -46,7 +46,6 @@ FOREIGN_DIRS = ["linux/", "nouveau/"]
 # Generated headers a driver's flags name ({build}/<dir>) -> the target in the tree package that brings them.
 GENERATED_HEADERS = {
     "storage-abi": "//{}:gen_storage_abi".format(KERNEL_PACKAGE),
-    "native-ram-block": "//{}:gen_native_data_seed".format(KERNEL_PACKAGE),
     "ipsw-volumes": "//{}:gen_ipsw_volumes".format(KERNEL_PACKAGE),
 }
 
