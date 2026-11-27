@@ -62,7 +62,7 @@ nvk_cbuf_binding_for_stage(mesa_shader_stage stage, bool has_task_shader)
    return stage;
 }
 
-enum ENUM_PACKED nvk_cbuf_type {
+enum ENUM_PACKED nvk_cbuf_type SWITCH_ENUM_U8 {
    NVK_CBUF_TYPE_INVALID = 0,
    NVK_CBUF_TYPE_ROOT_DESC,
    NVK_CBUF_TYPE_SHADER_DATA,

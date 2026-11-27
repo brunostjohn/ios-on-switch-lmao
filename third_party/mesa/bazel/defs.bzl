@@ -14,13 +14,30 @@ meson build directory next to the source tree that main's dylibs were built in.
 
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("//kernel/rules:common.bzl", "XCODE_EXECUTION")
-load(":flags.bzl", "MESA_CPP_ARGS", "MESA_C_ARGS", "MESA_PRE_ARGS")
+load(
+    ":flags.bzl",
+    "MESA_CPP_ARGS",
+    "MESA_CPP_ARGS_LINUX",
+    "MESA_CPP_ARGS_WINDOWS",
+    "MESA_C_ARGS",
+    "MESA_C_ARGS_LINUX",
+    "MESA_C_ARGS_WINDOWS",
+    "MESA_PRE_ARGS",
+    "MESA_PRE_ARGS_LINUX",
+    "MESA_PRE_ARGS_WINDOWS",
+)
 
 MESA = "third_party/mesa"
 
-# Mesa's targets only build in NVK's configuration (mesa_platform: a :user platform); `bazel build //...` in the host
-# configuration skips them. Its tools (the generators' py_binary targets, the proc-macros) build for the host.
-MESA_ONLY = ["//bazel/platforms:user"]
+# Targets tied to NVK's Mach-O configuration (:user platforms, Rust 1.96.1).
+MESA_USER_ONLY = ["//bazel/platforms:user"]
+
+# Mesa's C/genrule/rlib targets build in NVK's configuration (:user) and on desktop/host platforms, never in the kernel.
+# Every Mesa internal target is also tagged `manual` so host `bazel build //...` skips them unless depended on.
+MESA_ONLY = select({
+    "//bazel/platforms:kernel": ["@platforms//:incompatible"],
+    "//conditions:default": [],
+})
 
 # Mesa's own files in a package: never ios-on-switch-lmao's to format or lint (lint_files(dirs = [], exclude = ...)).
 MESA_LINT_EXCLUDE = [
@@ -49,14 +66,20 @@ MESA_PY_DEPS = [
 ]
 
 # meson's buildtype and b_ndebug arguments, which it puts after a target's include directories and visibility: the
-# debug profile is today's NVK (buildtype=release, b_ndebug=true, no LTO; //bazel:profile); release adds full LTO.
+# debug profile is today's NVK (buildtype=release, b_ndebug=true, no LTO; //bazel:profile); release adds full LTO
+# only for NVK's Darwin :user builds (desktop links clang C archives with rust-lld, which rejects foreign LTO bitcode).
 _HEAD = {
     "c": ["-DNDEBUG", "-Wall", "-Winvalid-pch", "-std=c11", "-O3"],
     "cxx": ["-DNDEBUG", "-Wall", "-Winvalid-pch", "-std=c++17", "-O3"],
 }
 
+_HEAD_WINDOWS = {
+    "c": ["/DNDEBUG", "/std:c11", "/O2"],
+    "cxx": ["/DNDEBUG", "/std:c++17", "/O2"],
+}
+
 _PROFILE = select({
-    "//bazel:release": ["-flto"],
+    "//third_party/mesa/bazel:darwin_user_release": ["-flto"],
     "//conditions:default": [],
 })
 
@@ -72,28 +95,48 @@ _PREFIX_MAPS = [
     "-fmacro-prefix-map=$(BINDIR)/{}/=".format(MESA),
 ]
 
+_PREFIX_MAPS_WINDOWS = [
+    "/clang:-fmacro-prefix-map={}/=../mesa/".format(MESA),
+    "/clang:-fmacro-prefix-map=$(BINDIR)/{}/=".format(MESA),
+]
+
 def _shell(flag):
     """copts are Bourne-tokenized: quote a flag that carries quotes (-DPACKAGE_VERSION="27.0.0-devel")."""
     if '"' in flag or "'" in flag or " " in flag:
         return "'" + flag.replace("'", "'\\''") + "'"
     return flag
 
-def _include(directory):
-    """The -I for one of meson's include directories.
+def _include(directory, prefix = "-I"):
+    """The -I (or /I on Windows) for one of meson's include directories.
 
     Args:
         directory: "src/util" a source directory, "gen:src/util" a build one ("gen:" the build root), "." Mesa's
             root, "execroot:" the execution root.
+        prefix: include flag prefix ("-I" or "/I").
 
     Returns:
         The flag.
     """
     if directory == "execroot:":
-        return "-I."
+        return prefix + "."
     if directory.startswith("gen:"):
         path = directory[len("gen:"):]
-        return "-I$(BINDIR)/{}{}".format(MESA, "/" + path if path else "")
-    return "-I{}{}".format(MESA, "" if directory == "." else "/" + directory)
+        return "{}$(BINDIR)/{}{}".format(prefix, MESA, "/" + path if path else "")
+    return "{}{}{}".format(prefix, MESA, "" if directory == "." else "/" + directory)
+
+def _win_extra(flags):
+    """Filters a target's extra compile args for clang-cl (drops GCC/Darwin-only warning and platform flags)."""
+    out = []
+    for f in flags:
+        if f == "-DNVK_HAS_DARWIN":
+            continue
+        if f.startswith("-D") or f.startswith("/"):
+            out.append(_shell(f))
+    return out
+
+def _linux_extra(flags):
+    """Filters a target's extra compile args for Linux musl (drops Darwin-only platform defines)."""
+    return [_shell(f) for f in flags if f != "-DNVK_HAS_DARWIN"]
 
 def mesa_args(lang, include_dirs, hidden = True, pre = True, proj = True, extra = []):
     """One meson target's compile arguments for one language, in meson's order.
@@ -106,31 +149,56 @@ def mesa_args(lang, include_dirs, hidden = True, pre = True, proj = True, extra 
         pre: the project's pre_args (MESA_PRE_ARGS).
         proj: the project's c_args/cpp_args (MESA_C_ARGS / MESA_CPP_ARGS) and, for C on iOS, the cross file's c_args.
         extra: the target's own arguments (c_args/cpp_args, its dependencies' compile_args), or a dict of them by
-            platform ("ios", "macos") where the two builds differ.
+            platform ("ios", "macos", optional "linux", "windows") where builds differ.
 
     Returns:
         The arguments, a list (or a list with select()s).
     """
-    head = [_include(d) for d in include_dirs]
+    unix_head = [_include(d) for d in include_dirs]
     if hidden:
-        head.append("-fvisibility=hidden")
-    args = [_shell(f) for f in head + _HEAD[lang]] + _PROFILE
+        unix_head.append("-fvisibility=hidden")
+    win_head = [_include(d, "/I") for d in include_dirs]
+    args = select({
+        "//third_party/mesa/bazel:windows": [_shell(f) for f in win_head + _HEAD_WINDOWS[lang]],
+        "//conditions:default": [_shell(f) for f in unix_head + _HEAD[lang]],
+    }) + _PROFILE
     if pre:
-        args = args + [_shell(f) for f in MESA_PRE_ARGS]
+        args = args + select({
+            "//third_party/mesa/bazel:linux": [_shell(f) for f in MESA_PRE_ARGS_LINUX],
+            "//third_party/mesa/bazel:windows": [_shell(f) for f in MESA_PRE_ARGS_WINDOWS],
+            "//conditions:default": [_shell(f) for f in MESA_PRE_ARGS],
+        })
     if proj:
-        args = args + (MESA_C_ARGS if lang == "c" else MESA_CPP_ARGS)
+        args = args + select({
+            "//third_party/mesa/bazel:linux": MESA_C_ARGS_LINUX if lang == "c" else MESA_CPP_ARGS_LINUX,
+            "//third_party/mesa/bazel:windows": MESA_C_ARGS_WINDOWS if lang == "c" else MESA_CPP_ARGS_WINDOWS,
+            "//conditions:default": MESA_C_ARGS if lang == "c" else MESA_CPP_ARGS,
+        })
         if lang == "c":
             args = args + _CROSS_C
     if type(extra) == "dict":
-        extra = select({
+        extra_sel = {
             "//third_party/mesa/bazel:ios": [_shell(f) for f in extra["ios"]],
             "//conditions:default": [_shell(f) for f in extra["macos"]],
-        })
+        }
+        if "linux" in extra:
+            extra_sel["//third_party/mesa/bazel:linux"] = [_shell(f) for f in extra["linux"]]
+        if "windows" in extra:
+            extra_sel["//third_party/mesa/bazel:windows"] = [_shell(f) for f in extra["windows"]]
+        extra = select(extra_sel)
     else:
-        extra = [_shell(f) for f in extra]
-    return args + extra + _PREFIX_MAPS
+        extra = select({
+            "//third_party/mesa/bazel:windows": _win_extra(extra),
+            "//third_party/mesa/bazel:linux": _linux_extra(extra),
+            "//conditions:default": [_shell(f) for f in extra],
+        })
+    prefix_maps = select({
+        "//third_party/mesa/bazel:windows": _PREFIX_MAPS_WINDOWS,
+        "//conditions:default": _PREFIX_MAPS,
+    })
+    return args + extra + prefix_maps
 
-def mesa_cc_library(name, sources, c_args = [], cpp_args = [], deps = [], **kwargs):
+def mesa_cc_library(name, sources, c_args = [], cpp_args = [], deps = [], tags = [], **kwargs):
     """One of meson's static_library targets: its objects, one action each, and its archive.
 
     Every Mesa header is an input, pruned per object by its .d file: a header edit recompiles only the objects that
@@ -143,6 +211,7 @@ def mesa_cc_library(name, sources, c_args = [], cpp_args = [], deps = [], **kwar
         c_args: mesa_args("c", ...).
         cpp_args: mesa_args("cxx", ...).
         deps: headers of its own package that //third_party/mesa:headers leaves out.
+        tags: extra Bazel tags.
         **kwargs: other cc_library attributes.
     """
     cc_library(
@@ -153,18 +222,19 @@ def mesa_cc_library(name, sources, c_args = [], cpp_args = [], deps = [], **kwar
         deps = ["//third_party/mesa:headers"] + deps,
         linkstatic = True,
         # Mesa's own code: never ios-on-switch-lmao's to lint (clang-tidy skips no-lint targets).
-        tags = ["no-lint"],
+        tags = ["no-lint", "manual"] + tags,
         target_compatible_with = MESA_ONLY,
         **kwargs
     )
 
-def mesa_genrule(**kwargs):
-    """A generator of one of Mesa's meson.build files (genrule), built only in NVK's configuration.
+def mesa_genrule(tags = [], **kwargs):
+    """A generator of one of Mesa's meson.build files (genrule).
 
     Args:
+        tags: extra Bazel tags.
         **kwargs: the genrule's attributes.
     """
-    native.genrule(target_compatible_with = MESA_ONLY, **kwargs)
+    native.genrule(tags = ["manual"] + tags, target_compatible_with = MESA_ONLY, **kwargs)
 
 def _mesa_file_impl(ctx):
     out = ctx.outputs.out
@@ -187,13 +257,14 @@ _mesa_file = rule(
     },
 )
 
-def mesa_file(**kwargs):
-    """A file put where meson's build directory has it (see _mesa_file), only in NVK's configuration.
+def mesa_file(tags = [], **kwargs):
+    """A file put where meson's build directory has it (see _mesa_file).
 
     Args:
+        tags: extra Bazel tags.
         **kwargs: name, src, out.
     """
-    _mesa_file(target_compatible_with = MESA_ONLY, **kwargs)
+    _mesa_file(tags = ["manual"] + tags, target_compatible_with = MESA_ONLY, **kwargs)
 
 # --- The configuration NVK builds in -----------------------------------------------------------------------------
 

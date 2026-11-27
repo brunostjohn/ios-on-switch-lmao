@@ -1037,7 +1037,11 @@ nir_variable_is_global(const nir_variable *var)
    return var->data.mode != nir_var_function_temp;
 }
 
+#ifdef _MSC_VER
+typedef enum nir_instr_type : uint8_t {
+#else
 typedef enum ENUM_PACKED {
+#endif
    nir_instr_type_alu,
    nir_instr_type_deref,
    nir_instr_type_call,
@@ -6391,7 +6395,7 @@ nir_lower_sysvals_to_varyings(nir_shader *shader,
                               const nir_lower_sysvals_to_varyings_options *options);
 
 /***/
-enum ENUM_PACKED nir_lower_tex_packing {
+enum ENUM_PACKED nir_lower_tex_packing SWITCH_ENUM_U8 {
    /** No packing */
    nir_lower_tex_packing_none = 0,
    /**

@@ -4,7 +4,11 @@
 #include "nvk_switch_stage.h"
 #include "nvk_shader.h"
 
+#ifdef _WIN32
+#define SWITCH_EXPORT
+#else
 #define SWITCH_EXPORT __attribute__((visibility("default")))
+#endif
 
 SWITCH_EXPORT bool
 switch_compile_stage_metrics(const struct switch_nvk_stage *stage,

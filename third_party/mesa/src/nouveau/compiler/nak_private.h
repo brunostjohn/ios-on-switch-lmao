@@ -24,7 +24,7 @@ struct nak_compiler {
    struct nir_shader_compiler_options nir_options;
 };
 
-enum ENUM_PACKED nak_attr {
+enum ENUM_PACKED nak_attr SWITCH_ENUM_U16 {
    /* System values A */
    NAK_ATTR_TESS_LOD_LEFT     = 0x000,
    NAK_ATTR_TESS_LOD_RIGHT    = 0x004,
@@ -108,7 +108,7 @@ uint16_t nak_varying_mesh_skew_attr_addr(const struct nak_compiler *nak,
 uint16_t nak_sysval_attr_addr(const struct nak_compiler *nak,
                               gl_system_value sysval);
 
-enum ENUM_PACKED nak_sv {
+enum ENUM_PACKED nak_sv SWITCH_ENUM_U8 {
    NAK_SV_LANE_ID          = 0x00,
    NAK_SV_VIRTCFG          = 0x02,
    NAK_SV_VIRTID           = 0x03,
@@ -147,7 +147,7 @@ struct nak_xfb_info
 nak_xfb_from_nir(const struct nak_compiler *nak,
                  const struct nir_xfb_info *nir_xfb);
 
-enum nak_nir_tex_ref_type {
+enum nak_nir_tex_ref_type SWITCH_ENUM_U8 {
    /** Indicates that this is a bindless texture */
    NAK_NIR_TEX_REF_TYPE_BINDLESS,
 
@@ -164,7 +164,7 @@ enum nak_nir_tex_ref_type {
    NAK_NIR_TEX_REF_TYPE_CBUF,
 };
 
-enum nak_nir_lod_mode {
+enum nak_nir_lod_mode SWITCH_ENUM_U8 {
    NAK_NIR_LOD_MODE_AUTO = 0,
    NAK_NIR_LOD_MODE_ZERO,
    NAK_NIR_LOD_MODE_BIAS,
@@ -173,7 +173,7 @@ enum nak_nir_lod_mode {
    NAK_NIR_LOD_MODE_BIAS_CLAMP,
 };
 
-enum nak_nir_offset_mode {
+enum nak_nir_offset_mode SWITCH_ENUM_U8 {
    NAK_NIR_OFFSET_MODE_NONE = 0,
    NAK_NIR_OFFSET_MODE_AOFFI,
    NAK_NIR_OFFSET_MODE_PER_PX,
@@ -181,6 +181,20 @@ enum nak_nir_offset_mode {
 
 PRAGMA_DIAGNOSTIC_PUSH
 PRAGMA_DIAGNOSTIC_ERROR(-Wpadded)
+#ifdef _MSC_VER
+struct nak_nir_tex_flags {
+   enum nak_nir_tex_ref_type ref_type:2;
+   enum nak_nir_lod_mode lod_mode:3;
+   enum nak_nir_offset_mode offset_mode:2;
+   bool has_z_cmpr:1;
+   bool is_sparse:1;
+   bool nodep:1;
+   bool scalar:1;
+   bool f16:1;
+   uint8_t pad:4;
+   uint16_t pad2;
+};
+#else
 struct nak_nir_tex_flags {
    enum nak_nir_tex_ref_type ref_type:2;
    enum nak_nir_lod_mode lod_mode:3;
@@ -192,6 +206,7 @@ struct nak_nir_tex_flags {
    bool f16:1;
    uint32_t pad:20;
 };
+#endif
 PRAGMA_DIAGNOSTIC_POP
 static_assert(sizeof(struct nak_nir_tex_flags) == 4,
               "nak_nir_tex_flags has no holes");
@@ -224,20 +239,31 @@ bool nak_nir_lower_kepler_shared_atomics(nir_shader *shader);
 bool nak_nir_lower_mesh_stages_shared_atomics(nir_shader *nir);
 bool nak_nir_lower_f16vec2_shared_atomics(nir_shader *nir);
 
+#ifdef _MSC_VER
+struct nak_nir_attr_io_flags {
+   bool output : 1;
+   bool patch : 1;
+   bool phys : 1;
+   uint8_t pad:5;
+   uint8_t pad1;
+   uint16_t pad2;
+};
+#else
 struct nak_nir_attr_io_flags {
    bool output : 1;
    bool patch : 1;
    bool phys : 1;
    uint32_t pad:29;
 };
+#endif
 
-enum nak_suclamp_mode {
+enum nak_suclamp_mode SWITCH_ENUM_U8 {
    NAK_SUCLAMP_MODE_STORED_DESCRIPTOR,
    NAK_SUCLAMP_MODE_PITCH_LINEAR,
    NAK_SUCLAMP_MODE_BLOCK_LINEAR,
 };
 
-enum nak_suclamp_round {
+enum nak_suclamp_round SWITCH_ENUM_U8 {
    NAK_SUCLAMP_ROUND_R1,
    NAK_SUCLAMP_ROUND_R2,
    NAK_SUCLAMP_ROUND_R4,
@@ -245,6 +271,17 @@ enum nak_suclamp_round {
    NAK_SUCLAMP_ROUND_R16,
 };
 
+#ifdef _MSC_VER
+struct nak_nir_suclamp_flags {
+   enum nak_suclamp_mode mode : 2;
+   enum nak_suclamp_round round : 3;
+   bool is_s32 : 1;
+   bool is_2d : 1;
+   uint8_t pad:1;
+   uint8_t pad1;
+   uint16_t pad2;
+};
+#else
 struct nak_nir_suclamp_flags {
    enum nak_suclamp_mode mode : 2;
    enum nak_suclamp_round round : 3;
@@ -252,6 +289,7 @@ struct nak_nir_suclamp_flags {
    bool is_2d : 1;
    uint32_t pad:25;
 };
+#endif
 
 enum nak_su_ga_offset_mode {
    NAK_SUGA_OFF_MODE_U32,
@@ -271,6 +309,15 @@ enum nak_imad_src_type {// 3 bits
    NAK_IMAD_TYPE_S16_HI,
 };
 
+#ifdef _MSC_VER
+struct nak_nir_imadsp_flags {
+   enum nak_imad_src_type src0 : 3;
+   enum nak_imad_src_type src1 : 3;
+   enum nak_imad_src_type src2 : 3;
+   uint32_t params_from_src1 : 1;
+   uint32_t pad:22;
+};
+#else
 struct nak_nir_imadsp_flags {
    enum nak_imad_src_type src0 : 3;
    enum nak_imad_src_type src1 : 3;
@@ -278,16 +325,28 @@ struct nak_nir_imadsp_flags {
    bool params_from_src1 : 1;
    uint32_t pad:22;
 };
+#endif
 
 bool nak_nir_lower_vtg_io(nir_shader *nir, const struct nak_compiler *nak);
 
-enum nak_isbe_access {
+enum nak_isbe_access SWITCH_ENUM_U8 {
    NAK_ISBE_ACCESS_MAP,
    NAK_ISBE_ACCESS_PATCH,
    NAK_ISBE_ACCESS_PRIM,
    NAK_ISBE_ACCESS_ATTR,
 };
 
+#ifdef _MSC_VER
+struct nak_nir_isbe_flags {
+   enum nak_isbe_access access : 2;
+   bool output : 1;
+   bool skew : 1;
+   bool per_primitive : 1;
+   uint8_t pad : 3;
+   uint8_t pad1;
+   uint16_t pad2;
+};
+#else
 struct nak_nir_isbe_flags {
    enum nak_isbe_access access : 2;
    bool output : 1;
@@ -295,6 +354,7 @@ struct nak_nir_isbe_flags {
    bool per_primitive : 1;
    uint32_t pad : 27;
 };
+#endif
 
 struct lower_mesh_intrinsics_ctx {
    const struct nak_compiler *nak;
@@ -415,6 +475,15 @@ enum nak_cmat_type {
    NAK_CMAT_TYPE_M16N16K16_FLOAT_SW,
 };
 
+#ifdef _MSC_VER
+struct nak_nir_cmat_mul_add_flags {
+   enum nak_cmat_type cmat_type:3;
+   enum glsl_base_type a_type:5;
+   enum glsl_base_type b_type:5;
+   uint32_t sat:1;
+   uint32_t pad:18;
+};
+#else
 struct nak_nir_cmat_mul_add_flags {
    enum nak_cmat_type cmat_type:3;
    enum glsl_base_type a_type:5;
@@ -422,6 +491,7 @@ struct nak_nir_cmat_mul_add_flags {
    bool sat:1;
    uint32_t pad:18;
 };
+#endif
 
 bool nak_nir_lower_fs_inputs(nir_shader *nir,
                              const struct nak_compiler *nak,

@@ -33,7 +33,11 @@
 
 struct nir_builder;
 
+#ifdef _MSC_VER
+typedef enum nir_search_value_type : uint8_t {
+#else
 typedef enum ENUM_PACKED {
+#endif
    nir_search_value_expression,
    nir_search_value_variable,
    nir_search_value_constant,

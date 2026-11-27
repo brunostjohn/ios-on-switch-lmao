@@ -4,6 +4,7 @@ load("@rules_cc//cc:action_names.bzl", "ACTION_NAMES")
 load("@rules_cc//cc:find_cc_toolchain.bzl", "find_cc_toolchain", "use_cc_toolchain")
 load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
 load("//kernel/rules:common.bzl", "XCODE_EXECUTION")
+load("//third_party/mesa/bazel:defs.bzl", "MESA_USER_ONLY")
 
 def _fs_depth_test_binary_impl(ctx):
     toolchain = find_cc_toolchain(ctx)
@@ -38,7 +39,7 @@ def _fs_depth_test_binary_impl(ctx):
     )
     return [DefaultInfo(executable = output)]
 
-fs_depth_test_binary = rule(
+_fs_depth_test_binary = rule(
     implementation = _fs_depth_test_binary_impl,
     attrs = {
         "archives": attr.label_list(mandatory = True),
@@ -48,3 +49,11 @@ fs_depth_test_binary = rule(
     fragments = ["cpp"],
     toolchains = use_cc_toolchain(),
 )
+
+def fs_depth_test_binary(**kwargs):
+    """Links an NVK host test binary in the Darwin :user configuration.
+
+    Args:
+        **kwargs: rule attributes.
+    """
+    _fs_depth_test_binary(target_compatible_with = MESA_USER_ONLY, **kwargs)

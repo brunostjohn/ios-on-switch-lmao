@@ -11,7 +11,11 @@
 
 #include "nvk_shader.h"
 
+#ifdef _WIN32
+#define SWITCH_EXPORT
+#else
 #define SWITCH_EXPORT __attribute__((visibility("default")))
+#endif
 
 _Thread_local bool switch_nvk_center_frag_depth_current;
 _Thread_local bool switch_nvk_texs_f16_current;

@@ -8,6 +8,7 @@ dylib was built with.
 """
 
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_proc_macro", "rust_static_library")
+load(":defs.bzl", "MESA_ONLY")
 
 # meson.build's rust_global_args and nouveau_rust_args (lint levels only; kept as meson passes them).
 RUST_GLOBAL_ARGS = [
@@ -51,12 +52,12 @@ _BUILDTYPE = [
 ]
 
 _EMBED = select({
-    "//bazel:release": ["-Cembed-bitcode=yes"],
+    "//third_party/mesa/bazel:rust_1_96_1_release": ["-Cembed-bitcode=yes"],
     "//conditions:default": ["-Cembed-bitcode=no"],
 })
 
 _LTO = select({
-    "//bazel:release": [
+    "//third_party/mesa/bazel:rust_1_96_1_release": [
         "-Clto=fat",
         "-Ccodegen-units=1",
     ],
@@ -66,16 +67,23 @@ _LTO = select({
 # Where meson's rustc saw each file (rustc applies the last matching prefix map): the standard library's sources in
 # the sysroot (rust-src) as the rustup toolchain main's dylib was built with, Mesa's sources as ../mesa/, its generated
 # files as build-directory paths.
-_REMAP = [
-    "--remap-path-prefix=$(RUST_SYSROOT)=/Users/brunostjohn/.rustup/toolchains/stable-aarch64-apple-darwin",
-    "--remap-path-prefix=third_party/mesa=../mesa",
-    "--remap-path-prefix=$(BINDIR)/third_party/mesa=",
-]
+_REMAP = select({
+    "//bazel/rust:toolchain_1.96.1": [
+        "--remap-path-prefix=$(RUST_SYSROOT)=/Users/brunostjohn/.rustup/toolchains/stable-aarch64-apple-darwin",
+        "--remap-path-prefix=third_party/mesa=../mesa",
+        "--remap-path-prefix=$(BINDIR)/third_party/mesa=",
+    ],
+    "//conditions:default": [
+        "--remap-path-prefix=$(RUST_SYSROOT)=/rustc/1.98.0",
+        "--remap-path-prefix=third_party/mesa=../mesa",
+        "--remap-path-prefix=$(BINDIR)/third_party/mesa=",
+    ],
+})
 
 _TOOLCHAINS = ["@rules_rust//rust/toolchain:current_rust_toolchain"]
 
-# NVK's crates build only with Rust 1.96.1 (mesa_platform sets it, and it carries into the proc-macros' exec
-# configuration); `bazel build //...` in the host configuration skips them.
+# Staticlibs (nak_rs, nil) build only with Rust 1.96.1 for NVK's mesa_relocatable; desktop links their _rlib targets
+# with workspace Rust 1.98.0 instead.
 _RUST_1_96_1 = select({
     "//bazel/rust:toolchain_1.96.1": [],
     "//conditions:default": ["@platforms//:incompatible"],
@@ -85,7 +93,13 @@ def _flags(metadata, lints, native_libs, cap_lints):
     flags = _BUILDTYPE + ["-Cmetadata=" + metadata]
     if cap_lints:
         flags = flags + ["--cap-lints=allow"]
-    return flags + lints + ["-lstatic:-bundle=" + lib for lib in native_libs]
+    flags = flags + lints
+    if native_libs:
+        flags = flags + select({
+            "//bazel/rust:toolchain_1.96.1": ["-lstatic:-bundle=" + lib for lib in native_libs],
+            "//conditions:default": [],
+        })
+    return flags
 
 def mesa_rust_library(
         name,
@@ -97,6 +111,7 @@ def mesa_rust_library(
         cap_lints = False,
         crate_type = "rlib",
         extra_flags = [],
+        tags = [],
         **kwargs):
     """One of meson's Rust targets (rust_abi 'rust': an rlib; 'c': a staticlib; rust.proc_macro: a proc-macro).
 
@@ -106,10 +121,11 @@ def mesa_rust_library(
         metadata: meson's -C metadata value (<target id>@@<name>@<kind>).
         edition: the crate's edition.
         lints: lint arguments (RUST_GLOBAL_ARGS, NOUVEAU_RUST_ARGS).
-        native_libs: the C archives meson names with -l static:-bundle= (recorded, never bundled).
+        native_libs: the C archives meson names with -l static:-bundle= (recorded on 1.96.1, omitted on desktop).
         cap_lints: --cap-lints allow (meson's subprojects).
         crate_type: "rlib", "staticlib" or "proc-macro".
         extra_flags: other rustc arguments meson gives the crate (--cfg ...).
+        tags: extra Bazel tags.
         **kwargs: srcs, crate_root, deps, proc_macro_deps, crate_features, compile_data.
     """
     flags = _flags(metadata, lints, native_libs, cap_lints) + extra_flags
@@ -120,7 +136,8 @@ def mesa_rust_library(
             crate_name = crate_name,
             edition = edition,
             rustc_flags = flags + ["-Cembed-bitcode=no"],
-            target_compatible_with = _RUST_1_96_1,
+            tags = ["manual"] + tags,
+            target_compatible_with = MESA_ONLY,
             **kwargs
         )
         return
@@ -130,18 +147,20 @@ def mesa_rust_library(
         crate_name = crate_name,
         edition = edition,
         rustc_flags = flags + _EMBED + (_LTO if crate_type == "staticlib" else []) + _REMAP,
-        target_compatible_with = _RUST_1_96_1,
+        tags = ["manual"] + tags,
+        target_compatible_with = _RUST_1_96_1 if crate_type == "staticlib" else MESA_ONLY,
         toolchains = _TOOLCHAINS,
         **kwargs
     )
     if crate_type == "staticlib":
-        # The same crate as an rlib, which a rust_test takes as its crate (nak_sm53_half_test).
+        # The same crate as an rlib, used by nak_sm53_half_test (1.96.1) and desktop builds (1.98.0).
         rust_library(
             name = name + "_rlib",
             crate_name = crate_name,
             edition = edition,
             rustc_flags = flags + _EMBED + _REMAP,
-            target_compatible_with = _RUST_1_96_1,
+            tags = ["manual"] + tags,
+            target_compatible_with = MESA_ONLY,
             toolchains = _TOOLCHAINS,
             **kwargs
         )

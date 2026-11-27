@@ -48,7 +48,10 @@ filegroup(
 cc_library(
     name = "headers",
     hdrs = [":header_files"],
-    tags = ["no-lint"],
+    tags = [
+        "manual",
+        "no-lint",
+    ],
     target_compatible_with = MESA_ONLY,
 )
 

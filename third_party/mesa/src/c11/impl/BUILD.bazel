@@ -42,8 +42,24 @@ mesa_cc_library(
             "src",
         ],
     ),
+    cpp_args = mesa_args(
+        "cxx",
+        include_dirs = [
+            "gen:src/c11/impl",
+            "src/c11/impl",
+            "gen:src",
+            "src",
+        ],
+    ),
     sources = [
         "time.c",
-        "threads_posix.c",
-    ],
+    ] + select({
+        "//third_party/mesa/bazel:windows": [
+            "threads_win32.c",
+            "threads_win32_tls_callback.cpp",
+        ],
+        "//conditions:default": [
+            "threads_posix.c",
+        ],
+    }),
 )
