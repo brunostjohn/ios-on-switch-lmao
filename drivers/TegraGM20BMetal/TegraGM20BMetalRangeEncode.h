@@ -198,6 +198,7 @@ private:
     bool encoderShadows_ = false;
     bool encoderTracked_ = false;  // its dispatches' uses are tracked: shadowed images, or stand-ins writes reach
     gm20b::StateCursor stateCursor_;
+    uint32_t namedBytesChunk_ = UINT32_MAX;
     gm20b::FusionPass fused_;
     size_t fusedAt_ = SIZE_MAX;
     gm20b::PassUses planned_;

@@ -124,6 +124,8 @@ void idUnlink(const tgm_coh *c)
 
 void entryFree(tgm_coh *c)
 {
+	if (c->tiled && c->tiled->tiled)
+		tgm_tiled_unmark_pages(c->pas, c->npages);
 	switch_gpu_backing_release(c->backing);
 	if (c->releaseSurface)
 		c->releaseSurface(c->surface);
@@ -186,7 +188,9 @@ void drop(tgm_coh *const *cs, uint32_t n)
 			--c->refs;
 		}
 		if (c->refs == 1 && tiledNow(c)) {
-			if (defer(c, &surfaces[ndeferred], &releases[ndeferred]))
+			const tgm_tiled *t = __atomic_load_n(&c->tiled, __ATOMIC_ACQUIRE);
+			if ((!t || !__atomic_load_n(&t->unlockedViews, __ATOMIC_ACQUIRE)) &&
+			    defer(c, &surfaces[ndeferred], &releases[ndeferred]))
 				ndeferred++;
 			else
 				last[nlast++] = c;
@@ -750,6 +754,105 @@ extern "C" struct tgm_coh *tgm_coh_find_tiled_pa(uint64_t pa, uint64_t *offset)
 		found->refs++;
 	IOLockUnlock(gRegistryLock);
 	return found;
+}
+
+extern "C" struct tgm_coh *tgm_coh_find_tiled_scratch_pa(uint64_t pa)
+{
+	if (!gRegistryLock || !tgm_tiled_any())
+		return nullptr;
+	const uint64_t page = pa & ~0xfffULL;
+	tgm_coh *matched = nullptr;
+	for (uint32_t skip = 0; !matched;) {
+		tgm_coh *candidates[kBatch];
+		uint32_t n = 0, seen = 0;
+		IOLockLock(gRegistryLock);
+		for (uint32_t b = 0; b < kBuckets && n < kBatch; b++) {
+			for (tgm_coh *c = gByPage[b]; c && n < kBatch; c = c->next) {
+				const tgm_tiled *t = __atomic_load_n(&c->tiled, __ATOMIC_ACQUIRE);
+				if (t && __atomic_load_n(&t->tiled, __ATOMIC_ACQUIRE) &&
+				    __atomic_load_n(&t->scratchMarked, __ATOMIC_ACQUIRE) &&
+				    seen++ >= skip) {
+					c->refs++;
+					candidates[n++] = c;
+				}
+			}
+		}
+		IOLockUnlock(gRegistryLock);
+		for (uint32_t i = 0; i < n; i++) {
+			tgm_coh *c = candidates[i];
+			if (!matched) {
+				IOLockLock(c->lock);
+				const tgm_tiled *t = __atomic_load_n(&c->tiled, __ATOMIC_ACQUIRE);
+				if (t && t->tiled && t->scratch && t->scratchMarked) {
+					tgm_relayout_pages rows = {};
+					tgm_scratch_pages(t->scratch, &rows);
+					for (uint32_t p = 0; p < rows.npages; p++) {
+						if (rows.pas[p] == page) {
+							matched = c;
+							break;
+						}
+					}
+				}
+				IOLockUnlock(c->lock);
+			}
+			if (c != matched)
+				tgm_coherency_put(c);
+		}
+		if (n < kBatch)
+			break;
+		skip += n;
+	}
+	return matched;
+}
+
+extern "C" void tgm_coh_for_each_unlocked_write(void (*fn)(struct tgm_coh *))
+{
+	if (!gRegistryLock || !tgm_tiled_any() || !fn)
+		return;
+	tgm_coh *batch[kBatch];
+	for (;;) {
+		uint32_t n = 0;
+		IOLockLock(gRegistryLock);
+		for (uint32_t b = 0; b < kBuckets && n < kBatch; b++) {
+			for (tgm_coh *c = gByPage[b]; c && n < kBatch; c = c->next) {
+				const tgm_tiled *t = __atomic_load_n(&c->tiled, __ATOMIC_ACQUIRE);
+				if (t && __atomic_load_n(&t->tiled, __ATOMIC_ACQUIRE) &&
+				    __atomic_load_n(&t->unlockedWrote, __ATOMIC_ACQUIRE)) {
+					c->refs++;
+					batch[n++] = c;
+				}
+			}
+		}
+		IOLockUnlock(gRegistryLock);
+		if (!n)
+			return;
+		for (uint32_t i = 0; i < n; i++)
+			fn(batch[i]);
+		drop(batch, n);
+		if (n < kBatch)
+			return;
+	}
+}
+
+extern "C" void *tgm_coh_surface(const struct tgm_coh *c)
+{
+	return c ? c->surface : nullptr;
+}
+
+extern "C" int tgm_coh_is_deferred(struct tgm_coh *c)
+{
+	if (!c || !gRegistryLock)
+		return 0;
+	IOLockLock(gRegistryLock);
+	const int deferred = c->deferred ? 1 : 0;
+	IOLockUnlock(gRegistryLock);
+	return deferred;
+}
+
+extern "C" void tgm_coh_clear_gpu_dirty(struct tgm_coh *c)
+{
+	if (c)
+		__atomic_store_n(&c->gpuDirty, 0, __ATOMIC_RELEASE);
 }
 
 extern "C" struct tgm_coh *tgm_coh_find_pa(uint64_t pa)

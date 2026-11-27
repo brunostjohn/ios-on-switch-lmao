@@ -73,41 +73,50 @@ bool SwitchMetalRangeEncode::beginPass(size_t at)
 {
     SwitchMetalCommandBuffer *cb = cb_;
     gm20b::CommandBuffer *rc = rc_;
-    const Cmd c = cb->_plan.legacy(at);
+    const bool own = !ahead_;
+    const auto &header = own ? cb->_plan.ownBegin(at) : cb->_plan.begin(at);
     computeUnit_ = false;
     rc->endPredicationUnit();
     SWITCH_METAL_ENCODE_SPAN(Pass);
-    const SwitchMetalPass &pass = cb->_passes[c.x];
+    const SwitchMetalPass &pass = own ? cb->_passes.own(header.pass) : cb->_passes[header.pass];
     renderBegin_ = at;
     if (continuing_) {
         continuing_ = false;
         uint8_t stores = 0, discards = 0;
-        for (uint32_t i = 0; i < 8; ++i) {
+        const uint8_t mask = pass.colorMask ? pass.colorMask : 0xffu;
+        for (uint8_t m = mask; m; m &= uint8_t(m - 1)) {
+            const uint32_t i = uint32_t(__builtin_ctz(m));
             if (pass.color[i].texture && pass.color[i].store == MTLStoreActionStore)
                 stores |= uint8_t(1u << i);
             if (pass.color[i].texture && pass.color[i].store == MTLStoreActionDontCare)
                 discards |= uint8_t(1u << i);
         }
         re_->continuePass(stores, discards);
-        planSplitPrograms(cb, at, *re_);
-        planPassUses(cb, at, planned_);
+        planSplitPrograms(cb, at, *re_, own);
+        planPassUses(cb, at, planned_, own);
         return true;
     }
     gm20b::PassDesc p;
+    p.mayFetch = false;
     bool shaderTestsDepth = false, testsStencil = false;
-    for (size_t sub = at; sub == at || (sub < to_ && gm20bContinuesPass(cb, sub)); sub = cb->_plan.encoderEnd(sub)) {
+    for (size_t sub = at; sub == at || (sub < to_ && gm20bContinuesPass(cb, sub));
+         sub = (own ? cb->_plan.ownBegin(sub).end : cb->_plan.begin(sub).end)) {
+        const SwitchMetalPass &subPass =
+            sub == at ? pass : (own ? cb->_passes.own(cb->_plan.ownBegin(sub).pass) : cb->_passes[cb->_plan.begin(sub).pass]);
         if (sampledShadows_)
             refresh(sub);
         if (standIns_ && !standIns(sub))
             return false;
-        if (cb->_passes[cb->_plan.legacy(sub).x].xrPlaneBinds && !imagePlanes(sub, p))
+        if (subPass.xrPlaneBinds && !imagePlanes(sub, p))
             return false;
-        passStorageMasks(cb, sub, p);
-        p.hiddenZeta |= cb->_passes[cb->_plan.legacy(sub).x].testsHiddenZeta;
-        shaderTestsDepth |= cb->_passes[cb->_plan.legacy(sub).x].shaderTestsDepth;
-        testsStencil |= cb->_passes[cb->_plan.legacy(sub).x].testsStencil;
+        passStorageMasks(cb, sub, p, own);
+        p.hiddenZeta |= subPass.testsHiddenZeta;
+        shaderTestsDepth |= subPass.shaderTestsDepth;
+        testsStencil |= subPass.testsStencil;
     }
-    for (unsigned j = 0; j < 8; j++) {
+    const uint8_t colorMask = pass.colorMask ? pass.colorMask : 0xffu;
+    for (uint8_t cm = colorMask; cm; cm &= uint8_t(cm - 1)) {
+        const unsigned j = unsigned(__builtin_ctz(cm));
         const SwitchMetalPass::Color &a = pass.color[j];
         __unsafe_unretained SwitchMetalTexture *t = (SwitchMetalTexture *)a.texture;
         if (!t)
@@ -142,7 +151,8 @@ bool SwitchMetalRangeEncode::beginPass(size_t at)
         }
         if (!fresh_.empty())
             fresh_.erase(t);  // this pass writes it
-        standInFresh_.erase(t);
+        if (!standInFresh_.empty())
+            standInFresh_.erase(t);
         // a one-layer pass's part has a header of its own (a fetch of the attachment reads it); a texture buffer's row and a
         // plane image are images of their own
         const uint32_t level = uint32_t(a.level), slice = uint32_t(a.slice);
@@ -268,7 +278,7 @@ bool SwitchMetalRangeEncode::beginPass(size_t at)
             return false;
     standInLoads_.clear();
     PlanDraws draws(cb, at, to_, *rc);
-    const size_t next = cb->_plan.encoderEnd(at);
+    const size_t next = header.end;
     if (!loadPlanes(p) || !formatStandIns(pass, p, draws, next < to_ && gm20bContinuesPass(cb, next)))
         return false;
     if (loadedTargets_ && !reachOfLoadedTargets(pass, p, draws, *rc, loadedReach_, why_)) {
@@ -290,10 +300,10 @@ bool SwitchMetalRangeEncode::beginPass(size_t at)
     }
     counters_->started(at, *re_);
     passDraws_ = rc->draws;
-    planSplitPrograms(cb, at, *re_);
-    planned_ = gm20b::PassUses{};
+    planSplitPrograms(cb, at, *re_, own);
+    planned_.reset();
     planned_.known = !sampledShadows_ && !standIns_;
-    planPassUses(cb, at, planned_);
+    planPassUses(cb, at, planned_, own);
     return true;
 }
 
@@ -331,7 +341,9 @@ void SwitchMetalRangeEncode::carryZcull(size_t to)
 
 void SwitchMetalRangeEncode::overlappingPlanes(const SwitchMetalPass &pass, gm20b::PassDesc &p)
 {
-    for (unsigned j = 0; j < 8; j++) {
+    const uint8_t mask = pass.colorMask ? pass.colorMask : 0xffu;
+    for (uint8_t m = mask; m; m &= uint8_t(m - 1)) {
+        const unsigned j = unsigned(__builtin_ctz(m));
         const SwitchMetalPass::Color &a = pass.color[j];
         __unsafe_unretained SwitchMetalTexture *t = (SwitchMetalTexture *)a.texture;
         if (!t)

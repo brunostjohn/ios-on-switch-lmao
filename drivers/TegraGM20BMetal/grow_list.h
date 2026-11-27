@@ -64,13 +64,23 @@ public:
         return capacity_;
     }
 
-    // The writer's own accesses
+    // The writer's own accesses (and a single reader after commit)
     T &own(size_t i)
     {
         return mine()[i];
     }
 
+    const T &own(size_t i) const
+    {
+        return mine()[i];
+    }
+
     T *ownData()
+    {
+        return mine();
+    }
+
+    const T *ownData() const
     {
         return mine();
     }
@@ -140,12 +150,38 @@ public:
         return *at;
     }
 
+    T *emplaceUninit()
+    {
+        const size_t n = size();
+        if (n == capacity_)
+            grow(n + 1);
+        T *at = mine() + n;
+        size_.store(n + 1, std::memory_order_relaxed);
+        return at;
+    }
+
+    void appendBytes(const T *first, size_t more)
+    {
+        if (!more)
+            return;
+        const size_t n = size();
+        if (n + more > capacity_)
+            grow(n + more);
+        memcpy(static_cast<void *>(mine() + n), first, more * sizeof(T));
+        size_.store(n + more, std::memory_order_relaxed);
+    }
+
     template <typename It> void append(It first, It last)
     {
         const size_t n = size(), more = size_t(std::distance(first, last));
         if (n + more > capacity_)
             grow(n + more);
-        std::copy(first, last, mine() + n);
+        if constexpr (std::is_pointer_v<It> && std::is_same_v<std::remove_cv_t<std::remove_pointer_t<It>>, T>) {
+            if (more)
+                memcpy(static_cast<void *>(mine() + n), first, more * sizeof(T));
+        } else {
+            std::copy(first, last, mine() + n);
+        }
         size_.store(n + more, std::memory_order_relaxed);
     }
 

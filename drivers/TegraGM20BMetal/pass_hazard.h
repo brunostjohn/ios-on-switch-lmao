@@ -207,6 +207,37 @@ struct PassUses {
         sampled[sampledCount++] = image;
         return true;
     }
+
+    void reset()
+    {
+        known = vertexSamples = shaderWrites = bufferWrites = depthStencil = false;
+        areaWidth = areaHeight = 0;
+        writtenCount = scratchCount = sampledCount = 0;
+    }
+
+    void copyFrom(const PassUses &src)
+    {
+        known = src.known;
+        vertexSamples = src.vertexSamples;
+        shaderWrites = src.shaderWrites;
+        bufferWrites = src.bufferWrites;
+        areaWidth = src.areaWidth;
+        areaHeight = src.areaHeight;
+        writtenCount = src.writtenCount;
+        for (uint8_t i = 0; i < writtenCount; ++i)
+            written[i] = src.written[i];
+        scratchCount = src.scratchCount;
+        for (uint8_t i = 0; i < scratchCount; ++i)
+            scratch[i] = src.scratch[i];
+        depthStencil = src.depthStencil;
+        if (depthStencil)
+            depth = src.depth;
+        sampledCount = src.sampledCount;
+        for (uint8_t i = 0; i < sampledCount; ++i) {
+            sampled[i] = src.sampled[i];
+            named[i] = src.named[i];
+        }
+    }
 };
 
 // The passes since the last drain: the images they wrote, sampled and used as scratch, each once; `valid` false where

@@ -18,6 +18,8 @@ struct SwitchMetalRecording {
     std::vector<id> owners;
     gm20b::PointerMap<bool> ownerKeys;
     SwitchMetalPassCachePtr passCache;
+    std::vector<uint8_t> passKey;
+    SwitchMetalRenderSlots renderSlots;
     size_t kept = 0;
 };
 
@@ -34,12 +36,17 @@ static void swapRecording(SwitchMetalCommandBuffer *b, SwitchMetalRecording &r)
     b->_bytes.chunks.swap(r.bytes.chunks);
     std::swap(b->_bytes.at, r.bytes.at);
     std::swap(b->_bytes.used, r.bytes.used);
+    std::swap(b->_bytes.curCpu, r.bytes.curCpu);
+    std::swap(b->_bytes.curLen, r.bytes.curLen);
+    std::swap(b->_bytes.curOk, r.bytes.curOk);
     b->_retirements.swap(r.retirements);
     b->_shadow.swap(r.shadow);
     b->_extra.swap(r.extra);
     b->_owners.swap(r.owners);
     b->_ownerKeys.swap(r.ownerKeys);
     b->_passCache.swap(r.passCache);
+    b->_passKey.swap(r.passKey);
+    b->_renderSlots.swapClean(r.renderSlots);
 }
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
@@ -177,6 +184,7 @@ void gm20bBytesDone(SwitchMetalCommandBuffer *cb)
     s.chunks.clear();  // its capacity goes on with the recording to the next command buffer
     s.at = 0;
     s.used = 0;
+    s.resetCursor();
     if (gaveBack)
         growBytesChunksAhead();
 }
@@ -235,6 +243,7 @@ void gm20bRecordingDone(SwitchMetalCommandBuffer *b)
         return;
     }
     b->_plan.clear();
+    b->_renderSlots.reset();
     swapRecording(b, *r);
     r->kept = bytes;
     r->passes.clear();

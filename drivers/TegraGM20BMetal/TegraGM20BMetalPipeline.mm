@@ -78,21 +78,21 @@ size_t stopOf(const Ahead &a)
 
 }  // namespace
 
-bool gm20bAheadReads(SwitchMetalCommandBuffer *cb)
+bool gm20bAheadReads(__unsafe_unretained SwitchMetalCommandBuffer *cb)
 {
     const size_t stop = cb->_aheadStop.load(std::memory_order_relaxed);
     return cb->_handedOnce && !cb->_pipelineVeto.load(std::memory_order_relaxed) &&
            !cb->_pipelineDeclined.load(std::memory_order_relaxed) && (!stop || cb->_encAt < stop);
 }
 
-void gm20bPrepareEncoder(SwitchMetalCommandBuffer *cb, size_t from, size_t to)
+void gm20bPrepareEncoder(__unsafe_unretained SwitchMetalCommandBuffer *cb, size_t from, size_t to)
 {
     cb->_plan.prepareRange(from, to);
     SWITCH_METAL_STAT(gm20b::frameCpuCounts().recordPrepares.fetch_add(1, std::memory_order_relaxed));
 }
 
 // Before the first hand-off: the encoders recorded so far, which the worker encodes from the tape's start
-static void prepareEnded(SwitchMetalCommandBuffer *cb, size_t length)
+static void prepareEnded(__unsafe_unretained SwitchMetalCommandBuffer *cb, size_t length)
 {
     if (const size_t stop = cb->_aheadStop.load(std::memory_order_relaxed))
         length = std::min(length, stop);
@@ -109,24 +109,28 @@ static void prepareEnded(SwitchMetalCommandBuffer *cb, size_t length)
     }
 }
 
-void gm20bPublishEncoder(SwitchMetalCommandBuffer *cb)
+void gm20bPublishEncoder(__unsafe_unretained SwitchMetalCommandBuffer *cb)
 {
     const size_t length = cb->_plan.size();
-    cb->_published.store(uint64_t(cb->_endedAt) << 32 | length, std::memory_order_seq_cst);
+    const uint64_t published = uint64_t(cb->_endedAt) << 32 | length;
     cb->_endedAt = cb->_encAt;
     cb->_handedCommands += uint32_t(length - cb->_encAt);
-    if (cb->_handedCommands < kHandOff || cb->_pipelineVeto.load(std::memory_order_relaxed))
+    if (cb->_handedCommands < kHandOff || cb->_pipelineVeto.load(std::memory_order_relaxed)) {
+        cb->_published.store(published, std::memory_order_release);
         return;
+    }
     cb->_handedCommands = 0;
     SWITCH_METAL_DIAGNOSTIC(gRM->stats.handoffs++);
     if (!cb->_handedOnce) {
         prepareEnded(cb, length);
         cb->_handedOnce = true;
+        cb->_published.store(published, std::memory_order_release);
         SWITCH_METAL_DIAGNOSTIC(gRM->stats.handoffWakes += gRM->submitAsleep.load(std::memory_order_relaxed));
         gRM->schedule.push({SwitchMetalScheduleChange::Encoded, cb});
         return;
     }
-    // the worker holds it already and reads _published before it sleeps: a wake only for a worker asleep
+    // Dekker pair with submitLoop's submitAsleep.store(seq_cst) -> _published.load(seq_cst)
+    cb->_published.store(published, std::memory_order_seq_cst);
     if (!cb->_pipelineDeclined.load(std::memory_order_relaxed) && gRM->submitAsleep.load(std::memory_order_seq_cst)) {
         SWITCH_METAL_DIAGNOSTIC(gRM->stats.handoffWakes++);
         gRM->schedule.wake();

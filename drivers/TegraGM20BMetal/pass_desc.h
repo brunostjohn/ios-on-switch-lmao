@@ -77,6 +77,8 @@ struct PassDesc {
     // colour targets take kTransientColorTag's tags (attachment_lifetime.h); the device's own passes store depth unbounded,
     // as they copy it, and take kDriverPassColorTag's
     bool metalDraws = false;
+    // Set false only when every pipeline in the pass has been checked to have fetchBits == 0.
+    bool mayFetch = true;
 
     // RGB10A8_2P_XR10 textures held in their two planes that the pass's draws store into, each through an RG32Uint image of
     // its texels (pack/xr.metal xr_planes_merge_frag before the pass, xr_planes_split_frag after it)

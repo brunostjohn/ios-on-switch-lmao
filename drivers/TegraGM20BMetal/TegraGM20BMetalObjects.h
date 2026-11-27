@@ -5,6 +5,7 @@
 #include "word_wait.h"
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
+#import <objc/runtime.h>
 #include <atomic>
 #include <condition_variable>
 #include <deque>
@@ -342,6 +343,7 @@ struct SwitchMetalPass {
     uint32_t layers = 1;  // renderTargetArrayLength (0 and 1: one)
     gm20b::SamplePositions positions;
     uint8_t compressed = 0;        // extended-range colours on compressed memory at its making (private_comp.h)
+    uint8_t colorMask = 0;         // bit c set where color[c].texture is non-nil
     bool testsHiddenZeta = false;  // a depth/stencil state set in it tests depth or stencil (gm20b::testsHiddenZeta)
     // a draw in it tests depth in its shader (shader_tests.h): a Depth16Unorm attachment renders converted
     // (TegraGM20BMetalRangeForms.mm depth16Tested)
@@ -359,6 +361,16 @@ struct SwitchMetalBytes {
     gm20b::GrowList<gm20b::Buffer> chunks;  // va 0: heap memory (the GPU pool had none; the command buffer fails)
     size_t at = 0;                          // the chunk being filled
     uint32_t used = 0;                      // its bytes taken
+    uint8_t *curCpu = nullptr;
+    uint32_t curLen = 0;
+    bool curOk = false;
+
+    void resetCursor()
+    {
+        curCpu = nullptr;
+        curLen = 0;
+        curOk = false;
+    }
 };
 
 // A command buffer's first error, set under its lock; whether it has one is readable with no lock
@@ -463,6 +475,68 @@ struct SwitchMetalResidencySnapshot {
     std::vector<SwitchMetalResidencyEntry> hostVisible;
 };
 
+struct SwitchMetalPreparedVariant {
+    __unsafe_unretained SwitchMetalPipeline *pipe = nil;
+    gm20b::RenderVariant forms;
+    gm20b::Variant<gm20b::Pipeline> *variant = nullptr;
+};
+
+struct SwitchMetalRenderSlots {
+    __unsafe_unretained SwitchMetalTexture *tex[2][gm20b::kStageTextures]{};
+    __unsafe_unretained SwitchMetalSampler *samp[2][16]{};
+    gm20b::StageTextureMask texTouched[2]{};
+    uint16_t sampTouched[2]{};
+    gm20b::RenderVariant forms;
+    std::array<SwitchMetalPreparedVariant, 8> prepared;
+    uint8_t preparedNext = 0;
+    bool preparedUsed = false;
+
+    void reset()
+    {
+        for (uint32_t stage = 0; stage < 2; ++stage) {
+            if (gm20b::anySlot(texTouched[stage])) {
+                gm20b::forEachSlot(texTouched[stage], [&](uint32_t slot) {
+                    tex[stage][slot] = nil;
+                });
+                texTouched[stage] = {};
+            }
+            if (uint16_t m = sampTouched[stage]) {
+                for (; m; m &= uint16_t(m - 1))
+                    samp[stage][__builtin_ctz(m)] = nil;
+                sampTouched[stage] = 0;
+            }
+        }
+        forms.cubic.samplers.clear();
+        forms.cubic.textures.clear();
+        forms.written.clear();
+        forms.fragmentTests = 0;
+        forms.xrSlots = 0;
+        if (preparedUsed) {
+            for (SwitchMetalPreparedVariant &p : prepared) {
+                p.pipe = nil;
+                p.variant = nullptr;
+                p.forms.cubic.samplers.clear();
+                p.forms.cubic.textures.clear();
+                p.forms.written.clear();
+                p.forms.fragmentTests = 0;
+                p.forms.xrSlots = 0;
+            }
+            preparedNext = 0;
+            preparedUsed = false;
+        }
+    }
+
+    void swapClean(SwitchMetalRenderSlots &other) noexcept
+    {
+        forms.cubic.samplers.swap(other.forms.cubic.samplers);
+        forms.cubic.textures.swap(other.forms.cubic.textures);
+        forms.written.swap(other.forms.written);
+        prepared.swap(other.prepared);
+        std::swap(preparedNext, other.preparedNext);
+        std::swap(preparedUsed, other.preparedUsed);
+    }
+};
+
 @interface SwitchMetalCommandBuffer : SwitchMetalObject {
 @public
     uint64_t _protection;  // setProtectionOptions: (kept, no effect)
@@ -526,6 +600,8 @@ struct SwitchMetalResidencySnapshot {
     SwitchMetalCommandPlan _plan;
     bool _recordingReturned;
     SwitchMetalPassCachePtr _passCache;
+    std::vector<uint8_t> _passKey;
+    SwitchMetalRenderSlots _renderSlots;
     gm20b::GrowList<SwitchMetalPass> _passes;  // OpRender's (Cmd::x)
     uint32_t _recordedPass;                    // the OpRender the draws being recorded belong to
     bool
@@ -755,35 +831,20 @@ static inline void gm20bPipelineStop(SwitchMetalCommandBuffer *cb, uint32_t reas
 // (TegraGM20BMetalEncoder.mm)
 uint64_t nextTraceId();
 
-// A variant a render encoder's prepare found for a state and its forms (TegraGM20BMetalCubic.mm preparedVariant)
-struct SwitchMetalPreparedVariant {
-    __unsafe_unretained SwitchMetalPipeline *pipe = nil;
-    gm20b::RenderVariant forms;
-    gm20b::Variant<gm20b::Pipeline> *variant = nullptr;
-};
-
-// A render encoder keeps what its draws need to decide, as they are recorded, whether the driver draws them: the state, each
-// bound buffer's address, the textures, the pass's formats. A draw it refuses is decided then, so encodeRaw never meets it.
+// A render encoder keeps what its draws need to decide, as they are recorded, whether the driver draws them: the state,
+// the pass's formats, and variant bookkeeping. Large per-slot tables live in _cb->_renderSlots (single active encoder).
 @interface SwitchMetalRenderEncoder : SwitchMetalEncoder {
 @public
     // Unretained, as the bound objects below: the command buffer retains each (setBinding), so a bind stores no
-    // reference count and a pooled encoder's end releases none of its 172 slots
+    // reference count and a pooled encoder's end releases none of its slots
     __unsafe_unretained SwitchMetalPipeline *_pipe;
-    uint64_t _bufVa[3]
-                   [31];  // stage 1 vertex, 2 fragment: the bound buffer's address plus offset (setBytes: 0, aligned)
-    __unsafe_unretained SwitchMetalBuffer *_buf[3][31];
-    __unsafe_unretained SwitchMetalTexture *_tex[2][gm20b::kStageTextures];  // vertex, fragment textures
-    __unsafe_unretained SwitchMetalSampler *_samp[2][16];
+    uint32_t _bufBound[2];  // stage 0 vertex, 1 fragment: bit s set while an MTLBuffer is bound at slot s
     uint16_t _cubicMask[2];
-    // `_samp` slots whose sampler the plan holds bound since `_sampEpoch` (SwitchMetalCommandPlan::stateEpoch): binding the same
+    // `_renderSlots.samp` slots whose sampler the plan holds bound since `_sampEpoch` (SwitchMetalCommandPlan::stateEpoch): binding the same
     // one again records nothing
     uint16_t _sampRecorded[2];
     uint64_t _sampEpoch;
-    gm20b::RenderVariant _forms;
     gm20b::Variant<gm20b::Pipeline> *_formVariant, *_sampledVariant;
-    // the variants its prepares found: a pass switching among its states asks a state's map once for each forms
-    std::array<SwitchMetalPreparedVariant, 8> _prepared;
-    uint8_t _preparedNext;
     uint16_t _formSamplers[2];  // populated when a cubic binding first needs this pipeline's sampler slots
     gm20b::StageTextureMask _cubicTextures[2];
     std::array<gm20b::StageTextureMask, 2> _sampledSlots;
@@ -801,14 +862,15 @@ struct SwitchMetalPreparedVariant {
     uint8_t _turn;         // its turned attachments' rotation (rotation.h; 0: none)
     uint32_t _passAt;      // its pass's SwitchMetalPass (the command buffer's _passes)
     gm20b::DepthStencilDesc _ds;
-    MTLRenderPassDescriptor *_pass;  // the command buffer's copy, which the raw encode reads
-    bool _passShared;                // _pass is the recording bank's immutable copy (TegraGM20BMetalPassCache.h)
-    size_t _renderAt;                // its OpRender in the command buffer's plan
+    __unsafe_unretained MTLRenderPassDescriptor *_pass;  // retained by _cb->_owners
+    bool _passShared;  // _pass is the recording bank's immutable copy (TegraGM20BMetalPassCache.h)
+    bool _hasForms;    // non-default variant state was prepared on this encoder
+    size_t _renderAt;  // its OpRender in the command buffer's plan
     __unsafe_unretained id<MTLBuffer> _visibility;  // its pass's visibility result buffer (the command buffer holds it)
     bool _drew;                                     // a draw recorded
     // setTessellationFactorBuffer:offset:instanceStride: and setTessellationFactorScale:, which its patch draws record
     // (TegraGM20BMetalTessellation.mm; unretained: each draw retains what it reads)
-    SwitchMetalBuffer *_tessFactors;
+    __unsafe_unretained SwitchMetalBuffer *_tessFactors;
     NSUInteger _tessFactorOffset, _tessFactorStride;
     float _tessScale;
     BOOL _tessScaleSet;
@@ -845,11 +907,31 @@ void recordBytes(__unsafe_unretained SwitchMetalCommandBuffer *cb, Cmd m, const 
 bool encodeKernel(gm20b::ComputeEncoder &e, gm20b::CommandBuffer &rc, SwitchMetalCommandBuffer *cb, const Cmd &c,
                   size_t at, const char **why);
 
+static inline bool gm20bIsClass(__unsafe_unretained id object, Class expected)
+{
+    if (!object)
+        return false;
+    return object_getClass(object) == expected || [object isKindOfClass:expected];
+}
+
+static inline void gm20bRetain(__unsafe_unretained SwitchMetalCommandBuffer *cb, __unsafe_unretained id object)
+{
+    if (!object || cb->_ownerKeys.find((__bridge void *)object))
+        return;
+    [cb retain:object];
+}
+
+void gm20bRecordDraw(__unsafe_unretained SwitchMetalCommandBuffer *cb, uint8_t primitive, uint32_t start,
+                     uint32_t count, uint32_t instances, uint32_t base, const gm20b::Pipeline *native);
+void gm20bBeginKeptRender(__unsafe_unretained SwitchMetalCommandBuffer *cb,
+                          __unsafe_unretained MTLRenderPassDescriptor *pass, uint32_t passAt);
+void gm20bEndEncoder(__unsafe_unretained SwitchMetalCommandBuffer *cb);
+
 static inline void setBinding(__unsafe_unretained SwitchMetalCommandBuffer *cb, Op op, int stage, NSUInteger index,
                               __unsafe_unretained id object, uint64_t c)
 {
     if (object)
-        [cb retain:object];
+        gm20bRetain(cb, object);
     Cmd m = cmd(op, uint8_t(stage), uint16_t(index));
     m.obj = (__bridge void *)object;
     m.c = c;
@@ -861,8 +943,8 @@ static inline void setBinding(__unsafe_unretained SwitchMetalCommandBuffer *cb, 
 
 // The encoder `e` records into this command buffer from now on, the one before it ended (TegraGM20BMetalEncoder.mm)
 @interface SwitchMetalCommandBuffer (Encoders)
-- (void)begin:(SwitchMetalEncoder *)e __attribute__((objc_direct));
-- (id<MTLRenderCommandEncoder>)renderCommandEncoderWithDescriptor:(MTLRenderPassDescriptor *)d;
+- (void)begin:(__unsafe_unretained SwitchMetalEncoder *)e __attribute__((objc_direct));
+- (id<MTLRenderCommandEncoder>)renderCommandEncoderWithDescriptor:(__unsafe_unretained MTLRenderPassDescriptor *)d;
 @end
 
 @interface SwitchMetalEncoder ()

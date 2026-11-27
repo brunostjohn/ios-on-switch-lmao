@@ -91,10 +91,14 @@ static void endedTwice(SwitchMetalCommandBuffer *cb)
         return;
     }
     _ended = true;
+    __unsafe_unretained SwitchMetalCommandBuffer *cb = _cb;
     if (!_counterPending.empty())
-        gm20bPlaceCounterMarks(_cb, self, _cb->_plan.size(), false);
-    [_cb record:cmd(OpEnd)];
-    _cb->_active = nil;
+        gm20bPlaceCounterMarks(cb, self, cb->_plan.size(), false);
+    if (!cb->_commandLog)
+        gm20bEndEncoder(cb);
+    else
+        [cb record:cmd(OpEnd)];
+    cb->_active = nil;
 }
 
 - (void)pushDebugGroup:(NSString *)s
@@ -148,6 +152,6 @@ void gm20bPoolEncoders()
 {
     for (Class cls :
          {[SwitchMetalRenderEncoder class], [SwitchMetalBlitEncoder class], [SwitchMetalComputeEncoder class]})
-        if (!gm20bPoolInstances(cls, endDropped))
+        if (!gm20bPoolInstances(cls, endDropped, true))
             os_log_error(gm20bLog(), "SwitchMetal: %{public}s instances are not pooled", class_getName(cls));
 }

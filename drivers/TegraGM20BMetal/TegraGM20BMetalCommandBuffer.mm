@@ -138,20 +138,24 @@ void gm20bPoolCommandBuffers()
     if (!object || !_ownerKeys.insert((__bridge void *)object, true).second)
         return;
     _owners.push_back(object);
+    static const Class texCls = [SwitchMetalTexture class];
+    static const Class bufCls = [SwitchMetalBuffer class];
+    static const Class sampCls = [SwitchMetalSampler class];
+    static const Class heapCls = [SwitchMetalHeap class];
     SwitchMetalResourceFacts facts;
-    if ([object isKindOfClass:[SwitchMetalTexture class]]) {
+    if (gm20bIsClass(object, texCls)) {
         facts.kind = SwitchMetalResourceKind::Texture;
         __unsafe_unretained SwitchMetalTexture *texture = (SwitchMetalTexture *)object;
         facts.roles = uint8_t(texture->_raw.converted() ? SwitchMetalResourceFacts::Converted : 0);
         __unsafe_unretained SwitchMetalTexture *root = texture->_levelsOwner ?: texture;
         facts.surfaceWrites = root->_surfaceWrites;
         facts.cpuBuffer = (__bridge void *)root->_buffer;
-    } else if ([object isKindOfClass:[SwitchMetalBuffer class]]) {
+    } else if (gm20bIsClass(object, bufCls)) {
         facts.kind = SwitchMetalResourceKind::Buffer;
         facts.cpuBuffer = (__bridge void *)object;
-    } else if ([object isKindOfClass:[SwitchMetalSampler class]])
+    } else if (gm20bIsClass(object, sampCls))
         facts.kind = SwitchMetalResourceKind::Sampler;
-    else if ([object isKindOfClass:[SwitchMetalHeap class]])
+    else if (gm20bIsClass(object, heapCls))
         facts.kind = SwitchMetalResourceKind::Heap;
     _plan.registerResource((__bridge void *)object, facts);
 }
@@ -169,8 +173,116 @@ static const gm20b::Pipeline *recordedPipeline(const gm20b::RasterState &raster)
 {
     if (const gm20b::Pipeline *native = static_cast<const gm20b::Pipeline *>(raster.nativePipeline))
         return native;
+    static const Class pipeCls = [SwitchMetalPipeline class];
     __unsafe_unretained SwitchMetalPipeline *pipeline = (__bridge SwitchMetalPipeline *)raster.pipeline;
-    return [(id)pipeline isKindOfClass:[SwitchMetalPipeline class]] ? pipeline->_raw : nullptr;
+    return gm20bIsClass(pipeline, pipeCls) ? pipeline->_raw : nullptr;
+}
+
+static void resolveDrawUses(__unsafe_unretained SwitchMetalCommandBuffer *cb, const gm20b::Pipeline *native,
+                            bool captures)
+{
+    auto &plan = cb->_plan;
+    const uint32_t index = plan.ownDraw(plan.size() - 1).state;
+    const auto &state = plan.renderStates.own(index);
+    if (state.usesFinal)
+        return;
+    if (!captures)
+        native = recordedPipeline(plan.raster.own(state.raster));
+    if (!native || !native->rec)
+        return;
+    plan.resolveRenderUses(index, native, [&](std::vector<gm20b::ResourceUse> &bound) {
+        const auto &record = *native->rec;
+        const gm20b::SetEntries &entries = native->entries;
+        for (uint32_t i = 0; i < entries.size(); ++i) {
+            const auto &entry = entries[i];
+            if (entry.kind == gm20b::EntryUbo && entry.stage >= 1 && entry.stage <= 2 && entry.slot < 31) {
+                const auto &binding = plan.buffers[entry.stage - 1].current()[entry.slot];
+                if (binding.source == gm20b::BufferBinding::Source::Buffer)
+                    bound.push_back(
+                        {binding.object,
+                         uint8_t(gm20b::ResourceUse::Read |
+                                 (gm20b::bufferStorage(entry) ? gm20b::ResourceUse::Write : 0))});
+            } else if ((entry.kind == gm20b::EntryTexture || entry.kind == gm20b::EntryTexture3d) &&
+                       entry.slot < gm20b::kStageTextures) {
+                const uint32_t at = gm20b::handleStage(entry);
+                const bool written =
+                    entry.stage == 2 && entry.slot < gm20b::kWrittenSlots && (native->writtenSlots >> entry.slot & 1);
+                bound.push_back({plan.textures[at].current().objects[entry.slot],
+                                 uint8_t(gm20b::ResourceUse::Read | gm20b::ResourceUse::Sample |
+                                         (written ? gm20b::ResourceUse::Write : 0))});
+            }
+            if ((entry.kind == gm20b::EntryTexture || entry.kind == gm20b::EntryTexture3d ||
+                 entry.kind == gm20b::EntrySamplerOnly) &&
+                entry.samplerKind == gm20b::SamplerSlot && entry.sampler < gm20b::kStageSamplers) {
+                const uint32_t at = gm20b::handleStage(entry);
+                bound.push_back({plan.samplers[at].current().objects[entry.sampler], gm20b::ResourceUse::Read});
+            }
+        }
+        if (record.vertexSlot < 31 && record.vertexStride) {
+            const auto &binding = plan.buffers[0].current()[record.vertexSlot];
+            if (binding.source == gm20b::BufferBinding::Source::Buffer)
+                bound.push_back({binding.object, gm20b::ResourceUse::Read});
+        }
+        // the buffer slots a stage reaches through its root table, which may be written there too
+        for (uint32_t stage = 0; stage < 2; ++stage)
+            for (uint32_t slots = record.rootSlots[stage]; slots; slots &= slots - 1) {
+                const auto &binding = plan.buffers[stage].current()[__builtin_ctz(slots)];
+                if (binding.source == gm20b::BufferBinding::Source::Buffer)
+                    bound.push_back({binding.object, uint8_t(gm20b::ResourceUse::Read | gm20b::ResourceUse::Write)});
+            }
+    });
+}
+
+void gm20bRecordDraw(__unsafe_unretained SwitchMetalCommandBuffer *cb, uint8_t primitive, uint32_t start,
+                     uint32_t count, uint32_t instances, uint32_t base, const gm20b::Pipeline *native)
+{
+    const bool captures = cb->_plan.capturesRender();
+    cb->_plan.recordDraw(primitive, start, count, instances, base, captures && native && native->rec);
+    resolveDrawUses(cb, native, captures);
+}
+
+void gm20bBeginKeptRender(__unsafe_unretained SwitchMetalCommandBuffer *cb,
+                          __unsafe_unretained MTLRenderPassDescriptor *pass, uint32_t passAt)
+{
+    cb->_predicates.otherWork();
+    cb->_plan.recordRenderBegin((__bridge void *)pass, passAt);
+    cb->_recordedPass = passAt;
+    std::vector<gm20b::ResourceUse> &uses = cb->_plan.recordUses();
+    const SwitchMetalPass &facts = cb->_passes.own(passAt);
+    for (uint8_t mask = facts.colorMask; mask; mask &= uint8_t(mask - 1)) {
+        const SwitchMetalPass::Color &a = facts.color[__builtin_ctz(mask)];
+        uses.push_back({(__bridge void *)a.texture,
+                        uint8_t(gm20b::ResourceUse::Write | (a.load == MTLLoadActionLoad ? gm20b::ResourceUse::Read : 0))});
+        if (a.resolve)
+            uses.push_back({(__bridge void *)a.resolve, gm20b::ResourceUse::Write});
+    }
+    if (facts.depth)
+        uses.push_back({(__bridge void *)facts.depth,
+                        uint8_t(gm20b::ResourceUse::Write |
+                                (facts.depthLoad == MTLLoadActionLoad || facts.stencilLoad == MTLLoadActionLoad
+                                     ? gm20b::ResourceUse::Read
+                                     : 0))});
+    if (id stencil = facts.zeta[1].texture; stencil && stencil != facts.depth)
+        uses.push_back({(__bridge void *)stencil,
+                        uint8_t(gm20b::ResourceUse::Write |
+                                (facts.stencilLoad == MTLLoadActionLoad ? gm20b::ResourceUse::Read : 0))});
+    if (facts.depthResolve)
+        uses.push_back({(__bridge void *)facts.depthResolve, gm20b::ResourceUse::Write});
+    if (facts.stencilResolve)
+        uses.push_back({(__bridge void *)facts.stencilResolve, gm20b::ResourceUse::Write});
+    if (!uses.empty())
+        cb->_plan.addUses(cb->_plan.size() - 1, uses);
+}
+
+void gm20bEndEncoder(__unsafe_unretained SwitchMetalCommandBuffer *cb)
+{
+    cb->_plan.recordEnd();
+    if (cb->_encOpen) {
+        if (gm20bAheadReads(cb))
+            gm20bPrepareEncoder(cb, cb->_encAt, cb->_plan.size());
+        cb->_encOpen = false;
+        gm20bPublishEncoder(cb);
+    }
 }
 
 - (void)record:(const Cmd &)cmd
@@ -192,70 +304,21 @@ static const gm20b::Pipeline *recordedPipeline(const gm20b::RasterState &raster)
     if (_plan.record(cmd, _extra.ownData(), _extra.size(), native && native->rec)) {
         std::vector<gm20b::ResourceUse> &uses = _plan.recordUses();
         if (draws) {
-            const uint32_t index = _plan.ownDraw(_plan.size() - 1).state;
-            const auto &state = _plan.renderStates.own(index);
-            if (!state.usesFinal) {
-                if (!captures)
-                    native = recordedPipeline(_plan.raster.own(state.raster));
-                if (native && native->rec) {
-                    _plan.resolveRenderUses(index, native, [&](std::vector<gm20b::ResourceUse> &bound) {
-                        const auto &record = *native->rec;
-                        const gm20b::SetEntries &entries = native->entries;
-                        for (uint32_t i = 0; i < entries.size(); ++i) {
-                            const auto &entry = entries[i];
-                            if (entry.kind == gm20b::EntryUbo && entry.stage >= 1 && entry.stage <= 2 &&
-                                entry.slot < 31) {
-                                const auto &binding =
-                                    _plan.buffers[entry.stage - 1][state.buffers[entry.stage - 1]][entry.slot];
-                                if (binding.source == gm20b::BufferBinding::Source::Buffer)
-                                    bound.push_back(
-                                        {binding.object,
-                                         uint8_t(gm20b::ResourceUse::Read |
-                                                 (gm20b::bufferStorage(entry) ? gm20b::ResourceUse::Write : 0))});
-                            } else if ((entry.kind == gm20b::EntryTexture || entry.kind == gm20b::EntryTexture3d) &&
-                                       entry.slot < gm20b::kStageTextures) {
-                                const uint32_t at = gm20b::handleStage(entry);
-                                const bool written = entry.stage == 2 && entry.slot < gm20b::kWrittenSlots &&
-                                                     (native->writtenSlots >> entry.slot & 1);
-                                bound.push_back({_plan.textures[at][state.textures[at]].objects[entry.slot],
-                                                 uint8_t(gm20b::ResourceUse::Read | gm20b::ResourceUse::Sample |
-                                                         (written ? gm20b::ResourceUse::Write : 0))});
-                            }
-                            if ((entry.kind == gm20b::EntryTexture || entry.kind == gm20b::EntryTexture3d ||
-                                 entry.kind == gm20b::EntrySamplerOnly) &&
-                                entry.samplerKind == gm20b::SamplerSlot && entry.sampler < gm20b::kStageSamplers) {
-                                const uint32_t at = gm20b::handleStage(entry);
-                                bound.push_back({_plan.samplers[at][state.samplers[at]].objects[entry.sampler],
-                                                 gm20b::ResourceUse::Read});
-                            }
-                        }
-                        if (record.vertexSlot < 31 && record.vertexStride) {
-                            const auto &binding = _plan.buffers[0][state.buffers[0]][record.vertexSlot];
-                            if (binding.source == gm20b::BufferBinding::Source::Buffer)
-                                bound.push_back({binding.object, gm20b::ResourceUse::Read});
-                        }
-                        // the buffer slots a stage reaches through its root table, which may be written there too
-                        for (uint32_t stage = 0; stage < 2; ++stage)
-                            for (uint32_t slots = record.rootSlots[stage]; slots; slots &= slots - 1) {
-                                const auto &binding = _plan.buffers[stage][state.buffers[stage]][__builtin_ctz(slots)];
-                                if (binding.source == gm20b::BufferBinding::Source::Buffer)
-                                    bound.push_back({binding.object,
-                                                     uint8_t(gm20b::ResourceUse::Read | gm20b::ResourceUse::Write)});
-                            }
-                    });
-                }
-            }
+            resolveDrawUses(self, native, captures);
         } else if (cmd.op == OpDispatch && cmd.obj2) {
             admitComputeDispatch(self, _plan.size() - 1,
                                  static_cast<const gm20b::ComputeKernelSet<gm20b::ComputeState> *>(cmd.obj2), nullptr);
         } else if (cmd.op == OpRender) {
             _recordedPass = uint32_t(cmd.x);
             const SwitchMetalPass &pass = _passes.own(cmd.x);
-            for (const SwitchMetalPass::Color &a : pass.color)
-                if (a.texture)
-                    uses.push_back({(__bridge void *)a.texture,
-                                    uint8_t(gm20b::ResourceUse::Write |
-                                            (a.load == MTLLoadActionLoad ? gm20b::ResourceUse::Read : 0))});
+            for (uint8_t mask = pass.colorMask; mask; mask &= uint8_t(mask - 1)) {
+                const SwitchMetalPass::Color &a = pass.color[__builtin_ctz(mask)];
+                uses.push_back({(__bridge void *)a.texture,
+                                uint8_t(gm20b::ResourceUse::Write |
+                                        (a.load == MTLLoadActionLoad ? gm20b::ResourceUse::Read : 0))});
+                if (a.resolve)
+                    uses.push_back({(__bridge void *)a.resolve, gm20b::ResourceUse::Write});
+            }
             if (pass.depth)
                 uses.push_back({(__bridge void *)pass.depth,
                                 uint8_t(gm20b::ResourceUse::Write |
@@ -266,9 +329,6 @@ static const gm20b::Pipeline *recordedPipeline(const gm20b::RasterState &raster)
                 uses.push_back({(__bridge void *)stencil,
                                 uint8_t(gm20b::ResourceUse::Write |
                                         (pass.stencilLoad == MTLLoadActionLoad ? gm20b::ResourceUse::Read : 0))});
-            for (const SwitchMetalPass::Color &a : pass.color)
-                if (a.resolve)
-                    uses.push_back({(__bridge void *)a.resolve, gm20b::ResourceUse::Write});
             if (pass.depthResolve)
                 uses.push_back({(__bridge void *)pass.depthResolve, gm20b::ResourceUse::Write});
             if (pass.stencilResolve)

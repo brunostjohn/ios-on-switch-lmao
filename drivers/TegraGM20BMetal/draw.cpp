@@ -181,22 +181,23 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
     cb_->draws += amplifies() ? amplifications_ : 1;
     SWITCH_METAL_DIAGNOSTIC(cb_->counts_.amplifiedDraws += amplifies());
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    if (const auto probe = instances == 1 ? dev_->armedProbe() : nullptr) {
-        if (p_.room() < kInstanceWords + probe->before.size() + probe->after.size() + 2 * std::size(kProbeRestores))
-            reserve();
-        if (!probe->before.empty())
-            p_.raw(probe->before.data(), uint32_t(probe->before.size()));
-        dev_->probeEmitted.fetch_add(1, std::memory_order_relaxed);
-        wholeDraw(*pl, false, first, count, instances, first, baseInstance);
-        if (!probe->after.empty())
-            p_.raw(probe->after.data(), uint32_t(probe->after.size()));
-        for (uint32_t i = 0; i < std::size(kProbeRestores); i++)
-            if (probe->restores >> i & 1)
-                p_.m(kProbeRestores[i].method, kProbeRestores[i].value);
-        cb_->sampleMaskHeld_ = kSampleMaskUnknown;
-        finishDraw(count, drawnInstances);
-        return true;
-    }
+    if (instances == 1 && dev_->probeArmed.load(std::memory_order_relaxed))
+        if (const auto probe = dev_->armedProbe()) {
+            if (p_.room() < kInstanceWords + probe->before.size() + probe->after.size() + 2 * std::size(kProbeRestores))
+                reserve();
+            if (!probe->before.empty())
+                p_.raw(probe->before.data(), uint32_t(probe->before.size()));
+            dev_->probeEmitted.fetch_add(1, std::memory_order_relaxed);
+            wholeDraw(*pl, false, first, count, instances, first, baseInstance);
+            if (!probe->after.empty())
+                p_.raw(probe->after.data(), uint32_t(probe->after.size()));
+            for (uint32_t i = 0; i < std::size(kProbeRestores); i++)
+                if (probe->restores >> i & 1)
+                    p_.m(kProbeRestores[i].method, kProbeRestores[i].value);
+            cb_->sampleMaskHeld_ = kSampleMaskUnknown;
+            finishDraw(count, drawnInstances);
+            return true;
+        }
 #endif
     if (drawnWhole(*pl)) {
         wholeDraw(*pl, false, first, count, instances, first, baseInstance);
@@ -304,9 +305,11 @@ Pipeline *RenderEncoder::fetchFreeFor(const Pipeline &pl, [[maybe_unused]] Stora
 
 Pipeline *RenderEncoder::formFor(Pipeline *pl, const FetchDraw &shape)
 {
+    if (!pl || (!pl->fetchBits && !pl->storageBits))
+        return pl;
     uint8_t forced = 0;
-    Pipeline *blendTwin = pl ? __atomic_load_n(&pl->blendTwin, __ATOMIC_ACQUIRE) : nullptr;
-    Pipeline *barrierTwin = pl ? __atomic_load_n(&pl->barrierTwin, __ATOMIC_ACQUIRE) : nullptr;
+    Pipeline *blendTwin = __atomic_load_n(&pl->blendTwin, __ATOMIC_ACQUIRE);
+    Pipeline *barrierTwin = __atomic_load_n(&pl->barrierTwin, __ATOMIC_ACQUIRE);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     forced = dev_->probeFetchRung.load(std::memory_order_relaxed);
     if (pl && (forced == kProbeBlendTwinTriangles || forced == kProbeBlendTwinWhole))

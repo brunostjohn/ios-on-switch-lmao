@@ -372,21 +372,43 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         x[0] = std::min(x[0], xj[0]), x[1] = std::max(x[1], xj[1]);
         y[0] = std::min(y[0], yj[0]), y[1] = std::max(y[1], yj[1]);
     }
-    const VariantTable *variants = __atomic_load_n(&pl->variantTable, __ATOMIC_ACQUIRE);
-    const uint32_t facts = bindingFacts(*pl, variants);
-    SWITCH_METAL_ENCODE_BEGIN(lookupSpan, VariantLookup);
-    Pipeline *prepared = dev_->variant(*pl, variants, facts | (rot_.turned() ? AssumeTurned : 0u));
-    SWITCH_METAL_ENCODE_END(lookupSpan);
+    const VariantTable *variants = nullptr;
+    if (pl == lastVariantInput_) {
+        variants = lastVariantTable_;
+    } else {
+        variants = __atomic_load_n(&pl->variantTable, __ATOMIC_ACQUIRE);
+        if (variants) {
+            lastVariantInput_ = pl;
+            lastVariantTable_ = variants;
+        }
+    }
+    Pipeline *prepared = pl;
+    if (variants) {
+        const uint32_t facts = bindingFacts(*pl, variants);
+        SWITCH_METAL_ENCODE_BEGIN(lookupSpan, VariantLookup);
+        prepared = dev_->variant(*pl, variants, facts | (rot_.turned() ? AssumeTurned : 0u));
+        SWITCH_METAL_ENCODE_END(lookupSpan);
+    }
     SWITCH_METAL_ENCODE_BEGIN(geometrySpan, Geometry);
-    DrawGeometry g;
-    if (firstDraw || pl->writeBits || (pl->fetchBits & ~pl->storageBits))
-        g = geometry(*pl, primitive, first, indexed ? drawIndexCount_ : count, {x[0], y[0], x[1], y[1]});
-    else
-        g.limit = {x[0], y[0], x[1], y[1]};
-    auto geometryAnalysis = geometryCache_.analysis(g, bindingRevision_, cb_->geometryBudget_, &cb_->geometryPool_);
+    const PixelBox limit = {x[0], y[0], x[1], y[1]};
+    // splitTwin() re-loads splitSource with acquire before dereferencing; a relaxed null check avoids a per-draw barrier.
+    const bool hasSplit = !indirectGeometry_ && !(rot_.turned() && pl->turnedVariant) &&
+                          __atomic_load_n(&pl->splitSource, __ATOMIC_RELAXED) != nullptr;
+    const bool needGeometry = firstDraw || mayFetch_ || hasSplit || pl->fetchBits != 0;
+    std::optional<WrittenRegion::Analysis> geometryAnalysis;
+    Pipeline *twin = pl;
+    if (needGeometry) {
+        DrawGeometry g;
+        if (firstDraw || pl->writeBits || (pl->fetchBits & ~pl->storageBits))
+            g = geometry(*pl, primitive, first, indexed ? drawIndexCount_ : count, limit);
+        else
+            g.limit = limit;
+        geometryAnalysis.emplace(geometryCache_.analysis(g, bindingRevision_, cb_->geometryBudget_, &cb_->geometryPool_));
+    }
     SWITCH_METAL_ENCODE_BEGIN(variantSpan, Variant);
     // a turned draw of a turned variant's state takes the variant over the generic program's split twin
-    Pipeline *twin = indirectGeometry_ || (rot_.turned() && pl->turnedVariant) ? pl : splitTwin(pl, geometryAnalysis);
+    if (hasSplit)
+        twin = splitTwin(pl, *geometryAnalysis);
     const Pipeline *launchOnly = nullptr;
     bool generic = false;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
@@ -408,13 +430,12 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     } else if (!pl->splitOf && !generic)
         pl = prepared;
     SWITCH_METAL_ENCODE_END(variantSpan);
-    if (!whole_) {
-        if (x[1] > x[0] && y[1] > y[0]) {
+    if (x[1] > x[0] && y[1] > y[0]) {
+        growReached(reached_, limit);
+        if (trackRects_ && !whole_) {
             const std::array<uint32_t, 4> r = {x[0], y[0], x[1], y[1]};
-            if (std::find(rects_.begin(), rects_.end(), r) == rects_.end()) {
+            if (std::find(rects_.begin(), rects_.end(), r) == rects_.end())
                 rects_.push_back(r);
-                growReached(reached_, {r[0], r[1], r[2], r[3]});
-            }
             if (rects_.size() > 1024) {
                 whole_ = true;
                 rects_.clear();
@@ -545,7 +566,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         cb_->refusal = {RefUnnamedUniform};
         return false;
     }
-    if (__atomic_load_n(&pl->heapMissing, __ATOMIC_ACQUIRE) && !dev_->rebindArguments(*pl)) {
+    if ((r.rootTableWord[0] || r.rootTableWord[1] || r.statusWord[0] || r.statusWord[1] || r.heapArrays) &&
+        __atomic_load_n(&pl->heapMissing, __ATOMIC_ACQUIRE) && !dev_->rebindArguments(*pl)) {
         *why = "no memory for the tables a state reads argument buffers through";
         cb_->refusal = {RefHeapMemory};
         return false;
@@ -581,7 +603,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                 for (uint32_t i = 0; i < entries.size(); i++)
                     if ((moved >> i & 1) && !writeSetEntry(pl, entries[i], set, prepared, why))
                         return false;
-                fillSpills(*pl, moved, false, prepared, set);
+                if (r.spillWords[0] || r.spillWords[1])
+                    fillSpills(*pl, moved, false, prepared, set);
                 return true;
             },
             [&](const DescriptorWords &words) {
@@ -620,8 +643,17 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     prepared_ = pl;
     preparedSet_ = setVa;
     SWITCH_METAL_ENCODE_BEGIN(bindSpan, Bind);
-    const Raster raster = rasterFor(primitive);
-    writeRaster(p, raster);
+    const bool plainRaster = !depthBias_.constant && !depthBias_.slope && raster_.cull == rasterHeld_.cull &&
+                             raster_.winding == rasterHeld_.winding && raster_.fill == rasterHeld_.fill &&
+                             icb::triangles(primitive) == rasterHeld_.bias && !rasterHeld_.biasConstant &&
+                             !rasterHeld_.biasSlope && !rasterHeld_.biasClamp;
+    Raster raster;
+    if (plainRaster) {
+        raster = rasterHeld_;
+    } else {
+        raster = rasterFor(primitive);
+        writeRaster(p, raster);
+    }
     const bool dynamicBlend = r.halfBlendColorWord;
     const bool slotRoots = r.rootSlots[0] || r.rootSlots[1];
     const bool patches = tessellates(r);
@@ -713,8 +745,9 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         p.m(NVB197_SET_TIR_CONTROL, tirControlHeld_);
     }
     SWITCH_METAL_ENCODE_END(bindSpan);
-    if (!writeClipControl(p, *pl, raster, why))
-        return false;
+    if (clipDirty_ || viewportDirty_ || rebinds || !plainRaster || !clampRangeHeld_)
+        if (!writeClipControl(p, *pl, raster, why))
+            return false;
     if (samplePasses_ != pl->samplePasses) {
         p.m(LOAD_CB_OFFSET, kRootSampleInfo + 8);
         p.nonInc(LOAD_CB, compatibleSampleMasks_, 4);
@@ -795,7 +828,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         launchSplit(p, *launchOnly, set);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     if (cb_->splitCapturing_ && twin->splitOf && !indexed)
-        captureSplit(*pl, geometryAnalysis, primitive, vFirst, count);
+        captureSplit(*pl, *geometryAnalysis, primitive, vFirst, count);
 #endif
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     countRules(*pl);
@@ -823,13 +856,13 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     }
     if (firstDraw && !indirectGeometry_ && !pl->dropsPixels && !(alphaWanted_ & kAlphaToCoverage)) {
         const uint8_t opaque = pl->writeBits & ~(pl->readBits | pl->fetchBits | pl->storageBits);
-        if (opaque && geometryAnalysis.covers(primitive == 3, areaW_, areaH_))
+        if (opaque && geometryAnalysis->covers(primitive == 3, areaW_, areaH_))
             covered_ = opaque;
     }
     const AttachmentBarrier needed = access.after(attachmentWrites_.rop, attachmentWrites_.storage);
     if (needed != AttachmentBarrier::None) {
         if (needed == AttachmentBarrier::Pixel &&
-            !(fetchedCompressed ? written_.meetsTiles(geometryAnalysis) : written_.meets(geometryAnalysis))) {
+            !(fetchedCompressed ? written_.meetsTiles(*geometryAnalysis) : written_.meets(*geometryAnalysis))) {
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
             SWITCH_METAL_DIAGNOSTIC(dev_->stats.fetchBarriersElided++);
 #endif
@@ -859,7 +892,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         !fetchedCompressed && fetchesOwnColor(pl->fetchBits, pl->writeBits, pl->storageBits) && !indirectGeometry_ &&
         !amplifies() && raster_.fill == 0 && (!pl->viewportIndex || views_.viewports <= 1) &&
         (primitive == 3 || primitive == 4) && drawCount == (primitive == 3 ? 6u : 4u) &&
-        WrittenRegion::nonOverlappingQuad(geometryAnalysis, primitive == 3));
+        WrittenRegion::nonOverlappingQuad(*geometryAnalysis, primitive == 3));
     SWITCH_METAL_ENCODE_END(barrierSpan);
     SWITCH_METAL_DIAGNOSTIC(cb_->counts_.interlockDraws += pl->storageBits != 0);
     SWITCH_METAL_DIAGNOSTIC(cb_->counts_.rasterOrderedDraws += pl->rec && (pl->rec->flags & PipelineRasterOrdered));
@@ -875,11 +908,11 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     attachmentWrites_.storage |= pl->storageWriteBits;
     passShaderWrites_ |= pl->writtenSlots != 0 || pl->writesMemory[0] || pl->writesMemory[1];
     passWritesMemory_ |= pl->writesMemory[0] || pl->writesMemory[1];
-    if (pl->writeBits)
-        written_.add(geometryAnalysis);
+    if (pl->writeBits && mayFetch_)
+        written_.add(*geometryAnalysis);
     // Reuse a bound already established for split/coverage/fetch decisions. Admission never triggers new CPU geometry
     // reads; unknown geometry uses the clipped viewport/scissor extent rather than the whole render target.
-    drawBox_ = geometryAnalysis.cachedBox();
+    drawBox_ = geometryAnalysis ? geometryAnalysis->cachedBox() : limit;
     drawPixels_ = drawBox_.empty() ? 0 : uint64_t(drawBox_.x1 - drawBox_.x0) * (drawBox_.y1 - drawBox_.y0);
     return pl->freeForm.matrixSlot == kNoUniform || matrixConstants(*pl, why);
 }
