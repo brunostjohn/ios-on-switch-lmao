@@ -1,42 +1,69 @@
 name: Save the Bazel disk cache
-description: Saves the disk cache entries this run read or wrote, for the job's next run (including partial progress on failure).
+description: LRU-prunes and saves the shared Bazel disk cache (including partial progress on failure) and deletes superseded entries on the same ref.
 inputs:
   cache:
-    description: The disk cache's name, as given to the bazel action.
+    description: The job label suffix for the saved cache key.
     required: true
-  prune:
-    description: Drop entries untouched by this run before saving (true on success, false on failure to keep prior warm entries).
-    default: "true"
 runs:
   using: composite
   steps:
-    # Bazel refreshes an entry's mtime whenever it reads it, the action result before its blobs, so no result kept here
-    # loses a blob. On a failed run we keep previously restored entries alongside newly succeeded actions so the next
-    # run starts warm instead of dropping progress.
-    - name: Prepare disk cache for saving
+    - name: LRU-prune shared Bazel disk cache
       id: prep
       shell: bash
-      env:
-        PRUNE: ${{ inputs.prune }}
       run: |
-        disk=~/Library/Caches/switch-ios-bazel/disk
-        marker="$RUNNER_TEMP/bazel-disk-cache-start"
-        if [ ! -d "$disk" ] || [ ! -f "$marker" ]; then
-          echo "save=false" >> "$GITHUB_OUTPUT"
-          exit 0
-        fi
-        if [ -z "$(find "$disk" -type f -newer "$marker" -print -quit)" ]; then
-          echo "No new Bazel disk cache entries written in this run; skipping cache save."
-          echo "save=false" >> "$GITHUB_OUTPUT"
-          exit 0
-        fi
-        if [ "$PRUNE" = "true" ]; then
-          find "$disk" -type f ! -newer "$marker" -delete
-        fi
-        du -sh "$disk" || true
-        echo "save=true" >> "$GITHUB_OUTPUT"
+        python3 ./tools/ci/prune_disk_cache.py \
+          --disk ~/Library/Caches/switch-ios-bazel/disk \
+          --marker "$RUNNER_TEMP/bazel-disk-cache-start" \
+          --max-gib 10.0 \
+          --target-gib 8.5 \
+          --max-age-days 14 \
+          --github-output "$GITHUB_OUTPUT"
     - if: steps.prep.outputs.save == 'true'
       uses: actions/cache/save@v6.1.0
       with:
         path: ~/Library/Caches/switch-ios-bazel/disk
-        key: bazel-disk-${{ inputs.cache }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+        key: bazel-disk-v2-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.cache }}
+    - name: Delete superseded disk caches on this ref
+      if: steps.prep.outputs.save == 'true' && env.GITHUB_TOKEN != ''
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        KEEP_KEY: bazel-disk-v2-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.cache }}
+      run: |
+        python3 - <<'PY' || true
+        import json
+        import os
+        import urllib.parse
+        import urllib.request
+
+        token = os.environ["GITHUB_TOKEN"]
+        repo = os.environ["GITHUB_REPOSITORY"]
+        ref = os.environ["GITHUB_REF"]
+        keep_key = os.environ["KEEP_KEY"]
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+        }
+        q = urllib.parse.urlencode({"ref": ref, "key": "bazel-disk-v2-", "per_page": 100})
+        req = urllib.request.Request(f"https://api.github.com/repos/{repo}/actions/caches?{q}", headers=headers)
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            caches = json.loads(resp.read().decode("utf-8")).get("actions_caches", [])
+        if not any(c.get("key") == keep_key for c in caches):
+            raise SystemExit(0)
+        deleted = 0
+        for c in caches:
+            if c.get("key") == keep_key:
+                continue
+            cid = c.get("id")
+            del_req = urllib.request.Request(
+                f"https://api.github.com/repos/{repo}/actions/caches/{cid}",
+                headers=headers,
+                method="DELETE",
+            )
+            try:
+                with urllib.request.urlopen(del_req, timeout=15):
+                    deleted += 1
+            except OSError:
+                pass
+        print(f"Cleaned up {deleted} superseded bazel-disk-v2 caches on {ref}")
+        PY
