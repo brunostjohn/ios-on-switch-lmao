@@ -8,6 +8,7 @@ during this run and evict only expired or oldest untouched entries once total si
 """
 
 import argparse
+import contextlib
 import os
 import sys
 import time
@@ -44,10 +45,8 @@ def _remove_empty_dirs(disk: Path) -> None:
         root_path = Path(root)
         if root_path == disk:
             continue
-        try:
+        with contextlib.suppress(OSError):
             root_path.rmdir()
-        except OSError:
-            pass
 
 
 def _drop_expired(
