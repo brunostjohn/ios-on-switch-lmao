@@ -22,6 +22,7 @@ TEST(NVDECLockScopeWiring, SubmitBufferFreeAndCloseDropClientLockAcrossSleeps)
     ASSERT_NE(runCall, std::string::npos);
     EXPECT_LT(submitUnlock, runCall);
     EXPECT_THAT(submit, HasSubstr("snapshotSubmitLocked();"));
+    EXPECT_EQ(submit.find("memcpy(&scratch_->submit"), std::string::npos);
 
     const std::string bufferFree = Body(client, "IOReturn AppleD5500UserClient::bufferFreeMethod(");
     const size_t freeUnlock = bufferFree.find("IOLockUnlock(lock_);");
@@ -36,5 +37,30 @@ TEST(NVDECLockScopeWiring, SubmitBufferFreeAndCloseDropClientLockAcrossSleeps)
     ASSERT_NE(closeUnlock, std::string::npos);
     ASSERT_NE(closeQuiesce, std::string::npos);
     EXPECT_LT(closeUnlock, closeQuiesce);
+}
+
+TEST(NVDECLockScopeWiring, ExportPresentAndWaitDropClientLockAndUseInvalidate)
+{
+    const std::string client = SourceText("../TegraNVDECUserClient.cpp");
+    const std::string ext = Body(client, "IOReturn AppleD5500UserClient::externalMethod(");
+    EXPECT_THAT(ext, HasSubstr("else if (method == SwitchNVDECMethodExport)"));
+    EXPECT_THAT(ext, HasSubstr("else if (method == TegraNVDECMethodPresent)"));
+
+    const std::string exp = Body(client, "IOReturn AppleD5500UserClient::exportMethod(");
+    EXPECT_THAT(exp, HasSubstr("retainBlock("));
+    EXPECT_THAT(exp, HasSubstr("switch_nvdec_output_export("));
+    EXPECT_EQ(exp.find("IOLockLock(lock_);"), std::string::npos);
+
+    const std::string pres = Body(client, "IOReturn AppleD5500UserClient::presentMethod(");
+    EXPECT_THAT(pres, HasSubstr("retainBlock("));
+    EXPECT_THAT(pres, HasSubstr("tegra_vic_present("));
+    EXPECT_THAT(pres, HasSubstr("switch_dcache_invalidate("));
+    EXPECT_EQ(pres.find("switch_dcache_clean_invalidate("), std::string::npos);
+    EXPECT_EQ(pres.find("IOLockLock(lock_);"), std::string::npos);
+
+    const std::string runBody = Body(client, "IOReturn AppleD5500UserClient::run(");
+    EXPECT_THAT(runBody, HasSubstr("switch_dcache_invalidate_lines("));
+    EXPECT_THAT(runBody, HasSubstr("switch_dcache_sync();"));
+    EXPECT_EQ(runBody.find("switch_dcache_clean_invalidate("), std::string::npos);
 }
 }  // namespace

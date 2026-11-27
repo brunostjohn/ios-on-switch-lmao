@@ -5,6 +5,7 @@
 #include <IOKit/IOKitLib.h>
 #include <mach/mach.h>
 #include <os/log.h>
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 #include "NVDECListener.h"
@@ -20,11 +21,21 @@ typedef struct {
     uint8_t *va;
 } Mapping;
 
+typedef struct {
+    uint32_t magic;
+    uint32_t method;
+    TegraNVDECSubmit submit;
+} SubmitPacket;
+
+_Static_assert(offsetof(SubmitPacket, submit) == 8, "tunnel header must be 8 bytes");
+_Static_assert(sizeof(SubmitPacket) == 8 + sizeof(TegraNVDECSubmit), "submit packet must have no padding");
+
 struct NVDECClient {
     io_connect_t connection;
     uint32_t selector, codecs, features, jobs;
     Mapping mappings[kBuffers];
     NVDECListener *listener;
+    SubmitPacket submitPacket;
 };
 
 static void remember(NVDECClient *c, uint32_t handle, void *va)
@@ -155,6 +166,8 @@ NVDECClient *nvdec_open(int *error)
     c->codecs = info.codecs;
     c->features = info.features;
     c->jobs = info.jobs_in_flight;
+    c->submitPacket.magic = TEGRA_NVDEC_TUNNEL_MAGIC;
+    c->submitPacket.method = TegraNVDECMethodSubmit;
     return c;
 }
 
@@ -247,10 +260,23 @@ void nvdec_free(void *ctx, uint32_t handle)
     forget(c, handle);
 }
 
+TegraNVDECSubmit *nvdec_submit_buffer(NVDECClient *c)
+{
+    return c ? &c->submitPacket.submit : NULL;
+}
+
 int nvdec_submit(void *ctx, const TegraNVDECSubmit *submit, TegraNVDECFence *reply)
 {
     NVDECClient *c = ctx;
-    if (call(c, c->selector, TegraNVDECMethodSubmit, submit, sizeof(*submit), reply, sizeof(*reply)))
+    kern_return_t kr;
+    if (submit == &c->submitPacket.submit) {
+        size_t size = sizeof(*reply);
+        kr = IOConnectCallStructMethod(c->connection, c->selector, &c->submitPacket, sizeof(c->submitPacket), reply,
+                                       &size);
+    } else {
+        kr = call(c, c->selector, TegraNVDECMethodSubmit, submit, sizeof(*submit), reply, sizeof(*reply));
+    }
+    if (kr)
         return -1;
     TegraNVDECRange status;
     if (c->listener && nvdec_status_range(submit, &status))
