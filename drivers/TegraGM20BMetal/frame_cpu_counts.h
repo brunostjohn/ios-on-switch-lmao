@@ -26,7 +26,7 @@ enum class EarlyOutcome : uint8_t {
 
 }  // namespace gm20b
 
-#if (!defined(SWITCH_DEBUG) || SWITCH_DEBUG) && (!defined(SWITCH_STATS_GPU) || SWITCH_STATS_GPU)
+#if (!defined(SWITCH_DEBUG) || SWITCH_DEBUG) && defined(SWITCH_STATS_GPU) && SWITCH_STATS_GPU
 namespace gm20b {
 
 // A render pass as the recording thread opened it

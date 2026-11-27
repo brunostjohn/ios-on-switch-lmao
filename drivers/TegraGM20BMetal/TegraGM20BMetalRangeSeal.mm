@@ -216,7 +216,7 @@ bool SwitchMetalRangeEncode::seal(size_t to)
     rc->quietEnd = cb->_rangeQuiet;
     const bool lastRange = cb->_segNext + 1 == cb->_segs.size() && cb->_promised.load(std::memory_order_acquire);
     if (lastRange) {
-        std::lock_guard<gm20b::Mutex> l(cb->_lock);
+        std::lock_guard<gm20b::UnfairMutex> l(cb->_lock);
         cb->_promisesTaken = true;
         rc->promises = cb->_promises;
     }
@@ -236,7 +236,7 @@ bool SwitchMetalRangeEncode::seal(size_t to)
                 },
                 armed);
             if (!cb->_resourceReady) {
-                std::lock_guard<gm20b::Mutex> lock(cb->_lock);
+                std::lock_guard<gm20b::UnfairMutex> lock(cb->_lock);
                 cb->_segError = [NSError
                     errorWithDomain:MTLCommandBufferErrorDomain
                                code:MTLCommandBufferErrorInternal
@@ -295,7 +295,7 @@ bool SwitchMetalRangeEncode::seal(size_t to)
              "a draw Apple's driver draws nothing defined for: skipped", rc->skips);
     publishSharedEvents(cb);
     if (rc->promisesKept) {
-        std::lock_guard<gm20b::Mutex> l(cb->_lock);
+        std::lock_guard<gm20b::UnfairMutex> l(cb->_lock);
         cb->_promises.clear();
     }
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG

@@ -324,6 +324,7 @@ bool Device::createTexelStandIn(Texture &t)
     {
         std::lock_guard<gm20b::Mutex> l(lock_);
         memcpy(tic_.cpu + 32 * s->tic, w, 32);
+        noteTicWrite();
     }
     s->luma = codes;
     s->chroma = alpha;

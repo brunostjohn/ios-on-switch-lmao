@@ -106,6 +106,8 @@ void RenderEncoder::clears(std::vector<Clear> &out, bool fused)
                     reach = Nothing;
             }
         }
+    } else if (reach == Draws && !whole_ && reached_.empty()) {
+        reach = Nothing;
     }
     static const float zero[4] = {};
     for (uint32_t j = 0; j < pass_.count && j < 8; j++) {

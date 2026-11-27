@@ -383,6 +383,7 @@ bool Device::compressedFromPlain(Texture &t)
         v->storage = t.storageRange();
         v->comptags = true;
     }
+    noteTicWrite();
     SWITCH_METAL_DIAGNOSTIC(stats.privateCompressedMoves++);
     return true;
 }
@@ -399,9 +400,11 @@ void Device::freeMovedPlain()
             continue;
         }
         // its job was on a channel since lost, which may have stopped before it: none of that channel's work runs now
-        if (lost)
+        if (lost) {
             for (size_t i = 0; i < it->tics.size(); i++)
                 memcpy(tic_.cpu + 32 * it->tics[i], it->headers.cpu + 32 * i, 32);
+            noteTicWrite();
+        }
         Lease *none = nullptr;
         if (it->zeta < kZetaFormats)
             tiledFree(zChunks_[it->zeta], it->span, deferred);

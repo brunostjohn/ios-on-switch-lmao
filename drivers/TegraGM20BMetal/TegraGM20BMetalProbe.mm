@@ -373,8 +373,8 @@ static gm20b::ProbeSurface probeSurface(const gm20b::Texture &t, uint32_t fmt2d)
     gm20b::ProbeForms f;
     if (!gm20b::parseProbeForms(forms.UTF8String, f))
         return [NSString stringWithFormat:@"forms not understood: %@", forms];
-    std::lock_guard<gm20b::Mutex> lock(_lock);
-    if (_committed)
+    std::lock_guard<gm20b::UnfairMutex> lock(_lock);
+    if (_committed.load(std::memory_order_relaxed))
         return @"committed already";
     gm20bPipelineVeto(self, VetoProbes);
     _probeForms = f;
@@ -384,7 +384,7 @@ static gm20b::ProbeSurface probeSurface(const gm20b::Texture &t, uint32_t fmt2d)
 // Where its barriers took the forms, once it completed (probe_forms.h ProbeTaken)
 - (NSString *)switchMetalProbeTaken
 {
-    std::lock_guard<gm20b::Mutex> lock(_lock);
+    std::lock_guard<gm20b::UnfairMutex> lock(_lock);
     return @(_probeTaken.text().c_str());
 }
 
@@ -400,8 +400,8 @@ static gm20b::ProbeSurface probeSurface(const gm20b::Texture &t, uint32_t fmt2d)
         return kProbesUnentitled;
     if (!written || (!fill && !method && !read))
         return @"a texture the driver does not hold (memoryless, a view, or refused)";
-    std::lock_guard<gm20b::Mutex> lock(_lock);
-    if (_committed || !_encOpen || ![_active isKindOfClass:[SwitchMetalBlitEncoder class]])
+    std::lock_guard<gm20b::UnfairMutex> lock(_lock);
+    if (_committed.load(std::memory_order_relaxed) || !_encOpen || ![_active isKindOfClass:[SwitchMetalBlitEncoder class]])
         return @"no blit encoder open";
     if (method) {
         gm20b::ProbeOp o;

@@ -180,9 +180,9 @@ bool Completion::renderRequest(const Ask &a, const CacheKey &k, bool bytes, Comp
     return true;
 }
 
-bool Completion::storedEntry(const StoreKey &store, const std::function<bool(const std::string &bytes)> &decoded)
+bool Completion::storedEntry(const StoreKey &store, const std::function<bool(std::string_view bytes)> &decoded)
 {
-    std::string bytes;
+    std::string_view bytes;
     for (uint32_t k = 0; k < kStoreCandidates; ++k)
         if (remote_->find(candidateName(store.name, k), bytes) && decoded(bytes))
             return true;
@@ -193,7 +193,7 @@ RecordCache::Found Completion::fromStore(const StoreKey &store, const std::strin
                                          std::string &why)
 {
     RecordCache::Found found = RecordCache::Found::None;
-    storedEntry(store, [&](const std::string &bytes) {
+    storedEntry(store, [&](std::string_view bytes) {
         found = decodeEntry(bytes, store.content, record, why);
         return found != RecordCache::Found::None;
     });
@@ -417,7 +417,7 @@ Compiler::Outcome Completion::remoteKernel(id facadeFunction, MTLComputePipeline
     };
     const auto stored = [&]() {
         RecordCache::Found found = RecordCache::Found::None;
-        storedEntry(store, [&](const std::string &bytes) {
+        storedEntry(store, [&](std::string_view bytes) {
             found = decodeKernelEntry(bytes, store.content, record, why);
             return found != RecordCache::Found::None;
         });
@@ -463,7 +463,7 @@ bool Completion::storedReflection(const std::function<bool(bool, bool, CompileRe
     std::string text;
     bool made = false;
     const auto stored = [&] {
-        return storedEntry(store, [&](const std::string &bytes) {
+        return storedEntry(store, [&](std::string_view bytes) {
             return decodeReflectionEntry(bytes, store.content, made, text);
         });
     };
@@ -573,7 +573,7 @@ bool Completion::facts(id facadeFunction, MTLComputePipelineDescriptor *descript
     std::string refusal;
     const auto stored = [&]() {
         RecordCache::Found found = RecordCache::Found::None;
-        storedEntry(store, [&](const std::string &bytes) {
+        storedEntry(store, [&](std::string_view bytes) {
             found = decodeFactsEntry(bytes, store.content, out, refusal);
             return found != RecordCache::Found::None;
         });
@@ -640,7 +640,7 @@ bool Completion::library(uint32_t type, const std::string &bytes, MadeLibrary &o
     std::string log;
     const auto stored = [&]() {
         RecordCache::Found found = RecordCache::Found::None;
-        storedEntry(store, [&](const std::string &entry) {
+        storedEntry(store, [&](std::string_view entry) {
             found = decodeLibraryEntry(entry, store.content, out, log);
             return found != RecordCache::Found::None;
         });

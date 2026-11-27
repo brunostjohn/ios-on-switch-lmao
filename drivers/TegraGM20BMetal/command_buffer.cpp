@@ -11,12 +11,12 @@
 #include "tiled_cache.h"
 
 #include <mach/mach.h>
-#include <os/log.h>
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
 
 #include "gm20b_gpu_internal.h"
+#include "gm20b_log.h"
 
 namespace gm20b {
 
@@ -107,6 +107,7 @@ CommandBuffer *Device::begin()
     cb.memberUses_.clear();
     cb.memberRemovals_ = setView_.removals;
     cb.memberHostWritten_ = false;
+    cb.dirtyBuffers_.clear();
     cb.arenaKindInvalidate_ = false;
     cb.pendingKindSwitch_ = false;
     cb.kindSwitchGen_ = 0;
@@ -115,6 +116,8 @@ CommandBuffer *Device::begin()
     cb.inRender_ = false;
     cb.passBufferWrites_ = false;
     cb.prevBufferWrites_ = false;
+    cb.passShaderFlushed_ = false;
+    cb.computeReleased_ = false;
     cb.tiledCacheDirty_ = false;
     cb.cbArenaKinds_.clear();
     cb.cbCrossSeen_.clear();
@@ -162,6 +165,8 @@ CommandBuffer *Device::begin()
     cb.rtLayer_ = rtLayer_;
     cb.alphaHeld_ = alphaHeld_;
     cb.sampleMaskHeld_ = sampleMaskHeld_;
+    cb.clampRangeHeld_ = clampRangeHeld_;
+    memcpy(cb.clampRange_, clampRange_, sizeof clampRange_);
     cb.tiledCacheSize_ = tiledCacheSize_;
     cb.ds_ = ds_;
     cb.extrasLive_ = extrasLive_;
@@ -198,8 +203,14 @@ CommandBuffer *Device::begin()
     cb.pixelOpenings_ = 0;
     cb.zcullCounts_ = {};
 #endif
-    if (const EntryForm entry = entryFormFor(cb.barrierForms().entry); relaxed(entry)) {
-        cb.shaderInvalidate_ = entryOpening(p, entry);
+    cb.samplerInvalidate_ = nullptr;
+    cb.headerInvalidate_ = nullptr;
+    const EntryForm askedEntry = cb.barrierForms().entry;
+    if (const EntryForm entry = entryFormFor(askedEntry); relaxed(entry)) {
+        const bool gateHeaders = askedEntry == EntryForm::Rule;
+        cb.shaderInvalidate_ =
+            entryOpening(p, entry, gateHeaders ? &cb.samplerInvalidate_ : nullptr,
+                         gateHeaders ? &cb.headerInvalidate_ : nullptr);
         SWITCH_METAL_DIAGNOSTIC(cb.taken_.entries++);
     } else {
         p.m(INVALIDATE_SAMPLER_CACHE_NO_WFI, 0);
@@ -343,7 +354,7 @@ static void logNotSubmitted(const CommandBuffer &cb)
         return;
     char why[192];
     cb.describeRefusal(why, sizeof why);
-    os_log_error(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "gm20b"),
+    os_log_error(gm20b::log(),
                  "SwitchMetal: a command buffer not submitted: %{public}s (#%u)", why, n);
 }
 
@@ -379,6 +390,8 @@ bool CommandBuffer::commit(uint32_t &seqno)
     uint64_t invalidatedBefore = 0;
     bool tablesInvalidate = false;
     uint64_t tablesBefore = 0;
+    bool ticInvalidate = false, tscInvalidate = false;
+    uint64_t ticBefore = 0, tscBefore = 0;
 
     struct RollbackInvalidation {
         Device &device;
@@ -386,6 +399,8 @@ bool CommandBuffer::commit(uint32_t &seqno)
         uint64_t &before;
         bool &tables;
         uint64_t &tablesBefore;
+        bool &tic, &tsc;
+        uint64_t &ticBefore, &tscBefore;
 
         ~RollbackInvalidation()
         {
@@ -393,8 +408,13 @@ bool CommandBuffer::commit(uint32_t &seqno)
                 device.heapInvalidated_ = before;
             if (tables && !published)
                 device.tablesInvalidated_ = tablesBefore;
+            if (tic && !published)
+                device.ticInvalidated_ = ticBefore;
+            if (tsc && !published)
+                device.tscInvalidated_ = tscBefore;
         }
-    } rollback{d, invalidates, published, invalidatedBefore, tablesInvalidate, tablesBefore};
+    } rollback{d, invalidates, published, invalidatedBefore, tablesInvalidate, tablesBefore,
+               ticInvalidate, tscInvalidate, ticBefore, tscBefore};
 
     uint64_t slmGiven = 0, slmVa = 0;
     const uint64_t placed = d.heapEpoch_.load(std::memory_order_acquire);
@@ -403,6 +423,20 @@ bool CommandBuffer::commit(uint32_t &seqno)
         invalidates = true;
         invalidatedBefore = d.heapInvalidated_;
         d.heapInvalidated_ = placed;
+    }
+    const uint64_t tscGen = d.tscWritten_.load(std::memory_order_acquire);
+    if (samplerInvalidate_ && tscGen != d.tscInvalidated_) {
+        *samplerInvalidate_ = Push::hdr(4, SUBC_3D, NVB197_INVALIDATE_SAMPLER_CACHE_NO_WFI, 0);
+        tscInvalidate = true;
+        tscBefore = d.tscInvalidated_;
+        d.tscInvalidated_ = tscGen;
+    }
+    const uint64_t ticGen = d.ticWritten_.load(std::memory_order_acquire);
+    if (headerInvalidate_ && ticGen != d.ticInvalidated_) {
+        *headerInvalidate_ = Push::hdr(4, SUBC_3D, NVB197_INVALIDATE_TEXTURE_HEADER_CACHE_NO_WFI, 0);
+        ticInvalidate = true;
+        ticBefore = d.ticInvalidated_;
+        d.ticInvalidated_ = ticGen;
     }
     if (const uint64_t perWarp = d.slmPerWarp_.load(std::memory_order_acquire); perWarp != d.slmChannel_) {
         slmGiven = perWarp;
@@ -576,6 +610,14 @@ bool CommandBuffer::commit(uint32_t &seqno)
         signaled += signalCount;
     }
     seqno = d.lastSubmitted();
+    for (const DirtyBuffer &entry : dirtyBuffers_) {
+        uint64_t seen = __atomic_load_n(&entry.buffer->cpuSeenGen, __ATOMIC_RELAXED);
+        while (seen < entry.gen &&
+               !__atomic_compare_exchange_n(&entry.buffer->cpuSeenGen, &seen, entry.gen, true, __ATOMIC_RELEASE,
+                                            __ATOMIC_RELAXED)) {
+        }
+    }
+    dirtyBuffers_.clear();
     d.scrubsSubmitted(*this, seqno);
     parkZcull();
     if (slmGiven)
@@ -587,11 +629,13 @@ bool CommandBuffer::commit(uint32_t &seqno)
     d.rtLayer_ = rtLayer_;
     d.alphaHeld_ = alphaHeld_;
     d.sampleMaskHeld_ = sampleMaskHeld_;
+    d.clampRangeHeld_ = clampRangeHeld_;
+    memcpy(d.clampRange_, clampRange_, sizeof clampRange_);
     d.tiledCacheSize_ = tiledCacheSize_;
     d.ds_ = ds_;
     d.extrasLive_ = extrasLive_;
     d.heldSegment_ = heldSegment_;
-    const uint64_t now = compClock();
+    const uint64_t now = backings_.empty() ? 0 : compClock();
     for (Texture *b : backings_) {
         Device::Backing &k = Device::backingOf(*b);
         k.lastUse.store(seq, std::memory_order_relaxed);
@@ -723,6 +767,7 @@ void CommandBuffer::abandon()
     }
     segments_.clear();
     dirty_.clear();
+    dirtyBuffers_.clear();
     surfaces_.clear();
     named_.clear();
     cbArenaKinds_.clear();

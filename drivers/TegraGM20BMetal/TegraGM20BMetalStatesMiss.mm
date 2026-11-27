@@ -9,9 +9,9 @@
 
 bool gm20bFirstNaming(uint64_t keyHash, uint32_t line)
 {
-    static gm20b::Mutex lock;
+    static gm20b::UnfairMutex lock;
     static std::unordered_set<uint64_t> named;
-    std::lock_guard<gm20b::Mutex> l(lock);
+    std::lock_guard<gm20b::UnfairMutex> l(lock);
     return named.insert(keyHash * 31 + line).second;
 }
 

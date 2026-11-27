@@ -13,7 +13,7 @@ static bool failSubmission(SwitchMetalCommandBuffer *cb, NSString *reason)
     failCommandBuffer(cb, reason);
     NSError *error = nil;
     {
-        std::lock_guard<gm20b::Mutex> l(cb->_lock);
+        std::lock_guard<gm20b::UnfairMutex> l(cb->_lock);
         error = cb->_segError;
     }
     finish(cb, error);
@@ -211,7 +211,7 @@ bool submitRange(SwitchMetalCommandBuffer *cb, bool followed)
     [[maybe_unused]] GM20BState &r = *gRM;
     NSError *priorError = nil;
     if (cb->_segError.set()) {
-        std::lock_guard<gm20b::Mutex> l(cb->_lock);
+        std::lock_guard<gm20b::UnfairMutex> l(cb->_lock);
         priorError = cb->_segError;
     }
     // a present is added before its command buffer is committed, a completed handler's flag before it is added
@@ -235,7 +235,7 @@ bool submitRange(SwitchMetalCommandBuffer *cb, bool followed)
     if (range.held) {
         decltype(cb->_loopContinue) loop;
         {
-            std::lock_guard<gm20b::Mutex> l(cb->_lock);
+            std::lock_guard<gm20b::UnfairMutex> l(cb->_lock);
             loop = std::exchange(cb->_loopContinue, {});
         }
         if (loop.pending) {
@@ -333,7 +333,7 @@ bool submitRange(SwitchMetalCommandBuffer *cb, bool followed)
             folded();
 #endif
             {
-                std::lock_guard<gm20b::Mutex> l(cb->_lock);
+                std::lock_guard<gm20b::UnfairMutex> l(cb->_lock);
                 priorError = cb->_segError;
             }
             if (priorError) {

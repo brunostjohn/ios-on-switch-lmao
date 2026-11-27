@@ -49,11 +49,11 @@ bool Device::waitFence(uint32_t seqno, uint64_t generation)
         if (done(seqno))
             return !lost(seqno);
         if (++refused == kRefusals) {
-            os_log_error(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "gm20b"),
+            os_log_error(gm20b::log(),
                          "SwitchMetal: the kernel refused %u waits on channel %u's seqno %u (%s): taken as killed",
                          refused, ch, seqno, k_.error().c_str());
             {
-                std::lock_guard<gm20b::Mutex> l(killedLock_);
+                std::lock_guard<gm20b::UnfairMutex> l(killedLock_);
                 killedKept_[killedNext_++ % killedKept_.size()] = {st.completed + 1, lastSubmitted(), kWaitRefused};
                 keptThrough_.store(lastSubmitted(), std::memory_order_relaxed);
                 keptKills_.store(true, std::memory_order_release);
@@ -68,7 +68,7 @@ bool Device::waitFence(uint32_t seqno, uint64_t generation)
 // A job the kernel says its own event wait failed, which the fence record no longer names
 void Device::keepFailure(uint32_t seqno)
 {
-    std::lock_guard<gm20b::Mutex> l(killedLock_);
+    std::lock_guard<gm20b::UnfairMutex> l(killedLock_);
     killedKept_[killedNext_++ % killedKept_.size()] = {seqno, seqno, kDependencyFailed};
     const uint32_t through = keptThrough_.load(std::memory_order_relaxed);
     if (!keptKills_.load(std::memory_order_relaxed) || int32_t(seqno - through) > 0)
@@ -82,7 +82,7 @@ std::vector<KillRange> Device::failedSeqnos() const
 {
     std::vector<KillRange> failed;
     {
-        std::lock_guard<gm20b::Mutex> l(killedLock_);
+        std::lock_guard<gm20b::UnfairMutex> l(killedLock_);
         for (const Killed &kept : killedKept_)
             if (kept.error)
                 failed.push_back(kept);
@@ -105,7 +105,7 @@ std::vector<KillRange> Device::failedSeqnos() const
 // A kept record names the seqnos of the slot it was written in, which a channel made in another slot gives out again
 void Device::forgetKept()
 {
-    std::lock_guard<gm20b::Mutex> l(killedLock_);
+    std::lock_guard<gm20b::UnfairMutex> l(killedLock_);
     killedKept_ = {};
     keptThrough_.store(0, std::memory_order_relaxed);
     keptKills_.store(false, std::memory_order_release);
@@ -149,7 +149,7 @@ bool Device::killed(uint32_t seqno) const
     if (!keptKills_.load(std::memory_order_acquire) ||
         int32_t(seqno - keptThrough_.load(std::memory_order_relaxed)) > 0)
         return false;
-    std::lock_guard<gm20b::Mutex> l(killedLock_);
+    std::lock_guard<gm20b::UnfairMutex> l(killedLock_);
     for (const Killed &kept : killedKept_)
         if (covers(kept)) {
             killedError_.store(kept.error, std::memory_order_relaxed);
@@ -222,7 +222,7 @@ bool Device::reopen()
         Killed live = {};
         if (liveKill(live)) {
             k_.markLost(oldChannel, k_.opened());
-            std::lock_guard<gm20b::Mutex> l(killedLock_);
+            std::lock_guard<gm20b::UnfairMutex> l(killedLock_);
             killedKept_[killedNext_++ % killedKept_.size()] = live;
             keptThrough_.store(live.last, std::memory_order_relaxed);
             keptKills_.store(true, std::memory_order_release);
@@ -247,7 +247,7 @@ bool Device::reopen()
                          return !gaveBack;
                      })) {
         channelRefusal_.refused(gaveBack);
-        std::lock_guard<gm20b::Mutex> l(channelLock_);
+        std::lock_guard<gm20b::UnfairMutex> l(channelLock_);
         channelError_ = k_.error();
         return false;
     }
@@ -273,6 +273,8 @@ bool Device::newContext(uint32_t channel, uint32_t &seq)
         for (Backing *b : backings_)
             b->submitted = false;
         heapInvalidated_ = ~0ull;
+        ticInvalidated_ = ~0ull;
+        tscInvalidated_ = ~0ull;
     }
     slmChannel_ = 0;
     memset(rootPush_, 0, sizeof rootPush_);
@@ -280,6 +282,7 @@ bool Device::newContext(uint32_t channel, uint32_t &seq)
     rtLayer_ = ~0u;
     alphaHeld_ = kAlphaControlUnknown;
     sampleMaskHeld_ = kSampleMaskUnknown;
+    clampRangeHeld_ = false;
     const uint32_t words = contextWords() + uint32_t(fx::twodInitWords());
     uint64_t va;
     uint32_t *start = reinterpret_cast<uint32_t *>(alloc(push_, words * 4, 256, va));

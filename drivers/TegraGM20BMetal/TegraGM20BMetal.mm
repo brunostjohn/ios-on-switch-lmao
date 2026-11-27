@@ -23,8 +23,7 @@ std::atomic<uint64_t> gSurfaceTextures{0};  // the frame timeline's churn count 
 
 os_log_t gm20bLog()
 {
-    static os_log_t l = os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "gm20b");
-    return l;
+    return gm20b::log();
 }
 
 [[noreturn]] void waitTooLong(const char *what, const void *object)
@@ -40,10 +39,10 @@ os_log_t gm20bLog()
 // One line per distinct text, then silence (shipped paths: no diagnostics but one-shot lines).
 void once(NSString *text)
 {
-    static gm20b::Mutex lock;
+    static gm20b::UnfairMutex lock;
     static std::set<std::string> seen;
     {
-        std::lock_guard<gm20b::Mutex> l(lock);
+        std::lock_guard<gm20b::UnfairMutex> l(lock);
         if (seen.size() > 512 || !seen.insert(text.UTF8String).second)
             return;
     }
@@ -69,8 +68,28 @@ uint64_t nowUs()
 }
 
 GM20BState *gRM;
+Class gSwitchMetalBufferClass;
+Class gSwitchMetalTextureClass;
+Class gSwitchMetalNoCopyTextureClass;
+Class gSwitchMetalSamplerClass;
+Class gSwitchMetalPipelineClass;
+Class gSwitchMetalDepthStencilClass;
+Class gSwitchMetalHeapClass;
+Class gSwitchMetalComputeStateClass;
 
 @implementation SwitchMetalObject
+
++ (void)load
+{
+    gSwitchMetalBufferClass = [SwitchMetalBuffer class];
+    gSwitchMetalTextureClass = [SwitchMetalTexture class];
+    gSwitchMetalNoCopyTextureClass = objc_getClass("SwitchMetalNoCopyTexture");
+    gSwitchMetalSamplerClass = [SwitchMetalSampler class];
+    gSwitchMetalPipelineClass = [SwitchMetalPipeline class];
+    gSwitchMetalDepthStencilClass = [SwitchMetalDepthStencil class];
+    gSwitchMetalHeapClass = [SwitchMetalHeap class];
+    gSwitchMetalComputeStateClass = objc_getClass("SwitchMetalComputeState");
+}
 
 - (id<MTLDevice>)device
 {
@@ -148,21 +167,15 @@ static gm20b::Device *openDevice(const char *packPath, uint64_t stack, gm20b::De
 #endif
     gm20b::Device *dev = new gm20b::Device;
     dev->heapHolds(gm20b::heapHolds);
-    if (!dev->open(packPath, stack, err, role)) {
+    if (!dev->open(packPath, stack, err, role, true)) {
         failure = dev->openFailure();
         delete dev;  // its connection closes: the kernel frees what it held
         return nullptr;
     }
-    if (role == gm20b::Device::Role::Client)
-        return dev;
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    const uint64_t opened = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
-#endif
-    dev->warm();
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     if (openNs && warmNs) {
-        *openNs = opened - began;
-        *warmNs = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - opened;
+        *openNs = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - began;
+        *warmNs = 0;
     }
 #endif
     return dev;
@@ -215,6 +228,18 @@ void metal_complete_states(const char *cacheDir, const char *nativeSeed)
     if (gRM && !gRM->completion)
         gRM->completion =
             std::make_unique<gm20b::Completion>(*gRM->raw, cacheDir, gRM->raw->pack().header()->stack, nativeSeed);
+}
+
+void metal_complete_states_lazy(switch_cache_dir_fn resolveCacheDir, const char *nativeSeed)
+{
+    if (gRM && !gRM->completion)
+        gRM->completion = std::make_unique<gm20b::Completion>(
+            *gRM->raw, nullptr, gRM->raw->pack().header()->stack, nativeSeed,
+            resolveCacheDir ? std::function<std::string()>([resolveCacheDir]() -> std::string {
+                char buf[512];
+                return resolveCacheDir(buf, sizeof buf) ? std::string(buf) : std::string();
+            })
+                            : nullptr);
 }
 
 dispatch_queue_t followingRootQueue()
@@ -412,11 +437,6 @@ id<MTLDevice> metal_device_open(const char *packPath, uint64_t stack, uint64_t r
     const bool renderServer = dev->role() == gm20b::Device::Role::RenderServer;
     if (!renderServer)
         observeBackground();
-#if SWITCH_METAL_DIAGNOSTICS
-    if (renderServer)
-        os_log(gm20bLog(), "SwitchMetal: shader heap %llu KB, each program placed at its state's first use",
-               (unsigned long long)(dev->heapBytes() >> 10));
-#endif
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     {  // the stall line's timer (gm20bStallTick): one a process, on a serial queue of its own, which alone runs the tick
         // and so owns its state. Nothing the render server's other threads hold delays it; another process's rides the

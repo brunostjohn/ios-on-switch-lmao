@@ -152,7 +152,7 @@ API_AVAILABLE(ios(18.0), macos(15.0))
 @end
 
 @implementation SwitchMetalResidencySet {
-    gm20b::Mutex _lock;
+    gm20b::UnfairMutex _lock;
     NSMutableArray<id<MTLAllocation>> *_pending;
     NSArray<id<MTLAllocation>> *_committed;
     std::shared_ptr<const SwitchMetalResidencySnapshot> _snapshot;
@@ -173,7 +173,7 @@ API_AVAILABLE(ios(18.0), macos(15.0))
 
 - (uint64_t)allocatedSize
 {
-    std::lock_guard<gm20b::Mutex> hold(_lock);
+    std::lock_guard<gm20b::UnfairMutex> hold(_lock);
     uint64_t bytes = 0;
     for (id<MTLAllocation> allocation in _committed)
         bytes += allocation.allocatedSize;
@@ -182,68 +182,75 @@ API_AVAILABLE(ios(18.0), macos(15.0))
 
 - (void)addAllocation:(id<MTLAllocation>)allocation
 {
-    std::lock_guard<gm20b::Mutex> hold(_lock);
+    std::lock_guard<gm20b::UnfairMutex> hold(_lock);
     if (allocation && ![_pending containsObject:allocation])
         [_pending addObject:allocation];
 }
 
 - (void)addAllocations:(const id<MTLAllocation> _Nonnull[])allocations count:(NSUInteger)count
 {
-    for (NSUInteger i = 0; i < count; i++)
-        [self addAllocation:allocations[i]];
+    if (!count)
+        return;
+    std::lock_guard<gm20b::UnfairMutex> hold(_lock);
+    for (NSUInteger i = 0; i < count; i++) {
+        id<MTLAllocation> allocation = allocations[i];
+        if (allocation && ![_pending containsObject:allocation])
+            [_pending addObject:allocation];
+    }
 }
 
 - (void)removeAllocation:(id<MTLAllocation>)allocation
 {
-    std::lock_guard<gm20b::Mutex> hold(_lock);
+    std::lock_guard<gm20b::UnfairMutex> hold(_lock);
     [_pending removeObject:allocation];
 }
 
 - (void)removeAllocations:(const id<MTLAllocation> _Nonnull[])allocations count:(NSUInteger)count
 {
+    if (!count)
+        return;
+    std::lock_guard<gm20b::UnfairMutex> hold(_lock);
     for (NSUInteger i = 0; i < count; i++)
-        [self removeAllocation:allocations[i]];
+        [_pending removeObject:allocations[i]];
 }
 
 - (void)removeAllAllocations
 {
-    std::lock_guard<gm20b::Mutex> hold(_lock);
+    std::lock_guard<gm20b::UnfairMutex> hold(_lock);
     [_pending removeAllObjects];
 }
 
 - (BOOL)containsAllocation:(id<MTLAllocation>)allocation
 {
-    std::lock_guard<gm20b::Mutex> hold(_lock);
+    std::lock_guard<gm20b::UnfairMutex> hold(_lock);
     return [_pending containsObject:allocation];
 }
 
 - (NSArray<id<MTLAllocation>> *)allAllocations
 {
-    std::lock_guard<gm20b::Mutex> hold(_lock);
+    std::lock_guard<gm20b::UnfairMutex> hold(_lock);
     return [_pending copy];
 }
 
 - (NSUInteger)allocationCount
 {
-    std::lock_guard<gm20b::Mutex> hold(_lock);
+    std::lock_guard<gm20b::UnfairMutex> hold(_lock);
     return _pending.count;
 }
 
 - (void)commit
 {
     auto snapshot = std::make_shared<SwitchMetalResidencySnapshot>();
-    std::lock_guard<gm20b::Mutex> hold(_lock);
+    std::lock_guard<gm20b::UnfairMutex> hold(_lock);
     _committed = [_pending copy];
     snapshot->committed = _committed;
     for (id allocation in _committed) {
-        if ([allocation isKindOfClass:[SwitchMetalBuffer class]]) {
-            SwitchMetalBuffer *b = (SwitchMetalBuffer *)allocation;
+        if (SwitchMetalBuffer *b = gm20bAsBuffer(allocation)) {
             const MTLStorageMode mode =
                 MTLStorageMode((b->_options & MTLResourceStorageModeMask) >> MTLResourceStorageModeShift);
             if (mode != MTLStorageModePrivate && mode != MTLStorageModeMemoryless)
                 snapshot->hostVisible.push_back({allocation, SwitchMetalResidencyEntry::Kind::Buffer, true});
-        } else if ([allocation isKindOfClass:[SwitchMetalTexture class]]) {
-            SwitchMetalTexture *t = (SwitchMetalTexture *)allocation;
+        } else if (SwitchMetalTexture *t = gm20bAsTexture(allocation)) {
             const MTLStorageMode mode = t->_descriptor ? t->_descriptor.storageMode : MTLStorageModeShared;
             if (mode == MTLStorageModePrivate || mode == MTLStorageModeMemoryless)
                 continue;
@@ -255,8 +262,7 @@ API_AVAILABLE(ios(18.0), macos(15.0))
             const bool write = surface ? (usage & MTLTextureUsageShaderWrite) != 0
                                        : (usage == MTLTextureUsageUnknown || (usage & MTLTextureUsageShaderWrite) != 0);
             snapshot->hostVisible.push_back({allocation, SwitchMetalResidencyEntry::Kind::Texture, write});
-        } else if ([allocation isKindOfClass:[SwitchMetalHeap class]]) {
-            SwitchMetalHeap *h = (SwitchMetalHeap *)allocation;
+        } else if (SwitchMetalHeap *h = gm20bAsHeap(allocation)) {
             const MTLStorageMode mode = h->_descriptor ? h->_descriptor.storageMode : MTLStorageModeShared;
             if (mode != MTLStorageModePrivate && mode != MTLStorageModeMemoryless)
                 snapshot->hostVisible.push_back({allocation, SwitchMetalResidencyEntry::Kind::Heap, false});
@@ -267,7 +273,7 @@ API_AVAILABLE(ios(18.0), macos(15.0))
 
 - (std::shared_ptr<const SwitchMetalResidencySnapshot>)gm20bSnapshot
 {
-    std::lock_guard<gm20b::Mutex> hold(_lock);
+    std::lock_guard<gm20b::UnfairMutex> hold(_lock);
     return _snapshot;
 }
 
@@ -287,7 +293,7 @@ void gm20bQueueAddResidencySet(SwitchMetalQueue *queue, id set)
     } else {
         return;
     }
-    std::lock_guard<gm20b::Mutex> hold(queue->_residencyLock);
+    std::lock_guard<gm20b::UnfairMutex> hold(queue->_residencyLock);
     if (!queue->_residencySets)
         queue->_residencySets = [NSMutableArray array];
     if (![queue->_residencySets containsObject:set]) {
@@ -300,7 +306,7 @@ void gm20bQueueRemoveResidencySet(SwitchMetalQueue *queue, id set)
 {
     if (!set)
         return;
-    std::lock_guard<gm20b::Mutex> hold(queue->_residencyLock);
+    std::lock_guard<gm20b::UnfairMutex> hold(queue->_residencyLock);
     [queue->_residencySets removeObject:set];
     queue->_residencySetCount.store(uint32_t(queue->_residencySets.count), std::memory_order_release);
 }
@@ -331,7 +337,7 @@ void gm20bSnapshotResidencySets(SwitchMetalCommandBuffer *cb)
     if (@available(iOS 18.0, macOS 15.0, *)) {
         NSArray *queued = nil;
         if (hasQueueSets) {
-            std::lock_guard<gm20b::Mutex> hold(queue->_residencyLock);
+            std::lock_guard<gm20b::UnfairMutex> hold(queue->_residencyLock);
             queued = [queue->_residencySets copy];
         }
         auto take = [&](SwitchMetalResidencySet *set) {
@@ -355,6 +361,8 @@ static void nameResident(gm20b::CommandBuffer *rc, const SwitchMetalResidencyEnt
         SwitchMetalBuffer *b = (SwitchMetalBuffer *)entry.allocation;
         if (b->_raw.hostVisible && !b->_raw.wc)
             rc->clean(b->_raw.cpu, b->_raw.length, true);
+        if (b->_raw.hostVisible)
+            b->_raw.markCpuDirty();
         useBuffer(rc, b, true);
         break;
     }

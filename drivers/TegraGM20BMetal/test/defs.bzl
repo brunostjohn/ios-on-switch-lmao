@@ -41,6 +41,8 @@ METAL_HOST_COPTS = [
     "-Wno-deprecated-declarations",
     # the plugin's key (gpu/defs.bzl): any, as a host test's pack takes
     "-DTEGRA_STACK_KEY=0ull",
+    "-DSWITCH_STATS_GPU=1",
+    "-DSWITCH_PROF_GPU=1",
 ]
 
 METAL_HOST_DEPS = [
@@ -55,6 +57,8 @@ METAL_HOST_DEPS = [
 METAL_DEVICE_COPTS = [
     "-Idrivers/TegraGM20B",
     "-DSWITCH_METAL_HARNESS_MARKS",
+    "-DSWITCH_STATS_GPU=1",
+    "-DSWITCH_PROF_GPU=1",
 ]
 
 FACADE_LINKOPTS = [

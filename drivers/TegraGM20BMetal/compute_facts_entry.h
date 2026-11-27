@@ -25,7 +25,7 @@ inline std::string encodeFactsEntry(const CacheKey &k, const uint32_t *facts, co
     return w.out;
 }
 
-inline RecordCache::Found decodeFactsEntry(const std::string &bytes, const CacheKey &k, PackComputeFacts &facts,
+inline RecordCache::Found decodeFactsEntry(std::string_view bytes, const CacheKey &k, PackComputeFacts &facts,
                                            std::string &refusal)
 {
     Reader r(bytes);

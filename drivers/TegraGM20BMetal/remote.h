@@ -18,6 +18,7 @@
 #include <mutex>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 #include "../../kits/SwitchSeedPack/SwitchSeedStore.h"
 #include "compile_request.h"
@@ -84,7 +85,8 @@ public:
     // The boot has a compiler, but none comes: it declined, or its launcher stopped starting it (asked of the kernel)
     bool declined();
 
-    // The store's entry under `name`, copied out of the mapping
+    // The store's entry under `name`, in place in the mapping or copied out
+    bool find(const Digest &name, std::string_view &bytes);
     bool find(const Digest &name, std::string &bytes);
     // A program slot's bytes where the mapped store holds them (switch_compiler::Store::putProgramSlots), in place, with
     // that mapping's first byte and size in `mapping` and `bytes`; null where it holds none of them
@@ -146,7 +148,7 @@ private:
     const uint64_t stack_;
     // scope_ is written once under scopeLock_, before scopeKnown_ is set with release; after that it is read with no lock.
     // The lock only orders the first lookups of a process, which may ask the kernel at once.
-    gm20b::Mutex scopeLock_;
+    gm20b::UnfairMutex scopeLock_;
     std::atomic<bool> scopeKnown_{false};
     StoreScope scope_;
     std::atomic<CompilerMethods> methods_{CompilerMethods::Unknown};
@@ -156,7 +158,8 @@ private:
     std::atomic<bool> librariesSupported_{false};
     std::atomic<const Mapping *> mapping_{nullptr};
     std::atomic<uint32_t> latest_{0};  // the newest generation a completion named
-    gm20b::Mutex mapLock_, asyncLock_, libraryLock_;
+    gm20b::UnfairMutex mapLock_;
+    gm20b::Mutex asyncLock_, libraryLock_;
     gm20b::CondVar libraryReady_, asyncDrained_;
     std::map<RegisteredLibrary, uint64_t> registeredLibraries_;
     std::set<RegisteredLibrary> registeringLibraries_;

@@ -53,6 +53,7 @@ host_test(
         "encode_profile_test.cpp",
         "//drivers/TegraGM20BMetal:encode_profile.h",
     ],
+    copts = ["-DSWITCH_PROF_GPU=1"],
     cxx_std = "c++17",
     gtest_main = False,
 )
@@ -1367,6 +1368,7 @@ objc_library(
     copts = WARNINGS + SANITIZERS + [
         "-std=c++17",
         "-g",
+        "-DSWITCH_PROF_GPU=1",
     ],
     features = [
         "asan",
@@ -1467,6 +1469,10 @@ host_test(
 host_test(
     name = "semantic_plan_apply_test",
     srcs = ["semantic_plan_apply_test.cpp"] + SEMANTIC_PLAN_SRCS,
+    copts = [
+        "-DSWITCH_STATS_GPU=1",
+        "-DSWITCH_PROF_GPU=1",
+    ],
     cxx_std = "c++17",
     deps = ["//drivers/TegraGM20BMetal/abi:metal_abi"],
 )

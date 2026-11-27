@@ -343,6 +343,11 @@ private:
     std::vector<SetUse> memberUses_;
     uint32_t memberRemovals_ = 0;
     bool memberHostWritten_ = false;
+    struct DirtyBuffer {
+        const Buffer *buffer;
+        uint64_t gen;
+    };
+    std::vector<DirtyBuffer> dirtyBuffers_;
     bool arenaKindInvalidate_ = false;
     bool pendingKindSwitch_ = false;
     uint32_t kindSwitchGen_ = 0;
@@ -351,6 +356,8 @@ private:
     bool inRender_ = false;
     bool passBufferWrites_ = false;
     bool prevBufferWrites_ = false;
+    bool passShaderFlushed_ = false;
+    bool computeReleased_ = false;
     bool tiledCacheDirty_ = false;
     std::map<uint64_t, KindRanges> cbArenaKinds_;
     std::map<uint64_t, uint64_t> cbCrossSeen_;
@@ -364,7 +371,14 @@ private:
         return pending;
     }
 
-    void noteArenaKind(const ArenaStorage *arena);
+    void noteArenaKind(const ArenaStorage *arena)
+    {
+        if (__builtin_expect(!arena || !arena->multiKindGen, 1))
+            return;
+        noteArenaKindSlow(arena);
+    }
+
+    void noteArenaKindSlow(const ArenaStorage *arena);
     UseMemo named_;  // (use_memo.h)
     JobVisibility visibility_ = JobVisibility::Legacy;
     bool externalWrites_ = false;
@@ -431,6 +445,8 @@ private:
     uint32_t rtLayer_ = ~0u;                // and SET_RT_LAYER (~0: not known)
     uint32_t alphaHeld_ = ~0u;              // and SET_ANTI_ALIAS_ALPHA_CONTROL (~0: not known)
     uint32_t sampleMaskHeld_ = ~0u;         // and SET_SAMPLE_MASK_X0_Y0..X1_Y1 (~0: not known)
+    bool clampRangeHeld_ = false;
+    uint32_t clampRange_[2] = {};
     DepthStencilRegs ds_;                   // and its depth/stencil registers
     const Pipeline *extrasLive_ = nullptr;  // and the state whose extras it holds (Pipeline::restore)
     HeldSegment heldSegment_;               // and the state segment its registers hold
@@ -439,6 +455,8 @@ private:
     // the prologue's INVALIDATE_SHADER_CACHES_NO_WFI data word, which commit gives the INSTRUCTION bit when programs were placed
     // in the heap since the last submission that invalidated the instruction cache
     uint32_t *shaderInvalidate_ = nullptr;
+    uint32_t *samplerInvalidate_ = nullptr;
+    uint32_t *headerInvalidate_ = nullptr;
     uint32_t prologueDwords_ = 0;
     // the split draws' prologues (RenderEncoder::launchSplit), launched in one compute segment after the submission prologue
     std::vector<SplitLaunch> splits_;

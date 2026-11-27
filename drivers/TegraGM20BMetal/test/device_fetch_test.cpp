@@ -428,13 +428,17 @@ TEST_F(DeviceFetch, AFetchDrawsWordsDoNotGrowWithItsPrimitives)
         k++;
         EXPECT_EQ(fetchSizes(), (std::pair<uint32_t, uint32_t>{3, 3}));
     }
-    std::multiset<uint32_t> firstOnly;
+    std::multiset<uint32_t> firstOnly, secondOnly;
     std::set_difference(methods[0].begin(), methods[0].end(), methods[1].begin(), methods[1].end(),
                         std::inserter(firstOnly, firstOnly.end()));
+    std::set_difference(methods[1].begin(), methods[1].end(), methods[0].begin(), methods[0].end(),
+                        std::inserter(secondOnly, secondOnly.end()));
     EXPECT_EQ(firstOnly, (std::multiset<uint32_t>{NVB197_SET_RT_LAYER, NVB197_SET_ANTI_ALIAS_ALPHA_CONTROL,
                                                   NVB197_SET_SAMPLE_MASK_X0_Y0, NVB197_SET_SAMPLE_MASK_X1_Y0,
-                                                  NVB197_SET_SAMPLE_MASK_X0_Y1, NVB197_SET_SAMPLE_MASK_X1_Y1}));
-    EXPECT_TRUE(std::includes(methods[0].begin(), methods[0].end(), methods[1].begin(), methods[1].end()));
+                                                  NVB197_SET_SAMPLE_MASK_X0_Y1, NVB197_SET_SAMPLE_MASK_X1_Y1,
+                                                  NVB197_INVALIDATE_TEXTURE_HEADER_CACHE_NO_WFI,
+                                                  NVB197_INVALIDATE_SAMPLER_CACHE_NO_WFI}));
+    EXPECT_EQ(secondOnly, (std::multiset<uint32_t>{NVB197_NO_OPERATION, NVB197_NO_OPERATION}));
     EXPECT_EQ(sizes[1], sizes[2]);
 }
 

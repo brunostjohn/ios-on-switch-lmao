@@ -402,10 +402,11 @@ TEST_F(DeviceSeparateZeta, AnInfiniteSlopeIsASaturatingBiasInForcedUnormUnits)
         memcpy(&u, &f, 4);
         return u;
     };
+    uint32_t minZ = 0, maxZ = 0;
     for (const uint8_t depthBits : {uint8_t(0), uint8_t(16)}) {
         Submitted s;
         ASSERT_EQ(draw(true, true, true, true, s, 1, depthBits, 1.0f, -INFINITY, 0.125f), "");
-        uint32_t controls = 0, constants = 0, minZ = 0, maxZ = 0;
+        uint32_t controls = 0, constants = 0;
         bool drawn = false;
         for (const auto &[m, v] : s.bias) {
             if (m == kMacroCalls && !drawn) {

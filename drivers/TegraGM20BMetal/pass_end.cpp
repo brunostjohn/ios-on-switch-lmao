@@ -148,7 +148,6 @@ void RenderEncoder::end()
     if (zcull_.slot >= 0 && !cb_->zcullPlanes_.holdsSlot(zcull_.slot))
         d.zcullSlots_.release(zcull_.slot);
     writeRaster(p_, Raster());
-    unclampDepthRange(p_);
     if (rot_.turned()) {
         emitSwizzle(p_, kSwizzleIdentity);
         for (uint32_t turned = views_.swizzled & ~1u; turned; turned &= turned - 1)
@@ -204,7 +203,9 @@ void RenderEncoder::end()
         tiledCacheDrain(p_, d.k_.info());
     if (measured)
         emitDrawStamp(p_, d.stamps_.va, candidate_.slot, true, candidate_.payload);
-    if (attachmentWrites_.storage || cb_->passBufferWrites_ || passShaderWrites_ || planned_.shaderWrites)
+    const bool bodyShaderFlushed =
+        attachmentWrites_.storage || cb_->passBufferWrites_ || passShaderWrites_ || planned_.shaderWrites;
+    if (bodyShaderFlushed)
         p_.m(INVALIDATE_SHADER_CACHES, kFlushData | kInvalidateData);
     checkRoom(p_, "a pass body");
     if (p_.at > bodyStart_)
@@ -238,14 +239,17 @@ void RenderEncoder::end()
     cb_->passBufferWrites_ = false;
     cb_->inRender_ = false;
     const PassForm pass = forms.pass != PassForm::Rule ? forms.pass : passRule(before, uses);
+    const bool alreadyIdle = forms.pass == PassForm::Rule && cb_->passShaderFlushed_;
     const Opened opened = passOpening(p, pass, switchFormFor(forms.switchForm, before, BarrierEngine::ThreeD),
-                                      entryFormFor(forms.entry), before, cb_->prevBufferWrites_);
+                                      entryFormFor(forms.entry), before, cb_->prevBufferWrites_, alreadyIdle);
     if (cb_->takeKindSwitch())
         kit(p, switch_gm20b_kind_switch);
     advanceChain(cb_->chain_, uses, opened != Opened::Pass);
     if (opened != Opened::Pass)
         cb_->prevBufferWrites_ = false;
     cb_->prevBufferWrites_ |= hadBufferWrites;
+    cb_->passShaderFlushed_ = bodyShaderFlushed;
+    cb_->computeReleased_ = false;
     cb_->lastEngine_ = BarrierEngine::ThreeD;
     SWITCH_METAL_DIAGNOSTIC(cb_->taken_.count(opened));
     SWITCH_METAL_DIAGNOSTIC(cb_->pixelOpenings_ += opened == Opened::Pass && pass == PassForm::PixelOrdered);
@@ -279,10 +283,8 @@ void RenderEncoder::end()
         copyZetaShadow(p, true);
         copied = true;
     }
-    if (copied) {
-        p.m(WAIT_FOR_IDLE, 0);
+    if (copied)
         p.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
-    }
     if (separate_.stencil)
         copySeparateZeta(
             p, (separate_.loadDepth ? kShaderTestDepth : 0) | (separate_.loadStencil ? kShaderTestStencil : 0), true);
@@ -507,7 +509,6 @@ void RenderEncoder::end()
         const uint32_t room2 = 8 + 8 * 32 * layers + (zetaShadowOf_ ? zetaShadowWords(layers) : 0);
         uint32_t *at = reinterpret_cast<uint32_t *>(d.alloc(d.push_, room2 * 4, 256, va));
         Push q{at, at + room2};
-        q.m(WAIT_FOR_IDLE, 0);
         for (uint32_t j = 0; j < pass_.count && j < 8; j++) {
             const Texture *o = shadowOf_[j];
             if (!o || !pass_.color[j].store)
@@ -531,6 +532,7 @@ void RenderEncoder::end()
         checkRoom(q, "a pass's shadow stores");
         cb_->segment(at, q.at);
         cb_->lastEngine_ = BarrierEngine::Copy;
+        cb_->passShaderFlushed_ = false;
         d.push_.head = uint64_t(reinterpret_cast<uint8_t *>(q.at) - d.push_.bo.cpu);
         SWITCH_METAL_DIAGNOSTIC(d.stats.pushBytes += uint64_t(q.at - at) * 4);
     }
@@ -544,6 +546,7 @@ void RenderEncoder::end()
         checkRoom(q, "a pass's separate depth and stencil stores");
         cb_->segment(at, q.at);
         cb_->lastEngine_ = BarrierEngine::Copy;
+        cb_->passShaderFlushed_ = false;
         d.push_.head = uint64_t(reinterpret_cast<uint8_t *>(q.at) - d.push_.bo.cpu);
         SWITCH_METAL_DIAGNOSTIC(d.stats.pushBytes += uint64_t(q.at - at) * 4);
     }

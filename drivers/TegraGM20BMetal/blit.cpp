@@ -38,8 +38,12 @@ BlitEncoder *CommandBuffer::blit()
         blitOpening(e.p_, switchFormFor(forms.switchForm, lastEngine_, BarrierEngine::Copy), entryFormFor(forms.entry),
                     lastEngine_);
     e.before_ = lastEngine_;
+    e.beforePassShaderFlushed_ = passShaderFlushed_;
+    e.beforeComputeReleased_ = computeReleased_;
     e.opened_ = e.p_.at;
     lastEngine_ = BarrierEngine::Copy;
+    passShaderFlushed_ = false;
+    computeReleased_ = false;
     encodersOpened_++;
     activeBlit_ = &e;
     if (takeKindSwitch())
@@ -317,8 +321,11 @@ void BlitEncoder::end()
 {
     if (cb_->activeBlit_ == this)
         cb_->activeBlit_ = nullptr;
-    if (p_.at == opened_)
+    if (p_.at == opened_) {
         cb_->lastEngine_ = before_;
+        cb_->passShaderFlushed_ = beforePassShaderFlushed_;
+        cb_->computeReleased_ = beforeComputeReleased_;
+    }
     checkRoom(p_, "a blit encoder");
     cb_->loops_.closeSegment(stream());
     dev_->push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - dev_->push_.bo.cpu);

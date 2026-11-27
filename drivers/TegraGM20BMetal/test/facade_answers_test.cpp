@@ -6,6 +6,7 @@
 #include "MetalABI.h"
 #include "SwitchRefusal.h"
 #include "../../../kits/SwitchGM20BEmit/SwitchGM20BMacroSlots.h"
+#include "../archive.h"
 #include "../device_answers.h"
 #include "bazel/testing/fresh_process.h"
 
@@ -75,6 +76,17 @@ void answers()
         EXPECT_EQ(flag(device, pointers), 0u) << pointers << ": no visible function tables";
     }
     free(methods);
+
+    if (Class targetCls = NSClassFromString(@"MTLTargetDeviceArchitecture")) {
+        id target = ((id (*)(id, SEL))objc_msgSend)(device, sel_registerName("targetDeviceArchitecture"));
+        ASSERT_NE(target, nil);
+        EXPECT_TRUE([target isKindOfClass:targetCls]);
+        EXPECT_EQ(((unsigned int (*)(id, SEL))objc_msgSend)(target, sel_registerName("cpuType")),
+                  unsigned(gm20b::kAppleGpuCpuType));
+        EXPECT_EQ(((unsigned int (*)(id, SEL))objc_msgSend)(target, sel_registerName("subType")),
+                  unsigned(gm20b::answers::kThisKind.gpuSubtype));
+        EXPECT_EQ(((unsigned long long (*)(id, SEL))objc_msgSend)(target, sel_registerName("driverVersion")), 0ull);
+    }
 }
 
 // A state of eight amplifications is made; one past the amplify macro's mapping words is refused at creation

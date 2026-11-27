@@ -220,7 +220,7 @@ int Kernel::resourceSet(std::vector<TegraGM20BAbiSurfaceUse> &members, uint32_t 
         setError(refused("ResourceSetCreate", kr));
         return kr;
     }
-    std::lock_guard<gm20b::Mutex> l(lostLock_);
+    std::lock_guard<gm20b::UnfairMutex> l(lostLock_);
     if (!fenceMap_ && !map(reply.fence_token, true, fenceMap_, fenceMapBytes_)) {
         fenceMap_ = 0;
         fenceMapBytes_ = 0;

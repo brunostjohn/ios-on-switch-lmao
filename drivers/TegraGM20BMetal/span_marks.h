@@ -151,7 +151,7 @@ public:
     {
         if (!slots_)
             return;
-        std::lock_guard<gm20b::Mutex> l(lock_);
+        std::lock_guard<gm20b::UnfairMutex> l(lock_);
         at_ = &(*slots_)[(stamp - 1) % kSpanSlots];
         at_->stamp = stamp;
         at_->marks = 0;
@@ -184,7 +184,7 @@ public:
     {
         if (!slots_ || !stamp)
             return {};
-        std::lock_guard<gm20b::Mutex> l(lock_);
+        std::lock_guard<gm20b::UnfairMutex> l(lock_);
         const Slot &s = (*slots_)[(stamp - 1) % kSpanSlots];
         if (s.stamp != stamp)
             return {};
@@ -200,7 +200,7 @@ private:
 
     std::unique_ptr<std::array<Slot, kSpanSlots>> slots_;
     Slot *at_ = nullptr;
-    gm20b::Mutex lock_;
+    gm20b::UnfairMutex lock_;
     uint64_t va_ = 0;
     uint8_t *cpu_ = nullptr;
 };

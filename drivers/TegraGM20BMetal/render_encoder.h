@@ -175,8 +175,13 @@ struct RenderEncoderPass {
     uint64_t bindingRevision_ = 0;
     MovedBindings moved_;
     uint64_t streamVa_[kPackVertexStreams] = {}, streamLimit_[kPackVertexStreams] = {};
+    uint32_t streamFormat_[kPackVertexStreams] = {};
+    uint32_t streamFormatKnown_ = 0;
     uint64_t ibVa_ = 0, ibEnd_ = 0;
     uint32_t ibSize_ = 0;
+    uint64_t rootTableVa_[2] = {};
+    uint32_t rootTableSlots_[2] = {}, rootBufDirty_[2] = {~0u, ~0u};
+    bool rootTableWrites_[2] = {};
     const Pipeline *factsPipeline_ = nullptr;
     uint64_t factsRevision_ = 0;
     uint32_t facts_ = 0;
@@ -204,9 +209,7 @@ struct RenderEncoderPass {
     Raster raster_, rasterHeld_;
     bool depthClamp_ = false;
     bool clipDirty_ = true;
-    uint32_t clipHeld_ = 0;        // the channel's SET_VIEWPORT_CLIP_CONTROL since the encoder's first bind
-    bool clampRangeHeld_ = false;  // the viewport's clip depth range is a clamp's, clampRange_
-    uint32_t clampRange_[2] = {};
+    uint32_t clipHeld_ = 0;  // the channel's SET_VIEWPORT_CLIP_CONTROL since the encoder's first bind
     uint32_t blendColor_[4] = {};  // Metal's default, (0, 0, 0, 0), until the encoder sets one
     bool blendColorDirty_ = true;
     uint32_t topology_ = ~0u, restart_ = ~0u;
@@ -223,6 +226,15 @@ struct RenderEncoderPass {
     bool called_ = false, drew_ = false, whole_ = false;
     bool mayFetch_ = true;
     bool trackRects_ = false;
+    bool passHasVolatileColor_ = false;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    uint8_t probeFetchRung_ = 0;
+    uint8_t fetchBarrierMode_ = 0;
+#endif
+#if SWITCH_METAL_DIAGNOSTICS
+    uint32_t probeNvn_ = 0;
+    uint32_t probeZcullKeep_ = 0;
+#endif
     uint32_t readBits_ = 0, areaW_ = 0, areaH_ = 0;
     std::array<uint8_t, 8> ropLayers_ = {};
     bool narrowed_ = false;
@@ -372,6 +384,8 @@ public:
     {
         ++bindingRevision_;
         moved_.all = true;
+        rootTableVa_[0] = rootTableVa_[1] = 0;
+        rootBufDirty_[0] = rootBufDirty_[1] = ~0u;
     }
 
     void setScissor(uint32_t x, uint32_t y, uint32_t w, uint32_t h);
@@ -647,6 +661,8 @@ private:
         ++bindingRevision_;
         moved_.buffers[stage] |= 1u << slot;
         touched_.buffers[stage] |= 1u << slot;
+        if (stage == 1 || stage == 2)
+            rootBufDirty_[stage - 1] |= 1u << slot;
     }
 
     void textureMoved(uint32_t at, uint32_t slot)
@@ -719,7 +735,7 @@ private:
     Pipeline *fetchFreeFor(const Pipeline &pl, StorageRoute *route = nullptr);
     bool matrixConstants(const Pipeline &pl, const char **why);
     uint32_t colorTargets() const;
-    StorageFallback storageFallback(const Pipeline &pl) const;
+    StorageFallback storageFallback(const Pipeline &pl, const Pipeline *barrierTwin) const;
     bool orderedFetch(const Pipeline &pl, const FetchDraw &shape) const;
     void fetchDraw(uint32_t primitive, bool indexed, uint32_t first, uint32_t count, uint32_t instances, uint32_t root,
                    uint32_t baseInstance);

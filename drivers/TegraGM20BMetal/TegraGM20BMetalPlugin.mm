@@ -218,29 +218,36 @@ bool systemContainerCache(char *out, size_t size)
 //  - /private/var/tmp/TegraGM20BMetal-<process> (iconservicesagent, whose home is /var/empty), then the user temp directory, then $TMPDIR (WebKit's
 //    GPU process: its per-user temp directory is the one its sandbox extension covers).
 // One the sandbox would refuse is left out, asked without a report (sandboxMayCreate): the order of the others is unchanged.
-unsigned cacheCandidates(char candidates[][512], unsigned most)
+// First writable record cache directory in priority order, short-circuiting before containermanagerd or temp probing
+// when an earlier candidate is already writable.
+bool findRecordCacheDir(char *out, size_t size)
 {
+    char tried[7][512];
     unsigned count = 0;
-    auto add = [&](const char *format, const char *a, const char *b) {
-        if (count >= most)
-            return;
-        snprintf(candidates[count], 512, format, a, b);
+    auto tryDir = [&](const char *format, const char *a, const char *b) -> bool {
+        if (count >= 7)
+            return false;
+        char candidate[512];
+        snprintf(candidate, sizeof candidate, format, a, b);
         for (unsigned i = 0; i < count; ++i)
-            if (!strcmp(candidates[i], candidates[count]))
-                return;
-        if (sandboxMayCreate(candidates[count]))
-            ++count;
+            if (!strcmp(tried[i], candidate))
+                return false;
+        strlcpy(tried[count++], candidate, sizeof tried[0]);
+        if (!sandboxMayCreate(candidate) || !writable(candidate))
+            return false;
+        strlcpy(out, candidate, size);
+        return true;
     };
     char user[512] = {}, temp[512] = {}, container[512] = {};
     if (!confstr(_CS_DARWIN_USER_CACHE_DIR, user, sizeof user))
         user[0] = 0;
     const bool appContainer = strstr(user, "/Containers/Data/") != nullptr;
-    if (user[0] && appContainer)
-        add("%s%s", user, "TegraGM20BMetal");
-    if (!appContainer && systemContainerCache(container, sizeof container))
-        add("%s%s", container, "");
-    if (user[0] && !appContainer)
-        add("%s%s", user, "TegraGM20BMetal");
+    if (user[0] && appContainer && tryDir("%s%s", user, "TegraGM20BMetal"))
+        return true;
+    if (!appContainer && systemContainerCache(container, sizeof container) && tryDir("%s%s", container, ""))
+        return true;
+    if (user[0] && !appContainer && tryDir("%s%s", user, "TegraGM20BMetal"))
+        return true;
     const bool haveTemp = confstr(_CS_DARWIN_USER_TEMP_DIR, temp, sizeof temp) != 0;
     for (const char *dir : {haveTemp ? (const char *)temp : nullptr, (const char *)getenv("TMPDIR")}) {
         // <...>/Containers/Data/<kind>/<UUID>/tmp/... -> <...>/Containers/Data/<kind>/<UUID>/Library/Caches/TegraGM20BMetal-<process>
@@ -252,14 +259,17 @@ unsigned cacheCandidates(char candidates[][512], unsigned most)
             continue;
         char root[512];
         snprintf(root, sizeof root, "%.*s/Library/Caches/TegraGM20BMetal-", (int)(tmp - dir), dir);
-        add("%s%s", root, getprogname());
+        if (tryDir("%s%s", root, getprogname()))
+            return true;
     }
-    add("%s%s", "/private/var/tmp/TegraGM20BMetal-", getprogname());
-    if (haveTemp)
-        add("%s%s", temp, "TegraGM20BMetal");
+    if (tryDir("%s%s", "/private/var/tmp/TegraGM20BMetal-", getprogname()))
+        return true;
+    if (haveTemp && tryDir("%s%s", temp, "TegraGM20BMetal"))
+        return true;
     if (const char *tmpdir = getenv("TMPDIR"); tmpdir && *tmpdir == '/')
-        add(tmpdir[strlen(tmpdir) - 1] == '/' ? "%s%s" : "%s/%s", tmpdir, "TegraGM20BMetal");
-    return count;
+        if (tryDir(tmpdir[strlen(tmpdir) - 1] == '/' ? "%s%s" : "%s/%s", tmpdir, "TegraGM20BMetal"))
+            return true;
+    return false;
 }
 
 // <Extensions>/TegraGM20BMetal.pack/pack.bin, beside the bundle: the driver's pipeline pack. Null if this process
@@ -292,13 +302,13 @@ bool gm20bNativeSeed(const char *pack, char *seed, size_t size)
     return sandboxAllows("file-read-data", kSandboxFilterPath, index);
 }
 
-#if SWITCH_DEBUG && (!defined(SWITCH_STATS_FRAME) || SWITCH_STATS_FRAME)
+#if SWITCH_DEBUG && defined(SWITCH_STATS_FRAME) && SWITCH_STATS_FRAME
 #define SWITCH_PLUGIN_FRAME 1
 #else
 #define SWITCH_PLUGIN_FRAME 0
 #endif
 
-#if SWITCH_DEBUG && ((!defined(SWITCH_STATS_GPU) || SWITCH_STATS_GPU) || (!defined(SWITCH_PROF_GPU) || SWITCH_PROF_GPU))
+#if SWITCH_DEBUG && ((defined(SWITCH_STATS_GPU) && SWITCH_STATS_GPU) || (defined(SWITCH_PROF_GPU) && SWITCH_PROF_GPU))
 #define SWITCH_PLUGIN_RATES 1
 #else
 #define SWITCH_PLUGIN_RATES 0
@@ -327,7 +337,7 @@ void observedSetLabelImage(id view, SEL cmd, id image)
 void observeLabelImages()
 {
     static std::atomic<bool> done;
-    if (strcmp(getprogname(), "SpringBoard") || done.exchange(true))
+    if (strcmp(getprogname(), "SpringBoard") || done.exchange(true, std::memory_order_relaxed))
         return;
     gIconLabelView = objc_getClass("SBIconPLKLegibilityView");
     Method m = gIconLabelView ? class_getInstanceMethod(gIconLabelView, sel_registerName("setImage:")) : nullptr;
@@ -392,18 +402,6 @@ void startRates()
 }
 #endif
 
-// The first record cache directory this process can write (cacheCandidates), for the driver's records; null: none, and
-// they stay in its memory
-const char *recordCacheDir()
-{
-    static char candidates[6][512];
-    const unsigned count = cacheCandidates(candidates, 6);
-    for (unsigned i = 0; i < count; i++)
-        if (writable(candidates[i]))
-            return candidates[i];
-    return nullptr;
-}
-
 // One open of the process's device; nil with what it met in `failure` (device_open.h) and in `why`
 id openOnce(unsigned port, gm20b::OpenFailure &failure, NSString *__strong &why)
 {
@@ -437,11 +435,8 @@ id openOnce(unsigned port, gm20b::OpenFailure &failure, NSString *__strong &why)
 #if SWITCH_DEBUG
     const uint64_t openBegan = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
 #endif
-    // The render server's raw GM20B path's own setup (its pack, channel and context, the first pool chunk) starts now on a
-    // thread of its own, beside the cache directory search below; metal_device_open takes what it made.
     if (renderServer)
         metal_prepare(pack, uint64_t(TEGRA_STACK_KEY));
-    const char *records = recordCacheDir();
 #if SWITCH_DEBUG
     const uint64_t searched = renderServer ? clock_gettime_nsec_np(CLOCK_UPTIME_RAW) : 0;
 #endif
@@ -456,7 +451,8 @@ id openOnce(unsigned port, gm20b::OpenFailure &failure, NSString *__strong &why)
            pack, (unsigned long long)TEGRA_STACK_KEY);
 #endif
     char nativeSeed[1100];
-    metal_complete_states(records, gm20bNativeSeed(pack, nativeSeed, sizeof nativeSeed) ? nativeSeed : nullptr);
+    metal_complete_states_lazy(&findRecordCacheDir,
+                               gm20bNativeSeed(pack, nativeSeed, sizeof nativeSeed) ? nativeSeed : nullptr);
 #if SWITCH_DEBUG
     const uint64_t openNs = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - openBegan;
     os_log(logger(), "TegraGM20BMetal: device %{public}s ready in %{public}s, open %llu ms",
@@ -483,17 +479,17 @@ id openOnce(unsigned port, gm20b::OpenFailure &failure, NSString *__strong &why)
 id openDevice(unsigned port)
 {
     static id device;
-    @synchronized([TegraGM20BMetalDevice class]) {
-        if (device)
-            return device;
-        gm20b::OpenFailure failure = gm20b::OpenFailure::Structural;
-        NSString *why = nil;
-        device = openOnce(port, failure, why);
-        if (!device)
-            os_log_error(logger(), "TegraGM20BMetal: no device in %{public}s (%{public}s): %{public}@", getprogname(),
-                         gm20b::openFailureText(failure), why);
+    static std::mutex lock;
+    std::lock_guard<std::mutex> hold(lock);
+    if (device)
         return device;
-    }
+    gm20b::OpenFailure failure = gm20b::OpenFailure::Structural;
+    NSString *why = nil;
+    device = openOnce(port, failure, why);
+    if (!device)
+        os_log_error(logger(), "TegraGM20BMetal: no device in %{public}s (%{public}s): %{public}@", getprogname(),
+                     gm20b::openFailureText(failure), why);
+    return device;
 }
 }  // namespace
 

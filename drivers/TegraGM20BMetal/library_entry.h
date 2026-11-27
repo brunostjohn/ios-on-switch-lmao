@@ -33,7 +33,7 @@ inline std::string encodeLibraryEntry(const CacheKey &k, const MadeLibrary *made
     return w.out;
 }
 
-inline RecordCache::Found decodeLibraryEntry(const std::string &bytes, const CacheKey &k, MadeLibrary &made,
+inline RecordCache::Found decodeLibraryEntry(std::string_view bytes, const CacheKey &k, MadeLibrary &made,
                                              std::string &refusal)
 {
     Reader r(bytes);

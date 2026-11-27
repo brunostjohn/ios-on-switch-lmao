@@ -49,7 +49,7 @@ Pipeline **twinSlot(Pipeline &made)
 
 bool Completion::markForm(const Pipeline *made, RequestForm form)
 {
-    std::lock_guard<gm20b::Mutex> l(formLock_);
+    std::lock_guard<gm20b::UnfairMutex> l(formLock_);
     const auto [it, inserted] = formsAsked_.emplace(std::make_pair(made, form), FormState::Asked);
     if (inserted)
         return true;
@@ -62,7 +62,7 @@ bool Completion::markForm(const Pipeline *made, RequestForm form)
 
 bool Completion::claimRetryForm(const Pipeline *made, RequestForm form)
 {
-    std::lock_guard<gm20b::Mutex> l(formLock_);
+    std::lock_guard<gm20b::UnfairMutex> l(formLock_);
     const auto it = formsAsked_.find({made, form});
     if (it == formsAsked_.end() || it->second != FormState::Retry)
         return false;
@@ -73,7 +73,7 @@ bool Completion::claimRetryForm(const Pipeline *made, RequestForm form)
 
 void Completion::unmarkForm(const Pipeline *made, RequestForm form)
 {
-    std::lock_guard<gm20b::Mutex> l(formLock_);
+    std::lock_guard<gm20b::UnfairMutex> l(formLock_);
     const auto it = formsAsked_.find({made, form});
     if (it == formsAsked_.end() || it->second == FormState::Retry)
         return;

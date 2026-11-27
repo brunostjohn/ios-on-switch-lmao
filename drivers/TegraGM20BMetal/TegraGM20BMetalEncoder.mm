@@ -130,7 +130,6 @@ void gm20bOwnPass(SwitchMetalRenderEncoder *e)
     e->_samples = 1;
     if (const char *rule = gm20bPassShapeInvalid(pass))
         gm20bPassInvalid(self, PredPassAttLevel, pass.renderTargetArrayLength, 0, rule);
-    static const Class texCls = [SwitchMetalTexture class];
     for (unsigned c = 0; c < 8; c++) {
         MTLRenderPassColorAttachmentDescriptor *a = pass.colorAttachments[c];
         id<MTLTexture> t = a.texture;
@@ -141,22 +140,21 @@ void gm20bOwnPass(SwitchMetalRenderEncoder *e)
         const bool volume = t.textureType == MTLTextureType3D;
         const NSUInteger slice = volume ? a.depthPlane : a.slice;
         facts.color[c] = {t, a.level, slice, a.loadAction, a.storeAction, a.clearColor, resolve, 0, 0};
-        const bool isTex = gm20bIsClass(t, texCls);
-        SwitchMetalTexture *x = (SwitchMetalTexture *)t;
         // an extended-range texture's alone: no texture of another form may be moving on the submit worker, whose
         // memory and comptags this thread may not read (private_comp.h)
-        if (isTex && x->_gm20bOk && gm20b::xrForm(x->_raw.format) != gm20b::XrForm::None && x->_raw.comptags)
+        __unsafe_unretained SwitchMetalTexture *x = gm20bAsTexture(t);
+        if (x && x->_gm20bOk && gm20b::xrForm(x->_raw.format) != gm20b::XrForm::None && x->_raw.comptags)
             facts.compressed |= uint8_t(1u << c);
         gm20bRetain(self, t);
         gm20bRetain(self, resolve);
-        if (isTex)
+        if (x)
             declareGpuWrites(x);
-        if (SwitchMetalTexture *r = (SwitchMetalTexture *)resolve; gm20bIsClass(r, texCls))
+        if (SwitchMetalTexture *r = gm20bAsTexture(resolve))
             declareGpuWrites(r);
-        const bool standsIn = isTex && gm20bFormatTarget(x);
+        const bool standsIn = x && gm20bFormatTarget(x);
         const bool resolving = resolve && (gm20bResolvesStore(a.storeAction) || a.storeAction == MTLStoreActionUnknown);
         // a whole one-sample Depth32Float or Depth16Unorm draws as its colour twin (zeta_colour.h)
-        const uint32_t depthColour = isTex && x->_gm20bOk && x->_raw.zeta && x->_raw.samples <= 1 && !a.level && !slice
+        const uint32_t depthColour = x && x->_gm20bOk && x->_raw.zeta && x->_raw.samples <= 1 && !a.level && !slice
                                          ? gm20b::depthAsColourFormat(x->_raw.format)
                                          : 0;
         if (const char *rule = gm20bColorTargetInvalid(a)) {
@@ -214,8 +212,7 @@ void gm20bOwnPass(SwitchMetalRenderEncoder *e)
         facts.depthResolveSlice = depth.resolveSlice;
         facts.zeta[0].store = gm20bKeptStore(depth.storeAction);
         [self retain:facts.depthResolve];
-        if (SwitchMetalTexture *r = (SwitchMetalTexture *)facts.depthResolve;
-            [(id)r isKindOfClass:[SwitchMetalTexture class]])
+        if (SwitchMetalTexture *r = gm20bAsTexture(facts.depthResolve))
             declareGpuWrites(r);
     }
     if (stencil.texture && gm20bResolvesStore(stencil.storeAction) && stencil.resolveTexture) {
@@ -225,8 +222,7 @@ void gm20bOwnPass(SwitchMetalRenderEncoder *e)
         facts.stencilResolveSlice = stencil.resolveSlice;
         facts.zeta[1].store = gm20bKeptStore(stencil.storeAction);
         [self retain:facts.stencilResolve];
-        if (SwitchMetalTexture *r = (SwitchMetalTexture *)facts.stencilResolve;
-            [(id)r isKindOfClass:[SwitchMetalTexture class]])
+        if (SwitchMetalTexture *r = gm20bAsTexture(facts.stencilResolve))
             declareGpuWrites(r);
     }
     facts.clearDepth = pass.depthAttachment.clearDepth;
@@ -349,7 +345,8 @@ void gm20bOwnPass(SwitchMetalRenderEncoder *e)
 
 - (id<MTLBlitCommandEncoder>)blitCommandEncoder
 {
-    SwitchMetalBlitEncoder *e = [SwitchMetalBlitEncoder new];
+    SwitchMetalBlitEncoder *e =
+        (__bridge_transfer SwitchMetalBlitEncoder *)gm20bPoolNew([SwitchMetalBlitEncoder class]);
     [self begin:e];
     [self record:cmd(OpBlit)];
     return (id<MTLBlitCommandEncoder>)e;
@@ -365,7 +362,8 @@ void gm20bOwnPass(SwitchMetalRenderEncoder *e)
 
 - (id<MTLComputeCommandEncoder>)computeCommandEncoderWithDispatchType:(MTLDispatchType)type
 {
-    SwitchMetalComputeEncoder *e = [SwitchMetalComputeEncoder new];
+    SwitchMetalComputeEncoder *e =
+        (__bridge_transfer SwitchMetalComputeEncoder *)gm20bPoolNew([SwitchMetalComputeEncoder class]);
     e->_type = type;
     [self begin:e];
     Cmd m = cmd(OpCompute);

@@ -129,10 +129,8 @@ void CommandBuffer::requestKindSwitch()
     }
 }
 
-void CommandBuffer::noteArenaKind(const ArenaStorage *arena)
+void CommandBuffer::noteArenaKindSlow(const ArenaStorage *arena)
 {
-    if (!arena || !arena->multiKindGen)
-        return;
     const uint64_t gen = arena->multiKindGen->load(std::memory_order_acquire);
     if (!gen)
         return;
@@ -174,17 +172,27 @@ void CommandBuffer::use(const Buffer &buffer, bool write, bool noted)
         if (inRender_)
             passBufferWrites_ = true;
     }
-    noteArenaKind(buffer.span.storage);
-    if (named_.named(&buffer, buffer.va, buffer.length, buffer.import, write))
+    if (named_.named(&buffer, buffer.va, buffer.length, buffer.import, write)) {
+        noteArenaKind(buffer.span.storage);
         return;
+    }
+    noteArenaKind(buffer.span.storage);
     SWITCH_METAL_ENCODE_SPAN(Use);
     const bool cachedHost = buffer.hostVisible && !buffer.gpuVolatile;
+    bool hostWritten = cachedHost;
+    if (cachedHost && !buffer.import && buffer.span.valid()) {
+        const uint64_t dirty = __atomic_load_n(&buffer.cpuDirtyGen, __ATOMIC_ACQUIRE);
+        const uint64_t seen = __atomic_load_n(&buffer.cpuSeenGen, __ATOMIC_ACQUIRE);
+        hostWritten = dirty != seen;
+        if (hostWritten)
+            dirtyBuffers_.push_back({&buffer, dirty});
+    }
     externalWrites_ |= write && cachedHost;
     volatileWrites_ |= write && buffer.hostVisible && buffer.gpuVolatile;
     const bool ranged = dev_->k_.exactJobs() && buffer.length && buffer.length <= UINT32_MAX;
     if (!ranged || !importContains(buffer.import, buffer.va, buffer.length))
         use(buffer.import, write);
-    useStorage(buffer.va, buffer.length, write, cachedHost, buffer.span.storage);
+    useStorage(buffer.va, buffer.length, write, hostWritten, buffer.span.storage);
 }
 
 void CommandBuffer::use(const Texture &texture, bool write)
@@ -198,9 +206,11 @@ void CommandBuffer::use(const Texture &texture, bool write)
         if (range.va || texture.va)
             textureWrites_.note(range.va ? range.va : texture.va, range.bytes ? range.bytes : 1);
     }
-    noteArenaKind(range.arena);
-    if (named_.named(&texture, texture.va, range.bytes, texture.import, write))
+    if (named_.named(&texture, texture.va, range.bytes, texture.import, write)) {
+        noteArenaKind(range.arena);
         return;
+    }
+    noteArenaKind(range.arena);
     SWITCH_METAL_ENCODE_SPAN(Use);
     const Texture *view = write ? writeTexture(&texture) : readTexture(&texture);
     const auto storage = view->storageRange();

@@ -41,14 +41,44 @@
 #include "TegraGM20BMetalObjects.h"
 #include "retirement.h"
 
+extern Class gSwitchMetalBufferClass;
+extern Class gSwitchMetalTextureClass;
+extern Class gSwitchMetalNoCopyTextureClass;
+extern Class gSwitchMetalSamplerClass;
+extern Class gSwitchMetalPipelineClass;
+extern Class gSwitchMetalDepthStencilClass;
+extern Class gSwitchMetalHeapClass;
+extern Class gSwitchMetalComputeStateClass;
+
+static inline void *gm20bAsClassPtr(__unsafe_unretained id object, Class cls)
+{
+    return object && object_getClass(object) == cls ? (__bridge void *)object : nullptr;
+}
+
+static inline void *gm20bAsTexturePtr(__unsafe_unretained id object)
+{
+    if (!object)
+        return nullptr;
+    Class cls = object_getClass(object);
+    return (cls == gSwitchMetalTextureClass || cls == gSwitchMetalNoCopyTextureClass) ? (__bridge void *)object
+                                                                                      : nullptr;
+}
+
+#define gm20bAsBuffer(object)       ((__bridge SwitchMetalBuffer *)gm20bAsClassPtr((object), gSwitchMetalBufferClass))
+#define gm20bAsTexture(object)      ((__bridge SwitchMetalTexture *)gm20bAsTexturePtr((object)))
+#define gm20bAsSampler(object)      ((__bridge SwitchMetalSampler *)gm20bAsClassPtr((object), gSwitchMetalSamplerClass))
+#define gm20bAsPipeline(object)     ((__bridge SwitchMetalPipeline *)gm20bAsClassPtr((object), gSwitchMetalPipelineClass))
+#define gm20bAsDepthStencil(object) ((__bridge SwitchMetalDepthStencil *)gm20bAsClassPtr((object), gSwitchMetalDepthStencilClass))
+#define gm20bAsHeap(object)         ((__bridge SwitchMetalHeap *)gm20bAsClassPtr((object), gSwitchMetalHeapClass))
+
 // Buffer-backed texture views share the caller's cached CPU pointer with their parent buffer.
 static inline SwitchMetalBuffer *cpuBufferOfResource(id object)
 {
-    if ([object isKindOfClass:[SwitchMetalBuffer class]])
-        return (SwitchMetalBuffer *)object;
-    if (![object isKindOfClass:[SwitchMetalTexture class]])
+    if (SwitchMetalBuffer *buffer = gm20bAsBuffer(object))
+        return buffer;
+    SwitchMetalTexture *texture = gm20bAsTexture(object);
+    if (!texture)
         return nil;
-    SwitchMetalTexture *texture = (SwitchMetalTexture *)object;
     while (texture->_kind == SwitchMetalTextureView && texture->_parent)
         texture = texture->_parent;
     return texture->_buffer;
@@ -190,7 +220,7 @@ struct GM20BState {
     gm20b::HandoffQueue<SwitchMetalScheduleChange> schedule;
     gm20b::SubmitQueue<void *, SwitchMetalCommandBuffer *> waiting;
     std::atomic<uint32_t> waitingCommitted{0};  // waiting.committed() as the worker last saw it (the stall line's)
-    gm20b::Mutex eventValues;
+    gm20b::UnfairMutex eventValues;
     gm20b::EventTimeline events;
     MTLSharedEventListener *listener;  // the CPU-ordered remainder's event waits
     // immutable range fences, the submit worker's to the completion thread; later submissions never change an earlier wait
@@ -417,7 +447,7 @@ enum class SwitchMetalEncoded {
 SwitchMetalEncoded encodeRaw(SwitchMetalCommandBuffer *cb, size_t from, size_t to, const char **why);
 
 // TegraGM20BMetalEvents.mm
-extern gm20b::Mutex gHoldersLock;
+extern gm20b::UnfairMutex gHoldersLock;
 extern std::set<SwitchMetalCommandBuffer *> gHolders;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 // A held command buffer's shared event wait as it was armed, for the still-waiting line (gm20bStallTick); gHoldersLock

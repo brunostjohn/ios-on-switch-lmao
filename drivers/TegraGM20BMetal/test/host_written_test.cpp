@@ -607,4 +607,43 @@ TEST(HostWrittenVolatileWc, IdleVolatileWcChunksFreeDirectlyWithoutBoPark)
     EXPECT_EQ(h.writeCombined, 0u);
 }
 
+TEST(HostWrittenVolatileWc, CachedHostBufferOnlyInvalidatesL2WhenCpuDirty)
+{
+    kernel_model::model = {};
+    kernel_model::model.coherentFromPool = false;
+    gm20b::Device dev;
+    std::string err;
+    ASSERT_TRUE(dev.open(harness::emptyPack().c_str(), 0, err, gm20b::Device::Role::Client)) << err;
+
+    gm20b::Buffer shared, dst;
+    ASSERT_TRUE(dev.createBuffer(4096, shared, false, true, false));
+    ASSERT_TRUE(dev.createBuffer(4096, dst, false, false, false));
+    ASSERT_TRUE(shared.hostVisible && !shared.gpuVolatile);
+
+    auto copyOnce = [&]() -> bool {
+        gm20b::CommandBuffer *cb = dev.begin();
+        gm20b::BlitEncoder *e = cb ? cb->blit() : nullptr;
+        if (!e) {
+            ADD_FAILURE() << "no blit encoder";
+            return false;
+        }
+        cb->use(shared, false);
+        cb->use(dst, true);
+        e->copyBytes(shared.va, dst.va, 256);
+        e->end();
+        uint32_t seqno = 0;
+        EXPECT_TRUE(cb->commit(seqno));
+        return !kernel_model::model.jobs.empty() && kernel_model::model.jobs.back().hostWritten;
+    };
+
+    EXPECT_TRUE(copyOnce()) << "first GPU read of a new cached-host buffer must invalidate L2";
+    EXPECT_FALSE(copyOnce()) << "steady read of an unmodified cached-host buffer skips L2 invalidate";
+    shared.markCpuDirty();
+    EXPECT_TRUE(copyOnce()) << "CPU modification re-arms L2 invalidate once";
+    EXPECT_FALSE(copyOnce()) << "subsequent steady read skips L2 invalidate again";
+
+    dev.destroyBuffer(shared);
+    dev.destroyBuffer(dst);
+}
+
 }  // namespace

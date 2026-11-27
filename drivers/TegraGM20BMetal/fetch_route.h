@@ -90,7 +90,8 @@ inline void noteStorageRoute(const StorageRoute &r)
     }
     if (!claimed)
         return;
-    os_log(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "gm20b"),
+    static os_log_t log = os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "gm20b");
+    os_log(log,
            "SwitchMetal: fetch route k%016llx takes its %{public}s form: fetch-free %{public}s (rung %u, format %u, "
            "readable %d, rop layers %u, 8-bit sources %d, accumulates %d); barrier twin %{public}s (%u triangles over "
            "%u px)",

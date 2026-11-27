@@ -51,7 +51,7 @@ __attribute__((noinline)) static void reportBytesOom(__unsafe_unretained SwitchM
                                                      NSUInteger length)
 {
     static std::atomic<bool> said{false};
-    if (!said.exchange(true))
+    if (!said.exchange(true, std::memory_order_relaxed))
         os_log_error(gm20bLog(),
                      "SwitchMetal: setBytes of %lu bytes: no GPU memory for its chunk (%{public}s): its command "
                      "buffer fails out of memory; later ones not logged",
@@ -79,6 +79,8 @@ void recordBytes(__unsafe_unretained SwitchMetalCommandBuffer *cb, Cmd m, const 
         memcpy(to, bytes, length);
     if (padded > length)
         memset(to + length, 0, padded - length);
+    if (gm20b::Buffer &buf = cb->_bytes.chunks.own(chunk); !buf.gpuVolatile)
+        buf.markCpuDirty();
     m.a = offset;
     m.b = uint32_t(length);
     m.c = chunk;
@@ -109,6 +111,8 @@ static void bindBytes(__unsafe_unretained SwitchMetalRenderEncoder *e, int stage
             memcpy(to, bytes, length);
         if (padded > length)
             memset(to + length, 0, padded - length);
+        if (gm20b::Buffer &buf = cb->_bytes.chunks.own(chunk); !buf.gpuVolatile)
+            buf.markCpuDirty();
         cb->_plan.bindBytes(uint32_t(stage - 1), uint32_t(index), chunk, offset, uint32_t(length), shadowOff);
         return;
     }
@@ -126,55 +130,57 @@ static void bindBytes(__unsafe_unretained SwitchMetalRenderEncoder *e, int stage
     bindBytes(self, 2, bytes, length, index);
 }
 
-- (void)buffer:(int)stage object:(id<MTLBuffer>)b offset:(NSUInteger)offset index:(NSUInteger)index
+static inline void bindBuffer(__unsafe_unretained SwitchMetalRenderEncoder *e, int stage,
+                              __unsafe_unretained id<MTLBuffer> b, NSUInteger offset, NSUInteger index)
 {
     SWITCH_API(ApiBind);
-    static const Class bufCls = [SwitchMetalBuffer class];
-    if (b && !gm20bIsClass(b, bufCls))
-        return gm20bCallInvalid(_cb, PredCallBufForeign, uint64_t(stage) << 8 | index, b.length,
+    __unsafe_unretained SwitchMetalBuffer *x = gm20bAsBuffer(b);
+    if (b && !x)
+        return gm20bCallInvalid(e->_cb, PredCallBufForeign, uint64_t(stage) << 8 | index, b.length,
                                 "a buffer not made by this device");
     if (stage >= 1 && stage <= 2 && index < 31) {
         if (b)
-            _bufBound[stage - 1] |= 1u << index;
+            e->_bufBound[stage - 1] |= 1u << index;
         else
-            _bufBound[stage - 1] &= ~(1u << index);
-        _eligibility++;
+            e->_bufBound[stage - 1] &= ~(1u << index);
+        e->_eligibility++;
     }
-    setBinding(_cb, OpBuffer, stage, index, b, offset);
+    setBinding(e->_cb, OpBuffer, stage, index, b, offset);
 }
 
 - (void)setVertexBuffer:(id<MTLBuffer>)b offset:(NSUInteger)offset atIndex:(NSUInteger)index
 {
-    [self buffer:1 object:b offset:offset index:index];
+    bindBuffer(self, 1, b, offset, index);
 }
 
 - (void)setFragmentBuffer:(id<MTLBuffer>)b offset:(NSUInteger)offset atIndex:(NSUInteger)index
 {
-    [self buffer:2 object:b offset:offset index:index];
+    bindBuffer(self, 2, b, offset, index);
 }
 
-- (void)bufferOffset:(int)stage offset:(NSUInteger)offset index:(NSUInteger)index
+static inline void bindBufferOffset(__unsafe_unretained SwitchMetalRenderEncoder *e, int stage, NSUInteger offset,
+                                    NSUInteger index)
 {
     SWITCH_API(ApiBind);
-    if (stage >= 1 && stage <= 2 && index < 31 && (_bufBound[stage - 1] & (1u << index)))
-        _eligibility++;
-    setBinding(_cb, OpBufferOffset, stage, index, nil, offset);
+    if (stage >= 1 && stage <= 2 && index < 31 && (e->_bufBound[stage - 1] & (1u << index)))
+        e->_eligibility++;
+    setBinding(e->_cb, OpBufferOffset, stage, index, nil, offset);
 }
 
 - (void)setVertexBufferOffset:(NSUInteger)offset atIndex:(NSUInteger)index
 {
-    [self bufferOffset:1 offset:offset index:index];
+    bindBufferOffset(self, 1, offset, index);
 }
 
 - (void)setFragmentBufferOffset:(NSUInteger)offset atIndex:(NSUInteger)index
 {
-    [self bufferOffset:2 offset:offset index:index];
+    bindBufferOffset(self, 2, offset, index);
 }
 
 - (void)setVertexBuffers:(const id<MTLBuffer> __unsafe_unretained[])b offsets:(const NSUInteger[])o withRange:(NSRange)r
 {
     for (NSUInteger k = 0; k < r.length; k++)
-        [self buffer:1 object:b[k] offset:o[k] index:r.location + k];
+        bindBuffer(self, 1, b[k], o[k], r.location + k);
 }
 
 - (void)setFragmentBuffers:(const id<MTLBuffer> __unsafe_unretained[])b
@@ -182,7 +188,7 @@ static void bindBytes(__unsafe_unretained SwitchMetalRenderEncoder *e, int stage
                  withRange:(NSRange)r
 {
     for (NSUInteger k = 0; k < r.length; k++)
-        [self buffer:2 object:b[k] offset:o[k] index:r.location + k];
+        bindBuffer(self, 2, b[k], o[k], r.location + k);
 }
 
 static gm20b::CheckedTexture checkedTexture(__unsafe_unretained SwitchMetalTexture *t)
@@ -194,8 +200,7 @@ bool gm20bBindTexture(__unsafe_unretained SwitchMetalRenderEncoder *e, int stage
                       NSUInteger index)
 {
     SWITCH_API(ApiBind);
-    static const Class texCls = [SwitchMetalTexture class];
-    __unsafe_unretained SwitchMetalTexture *x = gm20bIsClass(t, texCls) ? (SwitchMetalTexture *)t : nil;
+    __unsafe_unretained SwitchMetalTexture *x = gm20bAsTexture(t);
     if (x && x->_gm20bOk && x->_raw.rotation)
         SWITCH_REFUSE("gm20b", "tex.turned_bound",
                       "a %ux%u plane of rotation %u bound as a texture argument, read as it lies (MTLTexture.h "
@@ -293,8 +298,7 @@ bool gm20bBindSampler(__unsafe_unretained SwitchMetalRenderEncoder *e, int stage
                       __unsafe_unretained id<MTLSamplerState> s, NSUInteger index)
 {
     SWITCH_API(ApiBind);
-    static const Class sampCls = [SwitchMetalSampler class];
-    __unsafe_unretained SwitchMetalSampler *r = gm20bIsClass(s, sampCls) ? (SwitchMetalSampler *)s : nil;
+    __unsafe_unretained SwitchMetalSampler *r = gm20bAsSampler(s);
     __unsafe_unretained SwitchMetalCommandBuffer *cb = e->_cb;
     SwitchMetalRenderSlots &slots = cb->_renderSlots;
     const uint16_t bit = uint16_t(index < 16 ? 1u << index : 0);
@@ -375,24 +379,44 @@ bool gm20bBindSampler(__unsafe_unretained SwitchMetalRenderEncoder *e, int stage
 // clamps, bound as any state is (the frontend's the same)
 id<MTLSamplerState> clampedSampler(id<MTLSamplerState> s, float lodMin, float lodMax)
 {
-    if (![(id)s isKindOfClass:[SwitchMetalSampler class]])
+    SwitchMetalSampler *base = gm20bAsSampler(s);
+    if (!base)
         return s;
-    SwitchMetalSampler *base = (SwitchMetalSampler *)s;
-    const float clamps[2] = {lodMin, lodMax};
-    NSValue *key = [NSValue valueWithBytes:clamps objCType:@encode(float[2])];
-    @synchronized(base) {
-        if (!base->_clamped)
-            base->_clamped = [NSMutableDictionary dictionary];
-        if (id<MTLSamplerState> made = base->_clamped[key])
-            return made;
-        MTLSamplerDescriptor *d = [base->_descriptor copy];
-        d.lodMinClamp = lodMin;
-        d.lodMaxClamp = lodMax;
-        id<MTLSamplerState> made = [(id<MTLDevice>)base->_device newSamplerStateWithDescriptor:d];
-        if (made)
-            base->_clamped[key] = made;
+    uint32_t minBits = 0, maxBits = 0;
+    memcpy(&minBits, &lodMin, sizeof minBits);
+    memcpy(&maxBits, &lodMax, sizeof maxBits);
+    auto findLocked = [&]() -> id<MTLSamplerState> {
+        for (uint8_t i = 0; i < base->_clampedInlineCount; ++i)
+            if (base->_clampedInline[i].lodMinBits == minBits && base->_clampedInline[i].lodMaxBits == maxBits)
+                return base->_clampedInline[i].sampler;
+        for (const SwitchMetalClampedSampler &entry : base->_clampedOverflow)
+            if (entry.lodMinBits == minBits && entry.lodMaxBits == maxBits)
+                return entry.sampler;
+        return nil;
+    };
+    os_unfair_lock_lock(&base->_clampedLock);
+    if (id<MTLSamplerState> made = findLocked()) {
+        os_unfair_lock_unlock(&base->_clampedLock);
         return made;
     }
+    os_unfair_lock_unlock(&base->_clampedLock);
+    MTLSamplerDescriptor *d = [base->_descriptor copy];
+    d.lodMinClamp = lodMin;
+    d.lodMaxClamp = lodMax;
+    id<MTLSamplerState> made = [(id<MTLDevice>)base->_device newSamplerStateWithDescriptor:d];
+    if (!made)
+        return nil;
+    os_unfair_lock_lock(&base->_clampedLock);
+    if (id<MTLSamplerState> existing = findLocked()) {
+        os_unfair_lock_unlock(&base->_clampedLock);
+        return existing;
+    }
+    if (base->_clampedInlineCount < base->_clampedInline.size())
+        base->_clampedInline[base->_clampedInlineCount++] = {minBits, maxBits, made};
+    else
+        base->_clampedOverflow.push_back({minBits, maxBits, made});
+    os_unfair_lock_unlock(&base->_clampedLock);
+    return made;
 }
 
 - (void)setVertexSamplerState:(id<MTLSamplerState>)s

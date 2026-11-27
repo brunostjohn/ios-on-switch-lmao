@@ -124,6 +124,7 @@ private:
     // the engine of the work before it and where its opening ended: an encoder that sent nothing after its opening
     // changed no engine, and leaves the command buffer's as it found it
     BarrierEngine before_ = BarrierEngine::None;
+    bool beforePassShaderFlushed_ = false, beforeComputeReleased_ = false;
     uint32_t *opened_ = nullptr;
     static constexpr uint8_t kAccesses = 16;
     const void *read_[kAccesses] = {}, *written_[kAccesses] = {};

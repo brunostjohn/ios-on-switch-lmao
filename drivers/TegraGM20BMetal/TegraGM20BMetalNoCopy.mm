@@ -160,14 +160,14 @@ class WrappedMemory {
 public:
     void add(const void *memory, SwitchMetalNoCopyTexture *t)
     {
-        std::lock_guard<gm20b::Mutex> l(lock_);
+        std::lock_guard<gm20b::UnfairMutex> l(lock_);
         textures_.emplace(memory, t);
     }
 
     // The entries over `memory` whose texture is gone, a deallocating one included
     void prune(const void *memory)
     {
-        std::lock_guard<gm20b::Mutex> l(lock_);
+        std::lock_guard<gm20b::UnfairMutex> l(lock_);
         auto [from, to] = textures_.equal_range(memory);
         while (from != to)
             from = from->second ? std::next(from) : textures_.erase(from);
@@ -176,7 +176,7 @@ public:
     std::vector<SwitchMetalNoCopyTexture *> over(const void *memory)
     {
         std::vector<SwitchMetalNoCopyTexture *> found;
-        std::lock_guard<gm20b::Mutex> l(lock_);
+        std::lock_guard<gm20b::UnfairMutex> l(lock_);
         auto [from, to] = textures_.equal_range(memory);
         for (; from != to; ++from)
             if (SwitchMetalNoCopyTexture *t = from->second)
@@ -185,7 +185,7 @@ public:
     }
 
 private:
-    gm20b::Mutex lock_;
+    gm20b::UnfairMutex lock_;
     std::unordered_multimap<const void *, __weak SwitchMetalNoCopyTexture *> textures_;
 };
 

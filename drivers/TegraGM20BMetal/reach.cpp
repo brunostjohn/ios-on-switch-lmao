@@ -186,9 +186,9 @@ void RenderEncoder::takeReachTwin()
     if (!pipeline_ && !reachWhy_)
         reachWhy_ = why;
     static std::atomic<bool> logged{false};
-    if (reachCover_ && !logged.exchange(true))
+    if (reachCover_ && !logged.exchange(true, std::memory_order_relaxed))
         os_log_error(
-            os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "gm20b"),
+            gm20b::log(),
             "SwitchMetal: a rotation-4 load's draw has a vertex program that writes memory: it reaches every tile of "
             "its scissor within its viewport (once per process)");
 }

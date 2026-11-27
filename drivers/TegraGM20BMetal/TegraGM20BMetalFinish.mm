@@ -202,7 +202,7 @@ static void withholdPresents(SwitchMetalCommandBuffer *cb)
     NSError *error = nil;
     SwitchMetalPred failedBy = PredNone;
     {
-        std::lock_guard<gm20b::Mutex> l(cb->_lock);
+        std::lock_guard<gm20b::UnfairMutex> l(cb->_lock);
         error = cb->_segError;
         failedBy = SwitchMetalPred(cb->_failedBy);
     }
@@ -234,10 +234,11 @@ void scheduled(SwitchMetalCommandBuffer *cb)
     if (cb->_presents && cb->_segError.set())
         withholdPresents(cb);
 #if SWITCH_METAL_STATS
-    const uint64_t heldReturnUs = cb->_heldReturnUs.exchange(0);
+    const uint64_t heldReturnUs = cb->_heldReturnUs.exchange(0, std::memory_order_acq_rel);
 #endif
     MTLCommandBufferStatus committed = MTLCommandBufferStatusCommitted;
-    cb->_status.compare_exchange_strong(committed, MTLCommandBufferStatusScheduled);
+    cb->_status.compare_exchange_strong(committed, MTLCommandBufferStatusScheduled, std::memory_order_acq_rel,
+                                        std::memory_order_relaxed);
     const double now = hostSeconds();
     cb->_kernelEnd = now;
     cb->_gpuStart = now;
@@ -280,7 +281,7 @@ void segmentCompleted(SwitchMetalCommandBuffer *cb, NSError *error, const gm20b:
                             userInfo:@{NSLocalizedDescriptionKey : @"CPU-visible GPU results could not be acquired"}];
     retireEventSignals(signals, !error);
     if (error) {
-        std::lock_guard<gm20b::Mutex> l(cb->_lock);
+        std::lock_guard<gm20b::UnfairMutex> l(cb->_lock);
         if (!cb->_segError)
             cb->_segError = error;
     }
@@ -302,7 +303,7 @@ static std::vector<SwitchMetalDeferredPresent> takeDeferredPresents(SwitchMetalC
     latePresent = false;
     if (!cb->_hasDeferredPresents.load(std::memory_order_seq_cst))
         return {};
-    std::lock_guard<gm20b::Mutex> l(cb->_lock);
+    std::lock_guard<gm20b::UnfairMutex> l(cb->_lock);
     latePresent = std::exchange(cb->_latePresent, false);
     std::vector<SwitchMetalDeferredPresent> taken;
     taken.swap(cb->_deferredPresents);
@@ -313,7 +314,7 @@ static void prepareEmptyCompletion(SwitchMetalCommandBuffer *cb)
 {
     SWITCH_METAL_DIAGNOSTIC(gRM->stats.finished.fetch_add(1, std::memory_order_relaxed));
     cb->_error = nil;
-    cb->_status = MTLCommandBufferStatusCompleted;
+    cb->_status.store(MTLCommandBufferStatusCompleted, std::memory_order_release);
     const gm20b::CommandBufferTimes t = gm20b::orderedTimes(cb->_kernelStart, cb->_kernelEnd, hostSeconds(), false, 0);
     cb->_kernelStart = t.kernelStart;
     cb->_kernelEnd = t.kernelEnd;
@@ -352,17 +353,18 @@ static void completeBuffer(SwitchMetalCommandBuffer *cb)
         cur->_sharedEventWaits.clear();
         cur->_resourceReady.reset();
         gm20bRecordingDone(cur);
-        cur->_scheduledDone = true;
-        cur->_completedDone = true;
+        cur->_scheduledDone.store(true, std::memory_order_release);
+        cur->_completedDone.store(true, std::memory_order_release);
         gm20bClearCompileWaits(cur);
         cur->_submitOwner.clear();
         gm20bChanged(cur);
-        gRM->committed.fetch_sub(1, std::memory_order_acq_rel);
+        gRM->committed.fetch_sub(1, std::memory_order_release);
 #if SWITCH_FRAME_TIMELINE
         switch_frame::finished(cur->_frame);
 #endif
         void *last = (__bridge void *)cur;
-        if (cur->_queue->_last.compare_exchange_strong(last, nullptr))
+        if (cur->_queue->_last.compare_exchange_strong(last, nullptr, std::memory_order_acq_rel,
+                                                       std::memory_order_relaxed))
             CFRelease(last);
         void *next = cur->_turn.finished();
         if (!next)
@@ -387,7 +389,8 @@ static void scheduledEmpty(SwitchMetalCommandBuffer *cb)
     if (cb->_scheduledSent.exchange(true))
         return;
     MTLCommandBufferStatus committed = MTLCommandBufferStatusCommitted;
-    cb->_status.compare_exchange_strong(committed, MTLCommandBufferStatusScheduled);
+    cb->_status.compare_exchange_strong(committed, MTLCommandBufferStatusScheduled, std::memory_order_acq_rel,
+                                        std::memory_order_relaxed);
     const double now = hostSeconds();
     cb->_kernelEnd = now;
     cb->_gpuStart = now;
@@ -488,7 +491,7 @@ void failCommandBuffer(SwitchMetalCommandBuffer *cb, NSString *reason, MTLComman
     // turn, which gives back its encode ahead first (gm20bPipelineFailed).
     if (!cb->_committed.load(std::memory_order_relaxed))
         gm20bPipelineVeto(cb, VetoRefused);
-    std::lock_guard<gm20b::Mutex> l(cb->_lock);
+    std::lock_guard<gm20b::UnfairMutex> l(cb->_lock);
     if (!cb->_segError) {
         cb->_segError = error;
         if (p)
@@ -500,7 +503,7 @@ void finish(SwitchMetalCommandBuffer *cb, NSError *error)
 {
     if (error) {
         {
-            std::lock_guard<gm20b::Mutex> l(cb->_lock);
+            std::lock_guard<gm20b::UnfairMutex> l(cb->_lock);
             if (!cb->_segError)
                 cb->_segError = error;
         }
@@ -524,7 +527,7 @@ static void finished(SwitchMetalCommandBuffer *cb)
     NSError *error = nil;
     SwitchMetalPred failedBy = PredNone;
     if (cb->_segError.set()) {
-        std::lock_guard<gm20b::Mutex> l(cb->_lock);
+        std::lock_guard<gm20b::UnfairMutex> l(cb->_lock);
         error = cb->_segError;
         failedBy = SwitchMetalPred(cb->_failedBy);
     }
@@ -554,7 +557,8 @@ static void finished(SwitchMetalCommandBuffer *cb)
         commandBufferFailed(failedBy, error);
     {
         cb->_error = error;
-        cb->_status = error ? MTLCommandBufferStatusError : MTLCommandBufferStatusCompleted;
+        cb->_status.store(error ? MTLCommandBufferStatusError : MTLCommandBufferStatusCompleted,
+                          std::memory_order_release);
         // the GPU's own time, its end where this thread saw it complete: the duration exact, both late by that latency
         uint64_t ns = 0;
         const bool stamped = !error && gRM->raw->gpuNanoseconds(cb->_stamp, ns);
@@ -579,7 +583,7 @@ static void finished(SwitchMetalCommandBuffer *cb)
         presents.clear();
     }
 #if SWITCH_METAL_STATS
-    const uint64_t heldReturnUs = cb->_heldReturnUs.exchange(0);
+    const uint64_t heldReturnUs = cb->_heldReturnUs.exchange(0, std::memory_order_acq_rel);
 #endif
     if (sendScheduled) {
         dispatchScheduled(cb, scheduledHandlers);
@@ -685,7 +689,7 @@ void completionLoop()
             r.inflight.pop();
             NSError *error = ok ? nil : killError(r.raw->lostError());
             if (const gm20b::LoopContinue loop = r.raw->loopContinue(retired.loopStamp); !error && loop.continues) {
-                std::lock_guard<gm20b::Mutex> l(cb->_lock);
+                std::lock_guard<gm20b::UnfairMutex> l(cb->_lock);
                 cb->_loopContinue = {true, loop.tag, retired.loopFrom, retired.loopTo};
             }
             segmentCompleted(cb, error, *retired.writes, SwitchMetalRawProgress, retired.signals, retired.waits,
