@@ -17,6 +17,7 @@
 #include "../NativeMobileDisplay/SwitchPortrait.h"
 
 class IOService;
+class IOWorkLoop;
 class OSObject;
 
 enum SwitchHIDKind : unsigned {
@@ -35,6 +36,7 @@ enum SwitchHIDKind : unsigned {
 // is the whole panel, so backboardd scales them to whatever logical size the UI uses.
 constexpr unsigned kSwitchTouchSlots = 10, kSwitchTouchWidth = 1280, kSwitchTouchHeight = 720;
 constexpr uint32_t kSwitchTouchReportIntervalUs = 8000;
+constexpr uint32_t kSwitchLightReportIntervalUs = 116662;
 // Portrait-native (SwitchPortrait.h): reports carry the panel's own frame instead, the one iOS is given as its screen
 // (0..719 left to right, 0..1279 top to bottom of the portrait panel): landscape (x, y) is reported as (y, 1279 - x),
 // the display's own mapping. backboardd's digitizer-to-panel rotation is 0, and iOS turns touches into its landscape
@@ -200,6 +202,7 @@ OSObject *switch_hid_temperature_event(uint64_t timestamp, int32_t fixed);
 // device class and adds the IOHIDEventDriver personalities. Thread context; panics with the reason on failure. The
 // device comes back unretained: its attachment under IOResources keeps it.
 IOService *switch_hid_create(SwitchHIDKind kind);
+IOService *switch_hid_create(SwitchHIDKind kind, IOWorkLoop *sharedLoop);
 
 // Hands one input report to the device (and from there synchronously to its IOHIDEventDriver). Reports sent before
 // the event driver has opened the device are dropped by IOHIDFamily. Call from one thread per device.
@@ -217,6 +220,7 @@ bool switch_hid_supports_timestamps(IOService *device);
 // Hands an IOHIDEvent to the device's IOHIDEventDriver as if the driver had made it (IOHIDEventService::dispatchEvent,
 // the driver's slot 198). kIOReturnNotReady until the driver has opened the device. Call from one thread per device.
 IOReturn switch_hid_dispatch_event(IOService *device, OSObject *event);
+void switch_hid_set_light_copy_handler(IOService *device, SwitchHIDCopyEventHandler handler, void *context);
 
 // Feature reports the event system sends the device: IOHIDEventDriver::setProperties writes a client's ReportInterval
 // (microseconds; 0 when the last client stops) into the Report Interval element, and IOHIDDevice::postElementValues

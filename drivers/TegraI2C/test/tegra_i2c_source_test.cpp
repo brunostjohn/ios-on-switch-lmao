@@ -49,3 +49,30 @@ TEST(TegraI2CSource, AControllerClockComesUpInTheTrmOrder)
     }
     EXPECT_EQ(body.find("info.enable + 4"), std::string::npos) << "the clock gated during its set-up";
 }
+
+TEST(TegraI2CSource, FilterOnlyIsrWithoutIrqLockOrDmaDoneSource)
+{
+    const std::string source = switch_ios::test::SourceText("../TegraI2C.cpp");
+    EXPECT_NE(source.find("IOFilterInterruptEventSource::filterInterruptEventSource("), std::string::npos);
+    EXPECT_NE(source.find("thread_wakeup("), std::string::npos);
+    EXPECT_EQ(source.find("irqLock"), std::string::npos);
+    EXPECT_EQ(source.find("dmaDoneSource"), std::string::npos);
+    EXPECT_EQ(source.find("switch_dcache_clean_invalidate"), std::string::npos);
+    EXPECT_NE(source.find("switch_dcache_invalidate("), std::string::npos);
+
+    const std::string packet = switch_ios::test::Body(source, "int packet(");
+    ASSERT_FALSE(packet.empty());
+    EXPECT_NE(packet.find("const bool drainAtEnd = (in != nullptr) && (len + 3) / 4 <= kFifoWords;"),
+              std::string::npos);
+    const size_t packetWait = packet.find("sleepForAction(");
+    ASSERT_NE(packetWait, std::string::npos);
+    EXPECT_EQ(packet.find("w32(b.regs, INT_STATUS,", packetWait), std::string::npos);
+
+    const std::string chain = switch_ios::test::Body(source, "int chain(");
+    ASSERT_FALSE(chain.empty());
+    const size_t chainWait = chain.find("sleepForAction(");
+    ASSERT_NE(chainWait, std::string::npos);
+    EXPECT_EQ(chain.find("w32(b.regs, INT_STATUS,", chainWait), std::string::npos);
+    EXPECT_EQ(chain.find("dmaInvalidate("), chain.rfind("dmaInvalidate("));
+    EXPECT_GT(chain.find("dmaInvalidate("), chainWait);
+}
