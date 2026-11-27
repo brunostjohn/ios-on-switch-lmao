@@ -119,6 +119,7 @@
 #include <vm/vm_memtag.h>
 #endif /* HAS_MTE */
 #include <switch/prefetch_vm.h>
+#include <switch/vm_lazy_cow.h>
 
 #include <sys/codesign.h>
 #include <sys/code_signing.h>
@@ -4606,6 +4607,12 @@ vm_map_lookup_object_and_lock_entry(
 	fault_page_mask = MIN(VM_MAP_PAGE_MASK(original_map), PAGE_MASK);
 	vaddr = VM_MAP_TRUNC_PAGE(vaddr, fault_page_mask);
 
+	if (__improbable(vml_ctx_for_vaddr == NULL && !try_lock_entry &&
+	    (fault_type & VM_PROT_WRITE) &&
+	    os_atomic_load(&switch_vm_lazy_rw_global_active, relaxed) != 0u)) {
+		switch_vm_lazy_rw_fault(original_map, vaddr);
+	}
+
 	bool would_resolve_cow = force_copy || (fault_type & VM_PROT_WRITE);
 	vmrl_sh_flags_t flags = VMRL_SH_STREAM_NO_HOLES |
 	    VMRL_SH_DESCEND_INTO_CONSTANT |
@@ -6846,6 +6853,14 @@ handle_copy_delay:
 			 * Our try_lock failed, just retry the fault from the top
 			 */
 			vm_lock_contention_event(map, &vm_fault_busy_retry_count, VMLP_EVENT_LC_VM_FAULT_BUSY_RETRY, vaddr, vaddr);
+			goto RetryFault;
+		}
+
+		if (__improbable(kr == KERN_PROTECTION_FAILURE &&
+		    vml_ctx_for_vaddr == NULL &&
+		    (fault_type & VM_PROT_WRITE) &&
+		    os_atomic_load(&switch_vm_lazy_rw_global_active, relaxed) != 0u &&
+		    switch_vm_lazy_rw_page_active(original_map, vaddr))) {
 			goto RetryFault;
 		}
 
