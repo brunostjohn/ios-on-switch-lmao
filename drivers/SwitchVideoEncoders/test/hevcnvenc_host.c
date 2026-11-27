@@ -143,6 +143,21 @@ static void checkStreamAllowsEngine(const TegraNVENCSubmit *s, const char *what)
                      md->cu32x32_part_nLx2N_enable || md->cu32x32_part_nRx2N_enable || md->cu64x64_part_2NxnU_enable ||
                      md->cu64x64_part_2NxnD_enable || md->cu64x64_part_nLx2N_enable || md->cu64x64_part_nRx2N_enable;
     CHECK(!amp || sps->amp_enabled_flag, "%s: AMP partitions enabled with AMP off in the SPS", what);
+    // Every CU size in the SPS range must keep intra prediction enabled with Planar/DC available (nvenc.bin 0x111f1..
+    // 0x1133e: ip_search_mode still searches 8x8 intra on P pictures).
+    static const char *const kIntraNames[3] = {"8x8", "16x16", "32x32"};
+    const uint8_t intraEnable[3] = {md->intra_mode_8x8_enable, md->intra_mode_16x16_enable,
+                                    md->intra_mode_32x32_enable};
+    const uint32_t intraMask[3] = {md->h265_intra_luma8x8_mode_enable, md->h265_intra_luma16x16_mode_enable,
+                                   md->h265_intra_luma32x32_mode_enable};
+    for (uint32_t i = 0; i < 3; i++) {
+        if (i < sps->min_cu_size || i > sps->max_cu_size)
+            continue;
+        CHECK(intraEnable[i] && (intraMask[i] & 0x3u) == 0x3u,
+              "%s: intra %s disabled or missing Planar/DC (enable %u mask %#x) while in SPS CU range", what,
+              kIntraNames[i], intraEnable[i], intraMask[i]);
+    }
+    CHECK((md->h265_intra_chroma_mode_enable & 0x1fu) != 0, "%s: no intra chroma mode enabled", what);
 }
 
 static void checkSize(uint32_t width, uint32_t height, const char *header, const char *slice)
@@ -518,7 +533,7 @@ static void checkFast(void)
 {
     HEVCEncConfig c = {.width = 1920, .height = 1080, .fast = true, .fps_num = 60, .fps_den = 1};
     CHECK(hevcnvenc_configure(&c) == 0, "fast: configure");
-    CHECK(!c.amp && c.max_tr_depth_inter == 3 && c.max_tr_depth_intra == 3, "fast: coding tree");
+    CHECK(c.amp && c.max_tr_depth_inter == 3 && c.max_tr_depth_intra == 3, "fast: coding tree");
     uint8_t sps[192], pps[64];
     const size_t spsSize = hevcenc_write_sps(&c, sps, sizeof(sps)), ppsSize = hevcenc_write_pps(&c, pps, sizeof(pps));
     static HEVCParams params;
@@ -527,14 +542,22 @@ static void checkFast(void)
           "fast: AVD parser refused SPS or PPS");
     H264EncLayout l;
     hevcnvenc_layout(&c, TEGRA_NVENC_LAYOUT_TILED16, &l);
-    const HEVCEncPicture idr = {.idr = true, .qp = 26};
-    const HEVCEncPicture p = {.poc = 1, .qp = 28, .picture_index = 1};
+    const HEVCEncPicture idr = {.idr = true, .qp = 23};
+    const HEVCEncPicture p1 = {.poc = 1, .qp = 25, .picture_index = 1};
+    const HEVCEncPicture p2 = {.poc = 2, .qp = 25, .picture_index = 2};
+    static char pHeader[2 * TEGRA_NVENC_H265_SETUP_HEADER + 1], pSlice[2 * 64 + 1], p2Header[sizeof(pHeader)];
+    patched(kHeader1920, kPSetup, sizeof(kPSetup) / sizeof(kPSetup[0]), pHeader, sizeof(pHeader));
+    patched(kSlice1920, kPSlice, sizeof(kPSlice) / sizeof(kPSlice[0]), pSlice, sizeof(pSlice));
+    patched(pHeader, kP2Setup, sizeof(kP2Setup) / sizeof(kP2Setup[0]), p2Header, sizeof(p2Header));
+
     static TegraNVENCSubmit s;
     hevcnvenc_fill_submit(&c, TEGRA_NVENC_LAYOUT_TILED16, TEGRA_NVENC_CHROMA_OFFSET, &l, &idr, &kHandles, &s);
     const char *why = check(&s);
     CHECK(!why, "fast: checker refused IDR: %s", why ? why : "");
+    int differ = compareSetup(&s, kHeader1920, kSlice1920);
+    CHECK(!differ, "fast: %d bytes differ from T210 quality-level-0 IDR setup", differ);
     const nvenc_h265_drv_pic_setup_s *setup = setupOf(&s);
-    CHECK(!setup->sps_data.amp_enabled_flag && !params.sps[0].amp, "fast: AMP off in setup and SPS");
+    CHECK(setup->sps_data.amp_enabled_flag && params.sps[0].amp, "fast: AMP on in setup and SPS");
     CHECK(setup->pps_data.transform_skip_enabled_flag && params.pps[0].transform_skip,
           "fast: transform skip on in setup and PPS");
     CHECK(params.sps[0].max_th_depth_inter == setup->sps_data.max_transform_depth_inter &&
@@ -542,25 +565,27 @@ static void checkFast(void)
           "fast: the SPS's transform depths are the setup's");
     checkStreamAllowsEngine(&s, "fast IDR");
     const TegraNVENCEntry *ctrl = entry(&s, NVC5B7_SET_CONTROL_PARAMS);
-    CHECK(ctrl && !(ctrl->value & (1u << 11)), "fast: SLICE_STAT_ON off");
-    const nvenc_h264_me_control_s *me =
-        (const nvenc_h264_me_control_s *)(s.setup + setup->pic_control.me_control_offset);
-    CHECK(me->shape1.bitmask[0] == me->shape0.bitmask[0] && me->shape1.bitmask[1] == me->shape0.bitmask[1],
-          "fast: compact ME shape1");
-    const nvenc_h265_md_control_s *md =
-        (const nvenc_h265_md_control_s *)(s.setup + setup->pic_control.md_control_offset);
-    CHECK(!md->cu16x16_part_NxN_enable && !md->cu32x32_part_2NxnU_enable && !md->cu32x32_part_2NxnD_enable &&
-              !md->cu32x32_part_nLx2N_enable && !md->cu32x32_part_nRx2N_enable && md->chroma_eval_mode == 1,
-          "fast: IDR MD complexity trimmed");
+    CHECK(ctrl && (ctrl->value & (1u << 8)) && !(ctrl->value & (1u << 11)) && (ctrl->value & (1u << 12)),
+          "fast: IDR control params (SLICE_STAT_ON off, FORCE_OUTPIC/GPTIMER_ON on)");
 
-    hevcnvenc_fill_submit(&c, TEGRA_NVENC_LAYOUT_TILED16, TEGRA_NVENC_CHROMA_OFFSET, &l, &p, &kHandles, &s);
+    hevcnvenc_fill_submit(&c, TEGRA_NVENC_LAYOUT_TILED16, TEGRA_NVENC_CHROMA_OFFSET, &l, &p1, &kHandles, &s);
     why = check(&s);
-    CHECK(!why, "fast: checker refused P: %s", why ? why : "");
-    md = (const nvenc_h265_md_control_s *)(s.setup + setupOf(&s)->pic_control.md_control_offset);
-    CHECK(!md->intra_mode_8x8_enable && !md->h265_intra_luma8x8_mode_enable &&
-              !md->h265_intra_luma_mode_enable_leftbits,
-          "fast: P intra 8x8 off");
-    checkStreamAllowsEngine(&s, "fast P");
+    CHECK(!why, "fast: checker refused first P: %s", why ? why : "");
+    differ = compareSetup(&s, pHeader, pSlice);
+    CHECK(!differ, "fast: %d bytes differ from T210 quality-level-0 first P setup", differ);
+    checkPMethods(&s, &p1, 0, "fast first P");
+    checkStreamAllowsEngine(&s, "fast first P");
+    ctrl = entry(&s, NVC5B7_SET_CONTROL_PARAMS);
+    CHECK(ctrl && (ctrl->value & (1u << 8)) && !(ctrl->value & (1u << 11)) && (ctrl->value & (1u << 12)),
+          "fast: P control params (SLICE_STAT_ON off, FORCE_OUTPIC/GPTIMER_ON on)");
+
+    hevcnvenc_fill_submit(&c, TEGRA_NVENC_LAYOUT_TILED16, TEGRA_NVENC_CHROMA_OFFSET, &l, &p2, &kHandles, &s);
+    why = check(&s);
+    CHECK(!why, "fast: checker refused second P: %s", why ? why : "");
+    differ = compareSetup(&s, p2Header, pSlice);
+    CHECK(!differ, "fast: %d bytes differ from T210 quality-level-0 second P setup", differ);
+    checkPMethods(&s, &p2, 1, "fast second P");
+    checkStreamAllowsEngine(&s, "fast second P");
     checkPSyntax(&c, &params, &l);
 }
 
