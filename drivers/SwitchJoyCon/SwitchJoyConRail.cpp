@@ -798,6 +798,10 @@ bool SwitchJoyConRail::filter(Side &s)
     bool idle = false;
     bool dmaRx = false;
     IOSimpleLockLock(s.lock);
+    if (s.ier == 0) {
+        IOSimpleLockUnlock(s.lock);
+        return false;
+    }
     s.interrupts = s.interrupts + 1;
     const uint32_t errorsBefore = s.lineErrors;
     const uint32_t overflowsBefore = s.overflows;
@@ -1316,8 +1320,10 @@ void SwitchJoyConRail::sessionEnded(void *context, int32_t servedPid, int32_t op
 // UART at 1 or 3 Mbaud (hekate uart_init order; Linux tegra_uart_hw_init for the FIFO and interrupt setup).
 void SwitchJoyConRail::configureUart(Side &s, bool fast)
 {
-    const IOInterruptState state = IOSimpleLockLockDisableInterrupt(s.lock);
+    IOInterruptState state = IOSimpleLockLockDisableInterrupt(s.lock);
+    s.ier = 0;
     wr(s, IER, 0);
+    (void)rd(s, IER);
     carWrite(s.cfg->clockSource, kUartDivEnable | (fast ? kDiv3M : kDiv1M));
     wr(s, LCR, LCR_DLAB | LCR_8N1);
     wr(s, RBR_THR, 1);  // DLL
@@ -1326,13 +1332,17 @@ void SwitchJoyConRail::configureUart(Side &s, bool fast)
     (void)rd(s, SPR);
     wr(s, IIR_FCR, FCR_FIFO);
     (void)rd(s, SPR);
+    IOSimpleLockUnlockEnableInterrupt(s.lock, state);
+
     IODelay(20);  // >= 3 UART clocks after enabling the FIFO (Linux, T210 erratum)
     wr(s, MCR, 0);
-    IODelay(96);  // flow control off before the FIFOs are cleared (hekate uart_init)
+    delay_for_interval_with_leeway(96, 20, NSEC_PER_USEC);  // flow control off before the FIFOs are cleared
     wr(s, IIR_FCR, FCR_FIFO | FCR_RX_CLR | FCR_TX_CLR | FCR_RX_TRIG_8 | FCR_TX_TRIG_16);
     wr(s, IRDA_CSR, CSR_INVERT_TXD | CSR_INVERT_RTS);
     wr(s, MCR, MCR_RTS_EN);
     IODelay(3);
+
+    state = IOSimpleLockLockDisableInterrupt(s.lock);
     while (rd(s, LSR) & LSR_DR)
         (void)rd(s, RBR_THR);
     s.tail = s.head;  // bytes of the old rate are dropped; the receive loop sees the new epoch and rereads head
@@ -1929,8 +1939,12 @@ void SwitchJoyConRail::armPoll()
             interval = SWITCH_JOYCON_CADENCE_ACTIVE_MS;
     }
     pollInterval = interval;
-    if (polling)
-        poll->setTimeoutMS(interval);
+    if (polling) {
+        if (interval == SWITCH_JOYCON_CADENCE_QUIET_MS)
+            poll->setTimeout(kIOTimeOptionsWithLeeway, switch_abs_from_ms(interval), switch_abs_from_ms(10));
+        else
+            poll->setTimeoutMS(interval);
+    }
 }
 
 void SwitchJoyConRail::pollAction(OSObject *owner, IOTimerEventSource *)

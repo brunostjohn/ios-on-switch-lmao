@@ -67,7 +67,9 @@
 #include <IOKit/IOTimerEventSource.h>
 #include <IOKit/IOWorkLoop.h>
 #include <kern/clock.h>
+#if defined(SWITCH_STATS_POWER) && SWITCH_STATS_POWER
 #include <os/log.h>
+#endif
 #include <pexpert/pexpert.h>
 #include "../TegraGPIO/TegraGPIO.h"
 #include "../TegraI2C/TegraI2C.h"
@@ -76,7 +78,9 @@
 #include "../../kits/SwitchRefusal/SwitchRefusal.h"
 #include "SwitchALSMath.h"
 #include "SwitchBrightness.h"
+#if defined(SWITCH_STATS_POWER) && SWITCH_STATS_POWER
 #include "TegraPanel.h"
+#endif
 
 namespace {
 using namespace switch_als;
@@ -99,7 +103,7 @@ constexpr uint8_t kPowerOn = 1u << 0, kAdcEnable = 1u << 1;
 constexpr unsigned kSupplyDeadlineMS = 20000;  // from start to SwitchTouch's first LDO6 (it powers up in ~60 ms)
 constexpr unsigned kErrorLimit = 20;           // samples in a row the sensor did not answer (about 2.3 s)
 constexpr unsigned kUnclaimedLimit = 300;      // samples with no IOHIDEventDriver on the HID device (about 35 s)
-#if DEVELOPMENT || DEBUG
+#if defined(SWITCH_STATS_POWER) && SWITCH_STATS_POWER
 constexpr unsigned kStatsSamples = 43;  // one log line per 5 s of samples
 #endif
 
@@ -215,9 +219,11 @@ class SwitchALS : public IOService {
     uint64_t supplyAt = 0;  // when LDO6 last came on (switch_als_supply)
     bool running = false;
     uint32_t sampleUS = kSampleUS;  // CoreBrightness's report interval, at least kSampleUS (reportIntervalSet)
+#if defined(SWITCH_STATS_POWER) && SWITCH_STATS_POWER
     unsigned samples = 0, luxMin = ~0u, luxMax = 0;
     unsigned loggedLux = 0, loggedGain = ~0u;  // the last line's (noteStats); ~0u: none yet
     int loggedPanel = -1;
+#endif
 
     static void ticked(OSObject *owner, IOTimerEventSource *sender);
     static void reportIntervalSet(void *context, const uint8_t *report, size_t length);
@@ -228,7 +234,9 @@ class SwitchALS : public IOService {
     void sample();
     void failed(int err);
     void dispatch(uint32_t level, uint32_t visible, uint32_t ir);
+#if defined(SWITCH_STATS_POWER) && SWITCH_STATS_POWER
     void noteStats(uint32_t level, uint32_t visible, uint32_t ir);
+#endif
     void setCondition(bool SwitchALS::*condition, bool value);
 
 public:
@@ -374,7 +382,7 @@ void SwitchALS::dispatch(uint32_t level, uint32_t visible, uint32_t ir)
     }
 }
 
-#if DEVELOPMENT || DEBUG
+#if defined(SWITCH_STATS_POWER) && SWITCH_STATS_POWER
 // To the log only: what the sensor saw over the last 5 s, and the panel level it saw it at, only when that changed
 // since the last line (gain, panel level, or a reading more than an eighth, at least 2 lux, off the last line's
 // lux), so a lit screen in steady light writes no line every 5 s.
@@ -455,7 +463,7 @@ void SwitchALS::sample()
     if (!saturated(visible, ir) || gain == 0) {  // a clipped reading at a higher gain only steps the gain down
         const uint32_t level = lux(visible, ir, gain);
         dispatch(level, visible, ir);
-#if DEVELOPMENT || DEBUG
+#if defined(SWITCH_STATS_POWER) && SWITCH_STATS_POWER
         noteStats(level, visible, ir);
 #endif
     }
@@ -474,7 +482,12 @@ void SwitchALS::ticked(OSObject *owner, IOTimerEventSource *sender)
     auto *self = static_cast<SwitchALS *>(owner);
     if (!__atomic_load_n(&self->running, __ATOMIC_ACQUIRE))
         return;
-    sender->setTimeoutUS(__atomic_load_n(&self->sampleUS, __ATOMIC_RELAXED));
+    const uint32_t intervalUS = __atomic_load_n(&self->sampleUS, __ATOMIC_RELAXED);
+    const uint32_t leewayUS = intervalUS / 2 < 50000u ? intervalUS / 2 : 50000u;
+    uint64_t intervalAbs = 0, leewayAbs = 0;
+    clock_interval_to_absolutetime_interval(intervalUS, kMicrosecondScale, &intervalAbs);
+    clock_interval_to_absolutetime_interval(leewayUS, kMicrosecondScale, &leewayAbs);
+    sender->setTimeout(kIOTimeOptionsWithLeeway, intervalAbs, leewayAbs);
     self->sample();
 }
 
@@ -537,7 +550,7 @@ bool SwitchALS::start(IOService *provider)
     if (!IOService::start(provider))
         return false;
     loop = IOWorkLoop::workLoop();
-    clock = IOTimerEventSource::timerEventSource(this, &SwitchALS::ticked);
+    clock = IOTimerEventSource::timerEventSource(kIOTimerEventSourceOptionsPriorityKernel, this, &SwitchALS::ticked);
     supplyCheck = IOTimerEventSource::timerEventSource(this, &SwitchALS::supplyLate);
     if (!loop || !clock || !supplyCheck || loop->addEventSource(clock) != kIOReturnSuccess ||
         loop->addEventSource(supplyCheck) != kIOReturnSuccess) {

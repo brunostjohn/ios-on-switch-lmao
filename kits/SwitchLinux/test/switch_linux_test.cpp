@@ -196,6 +196,19 @@ TEST_F(SwitchLinux, CallsMoveWhenEnteredAgainAndCancel)
                             "thread_call_free"));
 }
 
+TEST_F(SwitchLinux, DeferrableCallsUseKernelPriorityAndLeeway)
+{
+    int weight = 1;
+    void *call = switch_linux_call_alloc_deferrable(fire, &weight);
+    EXPECT_FALSE(switch_linux_call_enter_after_leeway(call, 100, 50));
+    EXPECT_TRUE(switch_linux_call_enter_after_leeway(call, 0, 50));
+    switch_linux_call_free(call);
+    EXPECT_THAT(gSwitchLinuxCalls,
+                ElementsAre("thread_call_allocate priority 1 options 1",
+                            "thread_call_enter_delayed_with_leeway 5200 100 0x22", "thread_call_enter",
+                            "thread_call_free"));
+}
+
 // flush_work: a run still queued is made by the flusher; with none queued nothing runs.
 TEST_F(SwitchLinux, FlushMakesAPendingRun)
 {

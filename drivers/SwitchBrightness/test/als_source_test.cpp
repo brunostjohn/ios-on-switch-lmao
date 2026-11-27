@@ -206,7 +206,8 @@ TEST(SwitchALSSource, ReportIntervalPacesTheSamples)
 {
     const std::string als = SourceText("../SwitchALS.cpp");
     EXPECT_THAT(als, HasSubstr("switch_hid_set_feature_handler(hid, &SwitchALS::reportIntervalSet, this);"));
-    EXPECT_THAT(als, HasSubstr("sender->setTimeoutUS(__atomic_load_n(&self->sampleUS, __ATOMIC_RELAXED));"));
+    EXPECT_THAT(als, HasSubstr("const uint32_t intervalUS = __atomic_load_n(&self->sampleUS, __ATOMIC_RELAXED);"));
+    EXPECT_THAT(als, HasSubstr("sender->setTimeout(kIOTimeOptionsWithLeeway, intervalAbs, leewayAbs);"));
     EXPECT_THAT(als, HasSubstr("asked > kSampleUS ? asked : kSampleUS"));
     const std::string hid = SourceText("../../SwitchTouch/SwitchHIDDevice.cpp");
     EXPECT_THAT(hid, HasSubstr("switch_refusal_k(switch_refusal_key_with(switch_refusal_key(\"hid\", \"set-report\")"));

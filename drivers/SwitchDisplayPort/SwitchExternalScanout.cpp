@@ -321,8 +321,11 @@ void SwitchExternalScreen::requestFrame()
         return;
     const auto *bytes = reinterpret_cast<const uint8_t *>(request);
     if ((native_planes::wordAt(bytes, swapUpdated) & ~native_planes::wordAt(bytes, swapReady)) &
-        native_planes::kLayerBits)
+        native_planes::kLayerBits) {
+        if (dcb)
+            dcb->frameInterrupt(true);
         return;
+    }
     bool present[kLayers] = {};
     native_planes::Layer layers[kLayers];
     OSObject *surfaces[kLayers] = {};

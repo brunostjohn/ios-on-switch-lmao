@@ -75,9 +75,11 @@ void switch_linux_up_write(void *rwsem);
 // fn(arg) on the caller's thread (flush_work). Both are thread context, never from the call; both return true if a run
 // was pending. alloc is thread context; free takes a call that is neither pending nor running.
 void *switch_linux_call_alloc(void (*fn)(void *arg), void *arg);
+void *switch_linux_call_alloc_deferrable(void (*fn)(void *arg), void *arg);
 void switch_linux_call_free(void *call);
 bool switch_linux_call_enter(void *call);
 bool switch_linux_call_enter_after(void *call, uint64_t delay_ns);
+bool switch_linux_call_enter_after_leeway(void *call, uint64_t delay_ns, uint64_t leeway_ns);
 bool switch_linux_call_cancel(void *call);
 bool switch_linux_call_cancel_wait(void *call);
 bool switch_linux_call_flush(void *call, void (*fn)(void *arg), void *arg);

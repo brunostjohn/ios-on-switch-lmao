@@ -289,6 +289,13 @@ extern "C" void *switch_linux_call_alloc(void (*fn)(void *arg), void *arg)
                                              THREAD_CALL_PRIORITY_HIGH, THREAD_CALL_OPTIONS_ONCE);
 }
 
+extern "C" void *switch_linux_call_alloc_deferrable(void (*fn)(void *arg), void *arg)
+{
+    void *const entry = reinterpret_cast<void *>(fn);
+    return thread_call_allocate_with_options(reinterpret_cast<thread_call_func_t>(entry), arg,
+                                             THREAD_CALL_PRIORITY_KERNEL, THREAD_CALL_OPTIONS_ONCE);
+}
+
 extern "C" void switch_linux_call_free(void *call)
 {
     if (call)
@@ -305,6 +312,16 @@ extern "C" bool switch_linux_call_enter_after(void *call, uint64_t delay_ns)
     if (!delay_ns)
         return switch_linux_call_enter(call);
     return thread_call_enter_delayed(callOf(call), mach_absolute_time() + switch_abs_from_ns(delay_ns)) != FALSE;
+}
+
+extern "C" bool switch_linux_call_enter_after_leeway(void *call, uint64_t delay_ns, uint64_t leeway_ns)
+{
+    if (!delay_ns)
+        return switch_linux_call_enter(call);
+    return thread_call_enter_delayed_with_leeway(callOf(call), nullptr,
+                                                 mach_absolute_time() + switch_abs_from_ns(delay_ns),
+                                                 switch_abs_from_ns(leeway_ns),
+                                                 THREAD_CALL_DELAY_LEEWAY | THREAD_CALL_DELAY_SYS_BACKGROUND) != FALSE;
 }
 
 extern "C" bool switch_linux_call_cancel(void *call)

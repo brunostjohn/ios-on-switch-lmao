@@ -247,6 +247,16 @@ boolean_t thread_call_enter_delayed(thread_call_t call, uint64_t deadline)
     return was ? TRUE : FALSE;
 }
 
+boolean_t thread_call_enter_delayed_with_leeway(thread_call_t call, thread_call_param_t, uint64_t deadline,
+                                                uint64_t leeway, uint32_t flags)
+{
+    switch_linux_record("thread_call_enter_delayed_with_leeway %llu %llu %#x",
+                        static_cast<unsigned long long>(deadline), static_cast<unsigned long long>(leeway), flags);
+    const bool was = call->pending;
+    call->pending = true;
+    return was ? TRUE : FALSE;
+}
+
 boolean_t thread_call_cancel(thread_call_t call)
 {
     switch_linux_record("thread_call_cancel");

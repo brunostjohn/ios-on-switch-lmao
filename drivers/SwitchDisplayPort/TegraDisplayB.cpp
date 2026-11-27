@@ -425,9 +425,16 @@ void TegraDisplayB::releaseBandwidth()
 
 void TegraDisplayB::frameInterrupt(bool enable)
 {
-    if (enable != frameInterruptEnabled) {
-        frameInterruptEnabled = enable;
-        write(DC_CMD_INT_ENABLE, enable ? kFrameEnd : 0);
+    if (enable == frameInterruptEnabled)
+        return;
+    frameInterruptEnabled = enable;
+    if (enable) {
+        write(DC_CMD_INT_STATUS, kFrameEnd);
+        write(DC_CMD_INT_ENABLE, kFrameEnd);
+    } else {
+        write(DC_CMD_INT_ENABLE, 0);
+        write(DC_CMD_INT_STATUS, kFrameEnd);
+        (void)read(DC_CMD_INT_STATUS);
     }
 }
 

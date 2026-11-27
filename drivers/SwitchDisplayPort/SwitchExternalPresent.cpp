@@ -257,8 +257,11 @@ bool SwitchExternalScreen::frameEnd()
     if (clients)
         native_legacy_vsync_notify(this, mach_absolute_time(), mach_continuous_time(), interval);
     kickSwapQueue();
-    if (dcb)
-        dcb->frameInterrupt(true);
+    if (dcb) {
+        const bool needFrameEnd = latched || switch_abi_load<const void *>(this, vsyncClientList) != nullptr ||
+                                  (device == 2 && !pending && !ready && pendingSwapRequest() != nullptr);
+        dcb->frameInterrupt(needFrameEnd);
+    }
     return true;
 }
 

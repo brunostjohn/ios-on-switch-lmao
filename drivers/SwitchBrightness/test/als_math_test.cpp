@@ -468,3 +468,12 @@ TEST(SwitchBacklightMath, MarketingTableAsDisplayCreateWithIDReadsIt)
     EXPECT_LT(std::fabs(curve[0] - 12.506), 0.01);
     EXPECT_EQ(curve[100], 400.0f);
 }
+
+TEST(SwitchALSMath, SteadyStateLeewayStaysWellUnderFirstSampleTimeout)
+{
+    constexpr uint32_t kMaxLeewayUs = 50000;
+    constexpr uint32_t kFirstALSSampleTimeoutUs = 250000;
+    const uint32_t leeway = switch_als::kSampleUS / 2 < kMaxLeewayUs ? switch_als::kSampleUS / 2 : kMaxLeewayUs;
+    EXPECT_EQ(leeway, kMaxLeewayUs);
+    EXPECT_LT(switch_als::kSampleUS + leeway, kFirstALSSampleTimeoutUs);
+}

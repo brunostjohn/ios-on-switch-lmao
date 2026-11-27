@@ -39,8 +39,11 @@ typedef int lck_sleep_action_t;
 #define LCK_ATTR_NULL             ((void *)0)
 #define LCK_SLEEP_DEFAULT         0
 #define OS_LOG_DEFAULT            0
-#define THREAD_CALL_PRIORITY_HIGH 0
-#define THREAD_CALL_OPTIONS_ONCE  1u
+#define THREAD_CALL_PRIORITY_HIGH         0
+#define THREAD_CALL_PRIORITY_KERNEL       1
+#define THREAD_CALL_OPTIONS_ONCE          1u
+#define THREAD_CALL_DELAY_SYS_BACKGROUND  0x02u
+#define THREAD_CALL_DELAY_LEEWAY          0x20u
 
 void switch_linux_record(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 extern boolean_t switch_linux_stub_interrupts;
@@ -88,6 +91,8 @@ thread_call_t thread_call_allocate_with_options(thread_call_func_t func, thread_
 boolean_t thread_call_free(thread_call_t call);
 boolean_t thread_call_enter(thread_call_t call);
 boolean_t thread_call_enter_delayed(thread_call_t call, uint64_t deadline);
+boolean_t thread_call_enter_delayed_with_leeway(thread_call_t call, thread_call_param_t param1, uint64_t deadline,
+                                                uint64_t leeway, uint32_t flags);
 boolean_t thread_call_cancel(thread_call_t call);
 boolean_t thread_call_cancel_wait(thread_call_t call);
 

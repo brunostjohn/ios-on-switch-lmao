@@ -164,7 +164,8 @@ TEST(ExternalOwnership, FrontReadLivesUntilReplacementAndGenerationChangesRefuse
     EXPECT_FALSE(latch.has("return false;"));
     EXPECT_FALSE(latch.has("abandonDrawing"));
     EXPECT_FALSE(Block(present, "void SwitchExternalScreen::latchFrame()").has("dropFrame"));
-    EXPECT_TRUE(latch.has("dcb->frameInterrupt(true);"));
+    EXPECT_TRUE(latch.has("dcb->frameInterrupt(needFrameEnd);"));
+    EXPECT_TRUE(Block(source, "void SwitchExternalScreen::requestFrame()").has("dcb->frameInterrupt(true);"));
 
     const auto dcIrq = Block(service, "void SwitchDisplayPort::dcInterrupt(");
     EXPECT_FALSE(dcIrq.has("self->fail(\"DCB\""));
