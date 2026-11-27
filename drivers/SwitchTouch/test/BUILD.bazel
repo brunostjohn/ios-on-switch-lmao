@@ -35,16 +35,17 @@ host_library(
     hdrs = [
         "//drivers/ArmGIC:SwitchInterrupts.h",
         "//drivers/NativeMobileDisplay:SwitchPortrait.h",
+        "//drivers/SwitchJoyCon:SwitchJoyConTouch.h",
         "//drivers/SwitchPower:SwitchPower.h",
         "//drivers/SwitchTouch:SwitchHID.h",
         "//drivers/SwitchTouch:SwitchHIDTouchEvent.h",
         "//drivers/SwitchTouch:SwitchTouch.h",
         "//drivers/SwitchTouch:SwitchTouchFilter.h",
         "//drivers/SwitchTouch:SwitchTouchTrace.h",
-        "//kits/SwitchMath:SwitchMath.h",
         "//drivers/TegraAPBDMA:TegraAPBDMA.h",
         "//drivers/TegraGPIO:TegraGPIO.h",
         "//drivers/TegraI2C:TegraI2C.h",
+        "//kits/SwitchMath:SwitchMath.h",
     ],
 )
 
@@ -135,6 +136,7 @@ host_test(
         ":kernel",
     ],
 )
+
 host_test(
     name = "switch_hid_touch_event_test",
     srcs = ["switch_hid_touch_event_test.cpp"],

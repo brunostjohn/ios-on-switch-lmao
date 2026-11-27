@@ -168,3 +168,19 @@ TEST(SwitchMotionSource, DebugTotalsAreTheSysctlsHWTestReads)
     const std::string start = Body(SourceText("../SwitchMotion.cpp"), "extern \"C\" int switch_motion_start(");
     EXPECT_LT(start.find("__atomic_store_n(&gMotion, candidate"), start.find("switch_motion_totals_register()"));
 }
+
+TEST(SwitchMotionSource, SharedWorkLoopAcrossMotionHidDevices)
+{
+    const std::string start = Body(SourceText("../SwitchMotion.cpp"), "bool SwitchMotion::start(");
+    ASSERT_FALSE(start.empty());
+    const size_t loopAt = start.find("loop = IOWorkLoop::workLoop();");
+    ASSERT_NE(loopAt, std::string::npos);
+    EXPECT_EQ(Count(start, "switch_hid_create("), 3u);
+    for (const char *call :
+         {"switch_hid_create(s == Accel ? kSwitchHIDAccelerometer : kSwitchHIDGyro, loop)",
+          "switch_hid_create(kSwitchHIDDeviceMotion, loop)", "switch_hid_create(kSwitchHIDOrientation, loop)"}) {
+        const size_t at = start.find(call);
+        ASSERT_NE(at, std::string::npos) << call;
+        EXPECT_GT(at, loopAt) << call;
+    }
+}

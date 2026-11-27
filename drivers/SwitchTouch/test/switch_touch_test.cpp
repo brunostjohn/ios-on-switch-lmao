@@ -761,6 +761,20 @@ extern "C" void switch_frames_touch(uint64_t stamp, bool down, unsigned changes)
     gFramesTouches.push_back({stamp, down, changes});
 }
 
+static bool gDisplayOn = true;
+
+extern "C" bool switch_display_is_on(void)
+{
+    return gDisplayOn;
+}
+
+static std::vector<uint64_t> gJoyConTouchMs;
+
+extern "C" void switch_joycon_note_touch_ms(uint64_t now_ms)
+{
+    gJoyConTouchMs.push_back(now_ms);
+}
+
 struct Report {
     SwitchTouchReport report;
     uint64_t stamp, postedAt;
@@ -1746,6 +1760,70 @@ static void scenarioTimeoutQuiesceAndRecover()
           "transfer after timeout and stale IRQ succeeds");
 }
 
+static void scenarioJoyConTouchPreemptHook()
+{
+    bringUp();
+    check(gJoyConTouchMs.empty(), "bringUp never reports touch activity to SwitchJoyCon");
+
+    const size_t reportsBefore = gReports.size();
+    drag(1, 5, 10000000);  // enter, 5 moves, leave (10 ms apart -> every report dispatched)
+    const size_t dispatched = gReports.size() - reportsBefore;
+    check(dispatched == 7, format("7 live reports dispatched (got %zu)", dispatched));
+    check(gJoyConTouchMs.size() == dispatched,
+          format("switch_joycon_note_touch_ms called once per live dispatch (%zu vs %zu)", gJoyConTouchMs.size(),
+                 dispatched));
+    for (size_t i = 0; i < std::min(dispatched, gJoyConTouchMs.size()); ++i) {
+        check(gJoyConTouchMs[i] == gReports[reportsBefore + i].stamp / 1000000ULL,
+              format("touch ms %zu matches report stamp ms (got %" PRIu64 ", want %" PRIu64 ")", i, gJoyConTouchMs[i],
+                     gReports[reportsBefore + i].stamp / 1000000ULL));
+    }
+
+    // Contact down, then screen turns off (powerDown -> releaseAll): synthetic lift must NOT notify SwitchJoyCon.
+    gSchedule(gNow + 2000000, [] {
+        gFtm4.scan({contactEvent(3, 0, 500, 350)});
+    });
+    gRunUntil(gNow + 10000000);
+    const size_t reportsWhileDown = gReports.size();
+    const size_t hooksWhileDown = gJoyConTouchMs.size();
+    check(hooksWhileDown == dispatched + 1, "contact-down notified SwitchJoyCon");
+    switch_touch_display_power(false);
+    check(gReports.size() == reportsWhileDown + 1, "display off released held contact");
+    check(gJoyConTouchMs.size() == hooksWhileDown, "releaseAll on display off does not notify SwitchJoyCon");
+
+    // Display back on, panel brings up, contact down, then panel goes dark before IRQ (shown == false -> releaseAll).
+    switch_touch_display_power(true);
+    if (IOTimerEventSource::last && IOTimerEventSource::last->armed) {
+        IOTimerEventSource::last->armed = false;
+        IOTimerEventSource::last->action(IOTimerEventSource::last->owner, IOTimerEventSource::last);
+    }
+    gSchedule(gNow + 2000000, [] {
+        gFtm4.scan({contactEvent(3, 0, 520, 360)});
+    });
+    gRunUntil(gNow + 10000000);
+    const size_t hooksAfterReenter = gJoyConTouchMs.size();
+    check(hooksAfterReenter == hooksWhileDown + 1, "contact-down after wake notified SwitchJoyCon");
+    gDisplayOn = false;
+    gSchedule(gNow + 2000000, [] {
+        gFtm4.scan({contactEvent(5, 0, 540, 360)});
+    });
+    gRunUntil(gNow + 10000000);
+    check(gJoyConTouchMs.size() == hooksAfterReenter, "releaseAll on dark-screen IRQ does not notify SwitchJoyCon");
+
+    // ESD controller reset (EvReady -> releaseAll) while screen is lit must NOT notify SwitchJoyCon.
+    gDisplayOn = true;
+    gSchedule(gNow + 2000000, [] {
+        gFtm4.scan({contactEvent(3, 0, 560, 360)});
+    });
+    gRunUntil(gNow + 10000000);
+    const size_t hooksBeforeEsd = gJoyConTouchMs.size();
+    check(hooksBeforeEsd == hooksAfterReenter + 1, "contact-down before ESD notified SwitchJoyCon");
+    gSchedule(gNow + 2000000, [] {
+        gFtm4.scan({{0x10, 0, 0, 0, 0, 0, 0, 0}});
+    });
+    gRunUntil(gNow + 20000000);
+    check(gJoyConTouchMs.size() == hooksBeforeEsd, "releaseAll on EvReady reset does not notify SwitchJoyCon");
+}
+
 // --- One process per scenario (the drivers keep boot-wide state) ------------------------------------------------------
 static void run(void (*scenario)())
 {
@@ -1892,4 +1970,9 @@ TEST(SwitchTouch, TegraI2CDrainAtEndNonChained)
 TEST(SwitchTouch, TegraI2CTimeoutQuiesceAndRecover)
 {
     run(scenarioTimeoutQuiesceAndRecover);
+}
+
+TEST(SwitchTouch, JoyConTouchPreemptHook)
+{
+    run(scenarioJoyConTouchPreemptHook);
 }

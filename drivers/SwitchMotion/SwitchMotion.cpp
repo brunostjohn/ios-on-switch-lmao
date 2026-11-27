@@ -1505,14 +1505,14 @@ bool SwitchMotion::start(IOService *provider)
     const Sensor sensors[] = {Accel, Gyro};
     for (const Sensor s : sensors) {
         channels[s] = {this, s};
-        hid[s] = switch_hid_create(s == Accel ? kSwitchHIDAccelerometer : kSwitchHIDGyro);
+        hid[s] = switch_hid_create(s == Accel ? kSwitchHIDAccelerometer : kSwitchHIDGyro, loop);
         switch_hid_set_feature_handler(hid[s], &SwitchMotion::featureReceived, &channels[s]);
     }
     channels[DeviceMotion] = {this, DeviceMotion};
-    motionHid = switch_hid_create(kSwitchHIDDeviceMotion);
+    motionHid = switch_hid_create(kSwitchHIDDeviceMotion, loop);
     switch_hid_set_feature_handler(motionHid, &SwitchMotion::featureReceived, &channels[DeviceMotion]);
     if (kOrientationPolicy != OrientationPolicy::Off) {
-        orientationHid = switch_hid_create(kSwitchHIDOrientation);
+        orientationHid = switch_hid_create(kSwitchHIDOrientation, loop);
         timedOrientation = switch_hid_supports_timestamps(orientationHid);
     }
     __atomic_store_n(&displayLit, switch_display_is_on(), __ATOMIC_RELEASE);

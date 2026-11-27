@@ -239,10 +239,15 @@ public:
 class IOWorkLoop : public OSObject {
 public:
     typedef IOReturn (*Action)(OSObject *target, void *arg0, void *arg1, void *arg2, void *arg3);
+    static inline IOWorkLoop *last = nullptr;
+    static inline unsigned created = 0;
 
     static IOWorkLoop *workLoop()
     {
-        return new IOWorkLoop;
+        auto *wl = new IOWorkLoop;
+        last = wl;
+        ++created;
+        return wl;
     }
 
     IOReturn addEventSource(IOEventSource *)

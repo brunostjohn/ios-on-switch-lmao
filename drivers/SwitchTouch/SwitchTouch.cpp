@@ -48,6 +48,7 @@
 #include "../ArmGIC/SwitchInterrupts.h"
 #include "../TegraGPIO/TegraGPIO.h"
 #include "../TegraI2C/TegraI2C.h"
+#include "../SwitchJoyCon/SwitchJoyConTouch.h"
 #include "../SwitchPower/SwitchPower.h"
 #include "SwitchHID.h"
 #include "SwitchTouch.h"
@@ -66,6 +67,9 @@ extern "C" __attribute__((weak)) bool switch_display_is_on(void)
 // SwitchBrightness (SwitchALS.cpp): LDO6 also feeds the ambient light sensor's I2C side, which waits for it. Weak, as
 // above.
 extern "C" __attribute__((weak)) void switch_als_supply(bool)
+{}
+
+extern "C" __attribute__((weak)) void switch_joycon_note_touch_ms(uint64_t)
 {}
 
 #if defined(SWITCH_STATS_FRAME) && SWITCH_STATS_FRAME
@@ -385,7 +389,7 @@ class SwitchTouch : public IOService {
     void ended(Contact &contact, uint64_t now);
 #endif
     static void report(Contact &contact, int x, int y);
-    void flush(bool force = false, uint64_t overrideStamp = 0);
+    void flush(bool force = false, uint64_t overrideStamp = 0, bool live = true);
     void releaseAll();
 
 public:
@@ -1080,7 +1084,7 @@ void SwitchTouch::handle(const uint8_t *event)
     dirty = true;
 }
 
-void SwitchTouch::flush(bool force, uint64_t overrideStamp)
+void SwitchTouch::flush(bool force, uint64_t overrideStamp, bool live)
 {
     if (!dirty)
         return;
@@ -1114,14 +1118,17 @@ void SwitchTouch::flush(bool force, uint64_t overrideStamp)
         if (active)
             ++activeCount;
     }
+    const uint64_t stampUs = ticksToUs(stamp);
     report.contactCount = activeCount;
-    report.scanTime = static_cast<uint16_t>(ticksToUs(stamp) / 100);
+    report.scanTime = static_cast<uint16_t>(stampUs / 100);
     switch_hid_set_edge_contacts(hid, edge);
     if (timed) {
         switch_hid_post_at(hid, &report, sizeof(report), stamp);
     } else {
         switch_hid_post(hid, &report, sizeof(report));
     }
+    if (live && activeCount)
+        switch_joycon_note_touch_ms(stampUs / 1000);
 #if SWITCH_STATS_IO
     postTicks += mach_absolute_time() - began;
     ++stats.reports;
@@ -1160,7 +1167,7 @@ void SwitchTouch::releaseAll()
     downCount = 0;
     moved = false;
     pendingMoveStamp = 0;
-    flush(true);
+    flush(true, 0, false);
     lastPostedStamp = 0;
     lastReportMoved = false;
 }
