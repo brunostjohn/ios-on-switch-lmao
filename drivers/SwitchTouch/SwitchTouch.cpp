@@ -94,6 +94,7 @@ enum : uint8_t {  // FTM4 commands (hekate touch.h FTS4_CMD_*, Linux ftm4.h)
 };
 
 enum : uint8_t {
+    EvNoEvent = 0x00,
     EvEnter = 0x03,
     EvLeave = 0x04,
     EvMotion = 0x05,
@@ -119,6 +120,11 @@ constexpr unsigned kEdgeBand = 40;
 constexpr uint32_t kWatchdogMS = 10000;  // with as much leeway (switch_check_after_ms): no wakeup of its own
 #endif
 constexpr unsigned kEmptyLimit = 64;  // interrupts in a row that found the FIFO empty: INT is stuck low
+// Active motion aligns with backboardd's 8000 us ReportInterval (coalescing 5 ms FTM4 scans to 100 Hz while keeping
+// 120 Hz scans 1:1). Stationary holds pace to 16000 us (50 Hz at 5 ms scans, 60 Hz at 8.33 ms) so SpringBoard's
+// 42 ms pause-averaging window always receives 2-3 stationary samples while cutting AttentionAwareness XPC load 4x.
+constexpr uint32_t kActiveReportIntervalUs = kSwitchTouchReportIntervalUs;
+constexpr uint32_t kStationaryReportIntervalUs = 16000;
 
 // The touch-down drift is only measured: the largest raw distance from the first point over the first kDriftMs.
 // Palm: contact strength z (Linux ftm4 / hekate: bytes 4-5 << 6 over the gain in byte 6) at kPalmStrength or more is a
@@ -336,14 +342,20 @@ class SwitchTouch : public IOService {
     Contact contacts[kSlots] = {};
     uint32_t edge = 0;     // contacts that began within kEdgeBand of a panel edge
     uint32_t changed = 0;  // contacts that went down or up since the last report
-    bool dirty = false, running = false, announced = false;
+    unsigned downCount = 0;
+    bool dirty = false, moved = false, lastReportMoved = false;
+    bool running = false, announced = false;
     bool screenOff = false;     // display power off (switch_touch_display_power): stays down until the screen lights
     bool timed = false;         // reports carry the interrupt's time (switch_hid_supports_timestamps)
     bool pathsChecked = false;  // I2C3's chained and DMA paths checked (once a boot, checkPaths)
+    bool singleRead = false;    // CmdReadAllEvents zero-pads past FIFO end (proven once at bring-up)
+    bool singleReadChecked = false;
     unsigned empty = 0;
     volatile uint64_t irqStamp = 0;  // the filter's: when INT last reached the CPU (mach time)
     uint64_t reportStamp = 0;        // the interrupt's time, for the reports flush() posts now
     uint64_t lastStamp = 0;          // the last report's time: each report's is later
+    uint64_t lastPostedStamp = 0;
+    uint64_t pendingMoveStamp = 0;
 #if SWITCH_STATS_IO
     uint64_t lastContactIrq = 0;  // the last interrupt with contact events after which a contact stayed down
     uint64_t postTicks = 0;       // this interrupt's HID posts so far
@@ -359,6 +371,7 @@ class SwitchTouch : public IOService {
 #endif
     static bool powerUp();
     bool bringUp();
+    bool waitReady(unsigned timeoutMS);
     static bool checkPath(bool dma, const uint8_t *id, size_t size, char *why, size_t whySize);
     void checkPaths(const uint8_t *id, size_t size);
     static int enableSensing();
@@ -366,13 +379,13 @@ class SwitchTouch : public IOService {
     void handle(const uint8_t *event);
     static void position(const uint8_t *event, int &x, int &y);
     void begin(Contact &contact, int x, int y, unsigned z, uint64_t now);
-    void track(Contact &contact, int x, int y, unsigned z, uint64_t now);
+    bool track(Contact &contact, int x, int y, unsigned z, uint64_t now);
 #if SWITCH_STATS_IO
     void noteDrift(Contact &contact);
     void ended(Contact &contact, uint64_t now);
 #endif
     static void report(Contact &contact, int x, int y);
-    void flush();
+    void flush(bool force = false, uint64_t overrideStamp = 0);
     void releaseAll();
 
 public:
@@ -477,7 +490,7 @@ bool SwitchTouch::bringUp()
         checkPaths(id, sizeof(id));
         err = writeRegister(RegReset, kResetValue);
         IOSleep(10);
-        if (err || !waitEvent(EvReady, 20))
+        if (err || !waitReady(20))
             continue;
         err = enableSensing();
         if (err)
@@ -490,6 +503,42 @@ bool SwitchTouch::bringUp()
     IOLog("SwitchTouch: off: FTM4 on I2C3 0x49 did not come up: I2C error %d, chip id %02x%02x (expected 3670), "
           "no controller-ready event after reset or no sensing otherwise\n",
           err, id[1], id[2]);
+    return false;
+}
+
+// Waits for the post-reset EvReady event and proves once per boot whether CmdReadAllEvents zero-pads past FIFO end
+// (allowing single-transfer reads for 1-2 finger scans without a preceding RegEventCount transfer).
+bool SwitchTouch::waitReady(unsigned timeoutMS)
+{
+    for (unsigned waited = 0; waited <= timeoutMS; ++waited) {
+        unsigned count = 0;
+        if (!eventCount(&count) && count) {
+            if (!singleReadChecked && count == 1) {
+                singleReadChecked = true;
+                uint8_t burst[2 * kEventSize] = {};
+                const uint8_t allCmd = CmdReadAllEvents;
+                if (!tegra_i2c_transfer(kBus, kTouch, &allCmd, 1, burst, sizeof(burst))) {
+                    if (burst[0] == EvReady) {
+                        unsigned after = 0;
+                        if (burst[kEventSize] == EvNoEvent && !eventCount(&after) && after == 0) {
+                            singleRead = true;
+                        } else {
+                            IOLog("SwitchTouch: single-transfer event reads off for this boot (tail %#x, rem %u)\n",
+                                  burst[kEventSize], after);
+                        }
+                        return true;
+                    }
+                    continue;
+                }
+                IOLog("SwitchTouch: single-transfer event reads off for this boot (burst read failed)\n");
+            }
+            const uint8_t cmd = CmdReadOneEvent;
+            uint8_t event[kEventSize] = {};
+            if (!tegra_i2c_transfer(kBus, kTouch, &cmd, 1, event, sizeof(event)) && event[0] == EvReady)
+                return true;
+        }
+        IOSleep(1);
+    }
     return false;
 }
 
@@ -620,16 +669,52 @@ void SwitchTouch::interruptOccurred(OSObject *owner, IOInterruptEventSource *, i
 #endif
     const bool shown = switch_display_is_on();
     unsigned count = 0;
-    int err = eventCount(&count);
-#if SWITCH_STATS_IO
-    const uint64_t counted = mach_absolute_time();
-#endif
+    int err = 0;
     uint8_t events[kFifoDepth * kEventSize];
-    if (!err && count) {
-        if (count > kFifoDepth)
-            count = kFifoDepth;  // the rest keep INT low: the next interrupt takes them
+    const bool useSingle = self->singleRead && self->downCount <= 2;
+#if SWITCH_STATS_IO
+    bool readCount = false;
+    uint64_t counted = began;
+#endif
+    if (useSingle) {
+        const unsigned burst = self->downCount <= 1 ? 2u : 3u;
         const uint8_t cmd = CmdReadAllEvents;
-        err = tegra_i2c_transfer(kBus, kTouch, &cmd, 1, events, static_cast<size_t>(count) * kEventSize);
+        err = tegra_i2c_transfer(kBus, kTouch, &cmd, 1, events, static_cast<size_t>(burst) * kEventSize);
+        if (!err) {
+            for (unsigned i = 0; i < burst && events[i * kEventSize] != EvNoEvent; ++i)
+                ++count;
+            if (count == burst) {
+                unsigned more = 0;
+#if SWITCH_STATS_IO
+                const uint64_t countStart = mach_absolute_time();
+#endif
+                err = eventCount(&more);
+#if SWITCH_STATS_IO
+                readCount = true;
+                counted = began + (mach_absolute_time() - countStart);
+#endif
+                if (!err && more) {
+                    if (more > kFifoDepth - burst)
+                        more = kFifoDepth - burst;
+                    err = tegra_i2c_transfer(kBus, kTouch, &cmd, 1, events + static_cast<size_t>(burst) * kEventSize,
+                                             static_cast<size_t>(more) * kEventSize);
+                    if (!err)
+                        count += more;
+                }
+            }
+        }
+    } else {
+        err = eventCount(&count);
+#if SWITCH_STATS_IO
+        readCount = true;
+        counted = mach_absolute_time();
+#endif
+        if (!err && count) {
+            if (count > kFifoDepth)
+                count = kFifoDepth;  // the rest keep INT low: the next interrupt takes them
+            const uint8_t cmd = CmdReadAllEvents;
+            err = tegra_i2c_transfer(kBus, kTouch, &cmd, 1, events, static_cast<size_t>(count) * kEventSize);
+        }
     }
     if (err) {
         IOLog("SwitchTouch: off: reading the FTM4 event FIFO failed: I2C error %d\n", err);
@@ -691,9 +776,10 @@ void SwitchTouch::interruptOccurred(OSObject *owner, IOInterruptEventSource *, i
         if (contactEvents)
             self->lastContactIrq = self->anyDown() ? irqAt : 0;
     }
-    st.countRead.add(ticksToUs(counted - began));
+    if (readCount)
+        st.countRead.add(ticksToUs(counted - began));
     if (count)
-        st.eventRead.add(ticksToUs(read - counted));
+        st.eventRead.add(ticksToUs(read - (readCount ? counted : began)));
     if (st.reports != reportsBefore)
         st.post.add(ticksToUs(self->postTicks));
 #endif
@@ -840,7 +926,7 @@ void SwitchTouch::noteDrift(Contact &contact)
 #endif
 
 // A motion to raw (x, y) at strength z: the contact's reported position (SwitchTouchFilter.h) and its stats.
-void SwitchTouch::track(Contact &contact, int x, int y, unsigned z, uint64_t now)
+bool SwitchTouch::track(Contact &contact, int x, int y, unsigned z, uint64_t now)
 {
 #if SWITCH_STATS_IO
     const int fromStart = distance(x - contact.startX, y - contact.startY);
@@ -863,20 +949,19 @@ void SwitchTouch::track(Contact &contact, int x, int y, unsigned z, uint64_t now
     contact.trace.add(static_cast<unsigned>(ms), x - contact.startX, y - contact.startY, z);
 #endif
     if (!contact.filter.sample(x, y, z, ticksToUs(now)))
-        return;
-#if SWITCH_STATS_IO
+        return false;
     const uint16_t wasX = contact.x;
     const uint16_t wasY = contact.y;
-#endif
     report(contact, contact.filter.x.pixel(), contact.filter.y.pixel());
-#if SWITCH_STATS_IO
     if (contact.x == wasX && contact.y == wasY)
-        return;
+        return false;
+#if SWITCH_STATS_IO
     contact.moved = true;
     const int reported = distance(contact.x - contact.startX, contact.y - contact.startY);
     if (reported > contact.reportedTravel)
         contact.reportedTravel = static_cast<uint16_t>(reported);
 #endif
+    return true;
 }
 
 #if SWITCH_STATS_IO
@@ -920,9 +1005,10 @@ void SwitchTouch::handle(const uint8_t *event)
         contact.palm = false;
         if (!contact.down)
             return;
-        if (changed & bit)
-            flush();
+        if ((changed & bit) != 0 || moved)
+            flush(true, (changed & bit) != 0 ? 0 : pendingMoveStamp);
         contact.down = false;
+        --downCount;
         changed |= bit;
 #if SWITCH_STATS_IO
         ended(contact, now);
@@ -939,9 +1025,10 @@ void SwitchTouch::handle(const uint8_t *event)
         contact.palm = true;
         if (!contact.down)
             return;
-        if (changed & bit)
-            flush();
+        if ((changed & bit) != 0 || moved)
+            flush(true, (changed & bit) != 0 ? 0 : pendingMoveStamp);
         contact.down = false;
+        --downCount;
         changed |= bit;
 #if SWITCH_STATS_IO
         ended(contact, now);
@@ -958,12 +1045,13 @@ void SwitchTouch::handle(const uint8_t *event)
         if (type == EvMotion)
             return;  // as Linux: motion of a contact that has left is stale
         if (changed & bit)
-            flush();
+            flush(true);
         begin(contact, x, y, z, now);
 #if SWITCH_STATS_IO
         stats.strength.add(z);
 #endif
         contact.down = true;
+        ++downCount;
         changed |= bit;
         const bool atEdge = contact.x < kEdgeBand || contact.x >= kSwitchTouchReportWidth - kEdgeBand ||
                             contact.y < kEdgeBand || contact.y >= kSwitchTouchReportHeight - kEdgeBand;
@@ -985,41 +1073,50 @@ void SwitchTouch::handle(const uint8_t *event)
         dirty = true;
         return;
     }
-    track(contact, x, y, z, now);
-    // Every scan of a contact is a report, moved or not: iOS assumes a digitizer that reports each frame while touched,
-    // and IOHIDEventDriver dispatches an unchanged report of a down contact as a stationary touch. Without them
-    // SpringBoard's touch history (averaged over the last 42 ms by the clock) never saw a pause, so the app switcher's
-    // swipe and pause went home, and UIKit's velocity (the last motion over the time since) flung content after a
-    // finger had stopped.
+    if (track(contact, x, y, z, now)) {
+        moved = true;
+        pendingMoveStamp = now;
+    }
     dirty = true;
 }
 
-void SwitchTouch::flush()
+void SwitchTouch::flush(bool force, uint64_t overrideStamp)
 {
     if (!dirty)
         return;
-    SwitchTouchReport report = {};
-    report.id = 1;
-    for (unsigned i = 0; i < kSlots; ++i) {
-        report.slot[i].flags = static_cast<uint8_t>(kSwitchTouchValid | (contacts[i].down ? kSwitchTouchTip : 0U));
-        report.slot[i].contact = static_cast<uint8_t>(i);
-        report.slot[i].x = contacts[i].x;
-        report.slot[i].y = contacts[i].y;
-    }
-    switch_hid_set_edge_contacts(hid, edge);
-    // The interrupt's time (interruptOccurred), or now outside one (power-down's lift); each report's later than the last
-    // one's: IOHIDEventDriver takes an element whose time equals the report's as part of it (IOHIDElement processReport
-    // stamps only changed values), so two reports with one time would repeat the first one's lifts.
 #if SWITCH_STATS_IO
     const uint64_t began = mach_absolute_time();
-    uint64_t stamp = reportStamp ? reportStamp : began;
+    uint64_t stamp = overrideStamp ? overrideStamp : (reportStamp ? reportStamp : began);
 #else
-    uint64_t stamp = reportStamp ? reportStamp : mach_absolute_time();
+    uint64_t stamp = overrideStamp ? overrideStamp : (reportStamp ? reportStamp : mach_absolute_time());
 #endif
+    const bool immediate = force || changed != 0 || lastPostedStamp == 0;
+    if (!immediate && stamp > lastPostedStamp) {
+        const uint64_t elapsedUs = ticksToUs(stamp - lastPostedStamp);
+        const uint32_t minUs = (moved || lastReportMoved) ? kActiveReportIntervalUs : kStationaryReportIntervalUs;
+        if (elapsedUs < minUs)
+            return;
+    }
     if (stamp <= lastStamp)
         stamp = lastStamp + 1;
     lastStamp = stamp;
-    // Dropped by IOHIDFamily until the event driver has opened the device.
+    SwitchTouchReport report = {};
+    report.id = 1;
+    uint8_t activeCount = 0;
+    for (unsigned i = 0; i < kSlots; ++i) {
+        const bool down = contacts[i].down;
+        const bool active = down || ((changed & (1u << i)) != 0);
+        report.slot[i].flags = static_cast<uint8_t>((active ? kSwitchTouchValid : 0U) |
+                                                    (down ? (kSwitchTouchTip | kSwitchTouchInRange) : 0U));
+        report.slot[i].contact = static_cast<uint8_t>(i);
+        report.slot[i].x = contacts[i].x;
+        report.slot[i].y = contacts[i].y;
+        if (active)
+            ++activeCount;
+    }
+    report.contactCount = activeCount;
+    report.scanTime = static_cast<uint16_t>(ticksToUs(stamp) / 100);
+    switch_hid_set_edge_contacts(hid, edge);
     if (timed) {
         switch_hid_post_at(hid, &report, sizeof(report), stamp);
     } else {
@@ -1042,20 +1139,30 @@ void SwitchTouch::flush()
         switch_frames_touch(stamp, down, changes);
     }
 #endif
+    lastPostedStamp = stamp;
+    lastReportMoved = moved;
     changed = 0;
+    moved = false;
+    pendingMoveStamp = 0;
     dirty = false;
 }
 
 void SwitchTouch::releaseAll()
 {
-    for (Contact &contact : contacts) {
-        contact.palm = false;
-        if (contact.down) {
-            contact.down = false;
+    for (unsigned i = 0; i < kSlots; ++i) {
+        contacts[i].palm = false;
+        if (contacts[i].down) {
+            contacts[i].down = false;
+            changed |= 1u << i;
             dirty = true;
         }
     }
-    flush();
+    downCount = 0;
+    moved = false;
+    pendingMoveStamp = 0;
+    flush(true);
+    lastPostedStamp = 0;
+    lastReportMoved = false;
 }
 
 // Work loop: the panel powered off as hekate's touch_power_off (reset low, LDO6 off) with every contact lifted, the

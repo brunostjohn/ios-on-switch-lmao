@@ -36,6 +36,7 @@ kernel_driver(
         "SwitchHIDDevice.cpp",
         "SwitchHIDFastPath.cpp",
         "SwitchHIDMotionAccess.cpp",
+        "SwitchHIDTouchEvent.cpp",
         "SwitchTouch.cpp",
     ],
     abi = ["IOHIDDevice"],
