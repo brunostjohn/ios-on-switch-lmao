@@ -1,8 +1,36 @@
 """What the build derives from an IPSW's members. Each rule takes the IPSW (//ipsw:current, the kind
 --//ipsw:kind selects) for the kind's derived pins and names, and its members from @ipsw (the same kind's)."""
 
-load("//ipsw:ipsw.bzl", "IpswInfo")
+load("//ipsw:ipsw.bzl", "IpswInfo", "pinned_kinds")
 load("//ipsw:pins.bzl", "IPSWS")
+
+# Apple's trust caches by their member role in pins.bzl: //ipsw's target and the IM4P type.
+APPLE_TRUST = {
+    "app_cryptex_trust_cache": ("app_cryptex_trust", "trca"),
+    "static_trust_cache": ("static_trust", "trst"),
+    "system_cryptex_trust_cache": ("system_cryptex_trust", "trcs"),
+}
+
+def _im4p_pinned(ipsw):
+    members = ipsw["members"]
+    return (
+        ipsw.get("derived", {}).get("kernelcache_sha256") and
+        "kernelcache" in members and
+        "device_tree" in members and
+        all([members.get(role, {}).get("manifest_digest") for role in APPLE_TRUST])
+    )
+
+def im4p_pinned_kinds():
+    """The pinned kinds whose pins carry what their IM4P members are checked against.
+
+    That is the derived kernelcache_sha256 and each trust cache's manifest_digest. `bazel run //ipsw:pin` leaves a new
+    kind's derived pins to be filled in by hand; until they are, the kind has no <target>_<kind> in //ipsw and no
+    //install/img4 test, so the other kinds still load and analyze.
+
+    Returns:
+        The kinds, in pins.bzl's order.
+    """
+    return [kind for kind in pinned_kinds() if _im4p_pinned(IPSWS[kind])]
 
 _IPSW = {"ipsw": attr.label(default = "//ipsw:current", providers = [IpswInfo])}
 
@@ -10,7 +38,9 @@ def _ipsw_kernelcache_impl(ctx):
     ipsw = ctx.attr.ipsw[IpswInfo]
     derived, build = ipsw.derived, ipsw.build
     if ctx.attr.kind:
-        derived, build = IPSWS[ctx.attr.kind]["derived"], ctx.attr.kind
+        derived, build = IPSWS[ctx.attr.kind].get("derived", {}), ctx.attr.kind
+    if not derived.get("kernelcache_sha256"):
+        fail("{} has no kernelcache_sha256 in its derived pins (ipsw/pins.bzl)".format(build))
     out = ctx.actions.declare_file(ctx.attr.out)
     ctx.actions.run(
         executable = ctx.executable._im4p,
@@ -43,6 +73,7 @@ ipsw_kernelcache = rule(
 )
 
 def _ipsw_device_tree_impl(ctx):
+    build = ctx.attr.kind or ctx.attr.ipsw[IpswInfo].build
     out = ctx.actions.declare_file(ctx.attr.out)
     ctx.actions.run(
         executable = ctx.executable._im4p,
@@ -50,7 +81,7 @@ def _ipsw_device_tree_impl(ctx):
         inputs = [ctx.file.src],
         outputs = [out],
         mnemonic = "IpswDeviceTree",
-        progress_message = "Decompressing the %s device tree" % ctx.attr.ipsw[IpswInfo].build,
+        progress_message = "Decompressing the %s device tree" % build,
         # LZFSE through macOS's compression_tool.
         execution_requirements = {"requires-darwin": ""},
     )
@@ -60,6 +91,7 @@ ipsw_device_tree = rule(
     implementation = _ipsw_device_tree_impl,
     doc = "The device tree IM4P's 'dtre' payload, LZFSE-decompressed: Apple's tree of the IPSW's own device.",
     attrs = _IPSW | {
+        "kind": attr.string(doc = "a fixed IPSW kind src is a member of (default: the selected kind)"),
         "src": attr.label(mandatory = True, allow_single_file = True),
         "out": attr.string(mandatory = True),
         "_im4p": attr.label(default = "//tools/kernel:im4p", executable = True, cfg = "exec"),
@@ -68,9 +100,12 @@ ipsw_device_tree = rule(
 
 def _ipsw_apple_trust_impl(ctx):
     ipsw = ctx.attr.ipsw[IpswInfo]
-    pin = ipsw.pins["members"][ctx.attr.role]
+    members, build = ipsw.pins["members"], ipsw.build
+    if ctx.attr.kind:
+        members, build = IPSWS[ctx.attr.kind]["members"], ctx.attr.kind
+    pin = members[ctx.attr.role]
     if "manifest_digest" not in pin:
-        fail("{} has no manifest_digest pinned for {} (ipsw/pin.py)".format(ipsw.build, ctx.attr.role))
+        fail("{} has no manifest_digest pinned for {} (ipsw/pin.py)".format(build, ctx.attr.role))
     out = ctx.actions.declare_file(ctx.attr.out)
     ctx.actions.run(
         executable = ctx.executable._im4p,
@@ -83,7 +118,7 @@ def _ipsw_apple_trust_impl(ctx):
         inputs = [ctx.file.src],
         outputs = [out],
         mnemonic = "IpswAppleTrust",
-        progress_message = "Checking the %s %s against its BuildManifest" % (ipsw.build, pin["component"]),
+        progress_message = "Checking the %s %s against its BuildManifest" % (build, pin["component"]),
     )
     return [DefaultInfo(files = depset([out]))]
 
@@ -92,6 +127,7 @@ ipsw_apple_trust = rule(
     doc = "An Apple trust cache's payload, a version 2 module, once its IM4P's SHA-384 is the BuildManifest's Digest " +
           "of it (pins.bzl manifest_digest). The boot package merges it into its static module (tools/package/trust.py).",
     attrs = _IPSW | {
+        "kind": attr.string(doc = "a fixed IPSW kind whose pin src is checked against (default: the selected kind's)"),
         "role": attr.string(mandatory = True, doc = "the member's role in pins.bzl"),
         "fourcc": attr.string(mandatory = True, doc = "the IM4P type: trst, trcs or trca"),
         "src": attr.label(mandatory = True, allow_single_file = True),

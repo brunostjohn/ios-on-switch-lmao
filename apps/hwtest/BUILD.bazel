@@ -11,7 +11,7 @@ load("@rules_swift//swift:swift_test.bzl", "swift_test")
 load("//bazel/lint:defs.bzl", "lint_files")
 load("//bazel/testing:defs.bzl", "host_test")
 load("//kernel/rules:package.bzl", "ios_binary")
-load(":apps.bzl", "hwtest_app", "ios_arm64e", "metal_airs", "reproducible_apps")
+load(":apps.bzl", "hwtest_app", "hwtest_metallib", "ios_arm64e", "metal_airs", "reproducible_apps")
 load(
     ":modules.bzl",
     "APP27_TESTS_SRCS",
@@ -1359,6 +1359,18 @@ hwtest_app(
     infoplist = "Info.plist",
     minimum_os_version = "27.0",
     deps = [":app27_lib"],
+)
+
+hwtest_metallib(
+    name = "SwitchHWTest17_metallib",
+    srcs = glob(["shaders/*.metal"]),
+    minimum_os_version = "17.4",
+)
+
+hwtest_metallib(
+    name = "SwitchHWTest27_metallib",
+    srcs = glob(["shaders/*.metal"]),
+    minimum_os_version = "27.0",
 )
 
 # The same iOS 27 app as arm64e, beside it on a debug 27 image: the a64x loader translates an arm64e image whole

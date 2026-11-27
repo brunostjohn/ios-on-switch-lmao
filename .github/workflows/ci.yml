@@ -5,11 +5,20 @@ on:
     branches: [main]
 permissions:
   contents: read
+  actions: write
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 jobs:
+  release:
+    uses: ./.github/workflows/release-assets.yml
+    with:
+      upload: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
+    secrets:
+      BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
   lint:
+    needs: release
+    if: ${{ !cancelled() }}
     runs-on: xcode-27
     timeout-minutes: 360
     steps:
@@ -18,17 +27,19 @@ jobs:
         with:
           cache: lint
           buildbuddy-api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
-          upload: ${{ github.event_name == 'push' }}
+          upload: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
       # A build evaluates a module extension only when it needs one of its repositories, so a stale lockfile entry
       # otherwise fails only the job that does (@switch_release's: the release image dry run).
       - run: bazel mod deps --lockfile_mode=error
       - run: bazel test //:format_test //:lint_test //:clang_tidy_test
       - run: bazel run //tools/lint:py_owners
-      - if: github.event_name == 'push' && !cancelled()
+      - if: ${{ (success() || failure()) && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) }}
         uses: ./.github/actions/bazel-save
         with:
           cache: lint
   debug:
+    needs: [release, lint]
+    if: ${{ !cancelled() }}
     runs-on: xcode-27
     timeout-minutes: 360
     steps:
@@ -37,15 +48,9 @@ jobs:
         with:
           cache: debug
           buildbuddy-api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
-          upload: ${{ github.event_name == 'push' }}
+          upload: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
       - run: bazel test //...
-      - if: github.event_name == 'push' && !cancelled()
+      - if: ${{ (success() || failure()) && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) }}
         uses: ./.github/actions/bazel-save
         with:
           cache: debug
-  release:
-    uses: ./.github/workflows/release-assets.yml
-    with:
-      upload: ${{ github.event_name == 'push' }}
-    secrets:
-      BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}

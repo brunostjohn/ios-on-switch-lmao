@@ -3,9 +3,11 @@ only the steps it reaches:
 
     boot_args.py ............................ boot-args.txt
     overlay.py plan  (manifest) ............. overlay-plan.json
-    adt_edit.py      (board ADT, Apple's tree of the IPSW's iPad, plan, iOS 27 cache list, the roles' trust modules)
+    adt_edit.py base (board ADT, plan) ...... ios-base.adt
+    adt_edit.py finish (base, Apple's tree of the IPSW's iPad, iOS 27 cache list, the roles' trust modules)
                                          ...... ios.adt
-    overlay.py trust (plan, Mach-Os) ........ overlay.trustcache
+    overlay.py trust (plan, Mach-Os) ........ overlay.trustcache, and the release's overlay-base.trustcache without
+                                               installd (made from Apple's: the installer hashes it on the computer)
     trust.py         (IPSW, overlay, GPU, iOS 27 pretranslated) ... trustcache.bundle, all in one static module
     build_native_loader.py layout (kernel, ADT, bundle, seed, boot-args)
                                          ...... plan.json, the window's 1 MiB LZ4 blocks in 128 shards (by the MiB
@@ -103,6 +105,13 @@ for block in "$in"/*; do
     "$lz4" -d -c -q "$out/$name.lz4" | /usr/bin/cmp -s - "$block" || { echo "lz4: $name does not decode to its block" >&2; exit 1; }
 done
 """
+
+# The overlay's installd: Apple's, patched and re-signed (drivers/SwitchInstallPolicy), so never in a release asset.
+_INSTALLD = "build/switch-apps/installd"
+_LAUNCHD_CATALOG = (
+    "build/switch-bootstrap/launchd.plist",
+    "build/switch-bootstrap/launchd.plist.sig",
+)
 
 def _one(target, what):
     files = target.files.to_list()
@@ -253,23 +262,32 @@ def _boot_package_impl(ctx):
     args.add("--out", plan)
     _run(ctx, ctx.executable._overlay, [args], [ctx.file.overlay_manifest, ctx.file.portrait_header], [plan], "OverlayPlan", "Planning the userland overlay")
 
-    adt = out("ios.adt")
+    # The base reads nothing of Apple's, so the release ships it; the installer runs finish's port (install/adt) on it.
+    adt_base = out("ios-base.adt")
     args = ctx.actions.args()
+    args.add("base")
     args.add("--adt", ctx.file.adt)
-    args.add("--apple-adt", ctx.file._apple_adt)
     args.add("--overlay-plan", plan)
     args.add("--bt-patch", ctx.file.bt_patch)
     args.add("--portrait-header", ctx.file.portrait_header)
-    args.add("--root-volume-uuid", os_volume_uuid(ctx.attr._kind[BuildSettingInfo].value))
     if smp:
         args.add("--smp")
+    args.add("--out", adt_base)
+    _run(ctx, ctx.executable._adt_edit, [args], [ctx.file.adt, plan, ctx.file.bt_patch, ctx.file.portrait_header], [adt_base], "BootAdtBase", "Writing the ADT's Switch and iPad parts")
+
+    adt = out("ios.adt")
+    args = ctx.actions.args()
+    args.add("finish")
+    args.add("--base", adt_base)
+    args.add("--apple-adt", ctx.file._apple_adt)
+    args.add("--root-volume-uuid", os_volume_uuid(ctx.attr._kind[BuildSettingInfo].value))
 
     # iOS 27's Image4 will not start without the current boot's manifest hash; 17's AppleImage4 boots without one.
     manifest_hash = ios_version(ctx.attr._kind[BuildSettingInfo].value) >= 27
     if manifest_hash:
         args.add("--boot-manifest-hash")
     pretranslated = ctx.attr.pretranslated[PretranslatedPinsInfo]
-    adt_inputs = [ctx.file.adt, ctx.file._apple_adt, plan, ctx.file.bt_patch, ctx.file.portrait_header]
+    adt_inputs = [adt_base, ctx.file._apple_adt]
     if catalog_digest:
         args.add("--launchd-catalog-sha256", catalog_digest)
         adt_inputs.append(catalog_digest)
@@ -301,6 +319,18 @@ def _boot_package_impl(ctx):
     args.add_all(["%s=%s" % (source, f.path) for source, f in sorted(binaries.items())], before_each = "--file")
     args.add("--out", overlay_trust)
     _run(ctx, ctx.executable._overlay, [args], [plan] + binaries.values(), [overlay_trust], "OverlayTrust", "Hashing the overlay's code")
+
+    # The release's overlay module: the same less installd, which is made from Apple's, so this action never reads it.
+    # The installer merges installd's CDHash back in (install/window), and the bundle comes out the same.
+    overlay_trust_base = out("overlay-base.trustcache")
+    shipped = {source: f for source, f in binaries.items() if source != _INSTALLD}
+    args = ctx.actions.args()
+    args.add("trust")
+    args.add("--plan", plan)
+    args.add_all(["%s=%s" % (source, f.path) for source, f in sorted(shipped.items())], before_each = "--file")
+    args.add("--leave-out", _INSTALLD)
+    args.add("--out", overlay_trust_base)
+    _run(ctx, ctx.executable._overlay, [args], [plan] + shipped.values(), [overlay_trust_base], "OverlayTrustBase", "Hashing the overlay's code but installd")
 
     gpu = ctx.attr._gpu_trustcache[DefaultInfo].files.to_list()
     if len(gpu) > 1:
@@ -405,6 +435,26 @@ def _boot_package_impl(ctx):
     args.add("--out", overlay.path)
     _run(ctx, ctx.executable._overlay, [args], [plan] + files.values(), [overlay], "OverlayTree", "Laying out the userland overlay")
 
+    overlay_base = out("overlay-base.tar")
+    leave_out = [_INSTALLD] + (list(_LAUNCHD_CATALOG) if ctx.file.launchd_catalog else [])
+    shipped_files = {source: f for source, f in files.items() if source not in leave_out}
+    args = ctx.actions.args()
+    args.add("tree")
+    args.add("--plan", plan)
+    args.add_all(["%s=%s" % (source, f.path) for source, f in sorted(shipped_files.items())], before_each = "--file")
+    args.add_all(leave_out, before_each = "--leave-out")
+    args.add("--tar")
+    args.add("--out", overlay_base)
+    _run(
+        ctx,
+        ctx.executable._overlay,
+        [args],
+        [plan] + shipped_files.values(),
+        [overlay_base],
+        "OverlayTreeBase",
+        "Packing the release userland overlay",
+    )
+
     switchroot = {
         "bl31.bin": ctx.file.bl31,
         "bl33.bin": bl33,
@@ -444,13 +494,19 @@ def _boot_package_impl(ctx):
         DefaultInfo(files = depset([package])),
         OutputGroupInfo(
             adt = depset([adt]),
+            adt_base = depset([adt_base]),
+            bl33 = depset([bl33]),
             boot_script = depset([script_text]),
+            bootstrap_manifest = depset([bootstrap_manifest]),
             constants = depset([constants]),
             kernel_window = depset([window, layout_h, runs_h, constants, window_plan]),
             installer_seed = depset([seed_pin] if seed_pin else []),
             launchd_catalog = depset(catalog_outputs),
             loader = depset([loader]),
             overlay = depset([plan, overlay_trust, overlay]),
+            overlay_base = depset([overlay_base]),
+            overlay_trust_base = depset([overlay_trust_base]),
+            stage = depset([boot_args, u_boot, script]),
             trust = depset([bundle]),
         ),
     ]

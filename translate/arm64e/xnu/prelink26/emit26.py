@@ -12,14 +12,16 @@ _PrelinkLinkKASLROffsets), with what an arm64e MH_FILESET source needs on top:
     B/BL into the kernel is re-aimed at our kernel's function of the same name;
   * every kernel target has a name (names.py, pinned_names.py, shims.py): the prelink refuses any it is missing,
     with the kexts that import it.
-usage: emit26.py OUR_KERNEL KERNELCACHE OUTPUT   (writes OUTPUT and OUTPUT.json)
+usage: emit26.py [--bindings EXPORT] OUR_KERNEL KERNELCACHE OUTPUT        (writes OUTPUT, OUTPUT.json and EXPORT)
+       emit26.py --from-bindings EXPORT OUR_KERNEL KERNELCACHE OUTPUT     (kernel_bindings.py: no names, no work dir)
 """
-import base64, bisect, collections, copy, hashlib, json, os, struct, subprocess, sys, tempfile
+import argparse, base64, bisect, collections, copy, hashlib, json, os, struct, subprocess, sys, tempfile
 import xml.etree.ElementTree as ET
 HERE = os.path.dirname(os.path.abspath(__file__))
 R = os.path.join(HERE, "..")
 sys.path.insert(0, HERE)
 from kcinfo import KC, decode8
+import kernel_bindings
 import paths
 from tools.common.macho import macho, exports, backed_offset
 from kits.SwitchABI import sites as abi_sites
@@ -118,38 +120,55 @@ def write_fips_macs(kexts, kc, blobs, blob_at):
     return macs
 
 
-def main():
-    our_path, kc_path, out_path = sys.argv[1:4]
-    native_data = open(our_path, "rb").read()
-    native = macho(native_data)
+def by_name(native_data, native, local):
+    """Our kernel's defined symbols: name -> address, the external ones first; with `local`, ours.nm's too (vtable
+    slots name some)."""
     nsym = {}
     for a, ns in exports(native_data, native).items():
         for n in ns: nsym.setdefault(n, a)
-    for l in open(paths.work("ours.nm")):          # local symbols too (vtable slots name some)
-        a, t, n = l.split(); nsym.setdefault(n, int(a, 16))
-    # every defined symbol of ours (exports() keeps external ones only; kexts bind to KPI = external)
+    if local:
+        for l in open(paths.work("ours.nm")):
+            a, t, n = l.split(); nsym.setdefault(n, int(a, 16))
+    return nsym
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("kernel")
+    parser.add_argument("kernelcache")
+    parser.add_argument("output")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--bindings", help="write the bindings this prelink resolved through names (kernel_bindings.py)")
+    mode.add_argument("--from-bindings", help="resolve through this export instead of names.py's names")
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+    our_path, kc_path, out_path = args.kernel, args.kernelcache, args.output
+    native_data = open(our_path, "rb").read()
+    native = macho(native_data)
+    if args.from_bindings:
+        export = kernel_bindings.load(args.from_bindings, kernel_bindings.sha256_file(kc_path),
+                                      hashlib.sha256(native_data).hexdigest())
+        roots, cuts, deferred = export.roots, export.cuts, export.deferred
+        wanted_slide, kind = export.slide, export.build
+    else:
+        export = None
+        roots, cuts, deferred = paths.prelink_lists()
+        wanted_slide, kind = paths.SLIDE, os.environ.get("PRELINK_KIND", "")
+    # the export holds our addresses, so only naming needs ours.nm's local symbols
+    nsym = by_name(native_data, native, local=export is None)
     marker = nsym.get("_kalloc_sparse_prelink_index_version")
     if marker is None or struct.unpack_from("<I", native_data, backed_offset(native["segments"], marker, 4, len(native_data)))[0] != 1:
         raise SystemExit("our kernel lacks the sparse prelink index ABI v1")
     kc = KC(kc_path)
     d = kc.d
-    roots, cuts, deferred = paths.prelink_lists()
     missing = [r for r in roots if r not in kc.plist]
     if missing:
         raise SystemExit("roots this kernelcache does not ship: %s" % ", ".join(missing))
     sel, ifaces, codeless = kc.closure(roots, set(cuts))
-    names = {int(a, 16): n for a, n in json.load(open(paths.work("kernel-names.json")))["names"].items()}
-    # kexts link against the KPI only: a kext target named outside the 26.5.2 symbol sets (or iOS 17's imports) is
-    # a naming error, so it stays unresolved
-    import re
-    kpi = set(l.strip() for l in open(paths.work("symbolsets26.txt")))
-    # symbol-set entries like __ZN16IOPlatformExpert are prefixes (every member of the class)
-    prefixes = tuple(e for e in kpi if re.fullmatch(r"__ZN(\d+[A-Za-z_]\w*?)+", e) and not e.endswith("E"))
-    source = json.load(open(paths.work("kernel-names.json")))["source"]
-    def exported(a, n):
-        return (n in kpi or n.startswith(prefixes) or n.startswith("__ZTV") or n.endswith("gMetaClassE")
-                or source.get(hex(a)) in ("vtable", "got17", "got17+order", "symbolicator-class", "shim"))
-    names = {a: n for a, n in names.items() if exported(a, n)}
+    resolver = export or kernel_bindings.named(nsym)
     # extents
     ext = []
     segs_of = {}
@@ -181,7 +200,7 @@ def main():
     kbase = min(s["va"] for s in native["segments"] if s["size"])
     limit = (kbase - 0x100000 - highest) & ~(PAGE - 1)
     limit = limit - (1 << 64) if limit >= 1 << 63 else limit
-    slide = limit if paths.SLIDE is None else paths.SLIDE
+    slide = limit if wanted_slide is None else wanted_slide
     if slide > limit or slide % PAGE:
         raise SystemExit("slide %#x: the kexts must sit page-aligned at or below %#x" % (slide & M64, limit & M64))
     for lo, hi in our_text:
@@ -246,8 +265,7 @@ def main():
     # 2b. the selected kind's declared sites (kits/SwitchABI/sites.py), in the translated text: every original word is
     # checked where it is written, so a word a64x rewrote fails the build by its site. Before the branches into the
     # kernel are re-aimed (no site is a branch) and before the FIPS MACs, which cover the final text.
-    declared = abi_sites.load_all([p for p in os.environ.get("PRELINK_SITES", "").split(os.pathsep) if p],
-                              os.environ.get("PRELINK_KIND", ""))
+    declared = abi_sites.load_all([p for p in os.environ.get("PRELINK_SITES", "").split(os.pathsep) if p], kind)
     text = blobs["__PLK_TEXT_EXEC"]
     for site in declared:
         if site.bundle not in sel:
@@ -274,9 +292,9 @@ def main():
         if t and t[2] in sel:
             new = tgt + slide; kinds["kext"] += 1
         elif t and t[2] == "com.apple.kernel":
-            n = names.get(tgt)
-            if n and n in nsym:
-                new = nsym[n]; kinds["kernel"] += 1
+            ours = resolver.resolve(tgt)
+            if ours is not None:
+                new = ours; kinds["kernel"] += 1
             elif any(lo <= tgt < hi for lo, hi in kernel_text):
                 new = 0; unresolved_fn[tgt] += 1; kinds["kernel unresolved function"] += 1
                 unresolved_by_component[o[2]]["functions"].add(tgt)
@@ -318,9 +336,9 @@ def main():
                     tgt = pc + (sx(w & 0x3FFFFFF, 26) << 2)
                     if stub_va <= tgt < stubs_end: br["a64x stub"] += 1; continue
                     if not any(lo <= tgt < hi for lo, hi in kernel_text): continue
-                    n = names.get(tgt)
-                    if n and n in nsym and in_our_text(nsym[n]):
-                        dest = nsym[n]; br["kernel"] += 1
+                    ours = resolver.resolve(tgt)
+                    if ours is not None and in_our_text(ours):
+                        dest = ours; br["kernel"] += 1
                     else:
                         unresolved_fn[tgt] += 1; br["kernel unresolved"] += 1
                         unresolved_by_component[b]["functions"].add(tgt)
@@ -460,6 +478,11 @@ def main():
               "early_security_initializers": {}, "declared_sites": abi_sites.record(declared, slide),
               "runtime_qualified": False}
     json.dump(report, open(out_path + ".json", "w"), indent=1)
+    if args.bindings:
+        kernel_bindings.write(args.bindings, kernel_bindings.Bindings(
+            build=kind, kernelcache_sha256=report["kernelcache_sha256"], kernel_sha256=report["native_sha256"],
+            slide=slide, roots=roots, cuts=cuts, deferred=deferred, table=resolver.used))
+    print("bindings %d" % len(resolver.table if export else resolver.used))
     print("kexts %d, slide %#x, output %d bytes" % (len(sel), slide & M64, len(output)))
     print("pointers", dict(kinds)); print("branches", dict(br))
     print("unresolved kernel functions %d (sites %d), data %d (sites %d)" % (len(unresolved_fn), sum(unresolved_fn.values()),

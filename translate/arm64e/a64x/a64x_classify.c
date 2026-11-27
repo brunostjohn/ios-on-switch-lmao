@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * a64x_classify.c: which ARMv8.1+ class an instruction word is in (A64X_OK if a Cortex-A57 runs it).
  * Encodings from the Arm ARM (DDI 0487), cross-checked against LLVM's disassembler

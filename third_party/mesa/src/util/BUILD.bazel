@@ -152,7 +152,12 @@ mesa_cc_library(
         "vma.c",
         "mesa_cache_db.c",
         "mesa_cache_db_multipart.c",
-        "cache_ops_aarch64.c",
+    ] + select({
+        "//third_party/mesa/bazel:windows": ["cache_ops_null.c"],
+        "//third_party/mesa/bazel:linux_x86_64": ["cache_ops_x86.c"],
+        "//third_party/mesa/bazel:macos_x86_64": ["cache_ops_x86.c"],
+        "//conditions:default": ["cache_ops_aarch64.c"],
+    }) + [
         "//third_party/mesa/src/util/format:u_format.c",
         "//third_party/mesa/src/util/format:u_format_bptc.c",
         "//third_party/mesa/src/util/format:u_format_etc.c",

@@ -1,0 +1,146 @@
+# Full APFS test oracle harness, 3-volume end-to-end integration proof, negative controls, and IPSW comparison tool.
+# Test/oracle package only: never shipped in the installer binary.
+#
+#   bazel test //install/apfs_oracle:all                   unit tests (Rust + Python tree_diff)
+#   bazel test //install/apfs_oracle:oracle_fixture_test   Darwin remote oracle (all 10 checks + 5 negative controls)
+#   bazel run //install/apfs_oracle:ipsw_compare -- ...    manual IPSW comparison against Mac //:image on EC2
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("@rules_python//python:py_library.bzl", "py_library")
+load("@rules_python//python:py_test.bzl", "py_test")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+_LIB_SRCS = [
+    "compose.rs",
+    "inspect.rs",
+    "lib.rs",
+    "parse.rs",
+    "plan_dump.rs",
+    "power_cuts.rs",
+    "tamper.rs",
+    "verify.rs",
+]
+
+_DEPS = [
+    "//install/apfs_alloc:switch_apfs_alloc",
+    "//install/apfs_format:switch_apfs_format",
+    "//install/apfs_names:switch_apfs_names",
+    "//install/apfs_read:switch_apfs_read",
+    "//install/apfs_seal:switch_apfs_seal",
+    "//install/apfs_write:switch_apfs_write",
+    "//install/decmpfs:switch_decmpfs",
+    "//install/image:switch_image",
+    "//install/image_bootstrap:switch_image_bootstrap",
+    "//install/image_overlay:switch_image_overlay",
+    "//install/image_pretranslated:switch_image_pretranslated",
+    "@installer_crates//:hex",
+    "@installer_crates//:serde",
+    "@installer_crates//:serde_json",
+    "@installer_crates//:sha2",
+    "@installer_crates//:thiserror",
+    "@installer_crates//:zerocopy",
+]
+
+rust_library(
+    name = "switch_apfs_oracle",
+    testonly = True,
+    srcs = _LIB_SRCS,
+    crate_root = "lib.rs",
+    deps = _DEPS,
+)
+
+rust_test(
+    name = "switch_apfs_oracle_test",
+    size = "small",
+    srcs = _LIB_SRCS + ["tests.rs"],
+    crate_root = "lib.rs",
+    deps = _DEPS + [
+        "@installer_crates//:tempfile",
+    ],
+)
+
+rust_binary(
+    name = "switch_apfs_oracle_tool",
+    testonly = True,
+    srcs = ["main.rs"],
+    crate_root = "main.rs",
+    deps = _DEPS + [
+        ":switch_apfs_oracle",
+        "@installer_crates//:clap",
+    ],
+)
+
+py_library(
+    name = "tree_diff_lib",
+    testonly = True,
+    srcs = ["tree_diff.py"],
+    imports = ["."],
+)
+
+py_binary(
+    name = "tree_diff",
+    testonly = True,
+    srcs = ["tree_diff.py"],
+    main = "tree_diff.py",
+    deps = [":tree_diff_lib"],
+)
+
+py_test(
+    name = "tree_diff_test",
+    size = "small",
+    srcs = ["tree_diff_test.py"],
+    deps = [":tree_diff_lib"],
+)
+
+py_binary(
+    name = "fixture_helpers",
+    testonly = True,
+    srcs = ["fixture_helpers.py"],
+    main = "fixture_helpers.py",
+)
+
+sh_test(
+    name = "oracle_fixture_test",
+    size = "medium",
+    srcs = ["oracle_fixture_test.sh"],
+    args = [
+        "$(rootpath :switch_apfs_oracle_tool)",
+        "$(rootpath //install/apfs_read:switch_apfs_read_tool)",
+        "$(rootpath //boot/installer:apfs_tool)",
+        "$(rootpath tree_diff.py)",
+        "$(rootpath fixture_helpers.py)",
+    ],
+    data = [
+        "fixture_helpers.py",
+        "tree_diff.py",
+        ":switch_apfs_oracle_tool",
+        "//boot/installer:apfs_tool",
+        "//install/apfs_m1:images.sh",
+        "//install/apfs_read:switch_apfs_read_tool",
+    ],
+    tags = [
+        "external",
+        "manual",
+        "requires-darwin",
+    ],
+)
+
+sh_binary(
+    name = "ipsw_compare",
+    testonly = True,
+    srcs = ["ipsw_compare.sh"],
+    data = [
+        "tree_diff.py",
+        ":switch_apfs_oracle_tool",
+        "//boot/installer:apfs_tool",
+        "//install/apfs_m1:images.sh",
+        "//install/apfs_read:switch_apfs_read_tool",
+    ],
+    tags = ["manual"],
+)

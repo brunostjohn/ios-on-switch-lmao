@@ -30,6 +30,29 @@ rust_library(
     ],
 )
 
+rust_library(
+    name = "metal2vulkan_air_desktop",
+    srcs = glob(["src/**/*.rs"]),
+    compile_data = glob(
+        ["src/**"],
+        allow_empty = True,
+        exclude = ["src/**/*.rs"],
+    ),
+    crate_features = [
+        "default",
+        "serde",
+    ],
+    crate_name = "metal2vulkan_air",
+    crate_root = "src/lib.rs",
+    edition = "2021",
+    rustc_flags = ["--cap-lints=allow"],
+    version = "0.2.0",
+    deps = [
+        "@installer_crates//:serde",
+        "@installer_crates//:sha2_0_10",
+    ],
+)
+
 # What metal2vulkan's build script hashes of this crate (its source fingerprint follows the product into the front end).
 filegroup(
     name = "fingerprint_inputs",

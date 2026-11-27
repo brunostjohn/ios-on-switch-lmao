@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * A stub split over several holes of dead space: each piece but the last ends in `B next piece`, and the stub's own
  * branches follow the words they target. The dyld cache planner (tools/a64plan2.c) and the offline translation of

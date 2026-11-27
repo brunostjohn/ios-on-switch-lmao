@@ -7,12 +7,20 @@ edges, so a check that reads the kernelcache and writes only a validation output
 
 _APPLE_REPOS = ["gpu_apple_libs", "gpu_device_data"]
 
-# The one exception, by owner and path: files made from the IPSW that hold none of its bytes and ship on purpose. The
-# native loader compiles in the layout of a kernel window that holds Apple's kexts (sizes, offsets, a hash), which a Mac
-# without Xcode cannot compile, so the release carries the loader and constants.json, everything it compiles in; the Mac
-# refuses to stage a window whose constants differ (tools/package/bl33.py). Every other output stays Apple's.
+# The exceptions, by owner and path: files made from the IPSW that hold none of its bytes and ship on purpose. Every
+# other output stays Apple's.
+#  - The native loader compiles in the layout of a kernel window that holds Apple's kexts (sizes, offsets, a hash),
+#    which a Mac without Xcode cannot compile, so the release carries the loader and constants.json, everything it
+#    compiles in; the Mac refuses to stage a window whose constants differ (tools/package/bl33.py).
+#  - The iOS 27 prelink's bindings: Apple's kernel addresses the kexts use, each with our kernel's address and its name,
+#    which the computer cannot derive without Xcode, the ipsw CLI and iOS 17's kernelcache. The kexts' bytes come from
+#    the user's own IPSW; the prelink refuses the bindings with any other kernelcache or kernel.
+#  - The iOS 27 prelink's pins: the SHA-256 of the prelinked kernel and of each site table, so the computer's prelink,
+#    whose translator another compiler builds, returns nothing unless its result is CI's.
 DECLASSIFIED = {
     Label("//boot:package"): ["boot/package_work/loader.uboot.bin", "boot/package_work/constants.json"],
+    Label("//install/prelink:fileset_pins"): ["install/prelink/fileset_pins/prelink-pins.json"],
+    Label("//kernel:prelink_bindings_12377"): ["kernel/build/xnu-12377/prelink-bindings.json"],
 }
 
 def is_apple_label(label):

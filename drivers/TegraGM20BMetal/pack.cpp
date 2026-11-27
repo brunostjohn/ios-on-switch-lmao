@@ -8,10 +8,14 @@
 #include <cstring>
 #include <initializer_list>
 #include <utility>
+#ifdef _WIN32
+#include "utf8_path.h"
+#else
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#endif
 
 namespace gm20b {
 
@@ -27,11 +31,42 @@ uint64_t Pack::fnv(const void *p, size_t n)
 Pack::~Pack()
 {
     if (base_)
+#ifdef _WIN32
+        UnmapViewOfFile(base_);
+#else
         munmap(const_cast<uint8_t *>(base_), size_);
+#endif
 }
 
 bool Pack::load(const char *path, uint64_t stack, std::string &err)
 {
+#ifdef _WIN32
+    HANDLE file = createFileReadUtf8(path ? path : "");
+    if (file == INVALID_HANDLE_VALUE) {
+        err = std::string("cannot open ") + (path ? path : "");
+        return false;
+    }
+    LARGE_INTEGER fileSize = {};
+    if (!GetFileSizeEx(file, &fileSize) || fileSize.QuadPart <= 0) {
+        CloseHandle(file);
+        err = "mmap failed";
+        return false;
+    }
+    HANDLE mapping = CreateFileMappingW(file, nullptr, PAGE_READONLY, 0, 0, nullptr);
+    CloseHandle(file);
+    if (!mapping) {
+        err = "mmap failed";
+        return false;
+    }
+    void *m = MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0);
+    CloseHandle(mapping);
+    if (!m) {
+        err = "mmap failed";
+        return false;
+    }
+    base_ = static_cast<const uint8_t *>(m);
+    size_ = size_t(fileSize.QuadPart);
+#else
     const int fd = ::open(path, O_RDONLY);
     if (fd < 0) {
         err = std::string("cannot open ") + path;
@@ -47,6 +82,7 @@ bool Pack::load(const char *path, uint64_t stack, std::string &err)
     }
     base_ = static_cast<const uint8_t *>(m);
     size_ = st.st_size;
+#endif
     hdr_ = reinterpret_cast<const PackHeader *>(base_);
     if (size_ < sizeof(PackHeader) || memcmp(hdr_->magic, "GM20BPK1", 8)) {
         err = "not a raw pack";

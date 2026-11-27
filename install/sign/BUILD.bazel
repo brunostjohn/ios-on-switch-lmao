@@ -1,0 +1,68 @@
+# Ad hoc code signing, byte-equal to /usr/bin/codesign (README.md).
+#
+#   bazel build //install/sign:desktop                                 the six desktop builds of switch_sign_tool
+#   bazel test //install/sign:darwin_test                              against codesign itself, on generated files
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("//bazel/desktop:defs.bzl", "desktop_binaries")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+rust_library(
+    name = "switch_sign",
+    srcs = [
+        "blob.rs",
+        "code_directory.rs",
+        "detached.rs",
+        "embedded.rs",
+        "entitlements.rs",
+        "lib.rs",
+        "macho.rs",
+    ],
+    crate_root = "lib.rs",
+    deps = [
+        "@installer_crates//:object",
+        "@installer_crates//:plist",
+        "@installer_crates//:sha1",
+        "@installer_crates//:sha2",
+        "@installer_crates//:thiserror",
+    ],
+)
+
+rust_test(
+    name = "switch_sign_test",
+    crate = ":switch_sign",
+)
+
+rust_binary(
+    name = "switch_sign_tool",
+    srcs = ["main.rs"],
+    deps = [
+        ":switch_sign",
+        "//install/plistlib:switch_plistlib",
+        "@installer_crates//:plist",
+    ],
+)
+
+desktop_binaries(
+    name = "desktop",
+    binary = ":switch_sign_tool",
+)
+
+rust_test(
+    name = "darwin_test",
+    srcs = [
+        "tests/darwin_test.rs",
+        "tests/fixture.rs",
+    ],
+    crate_root = "tests/darwin_test.rs",
+    tags = ["requires-darwin"],
+    deps = [
+        ":switch_sign",
+        "@installer_crates//:hex",
+        "@installer_crates//:sha2",
+        "@installer_crates//:tempfile",
+    ],
+)

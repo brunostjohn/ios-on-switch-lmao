@@ -1,0 +1,90 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//bazel/desktop:defs.bzl", "desktop_binaries")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+_DEPS = [
+    "//install/apfs_format:switch_apfs_format",
+    "//install/apfs_read:switch_apfs_read",
+    "//install/apfs_write:switch_apfs_write",
+    "//install/image:switch_image",
+    "@installer_crates//:hex",
+    "@installer_crates//:thiserror",
+]
+
+rust_library(
+    name = "switch_image_pretranslated",
+    srcs = [
+        "lib.rs",
+        "manifest.rs",
+        "overlay_index.rs",
+        "place.rs",
+    ],
+    crate_root = "lib.rs",
+    deps = _DEPS,
+)
+
+rust_test(
+    name = "switch_image_pretranslated_test",
+    srcs = [
+        "lib.rs",
+        "manifest.rs",
+        "overlay_index.rs",
+        "place.rs",
+        "tests_index.rs",
+        "tests_place.rs",
+    ],
+    crate_root = "lib.rs",
+    deps = _DEPS + [
+        "//install/apfs_alloc:switch_apfs_alloc",
+        "//install/apfs_names:switch_apfs_names",
+        "@installer_crates//:sha2",
+        "@installer_crates//:tempfile",
+    ],
+)
+
+rust_binary(
+    name = "switch_image_fixture_tool",
+    srcs = ["tool.rs"],
+    crate_root = "tool.rs",
+    deps = [
+        ":switch_image_pretranslated",
+        "//install/apfs_format:switch_apfs_format",
+        "//install/apfs_names:switch_apfs_names",
+        "//install/apfs_read:switch_apfs_read",
+        "//install/apfs_write:switch_apfs_write",
+        "//install/image:switch_image",
+        "@installer_crates//:clap",
+        "@installer_crates//:hex",
+    ],
+)
+
+desktop_binaries(
+    name = "desktop",
+    binary = ":switch_image_fixture_tool",
+)
+
+sh_test(
+    name = "fixture_test",
+    size = "large",
+    srcs = ["fixture_test.sh"],
+    args = [
+        "$(rootpath :switch_image_fixture_tool)",
+        "$(rootpath //install/apfs_m1:switch_apfs_m1)",
+        "$(rootpath //install/apfs_read:switch_apfs_read_tool)",
+    ],
+    data = [
+        ":switch_image_fixture_tool",
+        "//install/apfs_m1:switch_apfs_m1",
+        "//install/apfs_read:switch_apfs_read_tool",
+    ],
+    tags = [
+        "external",
+        "manual",
+        "requires-darwin",
+    ],
+)

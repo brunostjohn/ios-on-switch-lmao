@@ -1,0 +1,65 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("//bazel/desktop:defs.bzl", "desktop_binaries")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+rust_library(
+    name = "switch_tui",
+    srcs = [
+        "src/input.rs",
+        "src/lib.rs",
+        "src/model.rs",
+        "src/progress_state.rs",
+        "src/render.rs",
+        "src/screens/mod.rs",
+        "src/screens/progress.rs",
+        "src/screens/size_confirm.rs",
+        "src/screens/wizard.rs",
+        "src/size_state.rs",
+        "src/state.rs",
+        "src/terminal.rs",
+        "src/theme.rs",
+        "src/transitions.rs",
+    ],
+    crate_root = "src/lib.rs",
+    deps = [
+        "@installer_crates//:crossterm",
+        "@installer_crates//:ratatui",
+        "@installer_crates//:thiserror",
+    ],
+)
+
+rust_test(
+    name = "switch_tui_test",
+    size = "small",
+    srcs = [
+        "tests/progress.rs",
+        "tests/render.rs",
+        "tests/tui_test.rs",
+        "tests/wizard.rs",
+    ],
+    crate_root = "tests/tui_test.rs",
+    deps = [
+        ":switch_tui",
+        "@installer_crates//:crossterm",
+        "@installer_crates//:ratatui",
+    ],
+)
+
+rust_binary(
+    name = "switch_tui_demo",
+    srcs = ["demo/main.rs"],
+    crate_root = "demo/main.rs",
+    deps = [
+        ":switch_tui",
+        "@installer_crates//:clap",
+    ],
+)
+
+desktop_binaries(
+    name = "desktop",
+    binary = ":switch_tui_demo",
+)

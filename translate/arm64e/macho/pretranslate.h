@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * One Mach-O slice translated offline, in place: same size, same layout, same load commands. One-word rewrites as
  * the loader does them; dead PAC failure checks become `b ok` and give their words to stubs; stubs also go into

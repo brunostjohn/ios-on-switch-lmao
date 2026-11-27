@@ -1,0 +1,47 @@
+; SPIR-V
+; Version: 1.3
+; Bound: 60
+               OpCapability Shader
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint Fragment %main "main" %frag_coord %in_uv %out_color %frag_depth
+               OpExecutionMode %main OriginUpperLeft
+               OpExecutionMode %main DepthReplacing
+               OpDecorate %frag_coord BuiltIn FragCoord
+               OpDecorate %frag_depth BuiltIn FragDepth
+               OpDecorate %in_uv Location 0
+               OpDecorate %out_color Location 0
+       %void = OpTypeVoid
+       %fn_t = OpTypeFunction %void
+        %f32 = OpTypeFloat 32
+         %v2 = OpTypeVector %f32 2
+         %v4 = OpTypeVector %f32 4
+      %f_001 = OpConstant %f32 0.001
+   %ptr_in_4 = OpTypePointer Input %v4
+   %ptr_in_2 = OpTypePointer Input %v2
+  %ptr_out_4 = OpTypePointer Output %v4
+  %ptr_out_1 = OpTypePointer Output %f32
+ %frag_coord = OpVariable %ptr_in_4 Input
+      %in_uv = OpVariable %ptr_in_2 Input
+  %out_color = OpVariable %ptr_out_4 Output
+ %frag_depth = OpVariable %ptr_out_1 Output
+       %main = OpFunction %void None %fn_t
+      %entry = OpLabel
+         %fc = OpLoad %v4 %frag_coord
+         %uv = OpLoad %v2 %in_uv
+         %dx = OpDPdx %v2 %uv
+         %dy = OpDPdy %v2 %uv
+        %fcx = OpCompositeExtract %f32 %fc 0
+        %fcy = OpCompositeExtract %f32 %fc 1
+        %fcz = OpCompositeExtract %f32 %fc 2
+        %dxx = OpCompositeExtract %f32 %dx 0
+        %dyy = OpCompositeExtract %f32 %dy 1
+         %sx = OpFMul %f32 %fcx %f_001
+         %sy = OpFMul %f32 %fcy %f_001
+        %r_v = OpFAdd %f32 %sx %dxx
+        %g_v = OpFAdd %f32 %sy %dyy
+        %col = OpCompositeConstruct %v4 %r_v %g_v %fcz %f_001
+        %dep = OpFAdd %f32 %fcz %f_001
+               OpStore %out_color %col
+               OpStore %frag_depth %dep
+               OpReturn
+               OpFunctionEnd

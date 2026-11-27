@@ -1339,7 +1339,7 @@ mesa_count_tess_level_components(const enum tess_primitive_mode mode,
 /**
  * Mesa primitive types for both GL and Vulkan:
  */
-enum ENUM_PACKED mesa_prim
+enum ENUM_PACKED mesa_prim SWITCH_ENUM_U8
 {
    MESA_PRIM_POINTS,
    MESA_PRIM_LINES,

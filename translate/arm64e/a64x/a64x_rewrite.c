@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * a64x_rewrite.c: turn A12 (ARMv8.3) instructions into ARMv8.0 code.
  *

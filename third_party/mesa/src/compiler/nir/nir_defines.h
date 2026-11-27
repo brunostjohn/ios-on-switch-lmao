@@ -129,7 +129,11 @@ MESA_DEFINE_CPP_ENUM_BITFIELD_OPERATORS(nir_variable_mode)
  * just the unsized type OR the number of bits.
  */
 /* clang-format off */
+#ifdef _MSC_VER
+typedef enum nir_alu_type : uint8_t {
+#else
 typedef enum ENUM_PACKED {
+#endif
    nir_type_invalid =   0, /* Not a valid type */
    nir_type_int =       2,
    nir_type_uint =      4,

@@ -52,3 +52,25 @@ rust_library(
     edition = "2024",
     link_deps = [":switch_refusal"],
 )
+
+cc_library(
+    name = "switch_refusal_desktop",
+    srcs = ["SwitchRefusalDesktop.c"],
+    hdrs = [
+        "SwitchRefusal.h",
+        "SwitchRefusalSite.h",
+    ],
+    defines = select({
+        "@platforms//os:windows": ["_CRT_SECURE_NO_WARNINGS"],
+        "//conditions:default": [],
+    }),
+    linkstatic = True,
+)
+
+rust_library(
+    name = "switch_refusal_rs_desktop",
+    srcs = ["SwitchRefusal.rs"],
+    crate_name = "switch_refusal",
+    edition = "2024",
+    link_deps = [":switch_refusal_desktop"],
+)

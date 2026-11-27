@@ -7,6 +7,7 @@ from pathlib import Path
 from types import ModuleType
 
 import native_oled_adt
+from loader_abi import SEED_BYTES
 from python.runfiles import runfiles
 
 from tools.trustcache.trustcache import trust_module
@@ -220,6 +221,20 @@ class CdhashLists(unittest.TestCase):
         adt = adt_edit.ipad_adt(switch_tree())
         with self.assertRaisesRegex(SystemExit, '/usr/libexec/locationd'):
             adt_edit.with_pretranslated_updates(adt, {'/usr/libexec/locationd': h(4).hex()}, h(3) + h(5))
+
+
+class Split(unittest.TestCase):
+    def test_finish_of_the_base_is_the_one_step_adt_and_the_base_names_no_volume(self):
+        adt_edit = load_adt_edit()
+        board = native_oled_adt.generate_adt(
+            bytes(SEED_BYTES), native_oled_adt.Profile(storage_probe=True, root_boot=True, full_ram=True)
+        )
+        base = adt_edit.with_no_root_volume(adt_edit.ipad_adt(board))
+        self.assertNotIn(native_oled_adt.ROOT_VOLUME_UUID.encode(), base)
+        volume = '11111111-2222-3333-4444-555555555555'
+        self.assertEqual(
+            adt_edit.with_root_volume(base, volume), adt_edit.with_root_volume(adt_edit.ipad_adt(board), volume)
+        )
 
 
 if __name__ == '__main__':

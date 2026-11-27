@@ -5,9 +5,13 @@ The iPad's identity (model, board, SoC, /product) is read from Apple's device tr
 (//ipsw:device_tree). Also the radios' nodes, the overlay's union directories, the loader's zeroed slots and, with
 --smp, all four A57s.
 
-    adt_edit.py --adt BASE --apple-adt APPLE --overlay-plan PLAN --bt-patch HCD --portrait-header H
-                --root-volume-uuid UUID [--smp] [--a64x-cache-pretranslated LIST] [--cdhashes ROLE=MODULE]...
-                [--pretranslated-updates JSON] --out ADT
+Two steps. `base` reads nothing of Apple's, so the release ships its output; `finish` reads Apple's tree, so it runs
+where the IPSW is (the installer's port: install/adt).
+
+    adt_edit.py base --adt BOARD --overlay-plan PLAN --bt-patch HCD --portrait-header H [--smp] --out BASE
+    adt_edit.py finish --base BASE --apple-adt APPLE --root-volume-uuid UUID [--boot-manifest-hash]
+                [--launchd-catalog-sha256 DIGEST] [--a64x-cache-pretranslated LIST]
+                [--cdhashes ROLE=MODULE]... [--pretranslated-updates JSON] --out ADT
 """
 
 import argparse
@@ -448,6 +452,16 @@ def with_root_volume(data: bytes, volume_uuid: str) -> bytes:
     return adt_serialize(tree)
 
 
+# The board ADT's root-matching names 21H461's System volume (native_oled_adt.ROOT_VOLUME_UUID). The base names none,
+# keeping the property's place, where finish writes the IPSW kind's.
+NO_ROOT_VOLUME = '00000000-0000-0000-0000-000000000000'
+
+
+def with_no_root_volume(data: bytes) -> bytes:
+    """Return the ADT whose /chosen/root-matching names no volume."""
+    return with_root_volume(data, NO_ROOT_VOLUME)
+
+
 def with_boot_manifest_hash_slot(data: bytes) -> bytes:
     """Return the ADT with a zeroed /chosen/boot-manifest-hash (loader_abi.BOOT_MANIFEST_HASH_PROPERTY)."""
     tree, _ = adt_parse(data)
@@ -515,29 +529,19 @@ def with_pretranslated_updates(data: bytes, updates: dict[str, str], pinned: byt
     return adt_serialize(tree)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    for name in ('adt', 'apple-adt', 'overlay-plan', 'bt-patch', 'portrait-header', 'out'):
-        parser.add_argument('--' + name, required=True, type=Path)
-    parser.add_argument('--root-volume-uuid', required=True, help="the IPSW kind's System volume")
-    parser.add_argument('--smp', action='store_true')
-    parser.add_argument('--boot-manifest-hash', action='store_true', help='a zeroed slot the layout step fills')
-    parser.add_argument('--a64x-cache-pretranslated', type=Path)
-    parser.add_argument('--launchd-catalog-sha256', type=Path)
-    parser.add_argument('--pretranslated-updates', type=Path, help='{System path: CDHash} a deploy may place')
-    parser.add_argument(
-        '--cdhashes', action='append', default=[], metavar='ROLE=MODULE', help='a trust module of a role, repeatable'
-    )
-    args = parser.parse_args()
-    dirs = [tuple(d) for d in json.loads(args.overlay_plan.read_text())['dirs']]
+def base(args: argparse.Namespace) -> bytes:
     adt = ipad_adt(
         args.adt.read_bytes(),
         smp=args.smp,
-        overlay_dirs=dirs,
+        overlay_dirs=[tuple(d) for d in json.loads(args.overlay_plan.read_text())['dirs']],
         bt_patch=args.bt_patch.read_bytes(),
         portrait=portrait_native(args.portrait_header),
     )
-    adt = with_ipad_identity(adt, args.apple_adt.read_bytes())
+    return with_no_root_volume(adt)
+
+
+def finish(args: argparse.Namespace) -> bytes:
+    adt = with_ipad_identity(args.base.read_bytes(), args.apple_adt.read_bytes())
     adt = with_root_volume(adt, args.root_volume_uuid)
     if args.boot_manifest_hash:
         adt = with_boot_manifest_hash_slot(adt)
@@ -556,7 +560,29 @@ def main() -> None:
         adt = with_pretranslated_updates(adt, json.loads(args.pretranslated_updates.read_text()), pinned)
     if ('/filesystems', 'DoNotUseSEP') not in parse_adt(adt).properties:
         raise SystemExit('ADT patch failed')
-    args.out.write_bytes(adt)
+    return adt
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    steps = parser.add_subparsers(dest='step', required=True)
+    step = steps.add_parser('base')
+    for name in ('adt', 'overlay-plan', 'bt-patch', 'portrait-header', 'out'):
+        step.add_argument('--' + name, required=True, type=Path)
+    step.add_argument('--smp', action='store_true')
+    step = steps.add_parser('finish')
+    for name in ('base', 'apple-adt', 'out'):
+        step.add_argument('--' + name, required=True, type=Path)
+    step.add_argument('--root-volume-uuid', required=True, help="the IPSW kind's System volume")
+    step.add_argument('--boot-manifest-hash', action='store_true', help='a zeroed slot the layout step fills')
+    step.add_argument('--a64x-cache-pretranslated', type=Path)
+    step.add_argument('--launchd-catalog-sha256', type=Path)
+    step.add_argument('--pretranslated-updates', type=Path, help='{System path: CDHash} a deploy may place')
+    step.add_argument(
+        '--cdhashes', action='append', default=[], metavar='ROLE=MODULE', help='a trust module of a role, repeatable'
+    )
+    args = parser.parse_args()
+    args.out.write_bytes(base(args) if args.step == 'base' else finish(args))
 
 
 if __name__ == '__main__':

@@ -1,0 +1,106 @@
+# Rebuilds and seals an APFS cryptex image with a pretranslated delta in one pass, fitted to its final size.
+#
+#   bazel test //install/apfs_seal:switch_apfs_seal_test    unit tests (any platform)
+#   bazel test //install/apfs_seal:seal_fixture_test        Darwin oracle (macOS worker with passwordless sudo)
+#   bazel build //install/apfs_seal:all_seal                the CLI for all six desktop platforms
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//bazel/desktop:defs.bzl", "desktop_binaries")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+_LIB_SRCS = [
+    "blocks.rs",
+    "delta.rs",
+    "file_info.rs",
+    "layout.rs",
+    "lib.rs",
+    "place.rs",
+    "records.rs",
+    "source.rs",
+    "write.rs",
+]
+
+_DEPS = [
+    "//install/apfs_alloc:switch_apfs_alloc",
+    "//install/apfs_btree:switch_apfs_btree",
+    "//install/apfs_format:switch_apfs_format",
+    "//install/apfs_read:switch_apfs_read",
+    "//install/apfs_write:switch_apfs_write",
+    "//install/decmpfs:switch_decmpfs",
+    "@installer_crates//:hex",
+    "@installer_crates//:serde",
+    "@installer_crates//:serde_json",
+    "@installer_crates//:sha2",
+    "@installer_crates//:thiserror",
+    "@installer_crates//:unicode-normalization",
+    "@installer_crates//:zerocopy",
+]
+
+rust_library(
+    name = "switch_apfs_seal",
+    srcs = _LIB_SRCS,
+    crate_root = "lib.rs",
+    deps = _DEPS,
+)
+
+rust_test(
+    name = "switch_apfs_seal_test",
+    srcs = _LIB_SRCS + [
+        "tests.rs",
+        "tests_fixture.rs",
+        "tests_inputs.rs",
+        "tests_regressions.rs",
+    ],
+    crate_root = "lib.rs",
+    deps = _DEPS + [
+        "//install/apfs_names:switch_apfs_names",
+        "@installer_crates//:tempfile",
+    ],
+)
+
+rust_binary(
+    name = "switch_apfs_seal_tool",
+    srcs = ["tool.rs"],
+    crate_root = "tool.rs",
+    deps = [
+        ":switch_apfs_seal",
+        "//install/apfs_format:switch_apfs_format",
+        "//install/apfs_read:switch_apfs_read",
+        "//install/apfs_write:switch_apfs_write",
+        "@installer_crates//:clap",
+        "@installer_crates//:hex",
+    ],
+)
+
+desktop_binaries(
+    name = "all_seal",
+    binary = ":switch_apfs_seal_tool",
+)
+
+sh_test(
+    name = "seal_fixture_test",
+    size = "large",
+    srcs = ["seal_fixture_test.sh"],
+    args = [
+        "$(rootpath :switch_apfs_seal_tool)",
+        "$(rootpath //install/apfs_read:switch_apfs_read_tool)",
+        "$(rootpath //boot/installer:apfs_tool)",
+        "$(rootpath //install/apfs_m1:tree_list.py)",
+    ],
+    data = [
+        ":switch_apfs_seal_tool",
+        "//boot/installer:apfs_tool",
+        "//install/apfs_m1:images.sh",
+        "//install/apfs_m1:tree_list.py",
+        "//install/apfs_read:switch_apfs_read_tool",
+    ],
+    tags = [
+        "external",
+        "manual",
+        "requires-darwin",
+    ],
+)

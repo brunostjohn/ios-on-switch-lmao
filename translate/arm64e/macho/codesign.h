@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Embedded code signatures of translated files: Mach-O slices and dyld shared cache files. Translation changes
  * code pages only, so a signature is redone in place: every CodeDirectory's code slots are rehashed over the new

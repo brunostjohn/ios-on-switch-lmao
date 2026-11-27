@@ -36,11 +36,21 @@ mesa_cc_library(
             "gen:src/util/blake3",
             "src/util/blake3",
         ],
-    ),
+    ) + select({
+        "//third_party/mesa/bazel:x86_64": [
+            "-DBLAKE3_NO_SSE2",
+            "-DBLAKE3_NO_SSE41",
+            "-DBLAKE3_NO_AVX2",
+            "-DBLAKE3_NO_AVX512",
+        ],
+        "//conditions:default": [],
+    }),
     sources = [
         "blake3.c",
         "blake3_dispatch.c",
         "blake3_portable.c",
-        "blake3_neon.c",
-    ],
+    ] + select({
+        "//third_party/mesa/bazel:aarch64": ["blake3_neon.c"],
+        "//conditions:default": [],
+    }),
 )

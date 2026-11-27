@@ -1,0 +1,60 @@
+# switch_sd: the boot entry on the card's FAT boot volume, on an allowlist (lib.rs).
+#
+#   bazel test //install/sd:sd_test        FAT32 and exFAT volumes macOS formatted, in card images, each checked by
+#                                          fsck_msdos -n or fsck_exfat -n (macOS workers: newfs/fsck, hdiutil attach)
+#   bazel build //install/sd:desktop       switch_sd_tool <card image> [<boot package dir>], six platforms
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("//bazel/desktop:defs.bzl", "desktop_binaries")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+rust_library(
+    name = "switch_sd",
+    srcs = [
+        "allow.rs",
+        "exfat.rs",
+        "fat32.rs",
+        "lib.rs",
+        "stream.rs",
+    ],
+    crate_root = "lib.rs",
+    deps = [
+        "//install/card:switch_card",
+        "@installer_crates//:hadris-fat",
+        "@installer_crates//:thiserror",
+    ],
+)
+
+rust_test(
+    name = "sd_test",
+    size = "medium",
+    srcs = [
+        "tests/sd_test.rs",
+        "tests/volume.rs",
+    ],
+    crate_root = "tests/sd_test.rs",
+    tags = ["requires-darwin"],
+    deps = [
+        ":switch_sd",
+        "//install/card:switch_card",
+        "//install/card:switch_card_testing",
+        "@installer_crates//:hadris-fat",
+    ],
+)
+
+rust_binary(
+    name = "switch_sd_tool",
+    srcs = ["tool.rs"],
+    deps = [
+        ":switch_sd",
+        "//install/card:switch_card",
+    ],
+)
+
+desktop_binaries(
+    name = "desktop",
+    binary = ":switch_sd_tool",
+)

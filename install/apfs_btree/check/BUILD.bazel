@@ -1,0 +1,52 @@
+# The B-tree builder against Apple's own trees and the kernel:
+#
+#   bazel test //install/apfs_btree/check:btree_fixture_test     on a macOS worker with passwordless sudo
+#
+# macOS builds a volume of about 20,000 files, then seals it with apfs_prepare_cryptex. Its trees are rebuilt from
+# their records and compared node for node: the kext's extent-reference trees and the sealer's fext tree must match;
+# the sealed fs tree is reported, as the sealer's split rule is only approximated. Every stored name hash is
+# recomputed. Then our writer adds a Data volume with the same files through M1's container layer: fsck_apfs, attach,
+# a read-only mount with owners, a full read-back, and two builds compared for determinism.
+load("@rules_rust//rust:defs.bzl", "rust_binary")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+lint_files()
+
+rust_binary(
+    name = "switch_apfs_btree_check",
+    testonly = True,
+    srcs = glob(["*.rs"]),
+    crate_root = "main.rs",
+    target_compatible_with = ["@platforms//os:macos"],
+    deps = [
+        "//install/apfs_alloc:switch_apfs_alloc",
+        "//install/apfs_btree:switch_apfs_btree",
+        "//install/apfs_format:switch_apfs_format",
+        "//install/apfs_names:switch_apfs_names",
+        "//install/apfs_read:switch_apfs_read",
+        "//install/apfs_write:switch_apfs_write",
+        "@installer_crates//:clap",
+        "@installer_crates//:unicode-normalization",
+        "@installer_crates//:zerocopy",
+    ],
+)
+
+sh_test(
+    name = "btree_fixture_test",
+    size = "large",
+    srcs = ["btree_fixture_test.sh"],
+    args = [
+        "$(rootpath :switch_apfs_btree_check)",
+        "$(rootpath //install/apfs_m1:switch_apfs_m1)",
+    ],
+    data = [
+        ":switch_apfs_btree_check",
+        "//install/apfs_m1:switch_apfs_m1",
+    ],
+    tags = [
+        "external",
+        "manual",
+        "requires-darwin",
+    ],
+)

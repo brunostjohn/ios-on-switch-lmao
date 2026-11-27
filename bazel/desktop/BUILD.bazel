@@ -1,0 +1,238 @@
+# The installer's toolchains for the six desktop platforms (//bazel/platforms:desktop_*), registered in MODULE.bazel:
+#
+#   Rust     rustc 1.98.0 from the build's own aarch64-apple-darwin tools repository, with each target's rust-std from
+#            @desktop_rust_std. aarch64-apple-darwin has no toolchain here: the build's existing one serves it.
+#   Linux    links with rust-lld, against the self-contained musl libc, libunwind and crt objects rust-std ships, plus
+#            @desktop_musl's prebuilt static libc++ / libc++abi; C and C++17 from @llvm's clang.
+#   Windows  links with rust-lld as lld-link, against the static CRT, MSVC STL and Windows SDK from @desktop_msvc;
+#            C and C++17 from @llvm's clang-cl.
+#   macOS    Xcode, through apple_support's toolchain, as for the host.
+load("@bazel_skylib//rules:write_file.bzl", "write_file")
+load("@rules_cc//cc/toolchains:cc_toolchain.bzl", "cc_toolchain")
+load("@rules_rust//rust:toolchain.bzl", "rust_toolchain")
+load("@rules_rust//rust/platform:triple_mappings.bzl", "system_to_stdlib_linkflags")
+load("//bazel/lint:defs.bzl", "lint_files")
+load(":cc_config.bzl", "desktop_cc_toolchain_config")
+load(":defs.bzl", "MACOS_MINIMUM_OS")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+_TOOLS = "@rust_macos_aarch64__aarch64-apple-darwin__stable_tools//:"
+
+_EXEC = [
+    "@platforms//cpu:aarch64",
+    "@platforms//os:osx",
+]
+
+# (triple, @platforms os, @platforms cpu)
+_RUST_TARGETS = [
+    ("x86_64-apple-darwin", "osx", "x86_64"),
+    ("x86_64-unknown-linux-musl", "linux", "x86_64"),
+    ("aarch64-unknown-linux-musl", "linux", "aarch64"),
+    ("x86_64-pc-windows-msvc", "windows", "x86_64"),
+    ("aarch64-pc-windows-msvc", "windows", "aarch64"),
+]
+
+_EXT = {
+    "linux": {
+        "binary": "",
+        "dylib": ".so",
+        "staticlib": ".a",
+    },
+    "osx": {
+        "binary": "",
+        "dylib": ".dylib",
+        "staticlib": ".a",
+    },
+    "windows": {
+        "binary": ".exe",
+        "dylib": ".dll",
+        "staticlib": ".lib",
+    },
+}
+
+# lld-link stamps the link time into the PE header unless told to hash the output instead (/Brepro). With a PDB, that
+# hash covers the PDB, which names the execroot and rustc's randomly named temp directory, so no two links match. rustc
+# passes /DEBUG whatever -Cstrip says; the later /DEBUG:NONE wins, and the strip level keeps rules_rust from declaring
+# a PDB. The CRT's objects name the PDBs of Microsoft's build machines, which are not redistributed (LNK4099 on every
+# link).
+_MSVC_RUSTC_FLAGS = [
+    "-Ctarget-feature=+crt-static",
+    "-Clink-arg=/Brepro",
+    "-Clink-arg=/DEBUG:NONE",
+    "-Clink-arg=/IGNORE:4099",
+]
+
+_MSVC_STRIP_LEVEL = {
+    "dbg": "debuginfo",
+    "fastbuild": "debuginfo",
+    "opt": "debuginfo",
+}
+
+[rust_toolchain(
+    name = "rust_" + triple,
+    binary_ext = _EXT[os]["binary"],
+    cargo = _TOOLS + "cargo",
+    cargo_clippy = _TOOLS + "cargo_clippy_bin",
+    clippy_driver = _TOOLS + "clippy_driver_bin",
+    default_edition = "2024",
+    dylib_ext = _EXT[os]["dylib"],
+    exec_triple = "aarch64-apple-darwin",
+    extra_rustc_flags = _MSVC_RUSTC_FLAGS if os == "windows" else [],
+    linker = _TOOLS + "rust-lld",
+    linker_preference = None if os == "osx" else "rust",
+    linker_type = "direct",
+    llvm_cov = _TOOLS + "llvm_cov_bin",
+    llvm_lib = _TOOLS + "llvm_lib",
+    llvm_profdata = _TOOLS + "llvm_profdata_bin",
+    rust_doc = _TOOLS + "rustdoc",
+    rust_objcopy = _TOOLS + "rust-objcopy",
+    rust_std = "@desktop_rust_std//:" + triple,
+    rustc = _TOOLS + "rustc",
+    rustc_lib = _TOOLS + "rustc_lib",
+    rustfmt = _TOOLS + "rustfmt_bin",
+    staticlib_ext = _EXT[os]["staticlib"],
+    stdlib_linkflags = system_to_stdlib_linkflags(
+        "darwin" if os == "osx" else os,
+        "msvc" if os == "windows" else None,
+    ),
+    strip_level = _MSVC_STRIP_LEVEL if os == "windows" else None,
+    target_triple = triple,
+    version = "1.98.0",
+) for triple, os, _ in _RUST_TARGETS]
+
+[toolchain(
+    name = "rust-" + triple,
+    exec_compatible_with = _EXEC,
+    target_compatible_with = [
+        "@platforms//os:" + os,
+        "@platforms//cpu:" + cpu,
+    ],
+    target_settings = ["//bazel/rust:toolchain_1.98.0"],
+    toolchain = ":rust_" + triple,
+    toolchain_type = "@rules_rust//rust:toolchain",
+) for triple, os, cpu in _RUST_TARGETS]
+
+# (triple, @platforms os, @platforms cpu, the target's headers and libraries)
+_CC_TARGETS = [
+    (
+        "x86_64-unknown-linux-musl",
+        "linux",
+        "x86_64",
+        ["@desktop_musl//:x86_64"],
+    ),
+    (
+        "aarch64-unknown-linux-musl",
+        "linux",
+        "aarch64",
+        ["@desktop_musl//:aarch64"],
+    ),
+    (
+        "x86_64-pc-windows-msvc",
+        "windows",
+        "x86_64",
+        [
+            "@desktop_msvc//:headers",
+            "@desktop_msvc//:x86_64_libs",
+        ],
+    ),
+    (
+        "aarch64-pc-windows-msvc",
+        "windows",
+        "aarch64",
+        [
+            "@desktop_msvc//:headers",
+            "@desktop_msvc//:aarch64_libs",
+        ],
+    ),
+]
+
+[desktop_cc_toolchain_config(
+    name = "cc_config_" + triple,
+    sysroot = ("@desktop_msvc//:SYSROOT" if os == "windows" else "@desktop_musl//:{}/SYSROOT".format(cpu)),
+    triple = triple,
+) for triple, os, cpu, _ in _CC_TARGETS]
+
+[filegroup(
+    name = "cc_files_" + triple,
+    srcs = sysroot + [
+        "@llvm//:clang_resource_headers",
+    ] + ([
+        "@desktop_msvc//:SYSROOT",
+        "@llvm//:bin/clang-cl",
+        "@llvm//:bin/lld-link",
+        "@llvm//:bin/llvm-lib",
+    ] if os == "windows" else [
+        "@desktop_musl//:{}/SYSROOT".format(cpu),
+        "@llvm//:bin/clang",
+        "@llvm//:bin/llvm-ar",
+    ]),
+) for triple, os, cpu, sysroot in _CC_TARGETS]
+
+filegroup(
+    name = "empty",
+    srcs = [],
+)
+
+[cc_toolchain(
+    name = "cc_" + triple,
+    all_files = ":cc_files_" + triple,
+    ar_files = ":cc_files_" + triple,
+    as_files = ":cc_files_" + triple,
+    compiler_files = ":cc_files_" + triple,
+    dwp_files = ":cc_files_" + triple,
+    dynamic_runtime_lib = ":empty" if os == "linux" else None,
+    linker_files = ":cc_files_" + triple,
+    objcopy_files = ":cc_files_" + triple,
+    static_runtime_lib = "@desktop_musl//:{}_cxx_libs".format(cpu) if os == "linux" else None,
+    strip_files = ":cc_files_" + triple,
+    supports_param_files = False,
+    toolchain_config = ":cc_config_" + triple,
+) for triple, os, cpu, _ in _CC_TARGETS]
+
+[toolchain(
+    name = "cc-" + triple,
+    exec_compatible_with = _EXEC,
+    target_compatible_with = [
+        "@platforms//os:" + os,
+        "@platforms//cpu:" + cpu,
+    ],
+    toolchain = ":cc_" + triple,
+    toolchain_type = "@bazel_tools//tools/cpp:toolchain_type",
+) for triple, os, cpu, _ in _CC_TARGETS]
+
+# The env file every installer crate's build script reads (build_script_env_files, install/crates/crates.MODULE.bazel).
+# The runner applies it after its own CARGO_CFG_* values, which come from `rustc --print=cfg --target=<triple>` and
+# ignore the toolchain's -Ctarget-feature=+crt-static, so the Windows lines restore rustc 1.98.0's features with
+# crt-static for cc-rs and aws-lc-sys. aws-lc-sys maps its own source paths only at opt-level 3 and never for clang-cl,
+# so without CFLAGS_<triple> its __FILE__ strings and debug info name the worker's execroot. cc-rs adds CFLAGS_<triple>
+# to the toolchain's CFLAGS, and the runner replaces ${pwd} with the execroot. On macOS cc-rs also gets the binaries'
+# deployment target, which apple_support's CFLAGS carry too. OPT_LEVEL=3: outside -c opt rules_rust passes 0, and cc-rs
+# would build aws-lc's C at -O0. On macOS fastbuild it changes nothing, because apple_support's CFLAGS end in -O0, which
+# cc-rs applies after OPT_LEVEL's flag. An -O3 in CFLAGS_<triple> would win there, but it also reaches aws-lc's
+# jitterentropy, which must be built at -O0 and refuses to compile otherwise.
+_BUILD_SCRIPT_ENV = {
+    "aarch64-apple-darwin": ["MACOSX_DEPLOYMENT_TARGET=" + MACOS_MINIMUM_OS],
+    "aarch64-pc-windows-msvc": ["CARGO_CFG_TARGET_FEATURE=crt-static,neon"],
+    "aarch64-unknown-linux-musl": [],
+    "x86_64-apple-darwin": ["MACOSX_DEPLOYMENT_TARGET=" + MACOS_MINIMUM_OS],
+    "x86_64-pc-windows-msvc": ["CARGO_CFG_TARGET_FEATURE=cmpxchg16b,crt-static,fxsr,sse,sse2,sse3"],
+    "x86_64-unknown-linux-musl": [],
+}
+
+write_file(
+    name = "build_script_env",
+    out = "build_script.env",
+    content = select({
+        "//bazel/desktop/triple:" + triple: env + [
+            "OPT_LEVEL=3",
+            "CFLAGS_{}={}-ffile-prefix-map=${{pwd}}=.".format(
+                triple.replace("-", "_"),
+                "/clang:" if "windows" in triple else "",
+            ),
+        ]
+        for triple, env in _BUILD_SCRIPT_ENV.items()
+    } | {"//conditions:default": []}),
+)

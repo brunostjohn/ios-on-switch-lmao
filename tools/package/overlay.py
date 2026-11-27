@@ -8,8 +8,9 @@ Three steps of //boot:package, so that each overlay edit reruns only what reads 
     overlay.py plan --manifest M --portrait-header H --kind KIND [--given SOURCE]... [--release] --out PLAN
         overlay/manifest.json, filtered and checked: the files to stage and the directories the kernel unions
         (each with the switch-no-<feature> boot-arg that hides it), which the ADT carries. Reads no overlay file.
-    overlay.py trust --plan PLAN [--file SOURCE=PATH]... --out MODULE
-        the trust cache module of the trusted files' CDHashes (empty when none is trusted)
+    overlay.py trust --plan PLAN [--file SOURCE=PATH]... [--leave-out SOURCE]... --out MODULE
+        the trust cache module of the trusted files' CDHashes (empty when none is trusted), less those left out: the
+        release ships the module without installd, which the installer makes from the user's IPSW and hashes there
     overlay.py tree --plan PLAN [--file SOURCE=PATH]... --out DIR
         the files at overlay/<absolute path>
 
@@ -33,6 +34,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import tarfile
 import tempfile
 import zipfile
 from collections.abc import Iterable
@@ -247,43 +249,36 @@ def _need(files: dict[str, Path], entry: dict) -> Path:
     return files[entry['source']]
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    step = parser.add_subparsers(dest='step', required=True)
-    p = step.add_parser('plan')
-    for name in ('manifest', 'portrait-header', 'out'):
-        p.add_argument('--' + name, required=True, type=Path)
-    p.add_argument('--kind', required=True)
-    p.add_argument('--given', action='append', default=[])
-    p.add_argument('--release', action='store_true')
-    for name in ('trust', 'tree'):
-        p = step.add_parser(name)
-        p.add_argument('--plan', required=True, type=Path)
-        p.add_argument('--file', action='append', default=[], help='SOURCE=PATH: a manifest source and its file')
-        p.add_argument('--out', required=True, type=Path)
-    args = parser.parse_args()
-    if args.step == 'plan':
-        result = plan(
-            json.loads(args.manifest.read_text()),
-            portrait_native(args.portrait_header),
-            args.kind,
-            args.given,
-            args.release,
-        )
-        args.out.write_text(json.dumps(result, indent=1) + '\n')
-        return
-    files = _files(args.file)
-    entries = json.loads(args.plan.read_text())['files']
-    if args.step == 'trust':
-        hashes = [cdhash(image) for e in entries if e['trust'] for image in code_of(e, _need(files, e))]
-        # Flags and launch-constraint category 0: overlay code lives on Data, where the system categories' volume
-        # constraints would refuse it.
-        args.out.write_bytes(trust_module(hashes) if hashes else b'')
-        print(f'overlay: {len(entries)} files ({len(hashes)} trusted) -> Data {OVERLAY_ROOT}')
-        return
-    args.out.mkdir(parents=True, exist_ok=True)
+def trust(entries: list[dict], files: dict[str, Path], leave_out: Iterable[str] = ()) -> tuple[bytes, int]:
+    """Return the trust cache module of the trusted files' CDHashes (empty when none is trusted) and their count.
+
+    `leave_out`: trusted sources not to hash, each of which the plan must trust.
+    """
+    leave_out = set(leave_out)
+    unknown = sorted(leave_out - {e['source'] for e in entries if e['trust']})
+    if unknown:
+        sys.exit(f'overlay: --leave-out {", ".join(unknown)} is no trusted file of the plan')
+    hashes = [
+        cdhash(image)
+        for e in entries
+        if e['trust'] and e['source'] not in leave_out
+        for image in code_of(e, _need(files, e))
+    ]
+    # Flags and launch-constraint category 0: overlay code lives on Data, where the system categories' volume
+    # constraints would refuse it.
+    return (trust_module(hashes) if hashes else b''), len(hashes)
+
+
+def stage_tree(entries: list[dict], files: dict[str, Path], out: Path, leave_out: Iterable[str] = ()) -> None:
+    leave_out = set(leave_out)
+    unknown = sorted(leave_out - {e['source'] for e in entries})
+    if unknown:
+        sys.exit(f'overlay: --leave-out {", ".join(unknown)} is no file of the plan')
+    out.mkdir(parents=True, exist_ok=True)
     for entry in entries:
-        target = args.out / entry['path'].lstrip('/')
+        if entry['source'] in leave_out:
+            continue
+        target = out / entry['path'].lstrip('/')
         if entry.get('bundle-signature'):
             detached_signature(_need(files, entry), entry['bundle-signature'], target)
             target.chmod(entry['mode'])
@@ -301,6 +296,81 @@ def main() -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(_need(files, entry), target)
         target.chmod(entry['mode'])
+
+
+def write_tree_tar(entries: list[dict], files: dict[str, Path], out: Path, leave_out: Iterable[str] = ()) -> None:
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='switch-overlay-tar-') as temporary:
+        root = Path(temporary) / 'tree'
+        stage_tree(entries, files, root, leave_out)
+        members = sorted(root.rglob('*'), key=lambda p: p.relative_to(root).as_posix())
+        with tarfile.open(out, 'w', format=tarfile.PAX_FORMAT) as archive:
+            for member in members:
+                rel = member.relative_to(root).as_posix()
+                info = tarfile.TarInfo(name=rel)
+                info.uid = 0
+                info.gid = 0
+                info.uname = ''
+                info.gname = ''
+                info.mtime = 0
+                if member.is_dir():
+                    info.type = tarfile.DIRTYPE
+                    info.mode = 0o755
+                    info.size = 0
+                    archive.addfile(info)
+                else:
+                    info.type = tarfile.REGTYPE
+                    info.mode = member.stat().st_mode & 0o777
+                    info.size = member.stat().st_size
+                    with member.open('rb') as fd:
+                        archive.addfile(info, fd)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    step = parser.add_subparsers(dest='step', required=True)
+    p = step.add_parser('plan')
+    for name in ('manifest', 'portrait-header', 'out'):
+        p.add_argument('--' + name, required=True, type=Path)
+    p.add_argument('--kind', required=True)
+    p.add_argument('--given', action='append', default=[])
+    p.add_argument('--release', action='store_true')
+    for name in ('trust', 'tree'):
+        p = step.add_parser(name)
+        p.add_argument('--plan', required=True, type=Path)
+        p.add_argument('--file', action='append', default=[], help='SOURCE=PATH: a manifest source and its file')
+        p.add_argument('--out', required=True, type=Path)
+    step.choices['trust'].add_argument(
+        '--leave-out', action='append', default=[], help='SOURCE: a trusted file not to hash'
+    )
+    step.choices['tree'].add_argument(
+        '--leave-out', action='append', default=[], help='SOURCE: a plan file not to stage'
+    )
+    step.choices['tree'].add_argument(
+        '--tar', action='store_true', help='write a deterministic tar archive to --out instead of a directory'
+    )
+    args = parser.parse_args()
+    if args.step == 'plan':
+        result = plan(
+            json.loads(args.manifest.read_text()),
+            portrait_native(args.portrait_header),
+            args.kind,
+            args.given,
+            args.release,
+        )
+        args.out.write_text(json.dumps(result, indent=1) + '\n')
+        return
+    files = _files(args.file)
+    entries = json.loads(args.plan.read_text())['files']
+    if args.step == 'trust':
+        module, trusted = trust(entries, files, args.leave_out)
+        args.out.write_bytes(module)
+        print(f'overlay: {len(entries)} files ({trusted} trusted) -> Data {OVERLAY_ROOT}')
+        return
+    if args.tar:
+        write_tree_tar(entries, files, args.out, args.leave_out)
+        return
+    stage_tree(entries, files, args.out, args.leave_out)
 
 
 if __name__ == '__main__':

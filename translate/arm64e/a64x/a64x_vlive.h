@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * a64x_vlive.h (included by a64x_rewrite.c): which SIMD&FP registers are dead after a site, so FP stubs can use
  * them as temporaries instead of spilling Q registers.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * a64x_fp16.h (included by a64x_rewrite.c): FEAT_FP16 half-precision arithmetic on ARMv8.0.
  *

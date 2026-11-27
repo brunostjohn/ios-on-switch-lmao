@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Host side of a64x (macho.h): Mach-O parsing, the loader's translation of one image, its verification, and the
  * chained-fixup formats with authenticated pointers. The translation follows xnu/a64x_xnu.c step for step; where the

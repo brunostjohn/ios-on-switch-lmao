@@ -225,6 +225,7 @@ cc_test(
         ":vertexcheck_source",
         GM20B_METAL + ":pack/probe_states.h",
         GM20B_METAL + ":TegraGM20BMetalPipelineKey.h",
+        GM20B_METAL + ":pipeline_key.h",
         GM20B_METAL + ":cubic.h",
         GM20B_METAL + ":pipeline_fields.h",
         GM20B_METAL + ":emit.cpp",

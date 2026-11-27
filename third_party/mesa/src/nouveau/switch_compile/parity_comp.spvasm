@@ -1,0 +1,74 @@
+; SPIR-V
+; Version: 1.3
+; Bound: 80
+               OpCapability Shader
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint GLCompute %main "main" %gl_gid %gl_lid
+               OpExecutionMode %main LocalSize 32 1 1
+               OpDecorate %gl_gid BuiltIn GlobalInvocationId
+               OpDecorate %gl_lid BuiltIn LocalInvocationIndex
+               OpDecorate %arr_f32 ArrayStride 4
+               OpDecorate %SsboBlock BufferBlock
+               OpMemberDecorate %SsboBlock 0 Offset 0
+               OpDecorate %in_buf DescriptorSet 0
+               OpDecorate %in_buf Binding 0
+               OpDecorate %out_buf DescriptorSet 0
+               OpDecorate %out_buf Binding 1
+               OpDecorate %PushBlock Block
+               OpMemberDecorate %PushBlock 0 Offset 0
+               OpMemberDecorate %PushBlock 1 Offset 4
+       %void = OpTypeVoid
+       %fn_t = OpTypeFunction %void
+        %f32 = OpTypeFloat 32
+        %u32 = OpTypeInt 32 0
+        %i32 = OpTypeInt 32 1
+      %v3u32 = OpTypeVector %u32 3
+      %u32_1 = OpConstant %u32 1
+     %u32_31 = OpConstant %u32 31
+     %u32_32 = OpConstant %u32 32
+      %i32_0 = OpConstant %i32 0
+      %i32_1 = OpConstant %i32 1
+   %scope_wg = OpConstant %u32 2
+    %sem_wg  = OpConstant %u32 264
+    %arr_f32 = OpTypeRuntimeArray %f32
+    %sh_arr  = OpTypeArray %f32 %u32_32
+  %SsboBlock = OpTypeStruct %arr_f32
+  %PushBlock = OpTypeStruct %f32 %f32
+  %ptr_in_v3 = OpTypePointer Input %v3u32
+   %ptr_in_u = OpTypePointer Input %u32
+   %ptr_ssbo = OpTypePointer Uniform %SsboBlock
+  %ptr_ss_f  = OpTypePointer Uniform %f32
+   %ptr_push = OpTypePointer PushConstant %PushBlock
+  %ptr_ps_f  = OpTypePointer PushConstant %f32
+    %ptr_sh  = OpTypePointer Workgroup %sh_arr
+   %ptr_sh_f = OpTypePointer Workgroup %f32
+     %gl_gid = OpVariable %ptr_in_v3 Input
+     %gl_lid = OpVariable %ptr_in_u Input
+     %in_buf = OpVariable %ptr_ssbo Uniform
+    %out_buf = OpVariable %ptr_ssbo Uniform
+       %push = OpVariable %ptr_push PushConstant
+     %shared = OpVariable %ptr_sh Workgroup
+       %main = OpFunction %void None %fn_t
+      %entry = OpLabel
+        %gid = OpLoad %v3u32 %gl_gid
+         %gx = OpCompositeExtract %u32 %gid 0
+        %lid = OpLoad %u32 %gl_lid
+       %p_in = OpAccessChain %ptr_ss_f %in_buf %i32_0 %gx
+        %val = OpLoad %f32 %p_in
+       %p_s0 = OpAccessChain %ptr_ps_f %push %i32_0
+         %s0 = OpLoad %f32 %p_s0
+       %p_s1 = OpAccessChain %ptr_ps_f %push %i32_1
+         %s1 = OpLoad %f32 %p_s1
+      %scaled = OpFMul %f32 %val %s0
+      %p_shw = OpAccessChain %ptr_sh_f %shared %lid
+               OpStore %p_shw %scaled
+               OpControlBarrier %scope_wg %scope_wg %sem_wg
+       %n_0  = OpIAdd %u32 %lid %u32_1
+       %n_id = OpBitwiseAnd %u32 %n_0 %u32_31
+      %p_shr = OpAccessChain %ptr_sh_f %shared %n_id
+       %nval = OpLoad %f32 %p_shr
+        %out = OpFAdd %f32 %nval %s1
+      %p_out = OpAccessChain %ptr_ss_f %out_buf %i32_0 %gx
+               OpStore %p_out %out
+               OpReturn
+               OpFunctionEnd

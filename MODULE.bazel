@@ -375,6 +375,16 @@ use_repo(
 # bazel/rust/Cargo.lock and crates.lock.json).
 include("//bazel/rust:crates.MODULE.bazel")
 
+# --- The installer's six desktop targets (bazel/desktop): rust-std for each, musl's headers, the MSVC CRT and Windows
+# SDK; C compiles with @llvm's clang. They match only //bazel/platforms:desktop_*, never the host or Apple targets. ----
+desktop_toolchains = use_extension("//bazel/desktop:repos.bzl", "desktop_toolchains")
+use_repo(desktop_toolchains, "desktop_msvc", "desktop_musl", "desktop_rust_std")
+
+register_toolchains("//bazel/desktop:all")
+
+# The installer's crates.io crates: @installer_crates (install/crates, pinned by its Cargo.lock and crates.lock.json).
+include("//install/crates:crates.MODULE.bazel")
+
 # The device's own data and llvm-as (gpu/deps.bzl). m2v is third_party/m2v, its crates.io crates @rust_crates (bazel/rust).
 gpu = use_extension("//gpu:deps.bzl", "gpu")
 use_repo(gpu, "gpu_device_data", "gpu_llvm_as")

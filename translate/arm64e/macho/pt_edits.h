@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 #ifndef A64X_PT_EDITS_H
 #define A64X_PT_EDITS_H
 

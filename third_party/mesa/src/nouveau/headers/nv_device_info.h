@@ -8,7 +8,7 @@
 
 #define NVIDIA_VENDOR_ID 0x10de
 
-enum ENUM_PACKED nv_device_type {
+enum ENUM_PACKED nv_device_type SWITCH_ENUM_U8 {
    NV_DEVICE_TYPE_IGP,
    NV_DEVICE_TYPE_DIS,
    NV_DEVICE_TYPE_SOC,

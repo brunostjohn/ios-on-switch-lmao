@@ -1,0 +1,41 @@
+# The installer's crates.io crates (crates.MODULE.bazel) and their licence check.
+#
+#   bazel test //install/crates:deny_test
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files(exclude = ["crates.lock.json"])
+
+exports_files([
+    "Cargo.lock",
+    "Cargo.toml",
+    "crates.lock.json",
+])
+
+_TOOLS = "@rust_macos_aarch64__aarch64-apple-darwin__stable_tools//:"
+
+sh_test(
+    name = "deny_test",
+    srcs = ["deny_test.sh"],
+    data = [
+        "Cargo.lock",
+        "Cargo.toml",
+        "deny.toml",
+        "@cargo_deny//:cargo-deny",
+        "@installer_vendor//:crates.txt",
+        "@installer_vendor//:vendor",
+        _TOOLS + "cargo",
+        _TOOLS + "rustc",
+        _TOOLS + "rustc_lib",
+    ],
+    env = {
+        "CARGO_BIN": "$(rootpath {}cargo)".format(_TOOLS),
+        "CARGO_DENY": "$(rootpath @cargo_deny//:cargo-deny)",
+        "DENY_CONFIG": "$(rootpath deny.toml)",
+        "MANIFEST": "$(rootpath Cargo.toml)",
+        "RUSTC_BIN": "$(rootpath {}rustc)".format(_TOOLS),
+        "VENDOR_LIST": "$(rootpath @installer_vendor//:crates.txt)",
+    },
+)

@@ -1,21 +1,69 @@
 name: Save the Bazel disk cache
-description: Saves the disk cache entries this run read or wrote, for the job's next run.
+description: LRU-prunes and saves the shared Bazel disk cache (including partial progress on failure) and deletes superseded entries on the same ref.
 inputs:
   cache:
-    description: The disk cache's name, as given to the bazel action.
+    description: The job label suffix for the saved cache key.
     required: true
 runs:
   using: composite
   steps:
-    # Bazel refreshes an entry's mtime whenever it reads it, the action result before its blobs, so no result kept here
-    # loses a blob.
-    - name: Drop the entries this run left untouched
+    - name: LRU-prune shared Bazel disk cache
+      id: prep
       shell: bash
       run: |
-        if [ -d ~/Library/Caches/switch-ios-bazel/disk ]; then
-          find ~/Library/Caches/switch-ios-bazel/disk -type f ! -newer "$RUNNER_TEMP/bazel-disk-cache-start" -delete
-        fi
-    - uses: actions/cache/save@v6.1.0
+        python3 ./tools/ci/prune_disk_cache.py \
+          --disk ~/Library/Caches/switch-ios-bazel/disk \
+          --marker "$RUNNER_TEMP/bazel-disk-cache-start" \
+          --max-gib 10.0 \
+          --target-gib 8.5 \
+          --max-age-days 14 \
+          --github-output "$GITHUB_OUTPUT"
+    - if: steps.prep.outputs.save == 'true'
+      uses: actions/cache/save@v6.1.0
       with:
         path: ~/Library/Caches/switch-ios-bazel/disk
-        key: bazel-disk-${{ inputs.cache }}-${{ github.sha }}
+        key: bazel-disk-v2-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.cache }}
+    - name: Delete superseded disk caches on this ref
+      if: steps.prep.outputs.save == 'true' && env.GITHUB_TOKEN != ''
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        KEEP_KEY: bazel-disk-v2-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.cache }}
+      run: |
+        python3 - <<'PY' || true
+        import json
+        import os
+        import urllib.parse
+        import urllib.request
+
+        token = os.environ["GITHUB_TOKEN"]
+        repo = os.environ["GITHUB_REPOSITORY"]
+        ref = os.environ["GITHUB_REF"]
+        keep_key = os.environ["KEEP_KEY"]
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+        }
+        q = urllib.parse.urlencode({"ref": ref, "key": "bazel-disk-v2-", "per_page": 100})
+        req = urllib.request.Request(f"https://api.github.com/repos/{repo}/actions/caches?{q}", headers=headers)
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            caches = json.loads(resp.read().decode("utf-8")).get("actions_caches", [])
+        if not any(c.get("key") == keep_key for c in caches):
+            raise SystemExit(0)
+        deleted = 0
+        for c in caches:
+            if c.get("key") == keep_key:
+                continue
+            cid = c.get("id")
+            del_req = urllib.request.Request(
+                f"https://api.github.com/repos/{repo}/actions/caches/{cid}",
+                headers=headers,
+                method="DELETE",
+            )
+            try:
+                with urllib.request.urlopen(del_req, timeout=15):
+                    deleted += 1
+            except OSError:
+                pass
+        print(f"Cleaned up {deleted} superseded bazel-disk-v2 caches on {ref}")
+        PY

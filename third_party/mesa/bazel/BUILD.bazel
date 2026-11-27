@@ -1,5 +1,6 @@
 # The Mesa build's own pieces (defs.bzl): the platform settings its BUILD files select on (the host twin builds for
 # //bazel/platforms:macos_user_arm64), and the tools its generators run (bindgen, cbindgen, rustfmt, libclang).
+load("@rules_python//python:py_binary.bzl", "py_binary")
 load("@xcode//:defs.bzl", "IPHONEOS_SDK", "MACOSX_SDK")
 load("//bazel/lint:defs.bzl", "lint_files")
 load(":defs.bzl", "cargo_tool", "mesa_make_variables")
@@ -8,7 +9,8 @@ package(default_visibility = ["//visibility:public"])
 
 lint_files()
 
-# Which platform a Mesa target is configured for: iOS (the device's NVK) or macOS (its host twin).
+# Which platform a Mesa target is configured for: iOS (the device's NVK), macOS user twin, or one of the six desktop
+# targets (//bazel/platforms:desktop_*).
 config_setting(
     name = "ios",
     constraint_values = ["@platforms//os:ios"],
@@ -17,6 +19,101 @@ config_setting(
 config_setting(
     name = "macos",
     constraint_values = ["@platforms//os:osx"],
+)
+
+config_setting(
+    name = "darwin_user",
+    constraint_values = ["//bazel/platforms:user"],
+)
+
+config_setting(
+    name = "darwin_user_release",
+    constraint_values = ["//bazel/platforms:user"],
+    flag_values = {"//bazel:profile": "release"},
+)
+
+config_setting(
+    name = "rust_1_96_1_release",
+    flag_values = {
+        "//bazel:profile": "release",
+        "//bazel/rust:toolchain_version": "1.96.1",
+    },
+)
+
+config_setting(
+    name = "macos_user",
+    constraint_values = [
+        "@platforms//os:osx",
+        "//bazel/platforms:user",
+    ],
+)
+
+config_setting(
+    name = "macos_aarch64",
+    constraint_values = [
+        "@platforms//os:osx",
+        "@platforms//cpu:aarch64",
+    ],
+)
+
+config_setting(
+    name = "macos_x86_64",
+    constraint_values = [
+        "@platforms//os:osx",
+        "@platforms//cpu:x86_64",
+    ],
+)
+
+config_setting(
+    name = "linux",
+    constraint_values = ["@platforms//os:linux"],
+)
+
+config_setting(
+    name = "linux_aarch64",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:aarch64",
+    ],
+)
+
+config_setting(
+    name = "linux_x86_64",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
+)
+
+config_setting(
+    name = "windows",
+    constraint_values = ["@platforms//os:windows"],
+)
+
+config_setting(
+    name = "windows_aarch64",
+    constraint_values = [
+        "@platforms//os:windows",
+        "@platforms//cpu:aarch64",
+    ],
+)
+
+config_setting(
+    name = "windows_x86_64",
+    constraint_values = [
+        "@platforms//os:windows",
+        "@platforms//cpu:x86_64",
+    ],
+)
+
+config_setting(
+    name = "aarch64",
+    constraint_values = ["@platforms//cpu:aarch64"],
+)
+
+config_setting(
+    name = "x86_64",
+    constraint_values = ["@platforms//cpu:x86_64"],
 )
 
 # bindgen-cli 0.73.2 and cbindgen 0.29.4, built by Rust 1.96.1's cargo from their own Cargo.lock; they never rebuild
@@ -33,6 +130,11 @@ cargo_tool(
     srcs = "@nvk_cbindgen_src//:all",
     bin = "cbindgen",
     manifest = "@nvk_cbindgen_src//:src/Cargo.toml",
+)
+
+py_binary(
+    name = "fix_windows_bindgen",
+    srcs = ["fix_windows_bindgen.py"],
 )
 
 # The generators format the Rust they write with rustfmt 1.96.1 from PATH and fail without it (the line numbers reach
@@ -52,6 +154,11 @@ mesa_make_variables(
     name = "bindgen_vars",
     variables = select({
         ":ios": {"BINDGEN_CLANG_ARGS": "--target=arm64-apple-ios17.0 -isysroot " + IPHONEOS_SDK},
+        ":macos_x86_64": {"BINDGEN_CLANG_ARGS": "--target=x86_64-apple-macosx13.0 -isysroot " + MACOSX_SDK},
+        ":linux_x86_64": {"BINDGEN_CLANG_ARGS": "--target=x86_64-unknown-linux-musl -fsigned-char"},
+        ":linux_aarch64": {"BINDGEN_CLANG_ARGS": "--target=aarch64-unknown-linux-musl -fsigned-char"},
+        ":windows_x86_64": {"BINDGEN_CLANG_ARGS": "--target=x86_64-pc-windows-msvc -fms-extensions -fms-compatibility -fms-compatibility-version=19.44"},
+        ":windows_aarch64": {"BINDGEN_CLANG_ARGS": "--target=aarch64-pc-windows-msvc -fms-extensions -fms-compatibility -fms-compatibility-version=19.44"},
         "//conditions:default": {"BINDGEN_CLANG_ARGS": "--target=arm64-apple-macosx14.0 -isysroot " + MACOSX_SDK},
     }),
 )

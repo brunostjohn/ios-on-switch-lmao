@@ -11,7 +11,11 @@
 #include <cstdint>
 #include <iterator>
 #include <string_view>
+#if defined(__has_include)
+#if __has_include("MetalABI.h")
 #include "MetalABI.h"
+#endif
+#endif
 
 namespace switch_metal {
 
@@ -28,6 +32,15 @@ inline constexpr AirSliceRule kAirSliceRules[] = {
     {"24B119", false, 0x20009, true, 0xd},
 };
 
+inline const AirSliceRule *airSliceRuleOf(std::string_view kind)
+{
+    for (const AirSliceRule &rule : kAirSliceRules)
+        if (rule.kind == kind)
+            return &rule;
+    return nullptr;
+}
+
+#ifdef SWITCH_METAL_KIND
 inline constexpr size_t airSliceRuleIndex()
 {
     for (size_t i = 0; i < std::size(kAirSliceRules); i++)
@@ -38,6 +51,7 @@ inline constexpr size_t airSliceRuleIndex()
 
 static_assert(airSliceRuleIndex() < std::size(kAirSliceRules), "no AIR slice rule for this kind (MetallibSlice.h)");
 inline constexpr const AirSliceRule &kAirSliceRule = kAirSliceRules[airSliceRuleIndex()];
+#endif
 
 constexpr uint32_t kAir64CpuType = 0x01000017;
 
@@ -56,7 +70,11 @@ inline bool pickAirSlice(const AirSliceRule &rule, bool have, uint32_t current, 
 // [offset, offset + size) of `file`: the slice `rule`'s Metal loads, the whole file when it is thin. False: a universal file
 // with no AIR64 slice that Metal takes.
 inline bool airSlice(const uint8_t *file, size_t length, size_t &offset, size_t &size,
+#ifdef SWITCH_METAL_KIND
                      const AirSliceRule &rule = kAirSliceRule)
+#else
+                     const AirSliceRule &rule)
+#endif
 {
     const auto word = [&](size_t at) {
         return uint32_t(file[at]) << 24 | uint32_t(file[at + 1]) << 16 | uint32_t(file[at + 2]) << 8 | file[at + 3];

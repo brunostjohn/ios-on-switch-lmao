@@ -85,15 +85,24 @@ pub fn compile_error(what: &'static str) -> impl FnOnce(metal2vulkan::error::Err
     }
 }
 
+const fn max_writes_for(stage_textures: usize) -> usize {
+    2 * (31 + stage_textures + 16) + SYNTHETIC_WRITES
+}
+
 /// A state of more set-0 writes than its record holds is refused, naming it: no write is dropped
-fn set0_writes_fit(count: usize, name: impl FnOnce() -> String) -> Result<(), String> {
-    if count <= MAX_WRITES {
+fn set0_writes_fit_limit(count: usize, max_writes: usize, name: impl FnOnce() -> String) -> Result<(), String> {
+    if count <= max_writes {
         return Ok(());
     }
     Err(format!(
-        "{}: {count} set-0 descriptor writes, past the {MAX_WRITES} of every argument a render pipeline binds",
+        "{}: {count} set-0 descriptor writes, past the {max_writes} of every argument a render pipeline binds",
         name()
     ))
+}
+
+#[cfg(test)]
+fn set0_writes_fit(count: usize, name: impl FnOnce() -> String) -> Result<(), String> {
+    set0_writes_fit_limit(count, MAX_WRITES, name)
 }
 
 fn state_name(descriptor: &RenderPipelineDescriptor) -> String {
@@ -147,6 +156,44 @@ pub unsafe extern "C" fn nmb_render_pipeline_offline(
     })
 }
 
+/// nmb_render_pipeline_offline's compile with the caller's render-stage texture-slot cap (`stage_textures`, e.g. 31
+/// on 21H461 or 128 on 24B119) so one binary can build records for any IPSW kind at runtime.
+///
+/// # Safety
+/// As nmb_render_pipeline_direct's.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nmb_render_pipeline_offline_kind(
+    descriptor: *const NmbOfflineRenderPipelineDescriptor,
+    barrier: bool,
+    texture_format: u64,
+    texture_samples: u32,
+    binds: *const NmbDirectBinds,
+    stage_textures: u32,
+    each: unsafe extern "C" fn(state: *const NmbDirectState, ctx: *mut c_void) -> bool,
+    ctx: *mut c_void,
+) -> bool {
+    guard(false, || {
+        if stage_textures == 0 {
+            return Err("stage_textures must be non-zero".into());
+        }
+        // SAFETY: the caller's contract.
+        let binds = unsafe { Binds::of(binds) }?;
+        let descriptor = render_descriptor(descriptor)?;
+        let compile = offline_devices()?.render(barrier, binds.fragment_tests);
+        translate_with_limit(
+            compile,
+            &descriptor,
+            None,
+            texture_format,
+            texture_samples,
+            &binds,
+            max_writes_for(stage_textures as usize),
+            each,
+            ctx,
+        )
+    })
+}
+
 /// nmb_render_pipeline_offline's compile on `devices`, of a descriptor of either function handle: the pack generator's
 /// offline functions, or the compile context's (NativeMetalCompile.rs)
 ///
@@ -189,6 +236,31 @@ pub fn translate(
     texture_format: u64,
     texture_samples: u32,
     binds: &Binds,
+    each: unsafe extern "C" fn(state: *const NmbDirectState, ctx: *mut c_void) -> bool,
+    ctx: *mut c_void,
+) -> Result<bool, String> {
+    translate_with_limit(
+        compile,
+        descriptor,
+        vulkan,
+        texture_format,
+        texture_samples,
+        binds,
+        MAX_WRITES,
+        each,
+        ctx,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn translate_with_limit(
+    compile: &metal2vulkan::device::Device,
+    descriptor: &RenderPipelineDescriptor,
+    vulkan: Option<&ash::Device>,
+    texture_format: u64,
+    texture_samples: u32,
+    binds: &Binds,
+    max_writes: usize,
     each: unsafe extern "C" fn(state: *const NmbDirectState, ctx: *mut c_void) -> bool,
     ctx: *mut c_void,
 ) -> Result<bool, String> {
@@ -306,7 +378,7 @@ pub fn translate(
                 })
                 .collect();
             writes.extend(immutable_samplers(layout, &writes));
-            set0_writes_fit(writes.len(), || state_name(descriptor))?;
+            set0_writes_fit_limit(writes.len(), max_writes, || state_name(descriptor))?;
             Ok(writes)
         })
         .collect::<Result<_, String>>()?;
@@ -455,7 +527,7 @@ pub fn translate(
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_WRITES, STAGE_TEXTURES, set0_writes_fit};
+    use super::{MAX_WRITES, STAGE_TEXTURES, max_writes_for, set0_writes_fit, set0_writes_fit_limit};
 
     #[test]
     fn a_states_writes_reach_every_argument_of_its_identity_and_its_synthetic_entries() {
@@ -464,6 +536,8 @@ mod tests {
         assert_eq!(MAX_WRITES, 156 + 20);
         #[cfg(target_j181)]
         assert_eq!(MAX_WRITES, 350 + 20);
+        assert_eq!(max_writes_for(31), 156 + 20);
+        assert_eq!(max_writes_for(128), 350 + 20);
     }
 
     #[test]
@@ -475,5 +549,7 @@ mod tests {
             why.contains(&format!("{} set-0 descriptor writes", MAX_WRITES + 1)),
             "{why}"
         );
+        assert!(set0_writes_fit_limit(370, max_writes_for(128), || "v + f".to_owned()).is_ok());
+        assert!(set0_writes_fit_limit(177, max_writes_for(31), || "v + f".to_owned()).is_err());
     }
 }

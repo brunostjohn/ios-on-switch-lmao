@@ -8,6 +8,7 @@ import hashlib
 import json
 import struct
 import sys
+import tarfile
 import tempfile
 import unittest
 import zipfile
@@ -116,6 +117,58 @@ class BundleTest(unittest.TestCase):
         entry = dict(planned, path='/Applications/Other.app')
         with self.assertRaises(SystemExit):
             overlay.code_of(entry, self.ipa)
+
+    def test_tree_tar_is_deterministic_preserves_modes_and_respects_leave_out(self):
+        helper = self.tmp / 'helper'
+        helper.write_bytes(self.executable)
+        config = self.tmp / 'config.plist'
+        config.write_bytes(b'<plist/>')
+        manifest = {
+            'files': [
+                *self.manifest['files'],
+                {'path': '/usr/libexec/helper', 'source': 'build/helper', 'trust': True},
+                {'path': '/etc/switch.plist', 'source': 'etc/switch.plist'},
+                {'path': '/usr/libexec/installd', 'source': 'build/switch-apps/installd', 'trust': True},
+            ]
+        }
+        plan_path = self.tmp / 'plan-tar.json'
+        plan_path.write_text(json.dumps(overlay.plan(manifest, portrait=False, kind='21H461')))
+        tar_a = self.tmp / 'overlay-a.tar'
+        tar_b = self.tmp / 'overlay-b.tar'
+        common = [
+            'tree',
+            '--plan',
+            str(plan_path),
+            '--file',
+            f'build/switch-hwtest/SwitchHWTest.ipa={self.ipa}',
+            '--file',
+            f'build/helper={helper}',
+            '--file',
+            f'etc/switch.plist={config}',
+            '--leave-out',
+            'build/switch-apps/installd',
+            '--tar',
+        ]
+        self.run_step(*common, '--out', str(tar_a))
+        self.run_step(*common, '--out', str(tar_b))
+        self.assertEqual(tar_a.read_bytes(), tar_b.read_bytes())
+
+        with tarfile.open(tar_a, 'r') as archive:
+            members = archive.getmembers()
+            names = [m.name for m in members]
+            self.assertEqual(names, sorted(names))
+            by_name = {m.name: m for m in members}
+            for m in members:
+                self.assertEqual((m.uid, m.gid, m.uname, m.gname, m.mtime), (0, 0, '', '', 0))
+            self.assertNotIn('usr/libexec/installd', by_name)
+            self.assertEqual(by_name['usr/libexec/helper'].mode, 0o755)
+            self.assertEqual(by_name['etc/switch.plist'].mode, 0o644)
+            self.assertEqual(by_name['Applications/SwitchHWTest.app/SwitchHWTest'].mode, 0o755)
+            self.assertEqual(by_name['Applications/SwitchHWTest.app/Info.plist'].mode, 0o644)
+            self.assertEqual(by_name['usr/libexec'].mode, 0o755)
+
+        with self.assertRaises(SystemExit):
+            self.run_step(*common, '--leave-out', 'nonexistent/source', '--out', str(self.tmp / 'bad.tar'))
 
 
 class SupplementalTest(unittest.TestCase):

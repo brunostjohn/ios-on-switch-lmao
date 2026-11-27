@@ -25,12 +25,12 @@ and sparse resident pages use the kernel allocator and are freed after the provi
 nothing on failure and permits only one attempt per boot.
 
 The accepted profile is at most 1 GiB logical and 32 MiB encoded. Resident 4 KiB data pages, including imported seed
-pages, are capped at **128 MiB**. The pointer table is at most 2 MiB and the request scratch is 64 KiB. The current seed
-has 401 nonzero pages (1,642,496 bytes), a 2,097,152-byte pointer table, a 65,536-byte scratch buffer and a
-1,646,592-byte loader reservation: 5,451,776 bytes before object/allocator overhead. At the resident limit these four
-contributions total 138,027,008 bytes before that overhead. The logical free space advertised by APFS can therefore
-exceed available RAM backing; a new page at the cap returns an I/O allocation failure. This is a bounded startup
-experiment, not a storage-capacity guarantee for complete services.
+pages, are capped at **128 MiB**. The pointer table is at most 2 MiB and the request scratch is 64 KiB. The pinned seed
+has no nonzero pages, so it needs a 2,097,152-byte pointer table, a 65,536-byte scratch buffer and a 4,096-byte loader
+reservation: 2,166,784 bytes before object/allocator overhead. With 128 MiB of resident pages added, the total is
+136,384,512 bytes before that overhead. The logical free space advertised by APFS can therefore exceed available RAM
+backing; a new page at the cap returns an I/O allocation failure. This is a bounded startup experiment, not a
+storage-capacity guarantee for complete services.
 
 ## I/O and discovery contract
 
@@ -61,19 +61,9 @@ differential sparse operations and independently compares the C parser's complet
 Reports are `build.json`, `bindings.json`, `host-tests.json` and `seed.json` in the build directory. These are not
 execution of the actual kernel IOKit framework, APFS writable-mount proof or physical Switch evidence.
 
-The corrected seed is `out/native-a57/root-v1/data-seed/data-v10.dbr`, expected UUID
-`CCD5A1A2-2FDC-4B25-B322-AE1722871BC9`, encoded SHA-256
-`fb156d6164613125844512e4d68ca6c6aed966da9e730c871b825229b53fef8d`, logical SHA-256
-`76b24691beba497ebe2ecc37a3847824ed499b16561ec21d6484260c1c13463d`. It preserves 206 selected original `/private/var`
-entries, including 39 logical files, with their exact modes, numeric UID/GID and protection class 0. The original
-29-bundle `staged_system_apps` subtree is deliberately excluded: 10,789 entries and 466,987,635 logical file bytes. This
-minimal baseline targets the first original launchd checkpoint; it does not establish complete original Data or
-app-service composition.
-
-The new host-formatted image has fresh inode allocation/timestamps, decoded file contents instead of original
-compression attributes, and only one permitted host attribute: the observed 11-byte `com.apple.provenance` marker,
-pinned and recorded per inode. The required symlink attribute is retained. `mobile/tmp` is absent so unchanged launchd
-can create and fix it. The creation receipt is `out/native-a57/root-v1/data-seed/creation.json`; it binds the complete 1
-GiB ownership-only byte diff, independent 7-Zip metadata/data-fork hashes and read-only `fsck_apfs` result. Original OS
-images and the earlier seed remain unchanged. Host verification is separate from the original APFS driver's
-writable-mount and real launchd execution evidence.
+The pinned seed is `bazel/pinned/data-seed/empty.dbr`, a 32-byte DBRDISK1 header for a zero-filled 1 GiB disk with no
+extents. Its expected UUID is `CCD5A1A2-2FDC-4B25-B322-AE1722871BC9`, its encoded SHA-256 is
+`e8c9370341964d89151eac89678a0d9b17b6857becfd2c62ff1b0a2eb9681eef` and its logical SHA-256 is
+`49bc20df15e412a64472421e13fe86ff1c5165e18b2afccf160d4dc19fe68a14`. `NativeRamBlock::start` returns before reading it
+on every boot, because `/private/var` is always the SD card's Data volume, so the seed is used only for its slot in the
+kernel window and the hashes compiled into the kernel.

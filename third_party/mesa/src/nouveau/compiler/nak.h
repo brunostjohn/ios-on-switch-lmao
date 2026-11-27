@@ -149,25 +149,25 @@ void nak_postprocess_nir(nir_shader *nir, const struct nak_compiler *nak,
  */
 void nak_release_nir_body(nir_shader *nir);
 
-enum ENUM_PACKED nak_ts_domain {
+enum ENUM_PACKED nak_ts_domain SWITCH_ENUM_U8 {
    NAK_TS_DOMAIN_ISOLINE = 0,
    NAK_TS_DOMAIN_TRIANGLE = 1,
    NAK_TS_DOMAIN_QUAD = 2,
 };
 
-enum ENUM_PACKED nak_ts_spacing {
+enum ENUM_PACKED nak_ts_spacing SWITCH_ENUM_U8 {
    NAK_TS_SPACING_INTEGER = 0,
    NAK_TS_SPACING_FRACT_ODD = 1,
    NAK_TS_SPACING_FRACT_EVEN = 2,
 };
 
-enum PACKED nak_mesh_topology {
+enum PACKED nak_mesh_topology SWITCH_ENUM_U8 {
    NAK_MESH_TOPOLOGY_POINTS = 0,
    NAK_MESH_TOPOLOGY_LINES = 1,
    NAK_MESH_TOPOLOGY_TRIANGLES = 4,
 };
 
-enum ENUM_PACKED nak_fs_interlock_mode {
+enum ENUM_PACKED nak_fs_interlock_mode SWITCH_ENUM_U8 {
    NAK_FS_INTERLOCK_MODE_DISABLED = 0,
    NAK_FS_INTERLOCK_MODE_SAMPLE = 1,
    NAK_FS_INTERLOCK_MODE_PIXEL = 2,

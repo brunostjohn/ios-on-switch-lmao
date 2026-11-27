@@ -1,0 +1,98 @@
+# switch_installd: the overlay's installd (tools/install_policy/installd.py), made on the user's computer.
+#
+#   bazel test --config=ios17 //install/installd:all     against //drivers/SwitchInstallPolicy:installd and installd.py
+#   bazel test --config=ios27 //install/installd:all     the same for iOS 27
+#   bazel build //install/installd:desktop               switch_installd_tool for the six desktop platforms
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("//bazel/desktop:defs.bzl", "desktop_binaries")
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//ipsw:ipsw.bzl", "pinned_kinds")
+load("//ipsw:pins.bzl", "IPSWS")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+rust_library(
+    name = "switch_installd",
+    srcs = [
+        "inject.rs",
+        "lib.rs",
+        "macho.rs",
+        "slice.rs",
+    ],
+    crate_root = "lib.rs",
+    deps = [
+        "//install/plistlib:switch_plistlib",
+        "//install/sign:switch_sign",
+        "//install/translate:switch_translate",
+        "@installer_crates//:plist",
+        "@installer_crates//:thiserror",
+    ],
+)
+
+rust_binary(
+    name = "switch_installd_tool",
+    srcs = ["main.rs"],
+    deps = [":switch_installd"],
+)
+
+desktop_binaries(
+    name = "desktop",
+    binary = ":switch_installd_tool",
+)
+
+rust_test(
+    name = "installd_test",
+    srcs = ["tests/installd_test.rs"],
+    data = [
+        "//drivers/SwitchInstallPolicy:installd",
+        "@ipsw//:os_installd",
+        "@ipsw//:os_system_version",
+    ],
+    env = select({
+        "//ipsw:" + kind: {
+            "SWITCH_INSTALLD_BUILD": IPSWS[kind]["build"],
+            "SWITCH_INSTALLD_PRETRANSLATE": "1" if IPSWS[kind].get("derived", {}).get("pretranslated") else "0",
+        }
+        for kind in pinned_kinds()
+    }) | {
+        "INSTALLD": "$(rootpath @ipsw//:os_installd)",
+        "INSTALLD_BUILT": "$(rootpath //drivers/SwitchInstallPolicy:installd)",
+        "SYSTEM_VERSION": "$(rootpath @ipsw//:os_system_version)",
+    },
+    deps = [
+        ":switch_installd",
+        "//install/sign:switch_sign",
+        "@installer_crates//:hex",
+        "@installer_crates//:plist",
+        "@installer_crates//:sha2",
+    ],
+)
+
+py_binary(
+    name = "inject_cases",
+    srcs = ["inject_cases.py"],
+    deps = ["//tools/install_policy:installd"],
+)
+
+genrule(
+    name = "inject_oracle_cases",
+    srcs = ["@ipsw//:os_installd"],
+    outs = ["inject_oracle_cases.bin"],
+    cmd = "$(execpath :inject_cases) $< $@",
+    tools = [":inject_cases"],
+)
+
+rust_test(
+    name = "inject_oracle_test",
+    srcs = ["tests/inject_oracle_test.rs"],
+    data = [":inject_oracle_cases"],
+    env = {"INJECT_CASES": "$(rootpath :inject_oracle_cases)"},
+    deps = [
+        ":switch_installd",
+        "@installer_crates//:flate2",
+        "@installer_crates//:sha2",
+    ],
+)

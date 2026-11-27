@@ -148,6 +148,10 @@ typedef struct NmbOfflineComputePipelineDescriptor {
 bool nmb_render_pipeline_offline(const NmbOfflineRenderPipelineDescriptor *descriptor, bool barrier,
                                  uint64_t textureFormat, uint32_t textureSamples, const NmbDirectBinds *binds,
                                  bool (*each)(const NmbDirectState *state, void *ctx), void *ctx);
+bool nmb_render_pipeline_offline_kind(const NmbOfflineRenderPipelineDescriptor *descriptor, bool barrier,
+                                      uint64_t textureFormat, uint32_t textureSamples, const NmbDirectBinds *binds,
+                                      uint32_t stageTextures, bool (*each)(const NmbDirectState *state, void *ctx),
+                                      void *ctx);
 bool nmb_compute_pipeline_offline(const NmbOfflineComputePipelineDescriptor *descriptor,
                                   const NmbDirectDispatch *dispatch,
                                   bool (*each)(const NmbDirectKernel *kernel, void *ctx), void *ctx);

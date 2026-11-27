@@ -1,0 +1,248 @@
+# switch_partition: partition mode, the iOS entry carved from the card's FAT with the files there moved first (lib.rs).
+#
+#   bazel test //install/partition:all     card images: the owner's card, hekate MBR-only cards, a cut at every write
+#   bazel build //install/partition:desktop   switch_partition_tool <card image>, six platforms
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("//bazel/desktop:defs.bzl", "desktop_binaries")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+rust_library(
+    name = "switch_partition",
+    srcs = [
+        "apply.rs",
+        "cache.rs",
+        "copy.rs",
+        "engine.rs",
+        "error.rs",
+        "exfat/boot.rs",
+        "exfat/mod.rs",
+        "exfat/relocate.rs",
+        "exfat/shrink.rs",
+        "exfat/walk.rs",
+        "fat32/boot.rs",
+        "fat32/mod.rs",
+        "fat32/relocate.rs",
+        "fat32/walk.rs",
+        "gpt_new.rs",
+        "journal/mod.rs",
+        "journal/plan.rs",
+        "journal/record.rs",
+        "layout.rs",
+        "lib.rs",
+        "mbr.rs",
+        "model.rs",
+        "precheck.rs",
+        "size.rs",
+        "tables.rs",
+        "verify_pending/mod.rs",
+        "verify_pending/readers.rs",
+        "verify_pending/walk.rs",
+    ],
+    crate_root = "lib.rs",
+    deps = [
+        "//install/card:switch_card",
+        "@installer_crates//:crc32fast",
+        "@installer_crates//:sha2",
+        "@installer_crates//:thiserror",
+    ],
+)
+
+rust_binary(
+    name = "switch_partition_tool",
+    srcs = ["tool.rs"],
+    deps = [
+        ":switch_partition",
+        "//install/card:switch_card",
+    ],
+)
+
+desktop_binaries(
+    name = "desktop",
+    binary = ":switch_partition_tool",
+)
+
+rust_library(
+    name = "switch_partition_testing",
+    testonly = True,
+    srcs = [
+        "testing/cards.rs",
+        "testing/cuts.rs",
+        "testing/exfat.rs",
+        "testing/exfat_fixtures.rs",
+        "testing/exfat_reader.rs",
+        "testing/fat32.rs",
+        "testing/fixtures.rs",
+        "testing/lib.rs",
+        "testing/macos.rs",
+        "testing/oracle.rs",
+        "testing/reader.rs",
+        "testing/scenario.rs",
+    ],
+    crate_root = "testing/lib.rs",
+    link_deps = [
+        "//install/card:oracle",
+    ],
+    deps = [
+        ":switch_partition",
+        "//install/card:switch_card",
+        "//install/card:switch_card_testing",
+        "@installer_crates//:sha2",
+    ],
+)
+
+_TEST_DEPS = [
+    ":switch_partition",
+    ":switch_partition_testing",
+    "//install/card:switch_card",
+    "//install/card:switch_card_testing",
+]
+
+# newfs_msdos and fsck_msdos make and check every volume: macOS workers only.
+rust_test(
+    name = "shapes_test",
+    size = "large",
+    srcs = ["tests/shapes_test.rs"],
+    crate_root = "tests/shapes_test.rs",
+    tags = ["requires-darwin"],
+    deps = _TEST_DEPS,
+)
+
+_CARD_JSON = "//install:testdata/switch-card-1tb.json"
+
+rust_test(
+    name = "mbr_test",
+    size = "large",
+    srcs = ["tests/mbr_test.rs"],
+    crate_root = "tests/mbr_test.rs",
+    tags = ["requires-darwin"],
+    deps = _TEST_DEPS,
+)
+
+rust_test(
+    name = "owner_test",
+    size = "large",
+    srcs = ["tests/owner_test.rs"],
+    crate_root = "tests/owner_test.rs",
+    data = [_CARD_JSON],
+    env = {"SWITCH_CARD_JSON": "$(rootpath {})".format(_CARD_JSON)},
+    tags = ["requires-darwin"],
+    deps = _TEST_DEPS,
+)
+
+rust_test(
+    name = "cut_test",
+    size = "enormous",
+    srcs = ["tests/cut_test.rs"],
+    crate_root = "tests/cut_test.rs",
+    data = [_CARD_JSON],
+    env = {"SWITCH_CARD_JSON": "$(rootpath {})".format(_CARD_JSON)},
+    tags = ["requires-darwin"],
+    deps = _TEST_DEPS,
+)
+
+rust_test(
+    name = "unit_test",
+    srcs = ["tests/unit_test.rs"],
+    crate_root = "tests/unit_test.rs",
+    deps = _TEST_DEPS,
+)
+
+rust_test(
+    name = "regression_test",
+    size = "large",
+    srcs = ["tests/regression_test.rs"],
+    crate_root = "tests/regression_test.rs",
+    tags = ["requires-darwin"],
+    deps = _TEST_DEPS,
+)
+
+rust_test(
+    name = "regression_refusals_test",
+    size = "large",
+    srcs = ["tests/regression_refusals_test.rs"],
+    crate_root = "tests/regression_refusals_test.rs",
+    tags = ["requires-darwin"],
+    deps = _TEST_DEPS + ["@installer_crates//:crc32fast"],
+)
+
+rust_test(
+    name = "regression_extra_test",
+    size = "large",
+    srcs = ["tests/regression_extra_test.rs"],
+    crate_root = "tests/regression_extra_test.rs",
+    data = [":switch_partition_tool"],
+    env = {"TOOL": "$(rootpath :switch_partition_tool)"},
+    tags = ["requires-darwin"],
+    deps = _TEST_DEPS + ["@installer_crates//:crc32fast"],
+)
+
+rust_test(
+    name = "exfat_test",
+    size = "large",
+    srcs = ["tests/exfat_test.rs"],
+    crate_root = "tests/exfat_test.rs",
+    data = [_CARD_JSON],
+    env = {"SWITCH_CARD_JSON": "$(rootpath {})".format(_CARD_JSON)},
+    tags = ["requires-darwin"],
+    deps = _TEST_DEPS,
+)
+
+rust_test(
+    name = "exfat_refusals_test",
+    size = "large",
+    srcs = ["tests/exfat_refusals_test.rs"],
+    crate_root = "tests/exfat_refusals_test.rs",
+    tags = ["requires-darwin"],
+    deps = _TEST_DEPS,
+)
+
+rust_test(
+    name = "exfat_resume_test",
+    size = "large",
+    srcs = ["tests/exfat_resume_test.rs"],
+    crate_root = "tests/exfat_resume_test.rs",
+    tags = ["requires-darwin"],
+    deps = _TEST_DEPS,
+)
+
+rust_test(
+    name = "exfat_pending_test",
+    size = "large",
+    srcs = ["tests/exfat_pending_test.rs"],
+    crate_root = "tests/exfat_pending_test.rs",
+    tags = ["requires-darwin"],
+    deps = _TEST_DEPS,
+)
+
+rust_test(
+    name = "exfat_spec_test",
+    size = "large",
+    srcs = ["tests/exfat_spec_test.rs"],
+    crate_root = "tests/exfat_spec_test.rs",
+    tags = ["requires-darwin"],
+    deps = _TEST_DEPS,
+)
+
+rust_test(
+    name = "exfat_matrix_edge_test",
+    size = "large",
+    srcs = ["tests/exfat_matrix_edge_test.rs"],
+    crate_root = "tests/exfat_matrix_edge_test.rs",
+    tags = ["requires-darwin"],
+    deps = _TEST_DEPS,
+)
+
+rust_test(
+    name = "exfat_cut_test",
+    size = "enormous",
+    srcs = ["tests/exfat_cut_test.rs"],
+    crate_root = "tests/exfat_cut_test.rs",
+    data = [_CARD_JSON],
+    env = {"SWITCH_CARD_JSON": "$(rootpath {})".format(_CARD_JSON)},
+    tags = ["requires-darwin"],
+    deps = _TEST_DEPS,
+)

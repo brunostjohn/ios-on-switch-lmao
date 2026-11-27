@@ -228,6 +228,14 @@ do {                       \
 #define ENUM_PACKED
 #endif
 
+#ifdef _MSC_VER
+#define SWITCH_ENUM_U8 : uint8_t
+#define SWITCH_ENUM_U16 : uint16_t
+#else
+#define SWITCH_ENUM_U8
+#define SWITCH_ENUM_U16
+#endif
+
 /* Attribute pure is used for functions that have no effects other than their
  * return value.  As a result, calls to it can be dead code eliminated.
  */

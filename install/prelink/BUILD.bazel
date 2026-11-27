@@ -1,0 +1,149 @@
+# switch_prelink: Apple's kexts prelinked into the project's kernel on the user's machine, byte-equal to CI's.
+#
+#   bazel test //install/prelink:switch_prelink_test                  unit tests
+#   bazel test --config=ios17 //install/prelink:oracle_test           against //kernel:kernel and the release path
+#   bazel test --config=ios27 //install/prelink:fileset_oracle_test   against //kernel:kernel_12377, and its refusals
+#   bazel build //install/prelink:desktop                             switch_prelink_tool for the six platforms
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("//bazel/desktop:defs.bzl", "desktop_binaries")
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//install:defs.bzl", "release_prelink")
+load("//ipsw:ipsw.bzl", "pinned_kinds")
+load(":defs.bzl", "fileset_pins", "kernel_input")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+rust_library(
+    name = "switch_prelink",
+    srcs = glob(["src/**/*.rs"]),
+    crate_root = "src/lib.rs",
+    deps = [
+        "//install/a64x:switch_a64x",
+        "@installer_crates//:base64",
+        "@installer_crates//:hex",
+        "@installer_crates//:object",
+        "@installer_crates//:quick-xml",
+        "@installer_crates//:serde",
+        "@installer_crates//:serde_json",
+        "@installer_crates//:sha2",
+        "@installer_crates//:thiserror",
+    ],
+)
+
+rust_test(
+    name = "switch_prelink_test",
+    crate = ":switch_prelink",
+)
+
+rust_binary(
+    name = "switch_prelink_tool",
+    srcs = ["main.rs"],
+    deps = [":switch_prelink"],
+)
+
+desktop_binaries(
+    name = "desktop",
+    binary = ":switch_prelink_tool",
+)
+
+# The release path's prelink (//install:release_kernel_10063's rule) over this checkout's own release inputs, since
+# @switch_release holds a published release's.
+[
+    kernel_input(
+        name = "kernel_inputs_" + name,
+        file = name,
+        inputs = "//install:kernel_inputs",
+        tags = ["manual"],
+    )
+    for name in ("kernel.macho", "prelink.json")
+]
+
+release_prelink(
+    name = "release_kernel_local",
+    inherit_report = "//kernel:dma_prelink_report",
+    kernel = ":kernel_inputs_kernel.macho",
+    options = ":kernel_inputs_prelink.json",
+    previous = "//bazel/pinned:prelink/dma-prelink.json",
+    tags = ["manual"],
+)
+
+_EXPECTED = [
+    "//kernel:kernel",
+    ":release_kernel_local",
+]
+
+rust_test(
+    name = "oracle_test",
+    size = "small",
+    srcs = ["tests/oracle.rs"],
+    crate_root = "tests/oracle.rs",
+    data = _EXPECTED + [
+        "//bazel/pinned:prelink/dma-prelink.json",
+        "//install:kernel_inputs",
+        "//ipsw:kernelcache",
+        "//kernel:dma_prelink_report",
+        "//kits/SwitchABI:sites",
+    ],
+    env = select({
+        "//ipsw:" + kind: {"SWITCH_PRELINK_KIND": kind}
+        for kind in pinned_kinds()
+    }) | {
+        "SWITCH_PRELINK_EXPECTED": " ".join(["$(rootpath {})".format(e) for e in _EXPECTED]),
+        "SWITCH_PRELINK_INHERITED": "$(rootpath //kernel:dma_prelink_report)",
+        "SWITCH_PRELINK_INPUTS": "$(rootpaths //install:kernel_inputs)",
+        "SWITCH_PRELINK_KERNELCACHE": "$(rootpath //ipsw:kernelcache)",
+        "SWITCH_PRELINK_PREVIOUS": "$(rootpath //bazel/pinned:prelink/dma-prelink.json)",
+        "SWITCH_PRELINK_SITES": "$(rootpaths //kits/SwitchABI:sites)",
+    },
+    target_compatible_with = select({
+        "//kernel:xnu_10063_141_1": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":switch_prelink",
+        "@installer_crates//:hex",
+        "@installer_crates//:sha2",
+    ],
+)
+
+# What the release publishes beside the bindings export so a user's prelink is pinned to CI's: the selected kind's
+# site tables and //kernel:kernel_12377 itself, by SHA-256.
+fileset_pins(
+    name = "fileset_pins",
+    out = "fileset_pins/prelink-pins.json",
+    prelinked = "//kernel:kernel_12377",
+)
+
+rust_test(
+    name = "fileset_oracle_test",
+    size = "medium",
+    srcs = ["tests/fileset_oracle.rs"],
+    crate_root = "tests/fileset_oracle.rs",
+    data = [
+        ":fileset_pins",
+        "//ipsw:kernelcache",
+        "//kernel:kernel_12377",
+        "//kernel:kernel_unprelinked_12377",
+        "//kernel:prelink_bindings_12377",
+        "//kits/SwitchABI:sites",
+    ],
+    env = {
+        "SWITCH_PRELINK_BINDINGS": "$(rootpath //kernel:prelink_bindings_12377)",
+        "SWITCH_PRELINK_EXPECTED": "$(rootpath //kernel:kernel_12377)",
+        "SWITCH_PRELINK_KERNEL": "$(rootpath //kernel:kernel_unprelinked_12377)",
+        "SWITCH_PRELINK_KERNELCACHE": "$(rootpath //ipsw:kernelcache)",
+        "SWITCH_PRELINK_PINS": "$(rootpath :fileset_pins)",
+        "SWITCH_PRELINK_SITES": "$(rootpaths //kits/SwitchABI:sites)",
+    },
+    target_compatible_with = select({
+        "//kernel:xnu_12377_121_6": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":switch_prelink",
+        "@installer_crates//:hex",
+        "@installer_crates//:sha2",
+    ],
+)

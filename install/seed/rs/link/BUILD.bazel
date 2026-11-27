@@ -1,0 +1,59 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+_COMPILE_DATA = [
+    "//drivers/TegraGM20BMetal:chip_facts.h",
+    "//drivers/TegraGM20BMetal:own_states.h",
+    "//drivers/TegraGM20BMetal:owned.h",
+    "//drivers/TegraGM20BMetal:pack/draw_context.txt",
+    "//drivers/TegraGM20BMetal:srgb_table.h",
+]
+
+_DEPS = [
+    "@installer_crates//:hex",
+    "@installer_crates//:sha2",
+    "@installer_crates//:thiserror",
+]
+
+_SRCS = [
+    "archives.rs",
+    "directlink.rs",
+    "fetchfree.rs",
+    "headers.rs",
+    "iterated_long.rs",
+    "iterated_short.rs",
+    "iterated_ucode.rs",
+    "kernels.rs",
+    "lib.rs",
+    "packfile.rs",
+    "packfile_encode.rs",
+    "packfile_records.rs",
+    "packfile_sections.rs",
+    "pipeline_build.rs",
+    "probelog.rs",
+    "records.rs",
+    "segment_methods.rs",
+    "segments.rs",
+    "splits.rs",
+]
+
+rust_library(
+    name = "switch_seed_link",
+    srcs = _SRCS,
+    compile_data = _COMPILE_DATA,
+    crate_root = "lib.rs",
+    deps = _DEPS,
+)
+
+rust_test(
+    name = "switch_seed_link_test",
+    size = "small",
+    srcs = _SRCS + ["tests.rs"],
+    compile_data = _COMPILE_DATA,
+    crate_root = "lib.rs",
+    deps = _DEPS + ["@installer_crates//:tempfile"],
+)

@@ -1,0 +1,186 @@
+# Portable ObjC-free C++17 GPU shader seed front (directpack + native-seed) and C FFI library for the desktop
+# installer. Compiles cleanly across all six desktop platforms without MetalABI.h or Apple frameworks; links the
+# host translator and stage compile on macOS arm64 for byte-identity verification against the ObjC tools.
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+GM20B = "//drivers/TegraGM20BMetal"
+
+DRIVER_CORE_SRCS = [
+    GM20B + ":direct.cpp",
+    GM20B + ":direct_compute.cpp",
+    GM20B + ":direct_core.cpp",
+    GM20B + ":emit.cpp",
+    GM20B + ":gm20b_cache.cpp",
+    GM20B + ":kernel_cache.cpp",
+    GM20B + ":metallib.cpp",
+    GM20B + ":pack.cpp",
+    GM20B + ":record_parts.cpp",
+]
+
+DRIVER_CORE_HDRS = [
+    GM20B + ":cache_io.h",
+    GM20B + ":cbuf.h",
+    GM20B + ":chip_facts.h",
+    GM20B + ":compute_key.h",
+    GM20B + ":compute_record.h",
+    GM20B + ":cubic.h",
+    GM20B + ":descriptors.h",
+    GM20B + ":direct.h",
+    GM20B + ":direct_abi.h",
+    GM20B + ":direct_compute.h",
+    GM20B + ":direct_core.h",
+    GM20B + ":direct_encode.h",
+    GM20B + ":direct_heap.h",
+    GM20B + ":direct_nvk.h",
+    GM20B + ":direct_push.h",
+    GM20B + ":direct_storage.h",
+    GM20B + ":dynamic_push.h",
+    GM20B + ":emit.h",
+    GM20B + ":gm20b_cache.h",
+    GM20B + ":kernel_pairs.h",
+    GM20B + ":metallib.h",
+    GM20B + ":nak_target.h",
+    GM20B + ":own_states.h",
+    GM20B + ":owned.h",
+    GM20B + ":pack.h",
+    GM20B + ":pack/fetch_free.h",
+    GM20B + ":pack/probe_bind.h",
+    GM20B + ":pipeline_fields.h",
+    GM20B + ":pipeline_key.h",
+    GM20B + ":plugin/MetallibEntries.h",
+    GM20B + ":plugin/MetallibSlice.h",
+    GM20B + ":plugin/TwoPlaneStandIn.h",
+    GM20B + ":program_facts.h",
+    GM20B + ":program_pages.h",
+    GM20B + ":program_stores.h",
+    GM20B + ":push.h",
+    GM20B + ":record.h",
+    GM20B + ":record_parts.h",
+    GM20B + ":render_key.h",
+    GM20B + ":residual.h",
+    GM20B + ":rotation.h",
+    GM20B + ":sample_shading.h",
+    GM20B + ":set_entries.h",
+    GM20B + ":set_layout.h",
+    GM20B + ":set_reads.h",
+    GM20B + ":slot_mask.h",
+    GM20B + ":spill_table.h",
+    GM20B + ":split_metadata.h",
+    GM20B + ":stage_textures.h",
+    GM20B + ":storage.h",
+    GM20B + ":translate/NativeMetalTranslate.h",
+    GM20B + ":utf8_path.h",
+    GM20B + ":viewports.h",
+    GM20B + ":written_textures.h",
+    GM20B + ":xr.h",
+    GM20B + ":xr_pass.h",
+    GM20B + ":zeta.h",
+    "//drivers/TegraGM20B:TegraGM20BABI.h",
+    "//drivers/TegraGM20B:TegraGM20BFencePageABI.h",
+    "//drivers/TegraGM20B:TegraGM20BJobABI.h",
+    "//drivers/TegraGM20B:TegraGM20BLayout.h",
+    "//kits/SwitchRefusal:SwitchRefusal.h",
+    "//kits/SwitchRefusal:SwitchRefusalSite.h",
+    "//kits/SwitchSeedPack:SwitchSeedPack.h",
+]
+
+PORTABLE_COPTS = select({
+    "@platforms//os:windows": [
+        "/O2",
+        "/I.",
+        "/Idrivers/TegraGM20BMetal",
+        "/Idrivers/TegraGM20BMetal/plugin",
+        "/Idrivers/TegraGM20B",
+        "/Ikits/SwitchRefusal",
+    ],
+    "//conditions:default": [
+        "-O2",
+        "-std=c++17",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-I.",
+        "-Idrivers/TegraGM20BMetal",
+        "-Idrivers/TegraGM20BMetal/plugin",
+        "-Idrivers/TegraGM20B",
+        "-Ikits/SwitchRefusal",
+    ],
+})
+
+PORTABLE_DEFINES = select({
+    "@platforms//os:windows": ["_CRT_SECURE_NO_WARNINGS"],
+    "//conditions:default": [],
+})
+
+MACOS_DEAD_STRIP = select({
+    "@platforms//os:macos": ["-Wl,-dead_strip_dylibs"],
+    "//conditions:default": [],
+})
+
+cc_library(
+    name = "seed_front_objs",
+    srcs = DRIVER_CORE_SRCS + [
+        "compute_parse.cpp",
+        "directpack.cpp",
+        "json_min.cpp",
+        "native_render_parse.cpp",
+        "native_seed.cpp",
+        "native_seed_restamp.cpp",
+        "offline_descriptors.cpp",
+        "offline_metal.cpp",
+        "render_parse.cpp",
+    ],
+    hdrs = [
+        "compute_parse.h",
+        "directpack_writer.h",
+        "json_min.h",
+        "native_seed_io.h",
+        "offline_metal.h",
+        "own_states_list.h",
+        "render_parse.h",
+        "switch_seed_cpp.h",
+    ] + DRIVER_CORE_HDRS,
+    copts = PORTABLE_COPTS,
+    defines = PORTABLE_DEFINES,
+    linkstatic = True,
+    deps = ["//kits/SwitchGM20B:classes"],
+)
+
+cc_library(
+    name = "translate_host_cc",
+    srcs = ["//gpu:translate_host"],
+    linkstatic = True,
+    tags = ["no-lint"],
+)
+
+cc_binary(
+    name = "directpack_portable",
+    srcs = ["directpack_main.cpp"],
+    copts = PORTABLE_COPTS,
+    defines = PORTABLE_DEFINES,
+    linkopts = MACOS_DEAD_STRIP,
+    deps = [
+        ":seed_front_objs",
+        ":translate_host_cc",
+        "//third_party/mesa/src/nouveau/switch_compile:host_cc",
+    ],
+)
+
+cc_binary(
+    name = "native_seed_portable",
+    srcs = ["native_seed_main.cpp"],
+    copts = PORTABLE_COPTS,
+    defines = PORTABLE_DEFINES,
+    linkopts = MACOS_DEAD_STRIP,
+    deps = [
+        ":seed_front_objs",
+        ":translate_host_cc",
+        "//third_party/mesa/src/nouveau/switch_compile:host_cc",
+    ],
+)

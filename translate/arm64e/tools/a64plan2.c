@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * a64plan2: translation plan for an arm64e dyld shared cache, second generation.
  *

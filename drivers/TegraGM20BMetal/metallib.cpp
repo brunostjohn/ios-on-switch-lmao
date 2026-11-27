@@ -2,10 +2,15 @@
 // See metallib.h.
 #include "metallib.h"
 
+#ifdef _WIN32
+#include <fstream>
+#include <vector>
+#else
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#endif
 #include <cstring>
 #include "MetallibSlice.h"
 
@@ -54,8 +59,13 @@ bool metallibAirHashes(const uint8_t *whole, size_t wholeBytes, std::map<std::st
 {
     out.clear();
     size_t sliceAt = 0, size = 0;
+#ifdef SWITCH_METAL_KIND
     if (!switch_metal::airSlice(whole, wholeBytes, sliceAt, size))
         return false;
+#else
+    if (!switch_metal::airSlice(whole, wholeBytes, sliceAt, size, switch_metal::kAirSliceRules[0]))
+        return false;
+#endif
     const uint8_t *file = whole + sliceAt;
     uint64_t listAt = 0, listBytes = 0;
     uint32_t count = 0;
@@ -80,6 +90,19 @@ bool metallibAirHashes(const uint8_t *whole, size_t wholeBytes, std::map<std::st
 bool metallibAirHashes(const std::string &path, std::map<std::string, AirHash> &out)
 {
     out.clear();
+#ifdef _WIN32
+    std::ifstream in(path, std::ios::binary | std::ios::ate);
+    if (!in)
+        return false;
+    const std::streamoff length = in.tellg();
+    if (length <= 0)
+        return false;
+    std::vector<uint8_t> bytes(static_cast<size_t>(length));
+    in.seekg(0);
+    if (!in.read(reinterpret_cast<char *>(bytes.data()), length))
+        return false;
+    return metallibAirHashes(bytes.data(), bytes.size(), out);
+#else
     const int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
     if (fd < 0)
         return false;
@@ -93,6 +116,7 @@ bool metallibAirHashes(const std::string &path, std::map<std::string, AirHash> &
     const bool ok = metallibAirHashes(static_cast<const uint8_t *>(mapped), size_t(st.st_size), out);
     munmap(mapped, size_t(st.st_size));
     return ok;
+#endif
 }
 
 }  // namespace gm20b

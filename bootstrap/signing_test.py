@@ -55,6 +55,19 @@ class SigningTests(unittest.TestCase):
                     self.assertNotEqual(result.returncode, 0)
                     target.write_bytes(original)
 
+            # Simulate Bazel darwin-sandbox: input bundle entries are absolute symlinks to a read-only tree.
+            sandbox_source = work / 'sandbox.app'
+            for item in sorted(source.rglob('*')):
+                link = sandbox_source / item.relative_to(source)
+                if item.is_dir():
+                    link.mkdir(parents=True, exist_ok=True)
+                else:
+                    link.parent.mkdir(parents=True, exist_ok=True)
+                    link.symlink_to(item.resolve())
+            sandbox_signed = sign_bundle(sandbox_source, work / 'sandbox-signed.app', entitlements)
+            self.assertFalse((sandbox_signed / 'main').is_symlink())
+            self.assertTrue((sandbox_signed / '_CodeSignature/CodeResources').is_file())
+
 
 if __name__ == '__main__':
     unittest.main()

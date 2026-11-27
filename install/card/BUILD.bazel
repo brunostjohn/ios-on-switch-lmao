@@ -1,0 +1,108 @@
+# switch_card: the installer's side of the kernel's card layout contract in install mode (lib.rs, write.rs).
+#
+#   bazel test //install/card:all                                      synthetic cards, and the kernel's rules as oracle
+#   bazel test //install/card:oracle_test                              each power-cut matrix's table in its test.outputs
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/testing:defs.bzl", "host_library")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+rust_library(
+    name = "switch_card",
+    srcs = [
+        "append.rs",
+        "card.rs",
+        "device.rs",
+        "entry.rs",
+        "error.rs",
+        "gpt.rs",
+        "lib.rs",
+        "write.rs",
+    ],
+    crate_root = "lib.rs",
+    deps = [
+        "@installer_crates//:crc32fast",
+        "@installer_crates//:mbrman",
+        "@installer_crates//:thiserror",
+    ],
+)
+
+rust_library(
+    name = "switch_card_testing",
+    testonly = True,
+    srcs = [
+        "testing/image.rs",
+        "testing/lib.rs",
+        "testing/owner.rs",
+        "testing/tables.rs",
+    ],
+    crate_root = "testing/lib.rs",
+    deps = [
+        ":switch_card",
+        "@installer_crates//:base64",
+        "@installer_crates//:crc32fast",
+        "@installer_crates//:serde_json",
+    ],
+)
+
+_CARD_JSON = "//install:testdata/switch-card-1tb.json"
+
+rust_test(
+    name = "card_test",
+    srcs = ["tests/card_test.rs"],
+    crate_root = "tests/card_test.rs",
+    data = [_CARD_JSON],
+    env = {"SWITCH_CARD_JSON": "$(rootpath {})".format(_CARD_JSON)},
+    deps = [
+        ":switch_card",
+        ":switch_card_testing",
+    ],
+)
+
+# The kernel's root rule and shared-volume selection, built from their own sources (the list is
+# drivers/NativeSwitchBlock/test:BUILD.bazel's FILES_VOLUME_SRCS, plus the root rule's headers).
+host_library(
+    name = "oracle",
+    srcs = [
+        "oracle/oracle.cpp",
+        "//diagnostics/switch:storage/fat32.h",
+        "//diagnostics/switch:storage/partition.c",
+        "//diagnostics/switch:storage/partition.h",
+        "//diagnostics/switch:storage/sd_reference.c",
+        "//diagnostics/switch:storage/sd_reference.h",
+        "//drivers/NativeSwitchBlock:SwitchSdRoot.h",
+        "//drivers/NativeSwitchBlock:SwitchSdVolume.cpp",
+        "//drivers/NativeSwitchBlock:SwitchSdVolume.h",
+        "//drivers/NativeSwitchBlock:SwitchSdVolumeInternal.h",
+        "//drivers/NativeSwitchBlock:SwitchSdWindow.h",
+        "//drivers/NativeSwitchBlock/test:sd_card_model.h",
+    ],
+    linkopts = ["-lc++"],
+    sanitize = False,
+)
+
+rust_test(
+    name = "oracle_test",
+    srcs = [
+        "tests/oracle/ffi.rs",
+        "tests/oracle/main.rs",
+        "tests/oracle/matrix.rs",
+    ],
+    crate_root = "tests/oracle/main.rs",
+    data = [
+        _CARD_JSON,
+        "//drivers/NativeSwitchBlock:NativeSwitchBlock.cpp",
+    ],
+    env = {
+        "SWITCH_BLOCK_CPP": "$(rootpath //drivers/NativeSwitchBlock:NativeSwitchBlock.cpp)",
+        "SWITCH_CARD_JSON": "$(rootpath {})".format(_CARD_JSON),
+    },
+    link_deps = [":oracle"],
+    deps = [
+        ":switch_card",
+        ":switch_card_testing",
+    ],
+)

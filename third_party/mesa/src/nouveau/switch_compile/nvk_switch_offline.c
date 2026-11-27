@@ -28,39 +28,50 @@
 #include "vk_pipeline_layout.h"
 
 #include "compiler/glsl_types.h"
+#include "util/simple_mtx.h"
 
-#include <pthread.h>
-
+#ifdef _WIN32
+#define SWITCH_EXPORT
+static_assert(sizeof(struct switch_nak_frozen) == 600, "switch_nak_frozen must be 600 bytes");
+#else
 #define SWITCH_EXPORT __attribute__((visibility("default")))
+#endif
 
+static simple_mtx_t frozen_lock = SIMPLE_MTX_INITIALIZER;
 static struct nak_compiler *frozen_nak;
 static struct nv_device_info frozen_info;
-static pthread_once_t frozen_once = PTHREAD_ONCE_INIT;
-static const struct switch_nak_frozen *frozen_table;
+static bool frozen_ready;
 
 /* With no vk_instance in the process, nothing else holds the GLSL type
  * singleton spirv_to_nir makes types in (vk_instance_init takes it): the
  * offline compile holds it for the process.
  */
-static void
-make_nak(void)
+static bool
+target_of(const struct switch_nak_frozen *f, struct switch_nvk_target *out)
 {
-   glsl_type_singleton_init_or_ref();
-   frozen_info = frozen_table->info;
-   frozen_nak = nak_compiler_create(&frozen_info);
-}
-
-static struct switch_nvk_target
-target_of(const struct switch_nak_frozen *f)
-{
-   frozen_table = f;
-   pthread_once(&frozen_once, make_nak);
-   return (struct switch_nvk_target) {
+   simple_mtx_lock(&frozen_lock);
+   if (!frozen_ready) {
+      glsl_type_singleton_init_or_ref();
+      frozen_info = f->info;
+      frozen_nak = nak_compiler_create(&frozen_info);
+      if (frozen_nak == NULL) {
+         simple_mtx_unlock(&frozen_lock);
+         return false;
+      }
+      frozen_ready = true;
+   } else if (memcmp(&frozen_info, &f->info, sizeof(frozen_info)) != 0) {
+      simple_mtx_unlock(&frozen_lock);
+      return false;
+   }
+   struct nak_compiler *nak = frozen_nak;
+   simple_mtx_unlock(&frozen_lock);
+   *out = (struct switch_nvk_target) {
       .info = &frozen_info,
-      .nak = frozen_nak,
+      .nak = nak,
       .debug_flags = f->debug_flags,
       .min_ssbo_alignment = f->min_ssbo_alignment,
    };
+   return true;
 }
 
 struct offline_layout {
@@ -210,7 +221,9 @@ compile(const struct switch_nak_frozen *f,
         const struct offline_layout *layout, struct nvk_shader *shader,
         bool *native_used)
 {
-   const struct switch_nvk_target t = target_of(f);
+   struct switch_nvk_target t;
+   if (!target_of(f, &t))
+      return VK_ERROR_INITIALIZATION_FAILED;
    const mesa_shader_stage stage = vk_to_mesa_shader_stage(info->stage);
    struct vk_pipeline_robustness_state rs;
    vk_pipeline_robustness_state_fill(&f->robustness, &rs, info->pipeline_pnext,

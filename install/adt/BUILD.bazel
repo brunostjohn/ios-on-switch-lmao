@@ -1,0 +1,67 @@
+# switch_adt: the boot ADT's finish step (tools/package/adt_edit.py finish), run where the IPSW is.
+#
+#   bazel test //install/adt:all                    unit tests; the selected kind's //boot:package ADT from its base
+#   bazel test //install/adt:all --config=ios27     the same for iOS 27 (the oracle is the selected kind's package)
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("//bazel/lint:defs.bzl", "lint_files")
+load(":defs.bzl", "adt_finish_case", "adt_provenance_tests")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+rust_library(
+    name = "switch_adt",
+    srcs = glob(["src/*.rs"]),
+    deps = [
+        "//install/trustcache:switch_trustcache",
+        "//install/window:switch_loader_abi",
+        "@installer_crates//:serde_json",
+        "@installer_crates//:thiserror",
+    ],
+)
+
+rust_test(
+    name = "switch_adt_test",
+    crate = ":switch_adt",
+)
+
+filegroup(
+    name = "boot_adt",
+    srcs = ["//boot:package"],
+    output_group = "adt",
+)
+
+filegroup(
+    name = "boot_launchd_catalog",
+    srcs = ["//boot:package"],
+    output_group = "launchd_catalog",
+)
+
+adt_finish_case(
+    name = "finish_case",
+    adt = ":boot_adt",
+    app_trust = "//ipsw:app_cryptex_trust",
+    apple = "//ipsw:device_tree",
+    base = "//boot:adt_base",
+    launchd_catalog = ":boot_launchd_catalog",
+    pretranslated = "//ipsw:pretranslated",
+    system_trust = "//ipsw:system_cryptex_trust",
+)
+
+rust_test(
+    name = "boot_test",
+    srcs = ["tests/boot.rs"],
+    data = [":finish_case"],
+    env = {"SWITCH_ADT_CASE": "$(rootpath :finish_case)"},
+    deps = [
+        ":switch_adt",
+        "@installer_crates//:serde_json",
+    ],
+)
+
+adt_provenance_tests(
+    name = "provenance_test",
+    adt = ":boot_adt",
+    base = "//boot:adt_base",
+)

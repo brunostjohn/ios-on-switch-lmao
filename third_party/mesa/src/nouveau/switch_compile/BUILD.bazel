@@ -5,11 +5,14 @@
 #   bazel build //third_party/mesa/src/nouveau/switch_compile:ios     the iOS object the plugin links
 #   bazel build //third_party/mesa/src/nouveau/switch_compile:host    the macOS object the pack tools link
 
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_python//python:py_test.bzl", "py_test")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 load("@xcode//:defs.bzl", "IPHONEOS_SDK", "MACOSX_SDK", "XCODE_TOOLCHAIN")
+load("//bazel/desktop:defs.bzl", "desktop_binaries")
 load("//bazel/lint:defs.bzl", "lint_files")
-load("//third_party/mesa/bazel:defs.bzl", "MESA_LINT_EXCLUDE", "mesa_args", "mesa_cc_library", "mesa_files")
+load("//third_party/mesa/bazel:defs.bzl", "MESA_LINT_EXCLUDE", "MESA_ONLY", "mesa_args", "mesa_cc_library", "mesa_files")
 load("//third_party/mesa/bazel:link.bzl", "mesa_relocatable")
 load("//third_party/mesa/src/nouveau/compiler:fs_depth_test.bzl", "fs_depth_test_binary")
 
@@ -168,6 +171,170 @@ cc_library(
     srcs = [":host"],
     linkstatic = True,
     tags = ["no-lint"],
+)
+
+SWITCH_COMPILE_DESKTOP_C_DEPS = [
+    ":switch_compile",
+    "//third_party/mesa/src/nouveau/compiler:nak",
+    "//third_party/mesa/src/compiler/rust:compiler_bindings",
+    "//third_party/mesa/src/util:mesa_util",
+    "//third_party/mesa/src/util:mesa_util_simd",
+    "//third_party/mesa/src/util/blake3:blake3",
+    "//third_party/mesa/src/c11/impl:mesa_util_c11",
+    "//third_party/mesa/src/compiler/rust:compiler_c_helpers",
+    "//third_party/mesa/src/nouveau/headers:nvidia_headers_c",
+    "//third_party/mesa/src/nouveau/nil:libnil_format_table",
+    "//third_party/mesa/src/compiler/nir:nir",
+    "//third_party/mesa/src/compiler:compiler",
+    "//third_party/mesa/src/vulkan/runtime:vulkan_runtime",
+    "//third_party/mesa/src/vulkan/runtime:vulkan_lite_runtime",
+    "//third_party/mesa/src/vulkan/util:vulkan_util",
+    "//third_party/mesa/src/compiler/spirv:vtn",
+]
+
+cc_library(
+    name = "desktop_c",
+    linkstatic = True,
+    tags = [
+        "manual",
+        "no-lint",
+    ],
+    target_compatible_with = MESA_ONLY,
+    deps = SWITCH_COMPILE_DESKTOP_C_DEPS,
+)
+
+# Desktop bundle on workspace Rust 1.98.0: links switch_compile's C closure together with nak_rs_rlib and nil_rlib
+# across all six desktop platforms without a second Rust standard library.
+rust_library(
+    name = "desktop",
+    srcs = ["switch_compile_desktop.rs"],
+    crate_name = "switch_compile_desktop",
+    edition = "2024",
+    link_deps = [":desktop_c"],
+    tags = ["manual"],
+    target_compatible_with = MESA_ONLY,
+    deps = [
+        "//third_party/mesa/src/nouveau/compiler:nak_rs_rlib",
+        "//third_party/mesa/src/nouveau/nil:nil_rlib",
+    ],
+)
+
+rust_binary(
+    name = "desktop_smoke",
+    srcs = ["switch_compile_desktop_smoke.rs"],
+    edition = "2024",
+    tags = ["manual"],
+    target_compatible_with = MESA_ONLY,
+    deps = [":desktop"],
+)
+
+desktop_binaries(
+    name = "desktop_smoke_all",
+    binary = ":desktop_smoke",
+    tags = ["manual"],
+)
+
+PARITY_SHADERS = [
+    "parity_vert",
+    "parity_frag_half",
+    "parity_frag_texs",
+    "parity_frag_turned",
+    "parity_frag_split",
+    "parity_comp",
+]
+
+[
+    genrule(
+        name = shader + "_spv",
+        testonly = True,
+        srcs = [shader + ".spvasm"],
+        outs = [shader + ".spv"],
+        cmd = "$(execpath @spirv_tools//:spirv-as) --target-env spv1.3 $< -o $@ && $(execpath @spirv_tools//:spirv-val) --target-env vulkan1.1 $@",
+        tags = ["manual"],
+        tools = [
+            "@spirv_tools//:spirv-as",
+            "@spirv_tools//:spirv-val",
+        ],
+    )
+    for shader in PARITY_SHADERS
+]
+
+cc_library(
+    name = "parity_driver_lib",
+    testonly = True,
+    srcs = ["switch_compile_parity_driver.c"],
+    copts = [
+        "-std=c11",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+    ],
+    linkstatic = True,
+    tags = [
+        "manual",
+        "no-lint",
+    ],
+)
+
+cc_binary(
+    name = "parity_host_bin",
+    testonly = True,
+    srcs = ["switch_compile_parity_driver.c"],
+    copts = [
+        "-std=c11",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-DSWITCH_PARITY_HAS_MAIN",
+    ],
+    tags = [
+        "manual",
+        "no-lint",
+    ],
+    deps = [":host_cc"],
+)
+
+rust_binary(
+    name = "parity_desktop_bin",
+    testonly = True,
+    srcs = ["switch_compile_parity_desktop.rs"],
+    edition = "2024",
+    link_deps = [":parity_driver_lib"],
+    tags = ["manual"],
+    deps = [":desktop"],
+)
+
+py_test(
+    name = "desktop_parity_test",
+    size = "small",
+    srcs = ["switch_compile_parity_test.py"],
+    args = [
+        "$(rootpath :parity_host_bin)",
+        "$(rootpath :parity_desktop_bin)",
+    ] + ["$(rootpath :" + s + "_spv)" for s in PARITY_SHADERS],
+    data = [
+        ":parity_desktop_bin",
+        ":parity_host_bin",
+    ] + [":" + s + "_spv" for s in PARITY_SHADERS],
+    main = "switch_compile_parity_test.py",
+    tags = ["requires-darwin"],
+)
+
+rust_test(
+    name = "desktop_concurrent_test",
+    size = "small",
+    srcs = ["switch_compile_concurrent_test.rs"],
+    data = [
+        ":parity_comp_spv",
+        ":parity_vert_spv",
+    ],
+    edition = "2024",
+    env = {
+        "PARITY_COMP_SPV": "$(rootpath :parity_comp_spv)",
+        "PARITY_VERT_SPV": "$(rootpath :parity_vert_spv)",
+    },
+    target_compatible_with = MESA_ONLY,
+    deps = [":desktop"],
 )
 
 py_test(

@@ -1,0 +1,82 @@
+# switch_decmpfs: APFS transparent compression, every decmpfs type: cmpfs for zlib, LZVN, LZFSE and stored data,
+# zbitmap for LZBITMAP.
+#
+#   bazel test //install/decmpfs:switch_decmpfs_test     hand-built files of each layout
+#   bazel test --config=ios27 //install/decmpfs:mount_test //install/decmpfs:mount_os_test
+#                                                     every compressed file of 24B119's AppOS cryptex (types 9, 14) and
+#                                                     OS image (4, 9) against macOS's read of it through a mount (a
+#                                                     macOS worker with hdiutil; the OS image is 9 GB)
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//install/translate:defs.bzl", "IOS27_ONLY")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+rust_library(
+    name = "switch_decmpfs",
+    srcs = ["lib.rs"],
+    deps = [
+        "@installer_crates//:cmpfs",
+        "@installer_crates//:thiserror",
+        "@installer_crates//:zbitmap",
+    ],
+)
+
+rust_test(
+    name = "switch_decmpfs_test",
+    srcs = [
+        "lib.rs",
+        "tests.rs",
+    ],
+    crate_root = "lib.rs",
+    deps = [
+        "@installer_crates//:cmpfs",
+        "@installer_crates//:flate2",
+        "@installer_crates//:thiserror",
+        "@installer_crates//:zbitmap",
+    ],
+)
+
+# Apple's bytes reach the test only as a Bazel output of the IPSW. It attaches the member, so it is manual.
+sh_test(
+    name = "mount_test",
+    size = "medium",
+    srcs = ["mount_test.sh"],
+    args = [
+        "$(rootpath //install/translate:switch_translate_tool)",
+        "$(rootpath @ipsw//:app_cryptex)",
+    ],
+    data = [
+        "//install/translate:switch_translate_tool",
+        "@ipsw//:app_cryptex",
+    ],
+    tags = [
+        "external",
+        "manual",
+    ],
+    target_compatible_with = IOS27_ONLY,
+)
+
+sh_test(
+    name = "mount_os_test",
+    size = "enormous",
+    srcs = ["mount_test.sh"],
+    args = [
+        "$(rootpath //install/translate:switch_translate_tool)",
+        "$(rootpath @ipsw//:os)",
+        "$(rootpath //install:ipsw_pins)",
+    ],
+    data = [
+        "//install:ipsw_pins",
+        "//install/translate:switch_translate_tool",
+        "@ipsw//:os",
+    ],
+    tags = [
+        "external",
+        "manual",
+    ],
+    target_compatible_with = IOS27_ONLY,
+)

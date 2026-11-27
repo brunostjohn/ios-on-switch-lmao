@@ -22,10 +22,12 @@ crate.spec(
         "std",
     ],
     package = "ash",
+    repositories = ["rust_crates"],
     version = "=0.38.0",
 )
 crate.spec(
     package = "libc",
+    repositories = ["rust_crates"],
     version = "=0.2.191",
 )
 crate.spec(
@@ -33,10 +35,12 @@ crate.spec(
     # (drivers/TegraGM20BMetal/translate/NativeMetalOffline.rs).
     features = ["derive"],
     package = "serde",
+    repositories = ["rust_crates"],
     version = "=1.0.229",
 )
 crate.spec(
     package = "serde_json",
+    repositories = ["rust_crates"],
     version = "=1.0.154",
 )
 crate.spec(
@@ -44,6 +48,7 @@ crate.spec(
     # instructions), as it was under cargo.
     features = ["asm"],
     package = "sha2",
+    repositories = ["rust_crates"],
     version = "=0.10.9",
 )
 
@@ -56,6 +61,7 @@ crate.spec(
 [
     crate.annotation(
         crate = name,
+        repositories = ["rust_crates"],
         rustc_flags = [
             "-Cmetadata=" + metadata,
             "-Cextra-filename=-" + extra,
@@ -85,6 +91,7 @@ crate.spec(
 # ash's version carries build metadata (+1.3.281), which its repository's name spells -1.3.281.
 crate.annotation(
     crate = "ash",
+    repositories = ["rust_crates"],
     rustc_flags = [
         "-Cmetadata=352f79ac2963a554",
         "-Cextra-filename=-8c611b457fff094a",
@@ -104,6 +111,7 @@ crate.annotation(
     },
     build_script_env_files = ["@@//bazel/rust:xcode_env"],
     crate = "sha2-asm",
+    repositories = ["rust_crates"],
     rustc_flags = [
         "-Cmetadata=abefad0bff350234",
         "-Cextra-filename=-3fe95fed770081cb",

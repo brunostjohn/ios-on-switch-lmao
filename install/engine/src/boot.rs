@@ -1,0 +1,244 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+use std::collections::BTreeMap;
+use std::fs::{self, File};
+use std::io::{BufReader, Read};
+use std::path::Path;
+
+use switch_apfs_read::{Entry, Fs, Stream, XattrData, stream};
+use switch_boot::{Assets, LAUNCHD_CATALOG, LaunchdCatalog, Members, PRETRANSLATED_EDITS};
+use switch_catalog::Build;
+
+use crate::LocalInputs;
+use crate::error::{EngineError, Result};
+use crate::fetch::Im4pMembers;
+use crate::progress::EngineProgress;
+
+pub struct BootOutputs {
+    pub sd_files: BTreeMap<String, Vec<u8>>,
+    pub overlay_files: BTreeMap<String, Vec<u8>>,
+    pub builtin_installer_pin: Option<Vec<u8>>,
+    pub bootstrap_manifest: Option<Vec<u8>>,
+    pub pretranslated_edits: Option<Vec<u8>>,
+    pub installd_cdhash: Option<[u8; 20]>,
+}
+
+pub fn read_pretranslated_edits_from_boot_tar(boot_tar: &Path) -> Result<Option<Vec<u8>>> {
+    let file = File::open(boot_tar).map_err(|e| EngineError::io_path(boot_tar, e))?;
+    let mut archive = tar::Archive::new(BufReader::new(file));
+    for entry in archive.entries().map_err(|e| EngineError::io_path(boot_tar, e))? {
+        let mut entry = entry.map_err(|e| EngineError::io_path(boot_tar, e))?;
+        if !entry.header().entry_type().is_file() {
+            continue;
+        }
+        let raw = entry.path_bytes();
+        let Ok(name) = std::str::from_utf8(&raw) else {
+            continue;
+        };
+        let mut norm = name;
+        while let Some(rest) = norm.strip_prefix("./") {
+            norm = rest;
+        }
+        if norm == PRETRANSLATED_EDITS {
+            let mut bytes = Vec::with_capacity(entry.size() as usize);
+            entry
+                .read_to_end(&mut bytes)
+                .map_err(|e| EngineError::io_path(boot_tar, e))?;
+            return Ok(Some(bytes));
+        }
+    }
+    Ok(None)
+}
+
+pub fn prepare_boot(
+    build: &Build,
+    local: &LocalInputs,
+    boot_tar: Option<&Path>,
+    im4p: Option<&Im4pMembers>,
+    system_fs: &Fs<'_>,
+    progress: &mut EngineProgress<'_>,
+) -> Result<BootOutputs> {
+    progress.check_cancel()?;
+    if let Some(dir) = &local.boot_files_dir {
+        progress.log(format!("Loading prebuilt boot files from {}", dir.display()));
+        return load_boot_dir(dir);
+    }
+
+    let tar_path = boot_tar
+        .ok_or_else(|| EngineError::Config("boot asset tar is required when --boot-files-dir is not set".into()))?;
+    let im4p = im4p
+        .ok_or_else(|| EngineError::Config("IPSW IM4P members are required when --boot-files-dir is not set".into()))?;
+
+    let boot_asset = build.asset("boot")?;
+    let tar_file = File::open(tar_path).map_err(|e| EngineError::io_path(tar_path, e))?;
+    // Hash once against the catalog asset digest while unpacking; members inside the tar are not hashed a second time.
+    let assets = Assets::from_tar_checked(BufReader::new(tar_file), boot_asset)?;
+
+    let installd = read_system_file(system_fs, switch_installd::PATH)?;
+    let system_version = read_system_file(system_fs, switch_installd::SYSTEM_VERSION)?;
+    let launchd_pair = if build.steps.launchd_catalog {
+        let plist = read_system_file(system_fs, LAUNCHD_CATALOG)?;
+        let sig = read_system_file(system_fs, &format!("{LAUNCHD_CATALOG}.sig"))?;
+        Some((plist, sig))
+    } else {
+        None
+    };
+
+    let launchd_catalog = launchd_pair.as_ref().map(|(plist, signature)| LaunchdCatalog {
+        plist: plist.as_slice(),
+        signature: signature.as_slice(),
+    });
+    let members = Members {
+        kernelcache: &im4p.kernelcache,
+        device_tree: &im4p.device_tree,
+        static_trust_cache: &im4p.static_trust_cache,
+        system_cryptex_trust_cache: &im4p.system_cryptex_trust_cache,
+        app_cryptex_trust_cache: &im4p.app_cryptex_trust_cache,
+        installd: &installd,
+        system_version: &system_version,
+        launchd_catalog,
+    };
+
+    progress.log(format!("Building boot package for {}", build.build()));
+    let package = switch_boot::boot_files(build, &assets, &members)?;
+    let mut out = BootOutputs {
+        sd_files: BTreeMap::new(),
+        overlay_files: BTreeMap::new(),
+        builtin_installer_pin: None,
+        bootstrap_manifest: None,
+        pretranslated_edits: assets.get(PRETRANSLATED_EDITS).map(ToOwned::to_owned),
+        installd_cdhash: Some(package.installd_cdhash),
+    };
+    for (path, data) in package.files {
+        classify_boot_file(&mut out, path, data)?;
+    }
+    if out.sd_files.is_empty() {
+        return Err(EngineError::Config("boot package contains no FAT boot files".into()));
+    }
+    Ok(out)
+}
+
+pub fn read_system_file(system_fs: &Fs<'_>, path: &str) -> Result<Vec<u8>> {
+    let oid = system_fs
+        .lookup(path)?
+        .ok_or_else(|| EngineError::Config(format!("{path} is missing from System volume")))?;
+    let (entry, _) = system_fs.entry(oid, path.to_owned(), None)?;
+    if !entry.inode.is_regular() {
+        return Err(EngineError::Config(format!("{path} is not a regular file")));
+    }
+    read_entry_plaintext(system_fs, &entry)
+}
+
+fn read_entry_plaintext(system_fs: &Fs<'_>, entry: &Entry) -> Result<Vec<u8>> {
+    if entry.inode.is_compressed() {
+        let decmpfs = read_xattr(system_fs, entry, switch_decmpfs::XATTR)?.ok_or_else(|| {
+            EngineError::ApfsRead(switch_apfs_read::ReadError::invalid(format!(
+                "{}: missing decmpfs xattr",
+                entry.path
+            )))
+        })?;
+        let fork = read_xattr(system_fs, entry, switch_decmpfs::RESOURCE_FORK)?;
+        return Ok(switch_decmpfs::decompress(&decmpfs, fork.as_deref())?);
+    }
+    let Some(s) = &entry.data else {
+        return Ok(Vec::new());
+    };
+    read_stream_vec(system_fs, s)
+}
+
+fn read_xattr(system_fs: &Fs<'_>, entry: &Entry, name: &str) -> Result<Option<Vec<u8>>> {
+    let Some((xattr, xstream)) = entry.xattr(name) else {
+        return Ok(None);
+    };
+    match (&xattr.data, xstream) {
+        (XattrData::Embedded(bytes), _) => Ok(Some(bytes.clone())),
+        (XattrData::Stream { .. }, Some(s)) => Ok(Some(read_stream_vec(system_fs, s)?)),
+        (XattrData::Stream { id, .. }, None) => Err(EngineError::ApfsRead(switch_apfs_read::ReadError::invalid(
+            format!("{}: {name} stream {id} missing extents", entry.path),
+        ))),
+    }
+}
+
+fn read_stream_vec(system_fs: &Fs<'_>, s: &Stream) -> Result<Vec<u8>> {
+    let size = usize::try_from(s.size)
+        .map_err(|_| EngineError::Config(format!("APFS stream {} ({} bytes) too large", s.id, s.size)))?;
+    let mut out = Vec::with_capacity(size);
+    stream::read(system_fs.source(), s, &mut |chunk| out.extend_from_slice(chunk))?;
+    Ok(out)
+}
+
+fn load_boot_dir(root: &Path) -> Result<BootOutputs> {
+    let mut out = BootOutputs {
+        sd_files: BTreeMap::new(),
+        overlay_files: BTreeMap::new(),
+        builtin_installer_pin: None,
+        bootstrap_manifest: None,
+        pretranslated_edits: None,
+        installd_cdhash: None,
+    };
+    walk_boot_dir(root, "", &mut out)?;
+    if out.sd_files.is_empty() {
+        return Err(EngineError::Config(format!(
+            "boot files directory {} contains no FAT boot files",
+            root.display()
+        )));
+    }
+    Ok(out)
+}
+
+fn walk_boot_dir(dir: &Path, prefix: &str, out: &mut BootOutputs) -> Result<()> {
+    let mut entries: Vec<_> = fs::read_dir(dir)
+        .map_err(|e| EngineError::io_path(dir, e))?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|e| EngineError::io_path(dir, e))?;
+    entries.sort_by_key(|e| e.file_name());
+    for entry in entries {
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| EngineError::Config(format!("{}: non-UTF-8 name", entry.path().display())))?;
+        let rel = if prefix.is_empty() {
+            name
+        } else {
+            format!("{prefix}/{name}")
+        };
+        let path = entry.path();
+        let meta = fs::metadata(&path).map_err(|e| EngineError::io_path(&path, e))?;
+        if meta.is_dir() {
+            walk_boot_dir(&path, &rel, out)?;
+        } else if meta.is_file() {
+            let bytes = fs::read(&path).map_err(|e| EngineError::io_path(&path, e))?;
+            classify_boot_file(out, rel, bytes)?;
+        }
+    }
+    Ok(())
+}
+
+fn classify_boot_file(out: &mut BootOutputs, path: String, data: Vec<u8>) -> Result<()> {
+    if let Some(rel) = path.strip_prefix("overlay/") {
+        out.overlay_files.insert(rel.to_owned(), data);
+    } else if path == switch_image_overlay::BUILTIN_MANIFEST {
+        out.builtin_installer_pin = Some(data);
+    } else if path == "bootstrap/manifest.json" {
+        out.bootstrap_manifest = Some(data);
+    } else if path.starts_with("bootstrap/") {
+        // Non-FAT bootstrap files in a //boot:package directory are staged via --bootstrap-dir.
+    } else if is_fat_boot_path(&path) {
+        out.sd_files.insert(path, data);
+    } else {
+        return Err(EngineError::Config(format!("unexpected file in boot package: {path}")));
+    }
+    Ok(())
+}
+
+fn is_fat_boot_path(path: &str) -> bool {
+    if path.eq_ignore_ascii_case(switch_sd::INI) || path.eq_ignore_ascii_case(switch_sd::ICON) {
+        return true;
+    }
+    matches!(
+        path.rsplit_once('/'),
+        Some((dir, name))
+            if dir.eq_ignore_ascii_case(switch_sd::BOOT_DIR)
+                && !name.is_empty()
+                && !switch_sd::user_owned(name)
+    )
+}

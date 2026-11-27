@@ -1,0 +1,42 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+_DEPS = [
+    "//install/seed/rs/crawl:switch_seed_crawl",
+    "@installer_crates//:hex",
+    "@installer_crates//:plist",
+    "@installer_crates//:serde",
+    "@installer_crates//:serde_json",
+    "@installer_crates//:sha2",
+    "@installer_crates//:thiserror",
+]
+
+_SRCS = [
+    "derive.rs",
+    "journal.rs",
+    "lib.rs",
+    "merge.rs",
+    "native_pack.rs",
+    "plan.rs",
+    "restamp.rs",
+    "seedpack.rs",
+]
+
+rust_library(
+    name = "switch_seed_plan",
+    srcs = _SRCS,
+    crate_root = "lib.rs",
+    deps = _DEPS,
+)
+
+rust_test(
+    name = "switch_seed_plan_test",
+    size = "small",
+    srcs = _SRCS + ["tests.rs"],
+    crate_root = "lib.rs",
+    deps = _DEPS + ["@installer_crates//:tempfile"],
+)

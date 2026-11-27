@@ -6,7 +6,7 @@ load("@rules_cc//cc:find_cc_toolchain.bzl", "find_cc_toolchain", "use_cc_toolcha
 load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
 load("@xcode//:defs.bzl", "XCODE_TOOLCHAIN")
 load("//kernel/rules:common.bzl", "XCODE_EXECUTION")
-load(":defs.bzl", "MESA_ONLY")
+load(":defs.bzl", "MESA_USER_ONLY")
 
 def _archive(target):
     archives = [f for f in target[DefaultInfo].files.to_list() if f.extension == "a"]
@@ -118,4 +118,4 @@ def mesa_relocatable(**kwargs):
     Args:
         **kwargs: the rule's attributes.
     """
-    _mesa_relocatable(target_compatible_with = MESA_ONLY, **kwargs)
+    _mesa_relocatable(target_compatible_with = MESA_USER_ONLY, **kwargs)

@@ -227,7 +227,8 @@ bool offsetOf(const Set0 &set0, const NmbDirectWrite &w, uint32_t &offset)
 }
 
 // record.cpp layout(): the entries of draw 0's set 0, read from m2v's writes where the probe reads NVK's words
-bool layout(const NmbDirectDraw &d, std::vector<LayoutEntry> &out, std::string &why)
+bool layout(const NmbDirectDraw &d, uint32_t stageTextures, const char *kindName, std::vector<LayoutEntry> &out,
+            std::string &why)
 {
     const Set0 set0(d.set0Bindings, d.set0BindingCount);
     for (uint32_t i = 0; i < d.writeCount; i++) {
@@ -302,10 +303,10 @@ bool layout(const NmbDirectDraw &d, std::vector<LayoutEntry> &out, std::string &
                 e.texSlot = uint8_t(w.slot);
             } else if ((w.source == NmbDirectTexture || w.source == NmbDirectCombined) &&
                        (w.stage == 1 || w.stage == 2)) {
-                if (w.slot >= kStageTextures) {
+                if (w.slot >= stageTextures) {
                     why = std::string(w.stage == 1 ? "a vertex" : "a fragment") + " texture at slot " +
-                          std::to_string(w.slot) + ", past the " + std::to_string(kStageTextures) +
-                          " a render stage binds on " + SWITCH_METAL_KIND;
+                          std::to_string(w.slot) + ", past the " + std::to_string(stageTextures) +
+                          " a render stage binds on " + kindName;
                     return false;
                 }
                 // the direct compile binds a texture of each argument's declared type (NativeMetalDirectProbe.rs
@@ -604,9 +605,21 @@ bool splitsFragment(const NmbDirectState &state)
 CompileOutcome directRecord(const NmbDirectState &state, const StageCompile &compile, const PackRules &rules,
                             const std::string &key, const std::vector<uint32_t> &attributes, RuntimeRecord &out,
                             std::string &why, std::map<uint32_t, uint32_t> *registers, bool split, bool variants,
-                            uint16_t xrSlots)
+                            uint16_t xrSlots, uint32_t stageTextures, const char *kindName)
 {
     out = {};
+#ifdef SWITCH_METAL_KIND
+    if (!stageTextures)
+        stageTextures = kStageTextures;
+    if (!kindName)
+        kindName = SWITCH_METAL_KIND;
+#endif
+    if (!stageTextures) {
+        why = "no render stage texture slots configured";
+        return CompileOutcome::Failed;
+    }
+    if (!kindName)
+        kindName = "unknown";
     const NmbDirectDraw &draw = state.draws[0];
     PackPipeline storage = {};
     const auto storageHeader = [](uint32_t format, uint32_t &word) {
@@ -688,7 +701,7 @@ CompileOutcome directRecord(const NmbDirectState &state, const StageCompile &com
         why = stateName(key) + ": " + why;
         return CompileOutcome::Refused;
     }
-    if (!layout(draw, parts.layout, why))
+    if (!layout(draw, stageTextures, kindName, parts.layout, why))
         return CompileOutcome::Refused;
     parts.sizes16 = boundSizes(state.draws[1]);
     parts.sizes4096 = boundSizes(state.draws[2]);

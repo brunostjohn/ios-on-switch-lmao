@@ -1,0 +1,48 @@
+# The geometry switch_apfs_alloc gives each size, against macOS across 1 GiB to 1 TiB:
+#
+#   bazel test //install/apfs_alloc/sweep:sweep_test     on a macOS worker that can attach disk images
+#
+# Each size is compared with newfs_apfs, resizeContainer and apfs_tool, and our writer's container at that size must
+# pass fsck_apfs, attach both volumes and mount. All images are sparse.
+load("@rules_rust//rust:defs.bzl", "rust_binary")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+lint_files()
+
+rust_binary(
+    name = "switch_apfs_alloc_sweep",
+    testonly = True,
+    srcs = [
+        "gpt.rs",
+        "sweep.rs",
+    ],
+    crate_root = "sweep.rs",
+    deps = [
+        "//install/apfs_alloc:switch_apfs_alloc",
+        "//install/apfs_format:switch_apfs_format",
+        "//install/apfs_read:switch_apfs_read",
+        "@installer_crates//:clap",
+        "@installer_crates//:zerocopy",
+    ],
+)
+
+sh_test(
+    name = "sweep_test",
+    size = "enormous",
+    srcs = ["sweep_test.sh"],
+    args = [
+        "$(rootpath :switch_apfs_alloc_sweep)",
+        "$(rootpath //install/apfs_m1:switch_apfs_m1)",
+        "$(rootpath //boot/installer:apfs_tool)",
+    ],
+    data = [
+        ":switch_apfs_alloc_sweep",
+        "//boot/installer:apfs_tool",
+        "//install/apfs_m1:switch_apfs_m1",
+    ],
+    tags = [
+        "external",
+        "manual",
+    ],
+)
