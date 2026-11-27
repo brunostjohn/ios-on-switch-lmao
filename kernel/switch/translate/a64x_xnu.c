@@ -32,6 +32,8 @@
 #include <switch/pretranslated.h>
 #include <mach-o/loader.h>
 #include <mach/mach_vm.h>
+#include <mach/exception_types.h>
+#include <mach/message.h>
 #include <kern/kalloc.h>
 #include <kern/locks.h>
 #include <kern/page_decrypt.h>
@@ -52,9 +54,11 @@
 
 #if CONFIG_A64X
 
-#define A64X_PAGE     4096u
-#define A64X_WORDS    (A64X_PAGE / 4)
-#define A64X_BRK_STUB 0xD4200020u /* brk #1: never executed (no branch reaches unused stub words) */
+#define A64X_PAGE          4096u
+#define A64X_WORDS         (A64X_PAGE / 4)
+#define A64X_READ_CLUSTER  (128u * 1024u)
+#define A64X_STUB_INIT_CAP 1024u
+#define A64X_BRK_STUB      0xD4200020u /* brk #1: never executed (no branch reaches unused stub words) */
 
 #if (DEVELOPMENT || DEBUG) && defined(SWITCH_STATS_IO) && SWITCH_STATS_IO
 /* statistics (sysctl kern.a64x.*) */
@@ -92,6 +96,9 @@ struct a64x_image {
     uint32_t map_flags;        /* A64X_MAP_NO_PAC for plain arm64 */
     uint64_t changed;          /* words the scan rewrote */
     uint8_t *data;             /* [npages * 128]: 1 bit per word of the segment, set = data in __text */
+    bool has_vtemps;
+    bool stub_ended;
+    bool text_ended;
 };
 
 static bool img_is_code(void *ctx, uint64_t off)
@@ -143,6 +150,20 @@ static void a64x_image_release(void *ops)
     }
 }
 
+static void a64x_stub_end(void *ops)
+{
+    struct a64x_image *im = ops;
+    os_atomic_store(&im->stub_ended, true, release);
+    a64x_image_release(im);
+}
+
+static void a64x_text_end(void *ops)
+{
+    struct a64x_image *im = ops;
+    os_atomic_store(&im->text_ended, true, release);
+    a64x_image_release(im);
+}
+
 /* apple_protect transform for the executable segment */
 static int a64x_text_page(const void *src, void *dst, unsigned long long off, void *ops)
 {
@@ -154,33 +175,51 @@ static int a64x_text_page(const void *src, void *dst, unsigned long long off, vo
     uint32_t pg = (uint32_t)((off - im->text_off) / A64X_PAGE);
     uint32_t c0 = im->cursor[pg], c1 = im->cursor[pg + 1];
     struct a64x_code_map cm = {im, img_is_code, im->map_flags, NULL};
-    size_t chk_bytes = (c1 - c0) * sizeof(uint32_t), scratch_bytes = chk_bytes + A64X_WALK_BYTES(A64X_WORDS);
-    uint32_t *chk = NULL;
-    struct a64x_walk walk = {NULL, NULL, 0};
     bool ok = true;
     if (c1 > c0) {
-        chk = kalloc_data(scratch_bytes, Z_NOWAIT);
-        ok = chk != NULL;
-        if (ok) {
+        void *scratch = NULL;
+        size_t scratch_bytes = 0;
+        uint32_t *chk = NULL;
+        struct a64x_walk walk = {NULL, NULL, 0};
+        struct a64x_walk *walkp = NULL;
+#if DEVELOPMENT || DEBUG
+        size_t chk_bytes = (size_t)(c1 - c0) * sizeof(uint32_t);
+        scratch_bytes = chk_bytes + (im->has_vtemps ? A64X_WALK_BYTES(A64X_WORDS) : 0);
+        scratch = kalloc_data(scratch_bytes, Z_WAITOK | Z_NOFAIL);
+        chk = scratch;
+        if (im->has_vtemps) {
             walk = a64x_walk_in(chk + (c1 - c0), A64X_WORDS);
+            walkp = &walk;
         }
-    }
-    if (ok) {
-        struct a64x_stub_region sr = {im->text_off + (uint64_t)im->stub_delta, chk, c1, c0, &walk};
-        uint32_t end = a64x_translate_page(src, dst, A64X_WORDS, off, &cm, c1 > c0 ? &sr : NULL, c0, NULL);
-        if (end != c1 || (chk && bcmp(chk, im->stubs + c0, chk_bytes))) {
+#else
+        if (im->has_vtemps) {
+            scratch_bytes = A64X_WALK_BYTES(A64X_WORDS);
+            scratch = kalloc_data(scratch_bytes, Z_WAITOK | Z_NOFAIL);
+            walk = a64x_walk_in(scratch, A64X_WORDS);
+            walkp = &walk;
+        }
+#endif
+        struct a64x_stub_region sr = {im->text_off + (uint64_t)im->stub_delta, chk, c1, c0, walkp};
+        uint32_t end = a64x_translate_page(src, dst, A64X_WORDS, off, &cm, &sr, c0, NULL);
+#if DEVELOPMENT || DEBUG
+        if (end != c1 || bcmp(chk, im->stubs + c0, chk_bytes)) {
+#else
+        if (end != c1) {
+#endif
             ok = false;
             A64X_INC(a64x_mismatch);
             printf("a64x: text page 0x%llx: stubs differ from the validated words; leaving LSE to the trap path\n",
                    off);
         }
+        if (scratch) {
+            kfree_data(scratch, scratch_bytes);
+        }
+    } else {
+        (void)a64x_translate_page(src, dst, A64X_WORDS, off, &cm, NULL, 0, NULL);
     }
     if (!ok) {
         /* one-word rewrites only: what needs a stub keeps its original word */
         (void)a64x_translate_page(src, dst, A64X_WORDS, off, &cm, NULL, 0, NULL);
-    }
-    if (chk) {
-        kfree_data(chk, scratch_bytes);
     }
     A64X_INC(a64x_pages);
     return 0;
@@ -332,7 +371,9 @@ static int a64x_find_islands(struct a64x_image *im, const struct a64x_layout *la
     uint8_t *fs = NULL;
     uint64_t cand_hit = 0;
     int error = 0;
-    uint32_t *page = kalloc_data(A64X_PAGE, Z_WAITOK);
+    size_t cluster_pages = MIN((size_t)im->npages, (size_t)(A64X_READ_CLUSTER / A64X_PAGE));
+    size_t cluster_bytes = cluster_pages ? cluster_pages * A64X_PAGE : A64X_PAGE;
+    uint32_t *cluster = kalloc_data(cluster_bytes, Z_WAITOK);
     im->data = kalloc_data(nbytes, Z_WAITOK | Z_ZERO);
     int resid = 0;
     if (lay->fs_size && lay->fs_size <= (1u << 24)) {
@@ -440,7 +481,7 @@ static int a64x_find_islands(struct a64x_image *im, const struct a64x_layout *la
         }
         im->nranges = merged;
     }
-    if (!page || !im->data) {
+    if (!cluster || !im->data) {
         goto out;
     }
     if (lay->dic_size && lay->dic_size <= (1u << 20)) {
@@ -469,14 +510,21 @@ static int a64x_find_islands(struct a64x_image *im, const struct a64x_layout *la
     uint8_t *dic_only = im->data;
     im->data = NULL; /* the pass sees instruction sections only, not the islands it is finding */
     struct a64x_code_map cm = {im, img_is_code, im->map_flags, NULL};
-    for (uint32_t pg = 0; pg < im->npages; pg++) {
+    for (uint32_t pg = 0; pg < im->npages;) {
+        uint32_t np = (uint32_t)MIN((size_t)(im->npages - pg), cluster_pages);
+        uint32_t bytes = np * A64X_PAGE;
         uint64_t off = im->text_off + (uint64_t)pg * A64X_PAGE;
-        bzero(page, A64X_PAGE);
-        if (vn_rdwr(UIO_READ, im->vp, (caddr_t)page, A64X_PAGE, (off_t)off, UIO_SYSSPACE, IO_NODELOCKED,
+        bzero(cluster, bytes);
+        if (vn_rdwr(UIO_READ, im->vp, (caddr_t)cluster, (int)bytes, (off_t)off, UIO_SYSSPACE, IO_NODELOCKED,
                     vfs_context_ucred(vfs_context_kernel()), &resid, current_proc())) {
             break;
         }
-        a64x_islands_page(&is, page, A64X_WORDS, (uint64_t)pg * A64X_WORDS, off, &cm);
+        for (uint32_t j = 0; j < np; j++) {
+            uint32_t p = pg + j;
+            a64x_islands_page(&is, cluster + (size_t)j * A64X_WORDS, A64X_WORDS, (uint64_t)p * A64X_WORDS,
+                              im->text_off + (uint64_t)p * A64X_PAGE, &cm);
+        }
+        pg += np;
     }
     a64x_islands_end(&is, nbits);
     im->data = dic_only;
@@ -487,55 +535,119 @@ out:
     if (fs) {
         kfree_data(fs, nbytes);
     }
-    if (page) {
-        kfree_data(page, A64X_PAGE);
+    if (cluster) {
+        kfree_data(cluster, cluster_bytes);
     }
     return error;
+}
+
+static bool a64x_stubs_grow(struct a64x_image *im, uint32_t keep, uint32_t min_cap)
+{
+    uint32_t ncap = im->stubcap ? im->stubcap : A64X_STUB_INIT_CAP;
+    while (ncap < min_cap) {
+        if (ncap > UINT32_MAX / 2) {
+            return false;
+        }
+        ncap *= 2;
+    }
+    uint32_t *n = kalloc_data((size_t)ncap * sizeof(uint32_t), Z_WAITOK);
+    if (!n) {
+        return false;
+    }
+    if (im->stubs) {
+        if (keep) {
+            bcopy(im->stubs, n, (size_t)keep * sizeof(uint32_t));
+        }
+        kfree_data(im->stubs, (size_t)im->stubcap * sizeof(uint32_t));
+    }
+    im->stubs = n;
+    im->stubcap = ncap;
+    return true;
 }
 
 /* read the executable segment once and lay out its stubs; stub_delta must be fixed before */
 static int a64x_scan(struct a64x_image *im)
 {
-    uint32_t *page = kalloc_data(A64X_PAGE, Z_WAITOK);
-    uint32_t *out = kalloc_data(A64X_PAGE, Z_WAITOK);
+    size_t cluster_pages = MIN((size_t)im->npages, (size_t)(A64X_READ_CLUSTER / A64X_PAGE));
+    size_t cluster_bytes = cluster_pages ? cluster_pages * A64X_PAGE : A64X_PAGE;
+    uint32_t *cluster = kalloc_data(cluster_bytes, Z_WAITOK | Z_NOFAIL);
+    uint32_t *out = kalloc_data(A64X_PAGE, Z_WAITOK | Z_NOFAIL);
     void *walk_buf = kalloc_data(A64X_WALK_BYTES(A64X_WORDS), Z_WAITOK | Z_NOFAIL);
+    struct a64x_stats *st = kalloc_type(struct a64x_stats, Z_WAITOK | Z_NOFAIL);
     struct a64x_walk walk = a64x_walk_in(walk_buf, A64X_WORDS);
     struct a64x_code_map cm = {im, img_is_code, im->map_flags, NULL};
     uint32_t cursor = 0;
     int error = 0;
-    for (uint32_t pg = 0; pg < im->npages && !error; pg++) {
+    if (im->npages && !a64x_stubs_grow(im, 0, A64X_STUB_INIT_CAP)) {
+        error = ENOMEM;
+    }
+    for (uint32_t pg = 0; pg < im->npages && !error;) {
+        uint32_t np = (uint32_t)MIN((size_t)(im->npages - pg), cluster_pages);
+        uint32_t bytes = np * A64X_PAGE;
         int resid = 0;
         uint64_t off = im->text_off + (uint64_t)pg * A64X_PAGE;
-        bzero(page, A64X_PAGE);
-        error = vn_rdwr(UIO_READ, im->vp, (caddr_t)page, A64X_PAGE, (off_t)off, UIO_SYSSPACE, IO_NODELOCKED,
+        bzero(cluster, bytes);
+        error = vn_rdwr(UIO_READ, im->vp, (caddr_t)cluster, (int)bytes, (off_t)off, UIO_SYSSPACE, IO_NODELOCKED,
                         vfs_context_ucred(vfs_context_kernel()), &resid, current_proc());
         if (error) {
             break;
         }
-        if (im->stubcap - cursor < A64X_WORDS * A64X_STUB_MAX) {
-            uint32_t ncap = im->stubcap ? im->stubcap * 2 : 4 * A64X_WORDS * A64X_STUB_MAX;
-            uint32_t *n = kalloc_data(ncap * sizeof(uint32_t), Z_WAITOK);
-            if (!n) {
-                error = ENOMEM;
+        for (uint32_t j = 0; j < np && !error; j++) {
+            uint32_t p = pg + j;
+            const uint32_t *page = cluster + (size_t)j * A64X_WORDS;
+            uint64_t p_off = im->text_off + (uint64_t)p * A64X_PAGE;
+            uint32_t next;
+            for (;;) {
+                if (im->stubcap - cursor < A64X_STUB_MAX &&
+                    !a64x_stubs_grow(im, cursor, cursor + A64X_STUB_MAX)) {
+                    error = ENOMEM;
+                    break;
+                }
+                bzero(st, sizeof(*st));
+                struct a64x_stub_region sr = {im->text_off + (uint64_t)im->stub_delta, im->stubs, im->stubcap, 0,
+                                              &walk};
+                next = a64x_translate_page(page, out, A64X_WORDS, p_off, &cm, &sr, cursor, st);
+                if (im->stubcap - next >= A64X_STUB_MAX) {
+                    break;
+                }
+                if (!a64x_stubs_grow(im, cursor, next + A64X_STUB_MAX)) {
+                    error = ENOMEM;
+                    break;
+                }
+            }
+            if (error) {
                 break;
             }
-            if (im->stubs) {
-                bcopy(im->stubs, n, cursor * sizeof(uint32_t));
-                kfree_data(im->stubs, im->stubcap * sizeof(uint32_t));
+            im->cursor[p] = cursor;
+            cursor = next;
+            if (st->stubs[A64X_FP16] || st->stubs[A64X_FCMA] || st->stubs[A64X_RDM]) {
+                im->has_vtemps = true;
             }
-            im->stubs = n;
-            im->stubcap = ncap;
+            for (uint32_t i = 0; i < A64X_WORDS; i++) {
+                im->changed += out[i] != page[i];
+            }
         }
-        struct a64x_stub_region sr = {im->text_off + (uint64_t)im->stub_delta, im->stubs, im->stubcap, 0, &walk};
-        im->cursor[pg] = cursor;
-        cursor = a64x_translate_page(page, out, A64X_WORDS, off, &cm, &sr, cursor, NULL);
-        for (uint32_t i = 0; i < A64X_WORDS; i++) {
-            im->changed += out[i] != page[i];
-        }
+        pg += np;
     }
     im->cursor[im->npages] = cursor;
     im->nstub = cursor;
-    kfree_data(page, A64X_PAGE);
+    if (!error) {
+        if (cursor == 0 && im->stubs) {
+            kfree_data(im->stubs, (size_t)im->stubcap * sizeof(uint32_t));
+            im->stubs = NULL;
+            im->stubcap = 0;
+        } else if (cursor < im->stubcap) {
+            uint32_t *fit = kalloc_data((size_t)cursor * sizeof(uint32_t), Z_WAITOK);
+            if (fit) {
+                bcopy(im->stubs, fit, (size_t)cursor * sizeof(uint32_t));
+                kfree_data(im->stubs, (size_t)im->stubcap * sizeof(uint32_t));
+                im->stubs = fit;
+                im->stubcap = cursor;
+            }
+        }
+    }
+    kfree_type(struct a64x_stats, st);
+    kfree_data(cluster, cluster_bytes);
     kfree_data(out, A64X_PAGE);
     kfree_data(walk_buf, A64X_WALK_BYTES(A64X_WORDS));
     return error;
@@ -590,13 +702,12 @@ static int a64x_map_image(vm_map_t map, struct vnode *vp, off_t slice_off, const
     }
     struct a64x_image *im = kalloc_type(struct a64x_image, Z_WAITOK | Z_ZERO);
     im->map_flags = kind == A64X_IMAGE_ARM64 ? A64X_MAP_NO_PAC : 0;
-    im->refs = 2; /* one per pager kind (text, stubs); each crypt_end drops one */
+    im->refs = 1; /* local owner reference; each pager takes its own ref before vm_map_apple_protected */
     im->text_off = lay->exec_fileoff;
     im->text_size = lay->exec_filesize;
     im->npages = (uint32_t)((lay->exec_filesize + A64X_PAGE - 1) / A64X_PAGE);
     im->cursor = kalloc_data((im->npages + 1) * sizeof(uint32_t), Z_WAITOK | Z_ZERO);
     if (vnode_ref(vp)) {
-        im->refs = 1;
         a64x_image_release(im);
         return EIO;
     }
@@ -611,20 +722,19 @@ static int a64x_map_image(vm_map_t map, struct vnode *vp, off_t slice_off, const
         error = a64x_scan(im);
     }
     if (error) {
-        im->refs = 1;
         a64x_image_release(im);
         printf("a64x: %s: translation failed (%d)\n", vp->v_name ? vp->v_name : "?", error);
         return error;
     }
-    if (!error && kind == A64X_IMAGE_ARM64 && im->changed == 0) {
+    if (kind == A64X_IMAGE_ARM64 && im->changed == 0) {
         /* plain arm64 with nothing the A57 lacks: keep the file's own mapping (byte-identical, no pager) */
-        im->refs = 1;
         a64x_image_release(im);
         A64X_INC(a64x_images_native);
         return 0;
     }
     vm_map_size_t stub_size = vm_map_round_page((vm_map_size_t)im->nstub * 4, vm_map_page_mask(map));
-    if (!error && im->nstub) {
+    bool stub_mapped = false;
+    if (im->nstub) {
         /* back the stub mapping with validated pages of the same file: the executable segment itself */
         im->stub_off = im->text_off & ~(uint64_t)PAGE_MASK;
         if (stub_size > vm_map_round_page(im->text_size, vm_map_page_mask(map))) {
@@ -643,35 +753,45 @@ static int a64x_map_image(vm_map_t map, struct vnode *vp, off_t slice_off, const
             im->nstub = 0;
             bzero(im->cursor, (im->npages + 1) * sizeof(uint32_t));
         } else {
-            struct pager_crypt_info ci = {a64x_stub_page, a64x_image_release, im, 0};
+            stub_mapped = true;
+            OSIncrementAtomic(&im->refs);
+            struct pager_crypt_info ci = {a64x_stub_page, a64x_stub_end, im, 0};
             kr = vm_map_apple_protected(map, stub_va, stub_va + stub_size, (vm_object_offset_t)-1, &ci,
                                         CRYPTID_APP_ENCRYPTION);
             if (kr != KERN_SUCCESS) {
                 printf("a64x: stub mapping not translated (kr %d)\n", kr);
+                if (!os_atomic_load(&im->stub_ended, acquire)) {
+                    a64x_image_release(im);
+                }
                 error = EIO;
             }
         }
     }
-    if (!im->nstub) {
-        a64x_image_release(im); /* the stub pager's reference: there is none */
-    }
     if (!error) {
-        struct pager_crypt_info ci = {a64x_text_page, a64x_image_release, im, 0};
+        OSIncrementAtomic(&im->refs);
+        struct pager_crypt_info ci = {a64x_text_page, a64x_text_end, im, 0};
         vm_map_offset_t end = exec_va + vm_map_round_page(im->text_size, vm_map_page_mask(map));
         kern_return_t kr =
             vm_map_apple_protected(map, exec_va, end, (vm_object_offset_t)-1, &ci, CRYPTID_APP_ENCRYPTION);
         if (kr != KERN_SUCCESS) {
             printf("a64x: text not translated (kr %d)\n", kr);
+            if (!os_atomic_load(&im->text_ended, acquire)) {
+                a64x_image_release(im);
+            }
             error = EIO;
         }
     }
     if (error) {
+        if (stub_mapped) {
+            (void)mach_vm_deallocate(map, stub_va, stub_size);
+        }
         printf("a64x: %s: translation failed (%d)\n", vp->v_name ? vp->v_name : "?", error);
-        /* references held by pagers that exist are dropped by their crypt_end; a failed setup leaks im */
+        a64x_image_release(im);
         return error;
     }
     A64X_INC(a64x_images);
     A64X_ADD(a64x_stub_words, im->nstub);
+    a64x_image_release(im);
     return 0;
 }
 
@@ -962,6 +1082,8 @@ extern int a64x_copyio_casp(user_addr_t uaddr, uint64_t e0, uint64_t e1, uint64_
 extern bool a64x_pc_is_jit(user_addr_t pc);
 extern bool a64x_user_neon_d(uint32_t regno, uint64_t *out);
 extern int switch_user_cache_maintenance(user_addr_t va, vm_size_t len, uint32_t op);
+extern kern_return_t exception_triage(exception_type_t exception, mach_exception_data_t code,
+                                      mach_msg_type_number_t codeCnt);
 
 static uint64_t reg(arm_saved_state_t *s, uint32_t r)
 {
@@ -1030,6 +1152,7 @@ int a64x_emulate_user(arm_saved_state_t *state, uint32_t w)
 
     uint32_t rs = (w >> 16) & 31, rn = (w >> 5) & 31, rt = w & 31, size = w >> 30;
     user_addr_t addr = rn == 31 ? get_saved_state_sp(state) : get_saved_state_reg(state, rn);
+    user_addr_t fault_addr = addr;
     uint64_t old = 0, old2 = 0;
     int error;
 
@@ -1090,6 +1213,7 @@ int a64x_emulate_user(arm_saved_state_t *state, uint32_t w)
         a64x_decode_ldra(w, &imm, &wb);
         user_addr_t ea = addr + (int64_t)imm;
         user_addr_t load_ea = (ea & (1ull << 55)) ? ea : (ea & ~0xFF00000000000000ull);
+        fault_addr = load_ea;
         /* Single-copy atomic 64-bit load on 8-byte-aligned addresses; LDRAA/LDRAB allows unaligned loads. */
         error = (load_ea & 7) == 0 ? copyin_atomic64(load_ea, &val) : copyin(load_ea, &val, sizeof(val));
         if (!error) {
@@ -1104,8 +1228,62 @@ int a64x_emulate_user(arm_saved_state_t *state, uint32_t w)
         }
         break;
     }
+    case A64X_RCPC_LDAPR: {
+        uint32_t bytes = 1u << size;
+        uint64_t val = 0;
+        if (bytes == 8 && (addr & 7) == 0) {
+            error = copyin_atomic64(addr, &val);
+        } else if (bytes == 4 && (addr & 3) == 0) {
+            uint32_t v32 = 0;
+            error = copyin_atomic32(addr, &v32);
+            val = v32;
+        } else {
+            error = copyin(addr, &val, bytes);
+        }
+        if (!error) {
+            __builtin_arm_dmb(DMB_ISHLD);
+            set_reg(state, rt, val);
+        }
+        break;
+    }
+    case A64X_LOR: {
+        uint32_t bytes = 1u << size;
+        if (w & (1u << 22)) {
+            uint64_t val = 0;
+            if (bytes == 8 && (addr & 7) == 0) {
+                error = copyin_atomic64(addr, &val);
+            } else if (bytes == 4 && (addr & 3) == 0) {
+                uint32_t v32 = 0;
+                error = copyin_atomic32(addr, &v32);
+                val = v32;
+            } else {
+                error = copyin(addr, &val, bytes);
+            }
+            if (!error) {
+                __builtin_arm_dmb(DMB_ISHLD);
+                set_reg(state, rt, val);
+            }
+        } else {
+            uint64_t val = reg(state, rt);
+            __builtin_arm_dmb(DMB_ISH);
+            if (bytes == 8 && (addr & 7) == 0) {
+                error = copyout_atomic64(val, addr);
+            } else if (bytes == 4 && (addr & 3) == 0) {
+                error = copyout_atomic32((uint32_t)val, addr);
+            } else {
+                error = copyout(&val, addr, bytes);
+            }
+        }
+        break;
+    }
+    case A64X_DPB: {
+        user_addr_t va = (user_addr_t)reg(state, rt);
+        fault_addr = va;
+        error = switch_user_cache_maintenance(va, 1, SWITCH_UCM_DC_CVAC);
+        break;
+    }
     case A64X_SB:
-        __builtin_arm_dsb(DSB_SY);
+        __builtin_arm_dsb(DSB_NSH);
         __builtin_arm_isb(ISB_SY);
         error = 0;
         break;
@@ -1164,7 +1342,12 @@ int a64x_emulate_user(arm_saved_state_t *state, uint32_t w)
         }
     }
     if (error) {
-        return 0; /* the fault is reported as the undefined instruction it was */
+        if (error == EFAULT) {
+            mach_exception_data_type_t codes[2] = {KERN_INVALID_ADDRESS, (mach_exception_data_type_t)fault_addr};
+            exception_triage(EXC_BAD_ACCESS, codes, 2);
+            __builtin_unreachable();
+        }
+        return 0;
     }
 #if XNU_12377_121_6
     add_user_saved_state_pc(state, 4);

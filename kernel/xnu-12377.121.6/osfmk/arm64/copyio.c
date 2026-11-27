@@ -488,7 +488,8 @@ bool
 a64x_pc_is_jit(user_addr_t pc)
 {
 	vm_map_t map = current_thread()->map;
-	if (map == VM_MAP_NULL || vm_map_is_sealed(map)) {
+	if (map == VM_MAP_NULL || map->pmap == PMAP_NULL || !map->pmap->user_cache_maintenance_trap ||
+	    vm_map_is_sealed(map)) {
 		return false;
 	}
 	vm_map_ilk_lock_shared(map);
