@@ -47,7 +47,9 @@ struct DisplayRefreshTest: HWTest {
             }
         }
         if found == nil, values.isEmpty, unread != 0 {
-            return .skip(KernelSysctl.unreadable("kern.switch_display_refresh_*", unread), metrics)
+            return .skip(
+                KernelSysctl.unreadable("kern.switch_display_refresh_*", unread, flag: "--//bazel:stats_frame"), metrics
+            )
         }
         metrics.set("source", found != nil ? "property" : "sysctl")
         for field in Self.counters {

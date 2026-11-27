@@ -1060,3 +1060,8 @@ void switch_gpu_chan_event_releases(struct tgm_chan *chan, u32 seqno)
 {
 	WRITE_ONCE(chan->event_through, seqno);
 }
+
+int switch_gpu_chan_has_syncpt(const struct tgm_chan *chan)
+{
+	return chan && chan->timeline && switch_gpu_timeline_has_syncpt(chan->timeline);
+}

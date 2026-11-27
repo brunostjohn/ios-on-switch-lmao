@@ -41,7 +41,11 @@ struct ScalePacingTest: HWTest {
     func run(_ context: TestContext) async throws -> Outcome {
         guard let connection = GPUConnection() else { return .skip("no TegraGM20B connection") }
         guard LaunchHitchTest.spans(connection) != nil else {
-            return .skip("the kernel keeps no compositor rounds (a release kernel)")
+            return .skip(
+                KernelSysctl.isReleaseKernel()
+                    ? "the kernel keeps no compositor rounds (a release kernel)"
+                    : "no compositor rounds (build with --//bazel:stats_gpu)"
+            )
         }
         let probe = await context.onStage(fullScreen: true) { stage -> ScaleProbe in
             let probe = ScaleProbe(stage: stage)

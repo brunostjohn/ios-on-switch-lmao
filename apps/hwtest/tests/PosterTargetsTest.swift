@@ -3,6 +3,7 @@ import HWTestCommon
 import HWTestCore
 import HWTestGPU
 import HWTestKit
+import HWTestShared
 import UIKit
 
 /// Lock screen posters and their snapshots render no target larger than the panel: the GM20B kernel's largest
@@ -30,7 +31,10 @@ struct PosterTargetsTest: HWTest {
         guard kr == KERN_SUCCESS else {
             let why =
                 kr == GPUConnection.kIOReturnUnsupported
-                    ? "a release kernel keeps no target peaks" : "target peaks unreadable (\(GPUConnection.hex(kr)))"
+                    ? (KernelSysctl.isReleaseKernel()
+                        ? "a release kernel keeps no target peaks"
+                        : "no target peaks (build with --//bazel:prof_gpu)")
+                    : "target peaks unreadable (\(GPUConnection.hex(kr)))"
             return .skip(why, metrics)
         }
         let peaks = TargetPeak.parse(String(decoding: reply.prefix { $0 != 0 }, as: UTF8.self))

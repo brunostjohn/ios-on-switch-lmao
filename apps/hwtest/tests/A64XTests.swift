@@ -62,13 +62,18 @@ struct A64XSelfTest: HWTest {
             ("FP16 multiply then add rounds to even (\(Self.fp16Want))", sum == Self.fp16Want),
         ]
         if context.ios >= 26 {
+            checks.append(("the app's A12 code was translated (rewritten > 0)", rewritten > 0))
+            if after.isEmpty && unread == ENOENT {
+                let functional = Outcome.judged(checks, metrics)
+                guard functional.verdict == .pass else { return functional }
+                return .skip(KernelSysctl.unreadable("kern.a64x.*", unread, flag: "--//bazel:stats_io"), metrics)
+            }
             checks += [
                 (
                     after.isEmpty && unread != ENOENT
                         ? KernelSysctl.unreadable("kern.a64x.*", unread) : "the kernel has a64x (kern.a64x.*)",
                     !after.isEmpty
                 ),
-                ("the app's A12 code was translated (rewritten > 0)", rewritten > 0),
                 ("no LSE site took the trap path (d_traps 0)", delta("traps") == 0),
                 ("no unhandled instruction (d_traps_unhandled 0)", delta("traps_unhandled") == 0),
                 ("every page's stubs matched (d_stub_mismatch 0)", delta("stub_mismatch") == 0),

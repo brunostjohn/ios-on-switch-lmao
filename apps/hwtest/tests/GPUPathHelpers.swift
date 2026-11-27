@@ -41,6 +41,15 @@ public struct GPUPaths {
         case unreadable(connection: String, sysctl: Int32)
     }
 
+    public static func infoFlags(_ connection: GPUConnection?) -> UInt32? {
+        guard let connection else { return nil }
+        let (kr, reply) = connection.call(
+            GPUConnection.FencePage.getInfo, [], outputSize: GPUConnection.FencePage.infoBytes
+        )
+        guard kr == KERN_SUCCESS, reply.count >= 8 else { return nil }
+        return GPUConnection.uint32(reply, 4)
+    }
+
     public static func read(_ connection: GPUConnection?) -> Reading {
         var asked = "no_connection"
         if let connection {
@@ -136,34 +145,46 @@ extension GPUPathTest {
         }
         let connection = GPUConnection()
         var metrics = Metrics()
-        let before: GPUPaths
+        let before: GPUPaths?
+        let flags: UInt32
         switch GPUPaths.read(connection) {
         case .counts(let paths):
             before = paths
+            flags = paths.flags != 0 ? paths.flags : (GPUPaths.infoFlags(connection) ?? 0)
         case .unreadable(let asked, let error):
-            metrics.set("connection", asked)
-            metrics.set("sysctl", KernelSysctl.code(error))
-            if asked == "release_kernel" && error == ENOENT {
-                return .skip("no path counters: a release kernel", metrics)
+            if counters.isEmpty && asked == "release_kernel" && error == ENOENT {
+                before = nil
+                flags = GPUPaths.infoFlags(connection) ?? 0
+            } else {
+                metrics.set("connection", asked)
+                metrics.set("sysctl", KernelSysctl.code(error))
+                if asked == "release_kernel" && error == ENOENT {
+                    let why = KernelSysctl.isReleaseKernel()
+                        ? "no path counters: a release kernel"
+                        : "no path counters (build with --//bazel:stats_gpu)"
+                    return .skip(why, metrics)
+                }
+                let why = "the path counters are unreadable: connection \(asked), sysctl \(KernelSysctl.code(error))"
+                return .fail(why, metrics)
             }
-            let why = "the path counters are unreadable: connection \(asked), sysctl \(KernelSysctl.code(error))"
-            return .fail(why, metrics)
         }
-        metrics.set("flags", String(before.flags, radix: 16))
+        metrics.set("flags", String(flags, radix: 16))
         var failures: [String] = []
-        if let bit, before.flags & (1 << UInt32(bit)) == 0 {
+        if let bit, flags & (1 << UInt32(bit)) == 0 {
             failures.append("the kernel does not advertise bit \(bit)")
         }
         let parts = PathParts()
         failures += try await PathParts.$current.withValue(parts) { try await exercise(gpu, context, &metrics) }
         failures += parts.failed
-        let after: GPUPaths
-        if case .counts(let paths) = GPUPaths.read(connection) { after = paths } else { after = before }
-        let skippedCounters = Set(parts.skipped.flatMap(\.counters))
-        for counter in counters {
-            let taken = after.taken(counter, since: before)
-            metrics.set(counter, taken)
-            if taken <= 0 && !skippedCounters.contains(counter) { failures.append("no \(counter) while it ran") }
+        if let before {
+            let after: GPUPaths
+            if case .counts(let paths) = GPUPaths.read(connection) { after = paths } else { after = before }
+            let skippedCounters = Set(parts.skipped.flatMap(\.counters))
+            for counter in counters {
+                let taken = after.taken(counter, since: before)
+                metrics.set(counter, taken)
+                if taken <= 0 && !skippedCounters.contains(counter) { failures.append("no \(counter) while it ran") }
+            }
         }
         metrics.set("paths", gpu.paths.isEmpty ? "-" : gpu.paths.text)
         if gpu.paths.paths.keys.contains(where: { $0 != "gm20b" }) {

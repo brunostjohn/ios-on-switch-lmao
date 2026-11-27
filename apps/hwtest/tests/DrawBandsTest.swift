@@ -3,6 +3,7 @@ import HWTestCommon
 import HWTestCore
 import HWTestGPU
 import HWTestKit
+import HWTestShared
 import Metal
 import QuartzCore
 import UIKit
@@ -125,6 +126,16 @@ struct DrawBandsTest: HWTest {
         let pipeline = try gpu.render(vertex: "bands_vertex", fragment: blend.fragment, format: .bgra8Unorm) { _ in }
         let target = try gpu.texture(.bgra8Unorm, Self.width, Self.height)
         let connection = GPUConnection()
+        if case .unreadable("release_kernel", ENOENT) = GPUPaths.read(connection) {
+            await MainActor.run { layer.removeFromSuperlayer() }
+            await context.clearStage()
+            metrics.fitLog(within: 720, keeping: Self.judged)
+            if !failures.isEmpty { return .fail(failures.joined(separator: "; "), metrics) }
+            let why = KernelSysctl.isReleaseKernel()
+                ? "no preemption counters: a release kernel"
+                : "no preemption counters (build with --//bazel:stats_gpu)"
+            return .skip(why, metrics)
+        }
         for (arm, budgetNs) in [("", Self.budgetUs * 1000), ("_whole", 0)] {
             _ = Self.budget(gpu.device, budgetNs)
             _ = GPUPaths.read(connection)

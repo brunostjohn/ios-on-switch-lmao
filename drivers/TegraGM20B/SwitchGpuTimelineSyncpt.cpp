@@ -42,6 +42,11 @@ bool job_of(const switch_gpu_timeline_syncpt &syncpt, uint32_t value, Mark &foun
 }
 }  // namespace
 
+extern "C" int switch_gpu_timeline_has_syncpt(const switch_gpu_timeline *timeline)
+{
+	return timeline && __atomic_load_n(&timeline->syncpt.id, __ATOMIC_ACQUIRE) != 0;
+}
+
 extern "C" uint32_t switch_gpu_timeline_syncpt_next(switch_gpu_timeline *timeline, uint32_t first,
 						    uint32_t last)
 {

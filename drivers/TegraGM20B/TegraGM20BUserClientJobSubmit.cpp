@@ -498,9 +498,11 @@ refresh:
 			const bool quietEnd = switch_gpu_quiet_end(quiet, semanticBound,
 								   scanoutWrites, closesGroup);
 			jobVisibility =
-				switch_gpu_job_visibility(head.flags, events->signals(),
-							  unlockedWrites || scanoutWrites,
-							  hostWritten || transaction.host_written) |
+				switch_gpu_job_visibility(
+					head.flags, events->signals(),
+					unlockedWrites || scanoutWrites ||
+						(writeCount && switch_gpu_chan_has_syncpt(chan)),
+					hostWritten || transaction.host_written) |
 				(quietEnd ? uint32_t(SWITCH_GPU_SUBMIT_QUIET) : 0u);
 			if (events->released())
 				switch_gpu_chan_event_releases(chan, uint32_t(completion.value));

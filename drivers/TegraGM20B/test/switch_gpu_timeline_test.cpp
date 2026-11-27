@@ -756,8 +756,10 @@ TEST_F(Timeline, ATokenIsAnsweredOnlyInsideItsOwnDrainedJob)
 	uint32_t threshold = 0;
 	uint32_t last = 0;
 	EXPECT_EQ(switch_gpu_timeline_syncpoint(&third, &id, &threshold, &last), -61);
+	EXPECT_EQ(switch_gpu_timeline_has_syncpt(timeline), 0);
 	EXPECT_EQ(switch_gpu_timeline_syncpt_next(timeline, 3, 4), 0u);
 	ASSERT_EQ(switch_gpu_timeline_syncpt_adopt(&third, 170, 40), 0);
+	EXPECT_EQ(switch_gpu_timeline_has_syncpt(timeline), 1);
 	EXPECT_EQ(switch_gpu_timeline_syncpt_adopt(&third, 171, 0), -16);
 
 	EXPECT_EQ(switch_gpu_timeline_syncpt_next(timeline, 3, 4), 170u);

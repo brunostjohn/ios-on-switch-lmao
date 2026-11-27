@@ -36,11 +36,24 @@ public enum KernelSysctl {
         }
     }
 
+    public static func isReleaseKernel() -> Bool {
+        if case .value(let version) = string("kern.version") {
+            return version.contains("/RELEASE_")
+        }
+        return false
+    }
+
     /// The skip text for names the app could not read.
-    public static func unreadable(_ names: String, _ error: Int32) -> String {
-        error == EPERM
-            ? "the sandbox denies the app's read of \(names) (EPERM)"
-            : error == ENOENT
-            ? "the kernel has no \(names) (ENOENT: a release kernel)" : "\(names) unreadable (errno \(error))"
+    public static func unreadable(_ names: String, _ error: Int32, flag: String? = nil) -> String {
+        if error == EPERM {
+            return "the sandbox denies the app's read of \(names) (EPERM)"
+        }
+        if error == ENOENT {
+            if let flag, !isReleaseKernel() {
+                return "the kernel has no \(names) (build with \(flag))"
+            }
+            return "the kernel has no \(names) (ENOENT: a release kernel)"
+        }
+        return "\(names) unreadable (errno \(error))"
     }
 }

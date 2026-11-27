@@ -449,22 +449,38 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		if ((op == TegraGM20BPathsOpNoteSpan) != (inSize == sizeof(TegraGM20BAbiPathsSpan)))
 			return kIOReturnBadArgument;
 		if (op == TegraGM20BPathsOpNoteSpan) {
+#if SWITCH_GPU_PATH_STATS
 			TegraGM20BAbiPathsSpan note =
 				*static_cast<const TegraGM20BAbiPathsSpan *>(in);
 			note.text[sizeof(note.text) - 1] = 0;
 			switch_gpu_span_note(owner_, note.text);
+#else
+			return kIOReturnUnsupported;
+#endif
 		} else if (op == TegraGM20BPathsOpSpans) {
+#if SWITCH_GPU_PATH_STATS
 			switch_gpu_span_line(reply->line, sizeof(reply->line));
-		} else if (op == TegraGM20BPathsOpCounts)
+#else
+			return kIOReturnUnsupported;
+#endif
+		} else if (op == TegraGM20BPathsOpCounts) {
+#if SWITCH_GPU_PATH_STATS
 			switch_gpu_path_line(reply->line, sizeof(reply->line));
-		else if (op == TegraGM20BPathsOpPool)
+#else
+			return kIOReturnUnsupported;
+#endif
+		} else if (op == TegraGM20BPathsOpPool)
 			poolLine(reply->line, sizeof(reply->line));
 		else if (op == TegraGM20BPathsOpRefusals)
 			snprintf(reply->line, sizeof(reply->line), "lines=%u",
 				 __atomic_load_n(&refusalLines_, __ATOMIC_RELAXED));
-		else if (op == TegraGM20BPathsOpTargetPeaks)
+		else if (op == TegraGM20BPathsOpTargetPeaks) {
+#if TGM_PROF
 			tgm_target_peaks_line(reply->line, sizeof(reply->line));
-		else if (op == TegraGM20BPathsOpProbeSyncpts) {
+#else
+			return kIOReturnUnsupported;
+#endif
+		} else if (op == TegraGM20BPathsOpProbeSyncpts) {
 			if (!switch_gpu_task_entitled(task_, SWITCH_GPU_PROBES_ENTITLEMENT))
 				return kIOReturnNotPrivileged;
 			probeSyncptsLine(reply->line, sizeof(reply->line));
@@ -474,6 +490,7 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		} else if (op == TegraGM20BPathsOpZbc) {
 			tgm_zbc_line(reply->line, sizeof(reply->line));
 		} else if (op == TegraGM20BPathsOpForeignWaits) {
+#if TGM_STATS
 			struct tgm_foreign_waits totals = {};
 			tgm_foreign_waits_totals(&totals);
 			snprintf(reply->line, sizeof(reply->line),
@@ -484,6 +501,9 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 				 static_cast<unsigned long long>(totals.promises),
 				 static_cast<unsigned long long>(totals.events),
 				 static_cast<unsigned long long>(totals.host1x));
+#else
+			return kIOReturnUnsupported;
+#endif
 		} else
 			return kIOReturnBadArgument;
 		return kIOReturnSuccess;

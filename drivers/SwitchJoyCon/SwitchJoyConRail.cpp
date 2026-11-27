@@ -1941,7 +1941,7 @@ void SwitchJoyConRail::armPoll()
     pollInterval = interval;
     if (polling) {
         if (interval == SWITCH_JOYCON_CADENCE_QUIET_MS)
-            poll->setTimeout(kIOTimeOptionsWithLeeway, switch_abs_from_ms(interval), switch_abs_from_ms(10));
+            poll->setTimeout(kIOTimeOptionsWithLeeway, switch_abs_from_ms(interval), switch_abs_from_ms(3));
         else
             poll->setTimeoutMS(interval);
     }

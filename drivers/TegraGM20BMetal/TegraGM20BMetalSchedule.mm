@@ -456,6 +456,14 @@ static bool scheduleAppEarly(SwitchMetalCommandBuffer *cb, bool atCommit)
     const bool ordered = atCommit || cb->_enqueueState.load(std::memory_order_acquire) == 1;
     if (ordered && cb->_before && !cb->_before->_scheduledTurn.ran())
         return false;
+    // Non-presenting IOSurface writers must reach the kernel before waitUntilScheduled returns so an immediate
+    // IOSurfaceLock sees the write; presenting drawables wait for completion via deferPresent.
+    if (!cb->_presents.load(std::memory_order_acquire)) {
+        std::vector<uint64_t> handles;
+        earlyWrittenSurfaces(cb, handles);
+        if (!handles.empty())
+            return false;
+    }
     SWITCH_METAL_STAT(
         gm20b::frameCpuCounts().early[size_t(gm20b::EarlyOutcome::Made)].fetch_add(1, std::memory_order_relaxed));
     scheduled(cb);

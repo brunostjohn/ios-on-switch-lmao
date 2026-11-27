@@ -29,7 +29,7 @@ struct RecorderHangDumpTest: HWTest {
     func run(_ context: TestContext) async throws -> Outcome {
         let first = KernelSysctl.string(Self.status)
         guard case .value(let before) = first else {
-            return .skip(KernelSysctl.unreadable(Self.status, first.error), Metrics())
+            return .skip(KernelSysctl.unreadable(Self.status, first.error, flag: "--//kernel:recorder"), Metrics())
         }
         let dumps = Int(KernelLine.fields(before)["dumps"] ?? "") ?? 0
         let tid: UInt64 = await MainActor.run {
@@ -44,7 +44,7 @@ struct RecorderHangDumpTest: HWTest {
         await MainActor.run { _ = usleep(Self.holdMicroseconds) }
         let second = KernelSysctl.string(Self.wait)
         guard case .value(let after) = second else {
-            return .skip(KernelSysctl.unreadable(Self.wait, second.error), Metrics())
+            return .skip(KernelSysctl.unreadable(Self.wait, second.error, flag: "--//kernel:recorder"), Metrics())
         }
         let fields = KernelLine.fields(after)
         let ring = RecorderRing(dump: "\(Self.directory)/Switch-recorder-\(fields["last_slot"] ?? "0").rec")
