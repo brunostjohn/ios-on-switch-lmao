@@ -6,6 +6,7 @@ namespace switch_smmu {
 constexpr uint32_t kPtbAsid = 0x1c, kPtbData = 0x20, kTlbFlush = 0x30, kPtcFlush = 0x34, kPtcFlushHi = 0x9b8;
 constexpr uint32_t kAsidEnable = 1u << 31, kTlbAsidMatch = 1u << 31, kTlbMatchSection = 2, kTlbSectionField = 0xffc00;
 constexpr uint32_t kPtcFlushAddress = 1, kPtcGroup = 32, kPtcSixteenEntries = 64;
+constexpr uint32_t kFlushCollapseLines = 8;
 constexpr uint64_t kTlbSection = 4ULL << 20;
 // T210 TRM 18.11.1.11: neither flush type needs to wait for the hit FIFO to go idle (bit 3 kept at reset value, 1).
 constexpr uint32_t kPtcNoWaitIdle = 1u << 3;
@@ -55,10 +56,20 @@ inline uint32_t parked(const tegra_smmu_attachment &a, uint32_t faultAsid)
 template <class Registers>
 void flushRange(Registers &io, uint32_t asid, uint64_t pa, uint64_t bytes, uint64_t iova, uint64_t iovaBytes)
 {
+    const uint64_t ptcStart = pa & ~uint64_t{kPtcSixteenEntries - 1};
+    const uint64_t ptcEnd = pa + bytes;
+    const uint64_t tlbStart = iova & ~(kTlbSection - 1);
+    const uint64_t tlbEnd = iova + iovaBytes;
+    const uint64_t ptcSteps = ptcEnd > ptcStart ? (ptcEnd - ptcStart + kPtcGroup - 1) / kPtcGroup : 0;
+    const uint64_t tlbSteps = tlbEnd > tlbStart ? (tlbEnd - tlbStart + kTlbSection - 1) / kTlbSection : 0;
+    if (ptcSteps > kFlushCollapseLines || tlbSteps > kFlushCollapseLines) {
+        flush(io, asid);
+        return;
+    }
     io.write(kPtcFlushHi, static_cast<uint32_t>(pa >> 32) & 3);
-    for (uint64_t at = pa & ~uint64_t{kPtcSixteenEntries - 1}; at < pa + bytes; at += kPtcGroup)
+    for (uint64_t at = ptcStart; at < ptcEnd; at += kPtcGroup)
         io.write(kPtcFlush, static_cast<uint32_t>(at) | kPtcNoWaitIdle | kPtcFlushAddress);
-    for (uint64_t at = iova & ~(kTlbSection - 1); at < iova + iovaBytes; at += kTlbSection)
+    for (uint64_t at = tlbStart; at < tlbEnd; at += kTlbSection)
         io.write(kTlbFlush, kTlbAsidMatch | (asid << 24) | (static_cast<uint32_t>(at >> 12) & kTlbSectionField) |
                                 kTlbMatchSection);
     (void)io.read(kPtbAsid);
@@ -71,6 +82,13 @@ void flushTables(Registers &io, uint32_t asid, const Table *tables, uint32_t cou
 {
     if (!count)
         return;
+    uint32_t ptcSteps = 0;
+    for (uint32_t i = 0; i < count; ++i)
+        ptcSteps += static_cast<uint32_t>(__builtin_popcountll(tables[i].groups)) * 2u;
+    if (ptcSteps > kFlushCollapseLines || count > kFlushCollapseLines) {
+        flush(io, asid);
+        return;
+    }
     io.write(kPtcFlushHi, static_cast<uint32_t>(tables[0].pa >> 32) & 3);
     for (uint32_t i = 0; i < count; ++i) {
         for (uint64_t groups = tables[i].groups; groups; groups &= groups - 1) {

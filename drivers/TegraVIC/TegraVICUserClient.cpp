@@ -124,16 +124,22 @@ struct Conn {
 Conn gConns[kMaxConnections];
 IOLock *gConnLock;
 
+uint32_t connBucket(const IOUserClient *client)
+{
+    return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(client) >> 6) & (kMaxConnections - 1);
+}
+
 Conn *connOf(const IOUserClient *client)
 {
-    Conn *found = nullptr;
-    IOLockLock(gConnLock);
-    for (uint32_t i = 0; i < kMaxConnections && !found; i++) {
-        if (gConns[i].client == client)
-            found = &gConns[i];
+    if (!client)
+        return nullptr;
+    const uint32_t start = connBucket(client);
+    for (uint32_t i = 0; i < kMaxConnections; ++i) {
+        Conn &c = gConns[(start + i) & (kMaxConnections - 1)];
+        if (__atomic_load_n(&c.client, __ATOMIC_ACQUIRE) == client)
+            return &c;
     }
-    IOLockUnlock(gConnLock);
-    return found;
+    return nullptr;
 }
 
 // The vtable copies (their address point is index 2 of each array).
@@ -258,7 +264,6 @@ struct Job {
     uint64_t info;
     IOReturn status;
     bool done, detached;  // detached: its synchronous caller was interrupted and finishJob frees it
-    TegraVICJob check;    // the submitting thread's check of each operation
     int caller;           // its event records are counted as this process's (switch_gpu_events_charge)
 #if TEGRA_VIC_STATS
     uint64_t submittedUs;
@@ -459,20 +464,24 @@ void finishJob(Job *job, IOReturn status)
             iouc_send_async_result64(job->ref, status, &argument, 1);
         }
         IODelete(job, Job, 1);
+        IOLockLock(conn->lock);
+        const bool wakeClose = --conn->pending == 0 && __atomic_load_n(&conn->closing, __ATOMIC_ACQUIRE);
+        if (wakeClose)
+            IOLockWakeup(conn->lock, &conn->pending, false);
+        IOLockUnlock(conn->lock);
     } else {
         IOLockLock(conn->lock);
         job->status = status;
         job->done = true;
         const bool detached = job->detached;
         IOLockWakeup(conn->lock, job, false);
+        const bool wakeClose = --conn->pending == 0 && __atomic_load_n(&conn->closing, __ATOMIC_ACQUIRE);
+        if (wakeClose)
+            IOLockWakeup(conn->lock, &conn->pending, false);
         IOLockUnlock(conn->lock);
         if (detached)
             IODelete(job, Job, 1);
     }
-    IOLockLock(conn->lock);
-    conn->pending--;
-    IOLockWakeup(conn->lock, &conn->pending, false);
-    IOLockUnlock(conn->lock);
     client->release();
 }
 
@@ -627,8 +636,8 @@ IOReturn transform(Conn *conn, const void *in, uint32_t size)
         if (TEGRA_VIC_REQ_CHROMA_SITE(r.flags))
             dst.chromaSite = TEGRA_VIC_REQ_CHROMA_SITE(r.flags);
         for (uint32_t i = 0; !why && i < job->plan.count; i++) {
-            why = tegra_vic_build(job->plan.op[i].fill ? nullptr : &src, &dst, &job->plan.op[i], tegra_vic_traits(),
-                                  tegra_vic_config_address(), tegra_vic_filter_address(), &job->check);
+            why = tegra_vic_validate(job->plan.op[i].fill ? nullptr : &src, &dst, &job->plan.op[i], tegra_vic_traits(),
+                                     tegra_vic_config_address(), tegra_vic_filter_address());
         }
         if (why)
             ret = kIOReturnUnsupported;  // a shape VIC does not do (kTegraVICTraits)
@@ -803,6 +812,7 @@ void tegra_vic_client_free(IOUserClient *self)
             iouc_release_port(conn->port);
         IOLock *lock = conn->lock;
         IOLockLock(gConnLock);
+        __atomic_store_n(&conn->client, static_cast<IOUserClient *>(nullptr), __ATOMIC_RELEASE);
         bzero(conn, sizeof(*conn));
         conn->lock = lock;  // kept for the slot's next connection
         IOLockUnlock(gConnLock);
@@ -817,32 +827,44 @@ IOReturn tegra_vic_new_user_client(IOService *self, task_t task, void *securityI
 {
     if (!tegra_vic_ready())
         return kIOReturnNotReady;
+    const OSObject *object = OSMetaClass::allocClassWithName("IOSurfaceAcceleratorClient");
+    IOUserClient *client = OSDynamicCast(IOUserClient, object);
+    if (!client) {
+        OSSafeReleaseNULL(object);
+        return kIOReturnNoMemory;
+    }
     Conn *conn = nullptr;
+    const uint32_t start = connBucket(client);
     IOLockLock(gConnLock);
     for (uint32_t i = 0; i < kMaxConnections && !conn; i++) {
-        if (!gConns[i].client && !gConns[i].task)
-            conn = &gConns[i];
+        Conn &slot = gConns[(start + i) & (kMaxConnections - 1)];
+        if (!slot.client && !slot.task)
+            conn = &slot;
     }
     if (conn)
         conn->task = task;  // claimed
     IOLockUnlock(gConnLock);
-    if (!conn)
+    if (!conn) {
+        *reinterpret_cast<const uintptr_t **>(client) = &gClientVtable[2];
+        client->release();
         return kIOReturnNoResources;
+    }
     if (!conn->lock)
         conn->lock = IOLockAlloc();
-    const OSObject *object = OSMetaClass::allocClassWithName("IOSurfaceAcceleratorClient");
-    IOUserClient *client = OSDynamicCast(IOUserClient, object);
-    if (!conn->lock || !client) {
-        OSSafeReleaseNULL(object);
+    if (!conn->lock) {
+        IOLockLock(gConnLock);
         conn->task = nullptr;
+        IOLockUnlock(gConnLock);
+        *reinterpret_cast<const uintptr_t **>(client) = &gClientVtable[2];
+        client->release();
         return kIOReturnNoMemory;
     }
     *reinterpret_cast<const uintptr_t **>(client) =
         &gClientVtable[2];  // Apple's client, our slots (see the top of this file)
     IOLockLock(gConnLock);
-    conn->client = client;
     conn->port = MACH_PORT_NULL;
     conn->pending = 0;
+    __atomic_store_n(&conn->client, client, __ATOMIC_RELEASE);
     IOLockUnlock(gConnLock);
     if (!client->initWithTask(task, securityID, type, properties) || !client->attach(self)) {
         client->release();  // free() clears the connection

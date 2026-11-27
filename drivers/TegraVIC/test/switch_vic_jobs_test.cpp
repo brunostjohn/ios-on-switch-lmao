@@ -628,6 +628,9 @@ protected:
         gSyncpt = 161;
         ASSERT_TRUE(Results::start(gSyncpt));
         gConfigs = {0x90000000, sizeof(configurations), configurations};
+        gConfigBusy = 0;
+        gConfigWaiters = 0;
+        gCountWaiters = 0;
         for (auto &job : jobs) {
             job.count = 1;
             job.method[0] = TEGRA_VIC_M_SET_CONFIG_STRUCT_OFFSET;
@@ -1579,4 +1582,31 @@ TEST_F(SwitchVICJobsTest, AFailedBridgeBetweenPassesRefusesSubmissionBeforeHardw
     EXPECT_EQ(gQueue.count, 0u);
     EXPECT_EQ(bridges, 1u);
     EXPECT_EQ(released, 1u);
+}
+
+TEST_F(SwitchVICJobsTest, StagedSubmitUsesReservedConfigSlotDirectlyAndReleasesOnRetire)
+{
+    uint8_t slot = 0xff;
+    uint8_t *va = nullptr;
+    ASSERT_TRUE(switch_vic_config_reserve(1, &slot, &va));
+    ASSERT_EQ(slot, 0u);
+    ASSERT_EQ(va, configurations);
+    memset(va, 0x5a, TEGRA_VIC_CONFIG_BYTES);
+
+    SwitchVICStagedJob staged = {};
+    staged.slot = slot;
+    staged.methods.count = 1;
+    staged.methods.method[0] = TEGRA_VIC_M_SET_CONFIG_STRUCT_OFFSET;
+    staged.methods.pixels = 1280u * 720u;
+
+    const SwitchVICOwnership ownership = {uses, 1, nullptr, 0, nullptr, 0};
+    ASSERT_EQ(switch_vic_submit_staged(&staged, 1, nullptr, ownership, nullptr, nullptr, nullptr), 0);
+    EXPECT_EQ(gConfigBusy, 1u);
+    EXPECT_EQ(configurations[0], 0x5a);
+    ASSERT_EQ(publishedWords.size(), 5u);
+    EXPECT_EQ(publishedWords[3], static_cast<uint32_t>(gConfigs.pa >> 8));
+
+    interrupt(0);
+    EXPECT_EQ(gQueue.count, 0u);
+    EXPECT_EQ(gConfigBusy, 0u);
 }

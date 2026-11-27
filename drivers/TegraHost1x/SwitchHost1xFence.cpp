@@ -7,6 +7,7 @@
 #include <IOKit/IOInterruptEventSource.h>
 #include <IOKit/IOWorkLoop.h>
 #include <kern/clock.h>
+#include <kern/sched_prim.h>
 #include <kern/thread_call.h>
 #include "SwitchHost1xFence.h"
 #include "SwitchHost1xFenceList.h"
@@ -32,7 +33,7 @@ struct Registers {
     }
 };
 
-IOLock *gLock;  // the lists, the hand-off, the timer's deadline
+IOSimpleLock *gLock;  // protects fence lists, filter waiters, hand-off, and bound timer across IRQ filter & threads
 Registers gRegisters;
 SwitchHost1xFenceList<Registers> gList;
 // Syncpoints whose channel stopped (switch_host1x_fences_fail) and has not restarted: a bound or a CPU wait that starts
@@ -52,8 +53,7 @@ uint32_t gIntid;
 bool gUp, gStrict;
 
 // A filter waiter's own fence (first, so the list's callback finds the waiter) arms its threshold and is expired by
-// the pass like any other. Free -> reserved (gLock) -> waiting (published once queued) -> retired (expired or
-// cancelled: the filter skips it) -> free (its fence's callback, after the pass, or a cancel that took it back).
+// the pass like any other. Free -> waiting (published once queued) -> retired (cancelled while down) -> free.
 struct FilterWaiter {
     switch_host1x_fence fence;
     void (*fn)(void *);
@@ -70,28 +70,10 @@ enum : uint8_t {
 };
 
 constexpr uint32_t kFilterWaiters = 8;
-IOSimpleLock *gFilterLock;  // the waiters' state and gFilterUp, against the filter
 FilterWaiter gWaiters[kFilterWaiters];
-bool gFilterUp;  // the sync unit is clocked: the filter may read it
 
-void setWaiter(FilterWaiter &waiter, uint8_t state)
-{
-    const IOInterruptState interrupts = IOSimpleLockLockDisableInterrupt(gFilterLock);
-    waiter.state = state;
-    IOSimpleLockUnlockEnableInterrupt(gFilterLock, interrupts);
-}
-
-void waiterExpired(switch_host1x_fence *fence, int)
-{
-    setWaiter(*reinterpret_cast<FilterWaiter *>(fence), kWaiterFree);
-}
-
-void setFilterUp(bool up)
-{
-    const IOInterruptState interrupts = IOSimpleLockLockDisableInterrupt(gFilterLock);
-    gFilterUp = up;
-    IOSimpleLockUnlockEnableInterrupt(gFilterLock, interrupts);
-}
+void waiterExpired(switch_host1x_fence *, int)
+{}
 
 uint64_t deadlineIn(uint32_t us)
 {
@@ -108,32 +90,45 @@ void armBoundsLocked(uint64_t deadline)
     thread_call_enter_delayed(gBounds, deadline);
 }
 
-// Waiters (no callback) are woken here, under the lock; fences with a callback move to `callbacks` in state. A filter
-// waiter whose fence expired is retired here, before the pass runs any callback, so no filter runs it after the
-// callbacks its threshold ends.
+void cancelBoundsLocked(bool force = false)
+{
+    if (!gBoundsAt || (!force && gList.hasBounded()))
+        return;
+    gBoundsAt = 0;
+    thread_call_cancel(gBounds);
+}
+
+// Waiters (no callback) and filter waiters are retired here under gLock (filter-safe); callbacks move to `callbacks`.
 void sortLocked(SwitchHost1xExpired &done, SwitchHost1xExpired &callbacks, uint8_t state)
 {
     for (auto *fence = done.take(); fence;) {
         auto *next = fence->next;
-        if (fence->signaled == waiterExpired)
-            setWaiter(*reinterpret_cast<FilterWaiter *>(fence), kWaiterRetired);
-        if (fence->signaled) {
+        if (fence->signaled == waiterExpired) {
+            reinterpret_cast<FilterWaiter *>(fence)->state = kWaiterFree;
+            fence->state = SWITCH_HOST1X_FENCE_IDLE;
+        } else if (fence->signaled) {
             fence->state = state;
             callbacks.push(fence);
         } else {
             fence->state = SWITCH_HOST1X_FENCE_IDLE;
-            IOLockWakeup(gLock, fence, false);
+            thread_wakeup(reinterpret_cast<event_t>(fence));
         }
         fence = next;
     }
 }
 
-// Outside the work loop, callbacks are handed to it.
-void settleLocked(SwitchHost1xExpired &done)
+// Outside the work loop, callbacks are handed to it; returns true when caller must kick gKick after unlocking gLock.
+bool settleLocked(SwitchHost1xExpired &done)
 {
+    cancelBoundsLocked();
     const bool idle = !gHandOff.first;
     sortLocked(done, gHandOff, SWITCH_HOST1X_FENCE_HANDED_OFF);
-    if (idle && gHandOff.first)
+    return idle && gHandOff.first != nullptr;
+}
+
+void maybeKick(bool kick)
+{
+    if (kick)
         gKick->interruptOccurred(nullptr, nullptr, 0);
 }
 
@@ -156,17 +151,20 @@ void bounds(thread_call_param_t, thread_call_param_t)
     SwitchHost1xExpired done;
     uint64_t grace = 0, next = 0;
     nanoseconds_to_absolutetime(static_cast<uint64_t>(kGraceMs) * NSEC_PER_MSEC, &grace);
-    IOLockLock(gLock);
+    const IOInterruptState ints = IOSimpleLockLockDisableInterrupt(gLock);
     gBoundsAt = 0;
-    if (gUp) {
-        if (const auto *lost = gList.overdue(gRegisters, mach_absolute_time(), grace, gStrict, TEGRA_HOST1X_ETIMEDOUT,
-                                             TEGRA_HOST1X_ELOST, done, &next))
-            panicLost(lost);
-        if (next)
+    const switch_host1x_fence *lost = nullptr;
+    if (gUp && gList.hasBounded()) {
+        lost = gList.overdue(gRegisters, mach_absolute_time(), grace, gStrict, TEGRA_HOST1X_ETIMEDOUT,
+                             TEGRA_HOST1X_ELOST, done, &next);
+        if (!lost && next)
             armBoundsLocked(next);
     }
-    settleLocked(done);
-    IOLockUnlock(gLock);
+    const bool kick = settleLocked(done);
+    IOSimpleLockUnlockEnableInterrupt(gLock, ints);
+    if (lost)
+        panicLost(lost);
+    maybeKick(kick);
 }
 }  // namespace
 
@@ -176,23 +174,22 @@ bool switch_host1x_intr_init(IOWorkLoop *loop, volatile uint8_t *sync, uint32_t 
     gIntid = intid;
     gBounds = thread_call_allocate_with_options(bounds, nullptr, THREAD_CALL_PRIORITY_KERNEL, THREAD_CALL_OPTIONS_ONCE);
     gKick = IOInterruptEventSource::interruptEventSource(loop, &kicked);
-    IOLock *lock = IOLockAlloc();
-    IOSimpleLock *filterLock = IOSimpleLockAlloc();
-    if (!lock || !filterLock || !gBounds || !gKick || loop->addEventSource(gKick) != kIOReturnSuccess)
+    IOSimpleLock *lock = IOSimpleLockAlloc();
+    if (!lock || !gBounds || !gKick || loop->addEventSource(gKick) != kIOReturnSuccess)
         return false;
     gKick->enable();
-    __atomic_store_n(&gFilterLock, filterLock, __ATOMIC_RELEASE);
     __atomic_store_n(&gLock, lock, __ATOMIC_RELEASE);
     return true;
 }
 
-void switch_host1x_intr_filter()
+bool switch_host1x_intr_filter()
 {
-    IOSimpleLock *lock = __atomic_load_n(&gFilterLock, __ATOMIC_ACQUIRE);
+    IOSimpleLock *lock = __atomic_load_n(&gLock, __ATOMIC_ACQUIRE);
     if (!lock)
-        return;
+        return false;
     IOSimpleLockLock(lock);
-    if (gFilterUp) {
+    bool needAction = false;
+    if (gUp) {
         for (auto &waiter : gWaiters) {
             if (waiter.state != kWaiterWaiting || waiter.fired ||
                 !switch_host1x_reached(gList.value(gRegisters, waiter.fence.syncpt), waiter.fence.threshold))
@@ -200,19 +197,29 @@ void switch_host1x_intr_filter()
             waiter.fired = true;
             waiter.fn(waiter.ctx);
         }
+        SwitchHost1xExpired done;
+        const bool fired = gList.interrupt(gRegisters, done);
+        cancelBoundsLocked();
+        sortLocked(done, gHandOff, SWITCH_HOST1X_FENCE_HANDED_OFF);
+        if (fired)
+            (void)gList.status(gRegisters, 0);  // flush posted INT_DISABLE/INT_STATUS before dropping level SPI
+        needAction = gHandOff.first != nullptr;
     }
     IOSimpleLockUnlock(lock);
+    return needAction;
 }
 
 void switch_host1x_intr_handle()
 {
     SwitchHost1xExpired callbacks, done;
-    IOLockLock(gLock);
+    const IOInterruptState ints = IOSimpleLockLockDisableInterrupt(gLock);
     done.append(gHandOff);
-    if (gUp)
+    if (gUp) {
         gList.interrupt(gRegisters, done);
+        cancelBoundsLocked();
+    }
     sortLocked(done, callbacks, SWITCH_HOST1X_FENCE_DELIVERING);
-    IOLockUnlock(gLock);
+    IOSimpleLockUnlockEnableInterrupt(gLock, ints);
     for (auto *fence = callbacks.take(); fence;) {
         auto *next = fence->next;
         auto *signaled = fence->signaled;
@@ -229,12 +236,13 @@ uint32_t switch_host1x_fences_fail(uint32_t id, int status)
         return 0;
     SwitchHost1xExpired done;
     uint32_t failed = 0;
-    IOLockLock(gLock);
+    const IOInterruptState ints = IOSimpleLockLockDisableInterrupt(gLock);
     gStopped[id / 32] |= 1u << (id % 32);
     if (gUp)
         failed = gList.fail(gRegisters, id, status, done);
-    settleLocked(done);
-    IOLockUnlock(gLock);
+    const bool kick = settleLocked(done);
+    IOSimpleLockUnlockEnableInterrupt(gLock, ints);
+    maybeKick(kick);
     return failed;
 }
 
@@ -242,38 +250,38 @@ void switch_host1x_fences_resume(uint32_t id)
 {
     if (!gLock || id >= SwitchHost1xFenceList<Registers>::kSyncpts)
         return;
-    IOLockLock(gLock);
+    const IOInterruptState ints = IOSimpleLockLockDisableInterrupt(gLock);
     gStopped[id / 32] &= ~(1u << (id % 32));
-    IOLockUnlock(gLock);
+    IOSimpleLockUnlockEnableInterrupt(gLock, ints);
 }
 
 bool switch_host1x_fence_names(uint32_t id)
 {
     if (!gLock || id >= SwitchHost1xFenceList<Registers>::kSyncpts)
         return false;
-    IOLockLock(gLock);
+    const IOInterruptState ints = IOSimpleLockLockDisableInterrupt(gLock);
     const bool named = gList.names(id);
-    IOLockUnlock(gLock);
+    IOSimpleLockUnlockEnableInterrupt(gLock, ints);
     return named;
 }
 
 void switch_host1x_intr_stop()
 {
-    IOLockLock(gLock);
+    const IOInterruptState ints = IOSimpleLockLockDisableInterrupt(gLock);
     gUp = false;
-    setFilterUp(false);
-    IOLockUnlock(gLock);
+    cancelBoundsLocked(true);
+    IOSimpleLockUnlockEnableInterrupt(gLock, ints);
 }
 
 void switch_host1x_intr_start()
 {
     SwitchHost1xExpired done;
-    IOLockLock(gLock);
+    const IOInterruptState ints = IOSimpleLockLockDisableInterrupt(gLock);
     gUp = true;
-    setFilterUp(true);
     gList.rearm(gRegisters, done);
-    settleLocked(done);
-    IOLockUnlock(gLock);
+    const bool kick = settleLocked(done);
+    IOSimpleLockUnlockEnableInterrupt(gLock, ints);
+    maybeKick(kick);
 }
 
 extern "C" void switch_host1x_fence_init(switch_host1x_fence *fence, uint32_t syncpt, uint32_t threshold,
@@ -293,9 +301,9 @@ extern "C" int switch_host1x_fence_add(switch_host1x_fence *fence, uint32_t boun
         __atomic_load_n(&fence->state, __ATOMIC_ACQUIRE) != SWITCH_HOST1X_FENCE_IDLE)
         return TEGRA_HOST1X_EINVAL;
     SwitchHost1xExpired done;
-    IOLockLock(gLock);
+    const IOInterruptState ints = IOSimpleLockLockDisableInterrupt(gLock);
     if (!gUp) {
-        IOLockUnlock(gLock);
+        IOSimpleLockUnlockEnableInterrupt(gLock, ints);
         return TEGRA_HOST1X_ENODEV;
     }
     fence->graced = 0;
@@ -305,8 +313,9 @@ extern "C" int switch_host1x_fence_add(switch_host1x_fence *fence, uint32_t boun
         gList.fail(gRegisters, fence->syncpt, TEGRA_HOST1X_ETIMEDOUT, done);
     if (fence->state == SWITCH_HOST1X_FENCE_QUEUED && fence->deadline)
         armBoundsLocked(fence->deadline);
-    settleLocked(done);
-    IOLockUnlock(gLock);
+    const bool kick = settleLocked(done);
+    IOSimpleLockUnlockEnableInterrupt(gLock, ints);
+    maybeKick(kick);
     return TEGRA_HOST1X_OK;
 }
 
@@ -315,17 +324,18 @@ extern "C" void switch_host1x_fence_watch(switch_host1x_fence *fence, uint32_t b
     if (!gLock || !fence)
         return;
     SwitchHost1xExpired done;
-    IOLockLock(gLock);
+    const IOInterruptState ints = IOSimpleLockLockDisableInterrupt(gLock);
     if (fence->state == SWITCH_HOST1X_FENCE_QUEUED) {
         fence->graced = 0;
-        fence->deadline = deadlineIn(boundUs);
+        gList.setDeadline(fence, deadlineIn(boundUs));
         if (stoppedLocked(fence->syncpt))
             gList.fail(gRegisters, fence->syncpt, TEGRA_HOST1X_ETIMEDOUT, done);
         else
             armBoundsLocked(fence->deadline);
     }
-    settleLocked(done);
-    IOLockUnlock(gLock);
+    const bool kick = settleLocked(done);
+    IOSimpleLockUnlockEnableInterrupt(gLock, ints);
+    maybeKick(kick);
 }
 
 extern "C" bool switch_host1x_fence_remove(switch_host1x_fence *fence)
@@ -333,14 +343,15 @@ extern "C" bool switch_host1x_fence_remove(switch_host1x_fence *fence)
     if (!gLock || !fence)
         return false;
     SwitchHost1xExpired done;
-    IOLockLock(gLock);
+    const IOInterruptState ints = IOSimpleLockLockDisableInterrupt(gLock);
     bool removed = gUp && gList.remove(gRegisters, fence, done);
     if (!removed && fence->state == SWITCH_HOST1X_FENCE_HANDED_OFF && gHandOff.erase(fence)) {
         fence->state = SWITCH_HOST1X_FENCE_IDLE;
         removed = true;
     }
-    settleLocked(done);
-    IOLockUnlock(gLock);
+    const bool kick = settleLocked(done);
+    IOSimpleLockUnlockEnableInterrupt(gLock, ints);
+    maybeKick(kick);
     return removed;
 }
 
@@ -351,27 +362,24 @@ extern "C" int switch_host1x_filter_wait(uint32_t syncpt, uint32_t threshold, vo
         return TEGRA_HOST1X_ENODEV;
     if (syncpt >= SwitchHost1xFenceList<Registers>::kSyncpts || !fn || !handle)
         return TEGRA_HOST1X_EINVAL;
-    IOLockLock(gLock);
+    const IOInterruptState ints = IOSimpleLockLockDisableInterrupt(gLock);
     if (!gUp) {
-        IOLockUnlock(gLock);
+        IOSimpleLockUnlockEnableInterrupt(gLock, ints);
         return TEGRA_HOST1X_ENODEV;
     }
     if (switch_host1x_reached(gList.value(gRegisters, syncpt), threshold)) {
-        IOLockUnlock(gLock);
+        IOSimpleLockUnlockEnableInterrupt(gLock, ints);
         return SWITCH_HOST1X_FILTER_PASSED;
     }
     FilterWaiter *waiter = nullptr;
-    const IOInterruptState interrupts = IOSimpleLockLockDisableInterrupt(gFilterLock);
     for (auto &slot : gWaiters)
         if (!waiter && slot.state == kWaiterFree)
             waiter = &slot;
-    if (waiter)
-        waiter->state = kWaiterRetired;
-    IOSimpleLockUnlockEnableInterrupt(gFilterLock, interrupts);
     if (!waiter) {
-        IOLockUnlock(gLock);
+        IOSimpleLockUnlockEnableInterrupt(gLock, ints);
         return TEGRA_HOST1X_ENOMEM;
     }
+    waiter->state = kWaiterRetired;
     switch_host1x_fence_init(&waiter->fence, syncpt, threshold, waiterExpired);
     waiter->fn = fn;
     waiter->ctx = ctx;
@@ -381,10 +389,11 @@ extern "C" int switch_host1x_filter_wait(uint32_t syncpt, uint32_t threshold, vo
     gList.add(gRegisters, &waiter->fence, done);
     const bool queued = waiter->fence.state == SWITCH_HOST1X_FENCE_QUEUED;
     if (queued)
-        setWaiter(*waiter, kWaiterWaiting);
-    settleLocked(done);
+        waiter->state = kWaiterWaiting;
+    const bool kick = settleLocked(done);
     *handle = (uint64_t(waiter->generation) << 32) | uint64_t(waiter - gWaiters);
-    IOLockUnlock(gLock);
+    IOSimpleLockUnlockEnableInterrupt(gLock, ints);
+    maybeKick(kick);
     return queued ? int(TEGRA_HOST1X_OK) : int(SWITCH_HOST1X_FILTER_PASSED);
 }
 
@@ -395,18 +404,17 @@ extern "C" bool switch_host1x_filter_cancel(switch_host1x_filter_handle handle)
     if (!gLock || index >= kFilterWaiters)
         return false;
     auto &waiter = gWaiters[index];
-    IOLockLock(gLock);
-    const IOInterruptState interrupts = IOSimpleLockLockDisableInterrupt(gFilterLock);
+    const IOInterruptState ints = IOSimpleLockLockDisableInterrupt(gLock);
     const bool mine = waiter.generation == uint32_t(handle >> 32) && waiter.state == kWaiterWaiting;
     const bool ran = waiter.fired;
     if (mine)
         waiter.state = kWaiterRetired;
-    IOSimpleLockUnlockEnableInterrupt(gFilterLock, interrupts);
     SwitchHost1xExpired done;
     if (mine && gUp && gList.remove(gRegisters, &waiter.fence, done))
-        setWaiter(waiter, kWaiterFree);
-    settleLocked(done);
-    IOLockUnlock(gLock);
+        waiter.state = kWaiterFree;
+    const bool kick = settleLocked(done);
+    IOSimpleLockUnlockEnableInterrupt(gLock, ints);
+    maybeKick(kick);
     return mine && !ran;
 }
 
@@ -422,12 +430,12 @@ extern "C" void tegra_host1x_syncpt_kick(uint32_t id)
 {
     if (!gLock || id >= SwitchHost1xFenceList<Registers>::kSyncpts)
         return;
-    IOLockLock(gLock);
+    const IOInterruptState ints = IOSimpleLockLockDisableInterrupt(gLock);
     gList.forEach(id, [](switch_host1x_fence *fence) {
         if (!fence->signaled)
-            IOLockWakeup(gLock, fence, false);
+            thread_wakeup(reinterpret_cast<event_t>(fence));
     });
-    IOLockUnlock(gLock);
+    IOSimpleLockUnlockEnableInterrupt(gLock, ints);
 }
 
 extern "C" int tegra_host1x_syncpt_wait_unless(uint32_t id, uint32_t threshold, uint32_t timeoutUs,
@@ -440,23 +448,37 @@ extern "C" int tegra_host1x_syncpt_wait_unless(uint32_t id, uint32_t threshold, 
     switch_host1x_fence waiter;
     switch_host1x_fence_init(&waiter, id, threshold, nullptr);
     SwitchHost1xExpired done;
-    IOLockLock(gLock);
+    IOInterruptState ints = IOSimpleLockLockDisableInterrupt(gLock);
     if (!gUp) {
-        IOLockUnlock(gLock);
+        IOSimpleLockUnlockEnableInterrupt(gLock, ints);
         return TEGRA_HOST1X_ENODEV;
     }
     gList.add(gRegisters, &waiter, done);
     if (waiter.state == SWITCH_HOST1X_FENCE_QUEUED && stoppedLocked(id))
         gList.fail(gRegisters, id, TEGRA_HOST1X_ETIMEDOUT, done);
-    settleLocked(done);
+    bool kick = settleLocked(done);
     uint64_t deadline = deadlineIn(timeoutUs);
     int ret = TEGRA_HOST1X_OK;
+    bool lostPanic = false;
     for (bool grace = false; waiter.state == SWITCH_HOST1X_FENCE_QUEUED;) {
         if (errors && __atomic_load_n(errors, __ATOMIC_ACQUIRE) != seen) {
             ret = TEGRA_HOST1X_EFALCON;
             break;
         }
-        if (IOLockSleepDeadline(gLock, &waiter, deadline, THREAD_UNINT) != THREAD_TIMED_OUT)
+        if (kick) {
+            IOSimpleLockUnlockEnableInterrupt(gLock, ints);
+            maybeKick(true);
+            kick = false;
+            ints = IOSimpleLockLockDisableInterrupt(gLock);
+            continue;
+        }
+        wait_result_t wr = assert_wait_deadline(reinterpret_cast<event_t>(&waiter), THREAD_UNINT, deadline);
+        if (wr == THREAD_WAITING) {
+            IOSimpleLockUnlockEnableInterrupt(gLock, ints);
+            wr = thread_block(THREAD_CONTINUE_NULL);
+            ints = IOSimpleLockLockDisableInterrupt(gLock);
+        }
+        if (wr != THREAD_TIMED_OUT)
             continue;
         if (waiter.state != SWITCH_HOST1X_FENCE_QUEUED)
             break;
@@ -469,14 +491,20 @@ extern "C" int tegra_host1x_syncpt_wait_unless(uint32_t id, uint32_t threshold, 
                 ret = TEGRA_HOST1X_ELOST;
                 break;
             }
-            panicLost(&waiter);
+            lostPanic = true;
+            break;
         }
         grace = true;
         clock_interval_to_deadline(kGraceMs, kMillisecondScale, &deadline);
     }
-    gList.remove(gRegisters, &waiter, done);
-    settleLocked(done);
-    IOLockUnlock(gLock);
+    if (!lostPanic) {
+        gList.remove(gRegisters, &waiter, done);
+        kick |= settleLocked(done);
+    }
+    IOSimpleLockUnlockEnableInterrupt(gLock, ints);
+    if (lostPanic)
+        panicLost(&waiter);
+    maybeKick(kick);
     return ret ? ret : waiter.status;
 }
 

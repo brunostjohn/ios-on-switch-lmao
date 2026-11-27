@@ -14,8 +14,12 @@
 
 using IOReturn = int;
 using IOOptionBits = uint32_t;
+using event_t = void *;
+using wait_result_t = int;
+using thread_continue_t = void (*)(void *, wait_result_t);
 constexpr IOReturn kIOReturnSuccess = 0;
-constexpr int THREAD_UNINT = 0, THREAD_AWAKENED = 0, THREAD_TIMED_OUT = 1;
+constexpr int THREAD_UNINT = 0, THREAD_WAITING = -1, THREAD_AWAKENED = 0, THREAD_TIMED_OUT = 1;
+constexpr thread_continue_t THREAD_CONTINUE_NULL = nullptr;
 constexpr uint32_t kMicrosecondScale = 1000, kMillisecondScale = 1000000;
 constexpr uint64_t NSEC_PER_USEC = 1000, NSEC_PER_MSEC = 1000000;
 constexpr size_t PAGE_SIZE = 16384;
@@ -98,14 +102,36 @@ inline void IOSimpleLockUnlockEnableInterrupt(IOSimpleLock *lock, IOInterruptSta
 }
 
 inline uint32_t switch_test_wakeups;
+inline uint64_t switch_test_wait_deadline;
+inline event_t switch_test_wait_event;
 
 inline void IOLockWakeup(IOLock *, void *, bool)
 {
     ++switch_test_wakeups;
 }
 
-// Called with the lock held and the deadline: returns THREAD_AWAKENED or THREAD_TIMED_OUT.
+inline void thread_wakeup(event_t)
+{
+    ++switch_test_wakeups;
+}
+
+// Called with the lock released and the deadline: returns THREAD_AWAKENED or THREAD_TIMED_OUT.
 inline std::function<int(uint64_t deadline)> switch_test_sleep;
+
+inline wait_result_t assert_wait_deadline(event_t event, int, uint64_t deadline)
+{
+    switch_test_wait_event = event;
+    switch_test_wait_deadline = deadline;
+    return THREAD_WAITING;
+}
+
+inline wait_result_t thread_block(thread_continue_t)
+{
+    switch_test_may_block("thread_block");
+    if (!switch_test_sleep)
+        throw std::runtime_error("unexpected sleep");
+    return switch_test_sleep(switch_test_wait_deadline);
+}
 
 inline int IOLockSleepDeadline(IOLock *lock, void *, uint64_t deadline, int)
 {
@@ -266,11 +292,20 @@ inline thread_call_t thread_call_allocate_with_options(thread_call_func_t functi
     return new thread_call{function, param, 0};
 }
 
+inline uint32_t switch_test_bounds_cancels;
+
 inline bool thread_call_enter_delayed(thread_call_t call, uint64_t deadline)
 {
     switch_test_bounds = call->fire;
     switch_test_bounds_at = deadline;
     return false;
+}
+
+inline bool thread_call_cancel(thread_call_t)
+{
+    ++switch_test_bounds_cancels;
+    switch_test_bounds_at = 0;
+    return true;
 }
 
 inline bool thread_call_enter(thread_call_t call)

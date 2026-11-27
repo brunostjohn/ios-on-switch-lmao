@@ -33,7 +33,7 @@ TegraSMMUIdentityTable *TegraSMMURamViewEnv::makeTable()
 
 void TegraSMMURamViewEnv::clean(const void *va, size_t bytes)
 {
-    switch_dcache_clean(va, bytes);
+    switch_dcache_clean_lines(va, bytes);
 }
 
 void TegraSMMURamViewEnv::sync()

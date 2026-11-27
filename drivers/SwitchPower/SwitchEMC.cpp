@@ -58,7 +58,8 @@ class SwitchEMC : public OSObject {
     IOInterruptEventSource *signal[switchperf::kSignalCpus] = {};
     volatile uint8_t *regs = nullptr;
     SwitchMMIOWords mcRegs;
-    switch_display::MemoryState memoryState;
+    switch_display::MemoryState memoryState, memoryCommitted;
+    uint32_t memorySeq = 0;
     bool memoryQualified = false, memoryDirty = false, fixed = false;
     uint32_t memoryAppliedKhz = 0;
     volatile uint8_t *car = nullptr;
@@ -118,6 +119,7 @@ class SwitchEMC : public OSObject {
 
     uint64_t floorBytes() const;
     unsigned memoryFloor(unsigned first) const;
+    void publishMemorySnapshot();
     void uncoveredDisplayMemory(uint32_t runningKhz, const char *why);
     bool programMemory(uint32_t before, uint32_t after, bool force = false);
     void programGpuMc(uint32_t dramKhz, bool logDump = false);
@@ -164,6 +166,8 @@ SwitchEMC *gEMC;
 // At the top rate with the down watermark off: a hint then only extends the hold, and a GPU submission costs this one
 // load, without waking the work loop.
 bool gTopHeld;
+// Latched while a raise to top rate is already queued on the work loop so concurrent submits don't storm signal[cpu].
+bool gRaisePending;
 
 void framesStarted()
 {
@@ -314,7 +318,10 @@ void SwitchEMC::program()
                         kCtrlEnable | kCtrlPeriodic | (kAvgWindowLog2 - 1) << kCtrlKShift |
                             (SWITCH_EMC_DOWN_SAMPLES - 1) << kCtrlDownNumShift | 0u << kCtrlUpNumShift |
                             (w.up_on ? kCtrlUpWmark : 0) | (w.down_on ? kCtrlDownWmark : 0));
-    __atomic_store_n(&gTopHeld, cur + 1 == count && !w.down_on, __ATOMIC_RELEASE);
+    const bool topHeld = cur + 1 == count && !w.down_on;
+    __atomic_store_n(&gTopHeld, topHeld, __ATOMIC_RELEASE);
+    if (topHeld)
+        __atomic_store_n(&gRaisePending, false, __ATOMIC_RELEASE);
 }
 
 IOReturn SwitchEMC::displayAction(OSObject *owner, void *bytes, void *result, void *, void *)
@@ -360,8 +367,10 @@ void SwitchEMC::actmonFired(OSObject *owner, IOInterruptEventSource *, int)
 void SwitchEMC::signalFired(OSObject *owner, IOInterruptEventSource *, int)
 {
     auto *self = static_cast<SwitchEMC *>(owner);
-    if (!self->governing)
+    if (!self->governing) {
+        __atomic_store_n(&gRaisePending, false, __ATOMIC_RELEASE);
         return;
+    }
 #if SWITCH_STATS_POWER
     const unsigned before = self->cur;
     const uint64_t bpmp = mach_absolute_time();
@@ -378,6 +387,12 @@ void SwitchEMC::signalFired(OSObject *owner, IOInterruptEventSource *, int)
     }
 #endif
     self->program();
+    __atomic_store_n(&gRaisePending, false, __ATOMIC_SEQ_CST);
+    if (!__atomic_load_n(&gTopHeld, __ATOMIC_ACQUIRE) && self->cur + 1 < self->count &&
+        self->held(mach_absolute_time())) {
+        self->moveTo(self->count - 1, SWITCH_EMC_REASON_HINT);
+        self->program();
+    }
 }
 
 #include "SwitchEMCHints.h"
@@ -391,6 +406,7 @@ void SwitchEMC::startActmon()
     switch_car_reset_deassert(kActmonClock);
     switch_mmio_write32(regs, kGlbPeriodCtrl, SWITCH_EMC_SAMPLE_MS - 1);
     switch_mmio_write32(regs, kMcAll + kCountWeight, kMcAllCountWeight);
+    __atomic_store_n(&gRaisePending, false, __ATOMIC_RELEASE);
     program();
     actmon->enable();
 }
@@ -398,6 +414,7 @@ void SwitchEMC::startActmon()
 void SwitchEMC::stopActmon()
 {
     __atomic_store_n(&gTopHeld, false, __ATOMIC_RELEASE);
+    __atomic_store_n(&gRaisePending, false, __ATOMIC_RELEASE);
     actmon->disable();
     switch_mmio_write32(regs, kMcAll + kCtrl, 0);
     switch_mmio_write32(regs, kMcAll + kIntrStatus, ~0u);
@@ -476,7 +493,7 @@ extern "C" void switch_emc_hint(unsigned int hint)
 // its top rate ahead of that work's traffic, as for a hint. One load while it is already there and held; never blocks.
 extern "C" void switch_emc_gpu_submit(void)
 {
-    if (__atomic_load_n(&gTopHeld, __ATOMIC_RELAXED))
+    if (__atomic_load_n(&gTopHeld, __ATOMIC_RELAXED) || __atomic_load_n(&gRaisePending, __ATOMIC_RELAXED))
         return;
     if (SwitchEMC *emc = __atomic_load_n(&gEMC, __ATOMIC_ACQUIRE))
         emc->hint();

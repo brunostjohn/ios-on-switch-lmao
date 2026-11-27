@@ -37,20 +37,27 @@ struct SwitchHost1xGatherStats {
 
     void submitted(uint32_t channel, bool copy, uint32_t heldWords)
     {
-        (copy ? copied : gathered)[channel]++;
-        if (heldWords > highWords[channel])
-            highWords[channel] = heldWords;
+        __atomic_add_fetch(&(copy ? copied : gathered)[channel], 1u, __ATOMIC_RELAXED);
+        uint32_t cur = __atomic_load_n(&highWords[channel], __ATOMIC_RELAXED);
+        while (heldWords > cur && !__atomic_compare_exchange_n(&highWords[channel], &cur, heldWords, true,
+                                                               __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {}
     }
 
     void waited(uint32_t channel)
     {
-        roomWaits[channel]++;
+        __atomic_add_fetch(&roomWaits[channel], 1u, __ATOMIC_RELAXED);
+    }
+
+    bool maybeDue(uint64_t nowUs) const
+    {
+        const uint64_t start = __atomic_load_n(&windowStart, __ATOMIC_RELAXED);
+        return !start || nowUs - start >= kWindowUs;
     }
 
     bool due(uint64_t nowUs)
     {
         if (!windowStart)
-            windowStart = nowUs;
+            __atomic_store_n(&windowStart, nowUs, __ATOMIC_RELAXED);
         return nowUs - windowStart >= kWindowUs;
     }
 
@@ -60,16 +67,19 @@ struct SwitchHost1xGatherStats {
     {
         if (!due(nowUs))
             return false;
-        uint32_t kb[kChannels];
-        for (uint32_t i = 0; i < kChannels; ++i)
-            kb[i] = (highWords[i] * 4 + 1023) / 1024;
+        uint32_t g[kChannels], c[kChannels], kb[kChannels], w[kChannels];
+        for (uint32_t i = 0; i < kChannels; ++i) {
+            g[i] = __atomic_exchange_n(&gathered[i], 0u, __ATOMIC_RELAXED);
+            c[i] = __atomic_exchange_n(&copied[i], 0u, __ATOMIC_RELAXED);
+            kb[i] = (__atomic_exchange_n(&highWords[i], 0u, __ATOMIC_RELAXED) * 4 + 1023) / 1024;
+            w[i] = __atomic_exchange_n(&roomWaits[i], 0u, __ATOMIC_RELAXED);
+        }
         const int n =
             snprintf(out, size,
                      "TegraHost1x: %llus NVDEC/VIC/NVENC/NVJPG/DC gathered=%u/%u/%u/%u/%u copied=%u/%u/%u/%u/%u "
                      "arena_high=%u/%u/%u/%u/%uKB room_waits=%u/%u/%u/%u/%u",
-                     ull((nowUs - windowStart) / 1000000), gathered[0], gathered[1], gathered[2], gathered[3],
-                     gathered[4], copied[0], copied[1], copied[2], copied[3], copied[4], kb[0], kb[1], kb[2], kb[3],
-                     kb[4], roomWaits[0], roomWaits[1], roomWaits[2], roomWaits[3], roomWaits[4]);
+                     ull((nowUs - windowStart) / 1000000), g[0], g[1], g[2], g[3], g[4], c[0], c[1], c[2], c[3], c[4],
+                     kb[0], kb[1], kb[2], kb[3], kb[4], w[0], w[1], w[2], w[3], w[4]);
         const size_t at = n < 0 ? 0 : static_cast<size_t>(n) < size ? static_cast<size_t>(n) : size;
         if (counters && clockKHz) {
             uint64_t clocked[kChannels], stalled[kChannels];
@@ -84,9 +94,7 @@ struct SwitchHost1xGatherStats {
         } else {
             snprintf(out + at, size - at, " counters=off");
         }
-        for (uint32_t i = 0; i < kChannels; ++i)
-            gathered[i] = copied[i] = highWords[i] = roomWaits[i] = 0;
-        windowStart = nowUs;
+        __atomic_store_n(&windowStart, nowUs, __ATOMIC_RELAXED);
         return true;
     }
 
