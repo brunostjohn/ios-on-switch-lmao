@@ -46,10 +46,13 @@ uint64_t periodTicks(uint64_t period)
 
 void SwitchExternalScreen::releaseEventSources()
 {
-    if (fenceLoop && fenceSource)
-        fenceLoop->removeEventSource(fenceSource);
-    OSSafeReleaseNULL(fenceSource);
-    OSSafeReleaseNULL(fenceLoop);
+    __atomic_store_n(&fenceStopping, true, __ATOMIC_RELEASE);
+    if (fenceCall) {
+        if (thread_call_cancel_wait(fenceCall))
+            release();
+        thread_call_free(fenceCall);
+        fenceCall = nullptr;
+    }
     if (loop) {
         if (readySource)
             loop->removeEventSource(readySource);
@@ -97,6 +100,10 @@ void SwitchExternalScreen::free()
         IODelete(slots, Slot, kSlots);
         slots = nullptr;
     }
+    if (validatedCache) {
+        IODelete(validatedCache, ValidatedCacheEntry, kValidatedCache);
+        validatedCache = nullptr;
+    }
     if (!mapped)
         switch_dma_free(&tables);
     IOMobileFramebufferLegacy::free();
@@ -107,7 +114,8 @@ bool SwitchExternalScreen::begin(SwitchDisplayPort *port, IOWorkLoop *workLoop)
     if (!workLoop || workLoop != getWorkLoop())
         return false;
     slots = IONewZero(Slot, kSlots);
-    if (!slots)
+    validatedCache = IONewZero(ValidatedCacheEntry, kValidatedCache);
+    if (!slots || !validatedCache)
         return false;
     // DC B's page tables are one physically contiguous run, taken at boot: hours in, a dock finds memory too fragmented
     // for a run this long, and every swap would then search for it again.
@@ -125,11 +133,16 @@ bool SwitchExternalScreen::begin(SwitchDisplayPort *port, IOWorkLoop *workLoop)
     colorLock = IOLockAlloc();
     completion = IOInterruptEventSource::interruptEventSource(this, &completionFired);
     readySource = IOInterruptEventSource::interruptEventSource(this, &readyFired);
-    fenceLoop = IOWorkLoop::workLoop();
-    fenceSource = fenceLoop ? IOInterruptEventSource::interruptEventSource(this, &fenceFired) : nullptr;
-    if (!colorLock || !completion || !readySource || !fenceSource ||
-        loop->addEventSource(completion) != kIOReturnSuccess || loop->addEventSource(readySource) != kIOReturnSuccess ||
-        fenceLoop->addEventSource(fenceSource) != kIOReturnSuccess) {
+    fenceStopping = false;
+    fenceCall = thread_call_allocate_with_options(
+        [](thread_call_param_t owner, thread_call_param_t) {
+            auto *self = static_cast<SwitchExternalScreen *>(owner);
+            self->fenceWork();
+            self->release();
+        },
+        this, THREAD_CALL_PRIORITY_KERNEL, THREAD_CALL_OPTIONS_ONCE);
+    if (!colorLock || !completion || !readySource || !fenceCall ||
+        loop->addEventSource(completion) != kIOReturnSuccess || loop->addEventSource(readySource) != kIOReturnSuccess) {
         releaseEventSources();
         return false;
     }
@@ -647,10 +660,13 @@ bool SwitchExternalScreen::validateSwap(const OriginalLegacySwapRequest *request
         }
         auto *rawMemory = native_legacy_surface_descriptor(surfaces[i]);
         auto *memory = rawMemory && rawMemory->metaCast("IOMemoryDescriptor") ? rawMemory : nullptr;
-        if (memory && memory->prepare(kIODirectionOut) == kIOReturnSuccess) {
-            IOByteCount segLen = 0;
-            const addr64_t firstPa = memory->getPhysicalSegment(0, &segLen, kIOMemoryMapperNone);
-            memory->complete(kIODirectionOut);
+        if (memory) {
+            addr64_t firstPa = cachedFirstPa(memory);
+            if (!firstPa && memory->prepare(kIODirectionOut) == kIOReturnSuccess) {
+                IOByteCount segLen = 0;
+                firstPa = memory->getPhysicalSegment(0, &segLen, kIOMemoryMapperNone);
+                memory->complete(kIODirectionOut);
+            }
             compressedSurface = compressedSurface || (firstPa && tegra_gm20b_surface_compressed(firstPa & ~0xfffULL));
         }
         layers[i] = layerOf(bytes, i, surfaces[i]);
@@ -659,8 +675,12 @@ bool SwitchExternalScreen::validateSwap(const OriginalLegacySwapRequest *request
     const unsigned reason = badObject || compressedSurface
                                 ? native_planes::kSurface
                                 : switch_external::checkSwap(updated, background, hasSurface, layers, width, height);
-    if (reason == native_planes::kAccepted)
+    if (reason == native_planes::kAccepted) {
+        uint32_t id = 0;
+        memcpy(&id, bytes + swapId, sizeof(id));
+        cacheValidatedLayers(request, id, updated, hasSurface, surfaces, layers);
         return true;
+    }
 #if DEVELOPMENT || DEBUG
     if (__atomic_fetch_add(&diagValidateRejects, 1u, __ATOMIC_RELAXED) < 8u) {
         char line[512];

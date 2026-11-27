@@ -136,8 +136,10 @@ TEST(DirectScanoutSource, TiledSurfacesScanBlockLinear)
     EXPECT_TRUE(copy.has("copy.sourceBlockHeightLog2 = blockLog2 >= 0 ? static_cast<uint32_t>(blockLog2) : 0;"));
     const CodeText kick = method("void kickOnce()");
     EXPECT_TRUE(
-        kick.before("const int blockLog2 = surfaceBlockLog2(memory);",
+        kick.before("const addr64_t firstPa = directFirstPa(memory);",
                     "offerDirect(request, surface, memory, sourceStride, allocation, width, height, tiled, kickAt)"));
+    EXPECT_TRUE(kick.before("const int blockLog2 = surfaceBlockLog2Pa(firstPa);",
+                            "const bool compressed = tiled && surfaceCompressedPa(firstPa);"));
     // window A scans, and the CPU's fallback copies as it is, only a frame in window A's own blocks; a frame tiled in
     // other blocks takes the GPU copy (which reads its layout) or is not shown
     EXPECT_TRUE(kick.before("const bool asScanned = !tiled || blockLog2 == static_cast<int>(kScanBlockLog2);",
@@ -548,6 +550,7 @@ TEST(SwapZeroLayerSource, SwapSubmitFilterMatchesBothIpswTables)
     EXPECT_TRUE(code().has("static constexpr unsigned kLegacyVtableSlots = 379, kSwapSubmitSlot = 180;"));
     EXPECT_TRUE(code().has("static constexpr unsigned kLegacyVtableSlots = 358, kSwapSubmitSlot = 178;"));
     EXPECT_TRUE(code().has("static inline switch_display::SwapZeroLayerState swapZeroLayer;"));
+    EXPECT_FALSE(code().has("swapZeroLock"));
     EXPECT_TRUE(method("bool start(IOService *provider) override").has("installSwapSubmitFilter();"));
     EXPECT_TRUE(method("void stop(IOService *provider) override").has("resetSwapZeroLayer();"));
     EXPECT_TRUE(method("void free() override").has("removeSwapSubmitFilter();"));

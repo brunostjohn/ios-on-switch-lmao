@@ -651,3 +651,19 @@ TEST(DisplayB, FrameInterruptClearsStatusOnEnableAndReadsBackOnDisable)
     d.dcb.frameInterrupt(false);
     EXPECT_TRUE(xusbModel().log.empty());
 }
+
+TEST(DisplayB, SteadyStateFlipsSkipEmcReservation)
+{
+    Display d;
+    d.dcb.present(clone(0x10000000, 0x14400000, true));
+    d.banks.boundary();
+    ASSERT_TRUE(d.dcb.latch());
+    ASSERT_EQ(plans.size(), 1u);
+
+    for (uint32_t i = 0; i < 10; ++i) {
+        d.dcb.present(clone(0x10000000 + (i % 2) * 0x04400000u, 0x18800000 + (i % 2) * 0x04400000u, false));
+        d.banks.boundary();
+        ASSERT_TRUE(d.dcb.latch());
+    }
+    EXPECT_EQ(plans.size(), 1u);
+}

@@ -192,3 +192,34 @@ TEST(SwitchSwapZeroLayer, NeverEmptiesNonZeroEnabledMaskAndRespectsSpecialAndRes
     EXPECT_EQ(cAfterReset.elided, 0u);
     state.finish(swap.bytes, cAfterReset, true);
 }
+
+TEST(SwitchSwapZeroLayer, ConcurrentActivateBeforeDisablePreventsClearingActiveState)
+{
+    SwapZeroLayerState state;
+    FakeSwap disableSwap;
+    disableSwap.setEnabled(0x5u);
+    disableSwap.setSurfaceId(0, 10);
+    disableSwap.setSurfaceId(2, 0);
+
+    FakeSwap activateSwap;
+    activateSwap.setEnabled(0x4u);
+    activateSwap.setSurfaceId(2, 99);
+
+    auto cActivate = state.begin(activateSwap.bytes);
+    auto cDisable = state.begin(disableSwap.bytes);
+    state.finish(disableSwap.bytes, cDisable, true);
+    state.finish(activateSwap.bytes, cActivate, true);
+
+    auto cAfter = state.begin(disableSwap.bytes);
+    EXPECT_EQ(cAfter.elided, 0u);
+    state.finish(disableSwap.bytes, cAfter, true);
+
+    cActivate = state.begin(activateSwap.bytes);
+    cDisable = state.begin(disableSwap.bytes);
+    state.finish(activateSwap.bytes, cActivate, true);
+    state.finish(disableSwap.bytes, cDisable, true);
+
+    cAfter = state.begin(disableSwap.bytes);
+    EXPECT_EQ(cAfter.elided, 0u);
+    state.finish(disableSwap.bytes, cAfter, true);
+}
