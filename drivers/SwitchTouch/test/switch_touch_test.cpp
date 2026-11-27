@@ -263,10 +263,12 @@ struct Controller {
     Device *device = nullptr;
     uint64_t generation = 0;  // a flush cancels the packet's scheduled bytes
     IOInterruptEventSource *source = nullptr;
-    bool deliveryPending = false;
-    unsigned packets = 0, actionsSeen = 0, fifoFlushes = 0;
+    IOFilterInterruptEventSource *filter = nullptr;
+    bool deliveryPending = false, stall = false;
+    unsigned packets = 0, actionsSeen = 0, filterCalls = 0, fifoFlushes = 0;
+    uint32_t everUnmasked = 0;
     unsigned arbLosses = 0;  // packets that lose the bus to another master at their START (I2C5's CL-DVFS master)
-    std::vector<std::string> trace;  // per submission: "W3+R2 chained" etc.
+    std::vector<std::string> trace;  // per submission: "W3+rs" etc.
 
     unsigned rxTrigger() const
     {
@@ -326,6 +328,8 @@ struct Controller {
 
     void addressed(uint8_t addr)
     {
+        if (stall)
+            return;
         if (arbLosses) {
             --arbLosses;
             latched |= INT_ARB_LOST;
@@ -468,6 +472,7 @@ struct Controller {
             break;
         case INT_MASK:
             intMask = v;
+            everUnmasked |= v;
             break;
         case FIFO_CONTROL:
             fifoControl = v & ~3u;
@@ -563,12 +568,8 @@ void w32(volatile uint8_t *base, uint32_t o, uint32_t v)
     *(volatile uint32_t *)(base + o) = v;
 }
 
-static unsigned gDmaSyncs = 0;
-
-void dmaSync(const uint8_t *, size_t)
-{
-    ++gDmaSyncs;
-}
+static unsigned gDmaInvalidates = 0;
+static unsigned gDmaInvalidateWhileActive = 0;
 
 // --- APB DMA (TegraAPBDMA.h) ------------------------------------------------------------------------------------------
 struct tegra_apbdma_channel {
@@ -583,6 +584,14 @@ struct tegra_apbdma_channel {
 static tegra_apbdma_channel gDma[TEGRA_APBDMA_CHANNELS];
 static std::map<uint32_t, uint8_t *> gDmaMemory;  // pa -> buffer
 static bool gDmaBroken = false, gDmaLoseInterrupt = false, gDmaOpenFails = false;
+
+void dmaInvalidate(const uint8_t *, size_t size)
+{
+    check(size != 0 && (size % 64) == 0, "DMA invalidate rounded to whole cache lines");
+    if (gDma[TEGRA_APBDMA_CH_I2C3_RX].enabled)
+        ++gDmaInvalidateWhileActive;
+    ++gDmaInvalidates;
+}
 
 bool tegra_apbdma_alloc(uint32_t size, tegra_apbdma_buffer *out)
 {
@@ -819,8 +828,10 @@ static std::vector<IrqRecord> gIrqs;
 
 static unsigned i2cActions(unsigned bus)
 {
-    unsigned n = 0;
-    for (IOInterruptEventSource *s : IOInterruptEventSource::all) {
+    unsigned n = gControllers[bus].filterCalls;
+    if (bus == 3)
+        n += gDma[TEGRA_APBDMA_CH_I2C3_RX].interrupts;
+    for (const IOInterruptEventSource *s : IOInterruptEventSource::all) {
         if (s->provider == gInterruptNubs[gIntid[bus]] || (bus == 3 && !s->provider))
             n += s->actions;
     }
@@ -831,11 +842,29 @@ static void deliver()
 {
     for (unsigned bus = 1; bus <= 5; ++bus) {
         Controller &c = gControllers[bus];
-        if (!c.source) {
+        if (!c.filter && !c.source) {
+            for (IOFilterInterruptEventSource *s : IOFilterInterruptEventSource::filters) {
+                if (gInterruptNubs.contains(gIntid[bus]) && s->provider == gInterruptNubs[gIntid[bus]])
+                    c.filter = s;
+            }
             for (IOInterruptEventSource *s : IOInterruptEventSource::all) {
-                if (gInterruptNubs.count(gIntid[bus]) && s->provider == gInterruptNubs[gIntid[bus]])
+                if (!c.filter && gInterruptNubs.contains(gIntid[bus]) && s->provider == gInterruptNubs[gIntid[bus]])
                     c.source = s;
             }
+        }
+        if (c.filter) {
+            if (!c.filter->enabled || !(c.status() & c.intMask))
+                continue;
+            ++c.filterCalls;
+            if (c.filter->filter(c.filter->owner, c.filter) && !c.deliveryPending) {
+                c.deliveryPending = true;
+                gSchedule(gNow + gWorkLoopNs, [&c] {
+                    c.deliveryPending = false;
+                    if (c.filter->enabled)
+                        c.filter->run();
+                });
+            }
+            continue;
         }
         if (!c.source || c.deliveryPending || !(c.status() & c.intMask))
             continue;
@@ -1073,6 +1102,7 @@ static void scenarioFiveFingers(bool dmaWorks)
     }
     const size_t irqsBefore = gIrqs.size(), reportsBefore = gReports.size();
     const unsigned startsBefore = gDma[TEGRA_APBDMA_CH_I2C3_RX].starts;
+    const unsigned invalidatesBefore = gDmaInvalidates;
     drag(5, 30, 8333333);
     check(gReports.size() - reportsBefore == 32, format("32 reports (got %zu)", gReports.size() - reportsBefore));
     check(downContacts(gReports[reportsBefore + 5].report) == 5, "five contacts down");
@@ -1087,6 +1117,12 @@ static void scenarioFiveFingers(bool dmaWorks)
     // Every steady-state 40-byte event read went by DMA (or none did).
     const unsigned starts = gDma[TEGRA_APBDMA_CH_I2C3_RX].starts - startsBefore;
     check(starts == (dmaWorks ? 31u : 0u), format("DMA reads %u", starts));
+    check(gDmaInvalidates - invalidatesBefore == starts,
+          format("exactly one post-DMA invalidate per DMA read (%u for %u reads)", gDmaInvalidates - invalidatesBefore,
+                 starts));
+    check(gDmaInvalidateWhileActive == 0, "DMA invalidate never runs while channel is active");
+    check(gControllers[3].filter && gControllers[3].filter->actions == 0,
+          "I2C3 filter-only ISR never bounces to work loop");
     // Positions survived the trip: contact 4 at the last move.
     const SwitchTouchReport &r = gReports[reportsBefore + 30].report;
     check((r.slot[4].flags & kSwitchTouchTip) != 0, "contact 4 down at the last move");
@@ -1644,6 +1680,72 @@ static void scenarioFifoFlushBehavior()
     check(i2c5.fifoFlushes > afterErr, "transfer after error flushed FIFOs before queueing");
 }
 
+static void scenarioFilterOnlyNoWorkLoop()
+{
+    bringUp();
+    check(gControllers[3].filter != nullptr && gControllers[5].filter != nullptr,
+          "I2C buses attach IOFilterInterruptEventSource");
+    check(gControllers[3].source == nullptr && gControllers[5].source == nullptr,
+          "no plain IOInterruptEventSource attached for I2C");
+    drag(1, 5, 8333333);
+    drag(5, 5, 8333333);
+    check(gControllers[3].filter->actions == 0, "I2C3 runs zero work-loop actions");
+    check(gControllers[5].filter->actions == 0, "I2C5 runs zero work-loop actions");
+    for (const IOInterruptEventSource *s : IOInterruptEventSource::all)
+        check(s->provider != nullptr, "no provider-less dmaDoneSource created");
+    check(gDmaInvalidates == gDma[TEGRA_APBDMA_CH_I2C3_RX].starts,
+          "exactly one invalidate per DMA read across bring-up and drags");
+    check(gDmaInvalidateWhileActive == 0, "DMA invalidate only runs after completion");
+}
+
+static void scenarioDrainAtEndNonChained()
+{
+    bringUp();
+    Controller &i2c5 = gControllers[5];
+    for (unsigned i = 0; i < 64; ++i)
+        gPmic.regs[0x40 + i] = static_cast<uint8_t>(0xa0 ^ i);
+    const uint8_t reg = 0x40;
+    uint8_t small[32] = {};
+    i2c5.everUnmasked = 0;
+    const unsigned irqsBefore = i2c5.filterCalls;
+    check(tegra_i2c_transfer(5, 0x3c, &reg, 1, small, sizeof(small)) == TEGRA_I2C_OK,
+          "32-byte read on non-chained I2C5 succeeds");
+    check((i2c5.everUnmasked & INT_RX_REQ) == 0, "32-byte read on non-chained bus never unmasks INT_RX_REQ");
+    check(i2c5.filterCalls - irqsBefore == 2,
+          format("32-byte write+read takes 2 filter IRQs (got %u)", i2c5.filterCalls - irqsBefore));
+    for (unsigned i = 0; i < sizeof(small); ++i)
+        check(small[i] == static_cast<uint8_t>(0xa0 ^ i), "32-byte drainAtEnd data matches");
+
+    uint8_t large[40] = {};
+    i2c5.everUnmasked = 0;
+    check(tegra_i2c_transfer(5, 0x3c, &reg, 1, large, sizeof(large)) == TEGRA_I2C_OK,
+          "40-byte PIO read on non-chained I2C5 succeeds");
+    check((i2c5.everUnmasked & INT_RX_REQ) != 0, ">32-byte PIO read unmasks INT_RX_REQ");
+    for (unsigned i = 0; i < sizeof(large); ++i)
+        check(large[i] == static_cast<uint8_t>(0xa0 ^ i), "40-byte PIO data matches");
+}
+
+static void scenarioTimeoutQuiesceAndRecover()
+{
+    bringUp();
+    Controller &i2c5 = gControllers[5];
+    const uint8_t reg = 0x2f;
+    uint8_t val = 0;
+    i2c5.stall = true;
+    const int timedOut = tegra_i2c_transfer(5, 0x3c, &reg, 1, &val, 1);
+    check(timedOut == TEGRA_I2C_ETIMEDOUT, format("stalled bus returns ETIMEDOUT (got %d)", timedOut));
+    check(i2c5.filter && i2c5.filter->enabled, "interrupt re-enabled after timeout quiesce and recovery");
+    i2c5.stall = false;
+    // A spurious late interrupt while idle must be masked/cleared cleanly without affecting subsequent transfers.
+    i2c5.latched |= INT_PACKET_DONE;
+    i2c5.intMask = INT_PACKET_DONE;
+    deliver();
+    check(i2c5.intMask == 0, "stale filter masks INT_MASK");
+    check((i2c5.latched & INT_PACKET_DONE) == 0, "stale filter clears INT_STATUS");
+    check(tegra_i2c_transfer(5, 0x3c, &reg, 1, &val, 1) == TEGRA_I2C_OK && val == gPmic.regs[0x2f],
+          "transfer after timeout and stale IRQ succeeds");
+}
+
 // --- One process per scenario (the drivers keep boot-wide state) ------------------------------------------------------
 static void run(void (*scenario)())
 {
@@ -1775,4 +1877,19 @@ TEST(SwitchTouch, SingleReadFallback)
 TEST(SwitchTouch, FifoFlushBehavior)
 {
     run(scenarioFifoFlushBehavior);
+}
+
+TEST(SwitchTouch, TegraI2CFilterOnlyNoWorkLoop)
+{
+    run(scenarioFilterOnlyNoWorkLoop);
+}
+
+TEST(SwitchTouch, TegraI2CDrainAtEndNonChained)
+{
+    run(scenarioDrainAtEndNonChained);
+}
+
+TEST(SwitchTouch, TegraI2CTimeoutQuiesceAndRecover)
+{
+    run(scenarioTimeoutQuiesceAndRecover);
 }
