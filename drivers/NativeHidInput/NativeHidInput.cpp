@@ -7,9 +7,6 @@
 #include <IOKit/IOTimerEventSource.h>
 #include <libkern/c++/OSString.h>
 #include <libkern/c++/OSIterator.h>
-extern "C" void native_hid_input_observed(unsigned, int);
-extern "C" void native_hid_live_checkpoint(IOService *);
-extern "C" bool native_hid_input_requested(void);
 extern "C" void native_touch_set_sink(void (*)(void *), void *) __attribute__((weak_import));
 // Optional touch digitizer fed by the board touch probe (kits/sheng/TouchProbe.cpp): finger set published with a seqlock.
 extern "C" {
@@ -286,8 +283,8 @@ class NativeHidInput : public IOHIDDevice {
         IOBufferMemoryDescriptor *buffer =
             IOBufferMemoryDescriptor::withBytes(report, sizeof(report), kIODirectionNone);
         const IOReturn result = buffer ? self->handleReport(buffer, 0, 0) : kIOReturnNoMemory;
+        (void)result;
         OSSafeReleaseNULL(buffer);
-        native_hid_input_observed(6, result);
         native_touch_hid_reports = native_touch_hid_reports + 1;
     }
 
@@ -334,18 +331,15 @@ class NativeHidInput : public IOHIDDevice {
         NativeHidInput *self = OSDynamicCast(NativeHidInput, owner);
         if (!self)
             return;
-        native_hid_live_checkpoint(self);
         if (self->touchOnly) {
             source->setTimeoutMS(1000);
             return;
         }
         if (!self->down && !hasEventDriver(self, 4)) {
-            native_hid_input_observed(3, 0);
             source->setTimeoutMS(1000);
             return;
         }
-        native_hid_input_observed(3, 1);
-        if (!self->down && !native_hid_input_requested()) {
+        if (!self->down) {
             source->setTimeoutMS(1000);
             return;
         }
@@ -353,8 +347,8 @@ class NativeHidInput : public IOHIDDevice {
         IOBufferMemoryDescriptor *buffer =
             IOBufferMemoryDescriptor::withBytes(report, sizeof(report), kIODirectionNone);
         const IOReturn result = buffer ? self->handleReport(buffer, 0, 0) : kIOReturnNoMemory;
+        (void)result;
         OSSafeReleaseNULL(buffer);
-        native_hid_input_observed(self->down ? 5 : 4, result);
         // Always attempt release, even if down returned an error: input must
         // never be left pressed by an ambiguous report completion.
         if (!self->down) {
@@ -434,7 +428,6 @@ public:
         if ((touchOnly || touchEnabled) && &native_touch_set_sink)
             native_touch_set_sink(&NativeHidInput::touchNotify, this);
         setProperty("OfflineInputProbe", true);
-        native_hid_input_observed(2, 0);
         timer->setTimeoutMS(1000);
         return true;
     }

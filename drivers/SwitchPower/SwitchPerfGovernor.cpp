@@ -80,7 +80,7 @@ struct Tick {
     uint32_t generation;  // gGeneration this state was made for
     switch_gov gov;
     uint64_t prevTotal[switchperf::kCpus], prevNow;
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_POWER
     uint64_t prevEfficiency[switchperf::kCpus];
 #endif
     uint32_t limits;  // gLimits as last folded in
@@ -96,7 +96,7 @@ void restartTick(const switchperf::Config &config, uint32_t generation, uint64_t
     switch_gov_init(&gTick.gov, config.khz, config.count, config.start, config.tunables, now);
     for (unsigned c = 0; c < switchperf::kCpus; ++c) {
         gTick.prevTotal[c] = switch_cpu_load_busy(&switchperf::gLoad[c], now);
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_POWER
         gTick.prevEfficiency[c] = switch_cpu_load_busy(&switchperf::gLoadEfficiency[c], now);
 #endif
     }
@@ -107,7 +107,7 @@ void restartTick(const switchperf::Config &config, uint32_t generation, uint64_t
     gTick.stats.since = now;
 }
 
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_POWER
 bool efficiencyClass(const struct perfcontrol_thread_data *oncore)
 {
     return oncore && (oncore->perfctl_class == PERFCONTROL_CLASS_BACKGROUND ||
@@ -122,7 +122,7 @@ void csw(perfcontrol_event event, uint32_t cpu, uint64_t timestamp, uint32_t, st
     if (cpu >= switchperf::kCpus)
         return;
     switch_cpu_load_switch(&switchperf::gLoad[cpu], timestamp, event != IDLE);
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_POWER
     switch_cpu_load_switch(&switchperf::gLoadEfficiency[cpu], timestamp, event != IDLE && efficiencyClass(oncore));
 #else
     (void)oncore;
@@ -152,7 +152,7 @@ switchperf::WindowBusy windowBusy(const switchperf::Config &config, uint64_t now
         busy.all += permille;
         if (permille > busy.peak)
             busy.peak = permille;
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_POWER
         const uint64_t efficiency = switch_cpu_load_busy(&switchperf::gLoadEfficiency[c], now);
         const uint64_t efficient = efficiency > gTick.prevEfficiency[c] ? efficiency - gTick.prevEfficiency[c] : 0;
         gTick.prevEfficiency[c] = efficiency;
@@ -179,7 +179,7 @@ bool step(const switchperf::Config &config, uint64_t now, bool *boot, uint64_t *
     const uint64_t until = switchperf::boostUntil();
     if (until > now)
         switch_gov_boost(&gTick.gov, gTick.gov.count - 1, until, now);
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_POWER
     switchperf::lineWindow(&gTick.stats, shares, config.tunables.up_permille);
 #endif
     const uint64_t bootUntil = __atomic_load_n(&switchperf::gBootUntil, __ATOMIC_RELAXED);
@@ -188,7 +188,7 @@ bool step(const switchperf::Config &config, uint64_t now, bool *boot, uint64_t *
         busy = 1000;  // the boot runs at the top point (the ceiling: thermal limits still apply)
     switch_gov_step(&gTick.gov, now, busy);
     __atomic_store_n(&switchperf::gDecided, gTick.gov.cur | gTick.generation << 8, __ATOMIC_RELEASE);
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_POWER
     if (now >= gTick.logDue) {
         gTick.logDue = now + config.logWindow;
         switchperf::linePublish(&gTick.stats, &gTick.gov, now);
@@ -244,7 +244,7 @@ void boost(switchperf::Boost *source, uint64_t until, uint64_t now, unsigned cpu
     const bool wake = was <= now || __atomic_load_n(&switchperf::gApplied, __ATOMIC_RELAXED) < ceiling;
     if (wake)
         switchperf::gSignal(switchperf::gCtx, cpu);
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_POWER
     __atomic_store_n(&source->hints, source->hints + 1, __ATOMIC_RELAXED);
     __atomic_store_n(&source->wakes, source->wakes + (wake ? 1 : 0), __ATOMIC_RELAXED);
 #endif
@@ -258,13 +258,13 @@ bool gRunning;
 Signal gSignal;
 void *gCtx;
 switch_cpu_load gLoad[kCpus];
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_POWER
 switch_cpu_load gLoadEfficiency[kCpus];
 #endif
 Boost gTouch, gFrame, gLaunch[kCpus];
 uint32_t gApplied, gAppliedKhz;
 uint32_t gDecided;
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_POWER
 uint32_t gBootHints;
 #endif
 
@@ -393,7 +393,7 @@ unsigned switchperf::take(char *line, size_t len)
         return 0;
     const uint64_t now = mach_absolute_time();
     const bool fellBack = closeBootWindow(now);
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_POWER
     LineTaken taken = {};
     const bool logDue = lineTake(&taken);
 #endif
@@ -403,7 +403,7 @@ unsigned switchperf::take(char *line, size_t len)
               "%u MHz) and the GPU's idle clock decide from here\n",
               static_cast<unsigned long long>(kBootFallbackSeconds), khzAt(ceiling()) / 1000);
     }
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_POWER
     if (logDue && line && len)
         lineFormat(taken, index, line, len);
 #endif
@@ -442,7 +442,7 @@ extern "C" void switch_perf_hint(unsigned int hint)
     } else if (cpu < switchperf::kCpus) {
         switchperf::Boost &slot = switchperf::gLaunch[cpu];
         boost(&slot, now + in.launchHold, now, cpu);
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_POWER
         if (hint == SWITCH_PERF_HINT_FOREGROUND)
             __atomic_store_n(&slot.foreground, slot.foreground + 1, __ATOMIC_RELAXED);
 #endif

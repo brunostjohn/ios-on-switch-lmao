@@ -97,11 +97,6 @@ bool BlitEncoder::copyTexels(const Texture &src, uint32_t sx, uint32_t sy, uint3
         room(32);
         copyElements(s, d, w, h, remap, aspect == kAspectWhole ? src.bpp : 4);
     }
-#if SWITCH_METAL_DIAGNOSTICS
-    char detail[64];
-    snprintf(detail, sizeof detail, " from %ux%u f%u at %u,%u", src.width, src.height, src.format, sx, sy);
-    logEdgeMiss("copy", dst, {dx, dy, dx + w, dy + h}, detail);
-#endif
     return true;
 }
 
@@ -186,10 +181,6 @@ void BlitEncoder::copyBufferTexels(uint64_t va, uint32_t pitch, const Texture &t
     if (!toTexture)
         cb_->bufferWrites_.note(va, uint64_t(pitch) * h + uint64_t(w) * 16);
     cb_->use(t, toTexture);
-#if SWITCH_METAL_DIAGNOSTICS
-    if (toTexture && !t.zeta)
-        logEdgeMiss("upload", t, {x, y, x + w, y + h}, "");
-#endif
     room(48);
     const CopySide rows{va, pitch}, texels = sideOf(t, x, y, z);
     const CopySide &from = toTexture ? rows : texels, &to = toTexture ? texels : rows;

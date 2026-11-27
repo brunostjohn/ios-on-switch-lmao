@@ -29,7 +29,8 @@
 #include <vm/vm_shared_region_xnu.h>
 #endif
 
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && \
+    ((defined(SWITCH_STATS_FRAME) && SWITCH_STATS_FRAME) || (defined(SWITCH_STATS_SCHED) && SWITCH_STATS_SCHED))
 
 #define LINES_PER_SECOND 30
 #define MIN_BLOCK_US     10
@@ -211,4 +212,28 @@ void switch_sched_render_swapped(void)
     os_log(OS_LOG_DEFAULT, "SwitchFrameRender: %s", line);
 }
 
-#endif /* DEVELOPMENT || DEBUG */
+#else
+
+void switch_sched_render_vsync(__unused uint64_t stamp, __unused uint64_t period);
+
+void switch_sched_render_vsync(__unused uint64_t stamp, __unused uint64_t period)
+{}
+
+void switch_sched_render_submitted(void);
+
+void switch_sched_render_submitted(void)
+{}
+
+bool switch_sched_render_window(uint64_t *vsync, int64_t *woke_us, int64_t *first_us);
+
+bool switch_sched_render_window(__unused uint64_t *vsync, __unused int64_t *woke_us, __unused int64_t *first_us)
+{
+    return false;
+}
+
+void switch_sched_render_swapped(void);
+
+void switch_sched_render_swapped(void)
+{}
+
+#endif

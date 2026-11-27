@@ -1466,6 +1466,8 @@ brk_out:
 
 #if DEVELOPMENT || DEBUG
 extern void switch_kprof_user_trap(arm_saved_state_t *state, uint32_t esr);
+#endif
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_KPROF) && SWITCH_KPROF
 /* osfmk/kern/switch_kprof.c (r17-faults): a fault arm_fast_fault resolved, for the kprof faults lines */
 extern void switch_kprof_fast_fault(bool access_flag);
 #define SWITCH_FSC_ACCESS_FLAG(fc) \
@@ -1981,7 +1983,7 @@ handle_user_abort(arm_saved_state_t *state, uint64_t esr, vm_offset_t fault_addr
 			result = arm_fast_fault(pmap,
 			    vm_fault_addr,
 			    fault_type, (fault_code == FSC_ACCESS_FLAG_FAULT_L3), TRUE);
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_KPROF) && SWITCH_KPROF
 			if (result == KERN_SUCCESS) {
 				switch_kprof_fast_fault(SWITCH_FSC_ACCESS_FLAG(fault_code));
 			}
@@ -2677,7 +2679,7 @@ handle_kernel_abort(arm_saved_state_t *state, uint64_t esr, vm_offset_t fault_ad
 			    fault_addr,
 			    fault_type, (fault_code == FSC_ACCESS_FLAG_FAULT_L3), FALSE);
 			if (result == KERN_SUCCESS) {
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_KPROF) && SWITCH_KPROF
 				switch_kprof_fast_fault(SWITCH_FSC_ACCESS_FLAG(fault_code));
 #endif
 				return;

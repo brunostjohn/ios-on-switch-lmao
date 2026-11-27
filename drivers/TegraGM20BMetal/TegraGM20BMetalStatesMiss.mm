@@ -17,7 +17,7 @@ bool gm20bFirstNaming(uint64_t keyHash, uint32_t line)
 
 void gm20bNoteMiss(const char *kind, uint64_t keyHash, const std::string &key, NSString *label)
 {
-#if SWITCH_METAL_DIAGNOSTICS
+#if SWITCH_METAL_STATS
     if (!gm20bFirstNaming(keyHash, 0))
         return;
     os_log(gm20bLog(), "SwitchMetal: %{public}s: a %{public}s state the pack lacks %016llx (%{public}s)", getprogname(),

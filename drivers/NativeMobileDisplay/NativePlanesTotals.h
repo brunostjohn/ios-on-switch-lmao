@@ -7,7 +7,7 @@
 //  - A detached layer refused for its format or layout: one line with its surface as the kernel's IOSurface describes it,
 //    once per format, reason and geometry (Core Animation resends a refused swap every frame).
 
-#if SWITCH_FRAME_TIMELINE
+#if SWITCH_DISPLAY_PROBES
 static constexpr unsigned kPlaneTotals = 6;
 static inline uint32_t planeTotals[kPlaneTotals] = {};
 static inline struct sysctl_oid planeTotalOids[kPlaneTotals] = {};

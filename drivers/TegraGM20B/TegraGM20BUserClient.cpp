@@ -179,7 +179,7 @@ void AGXDeviceUserClient::free()
 		IOLockFree(unmapLock_);
 		unmapLock_ = nullptr;
 	}
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 	for (tgm_bind_history *&history : bindHistory_)
 		if (history)
 			IOFree(history, sizeof(*history));
@@ -837,7 +837,7 @@ IOReturn AGXDeviceUserClient::clientMemoryForType(UInt32 type, IOOptionBits *opt
 IOReturn AGXDeviceUserClient::memoryForType(UInt32 type, IOOptionBits *options,
 					    IOMemoryDescriptor **memory)
 {
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 	if (IOMemoryDescriptor *readback = tgm_readback_memory(this, type)) {
 		*memory = readback;
 		*options = kIOMapAnywhere | kIOMapDefaultCache;

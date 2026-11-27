@@ -6,7 +6,7 @@
 #include <stdint.h>
 #include "TegraNVJPG.h"
 
-#if TEGRA_NVJPG_STATS
+#if TEGRA_NVJPG_PROBES
 // What one process asked of NVJPG: `formats` bit n for each TEGRA_NVJPG_OUT_n decoded, `asked[n]` the requests for
 // TEGRA_NVJPG_OUT_n, refused and failed ones too, `routes[n]` the decodes routed by TEGRA_NVJPG_ROUTE_n (its
 // TEGRA_NVJPG_ROUTE_COUNT), `cancelled` its jobs the engine cancelled (past their bound, or on a falcon error). HW Test
@@ -25,6 +25,11 @@ void tegra_nvjpg_count_job(int pid, uint32_t format, bool failed, uint64_t engin
 void tegra_nvjpg_counts_of(int pid, TegraNVJPGRouteCounts *out);
 void tegra_nvjpg_count_route(int pid, uint32_t route);
 void tegra_nvjpg_count_cancelled(int pid);
+// TegraNVJPG.cpp's: the jobs cancelled since boot. Only the service's engine thread runs jobs, so the change across one
+// job's run is that job's.
+uint64_t tegra_nvjpg_cancellations(void);
+#endif
+#if TEGRA_NVJPG_STATS
 // The window's line once 5 s have passed with work in them.
 void tegra_nvjpg_stats_line(void);
 // A decode's route (TEGRA_NVJPG_ROUTE_*): what GM20B answered for the destination (`held` block-linear, its row bytes
@@ -35,9 +40,6 @@ void tegra_nvjpg_note_route(uint32_t route, bool held, uint32_t rowBytes, uint32
 // TegraNVJPG.cpp's, taken and zeroed: the jobs whose engine wait ran with gStateLock free, and the longest a
 // cancellation or an idle gate call waited to take gStateLock. Takes no lock: a client's refused decode calls it too.
 void tegra_nvjpg_lock_counts(uint64_t *waitsUnlocked, uint64_t *stateWaitMaxUs);
-// TegraNVJPG.cpp's: the jobs cancelled since boot. Only the service's engine thread runs jobs, so the change across one
-// job's run is that job's.
-uint64_t tegra_nvjpg_cancellations(void);
 #endif
 
 #endif

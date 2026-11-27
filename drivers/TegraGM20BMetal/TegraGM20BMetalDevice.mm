@@ -4,7 +4,6 @@
 #import "TegraGM20BMetalXrPlanes.h"
 #import "TegraGM20BMetalFresh.h"
 #import "TegraGM20BMetalDecoded.h"
-#include "surface_note.h"
 #include "surface_refusal.h"
 #include <mach/vm_page_size.h>
 #import "TegraGM20BMetalMultisample.h"
@@ -104,6 +103,7 @@
     d[@"state_segment_skips"] = @(gRM->raw->stats.segmentSkips.load());
     d[@"state_segment_extras_losses"] = @(gRM->raw->stats.segmentExtrasLosses.load());
     d[@"state_segment_copies"] = @(gRM->raw->stats.segmentCopies.load());
+#if SWITCH_METAL_PROF
     {
         const gm20b::EncodeTotals &encode = gRM->raw->stats.encode;
         const double perUs = gm20b::encodeTicksPerUs();
@@ -112,9 +112,7 @@
         d[@"exec_us"] = @(uint64_t(double(encode.ticks[size_t(gm20b::EncodePart::Exec)].load()) / perUs));
         d[@"exec_pushes"] = @(encode.execPushes.load());
     }
-    d[@"replay_same"] = @(gRM->raw->stats.replay.same.load());
-    d[@"replay_recent"] = @(gRM->raw->stats.replay.recent.load());
-    d[@"replay_new"] = @(gRM->raw->stats.replay.fresh.load());
+#endif
     d[@"stencil_bit_draws"] = @(gRM->raw->stats.stencilBitDraws.load());
     d[@"zeta_colour_draws"] = @(gRM->raw->stats.zetaColourDraws.load());
     d[@"mip_twod_levels"] = @(gRM->raw->stats.mipTwodLevels.load());
@@ -422,28 +420,12 @@
     return (id<MTLBuffer>)b;
 }
 
-#if SWITCH_FRAME_TIMELINE
-static void noteCompositorTarget(MTLTextureDescriptor *d, const void *frame)
-{
-    constexpr NSUInteger kPanel = 1280 * 720;
-    if (!(d.usage & MTLTextureUsageRenderTarget) || d.width * d.height <= kPanel || !gRM || !gRM->raw ||
-        gRM->raw->role() != gm20b::Device::Role::RenderServer || !gm20b::noteAllowed())
-        return;
-    gm20b::postTargetNote({uint32_t(d.width), uint32_t(d.height), uint32_t(d.pixelFormat), uint32_t(d.usage),
-                           uint32_t(d.storageMode), uint32_t(d.sampleCount), uint32_t(d.textureType),
-                           switch_frame::callers(frame)});
-}
-#endif
-
 // A private or shared texture of its own memory is block-linear (TegraGM20BLayout.h), as NVK lays out an optimal image and
 // m2v's view of it is (texture_tiled_in_place). The CPU reaches a shared one only through replaceRegion and getBytes,
 // which go through the copy engine (transferTexture) or swizzle (cpuTiled); textures over buffers, IOSurfaces and
 // caller pages stay pitch, as another binding names those bytes.
 - (id<MTLTexture>)newTextureWithDescriptor:(MTLTextureDescriptor *)d
 {
-#if SWITCH_FRAME_TIMELINE
-    noteCompositorTarget(d, __builtin_frame_address(0));
-#endif
     id<MTLTexture> made =
         swizzled([self gm20bNewTexture:d
                                  tiled:d.storageMode == MTLStorageModePrivate || d.storageMode == MTLStorageModeShared],
@@ -482,6 +464,7 @@ static bool refusedTexture(const gm20b::shapes::TextureShape &s)
     return false;
 }
 
+#if SWITCH_METAL_DIAGNOSTICS
 // The first texture of a kind the driver holds in memory of its own, once per process
 static void announceTexture(gm20b::shapes::Route route, const gm20b::shapes::TextureShape &s, const gm20b::Texture &t)
 {
@@ -513,6 +496,7 @@ static void announceTexture(gm20b::shapes::Route route, const gm20b::shapes::Tex
                 (unsigned long long)t.storage.bytes, t.comptags ? "compressed" : "plain");
     }
 }
+#endif
 
 - (id<MTLTexture>)gm20bNewTexture:(MTLTextureDescriptor *)d tiled:(bool)tiled
 {
@@ -556,7 +540,7 @@ static void announceTexture(gm20b::shapes::Route route, const gm20b::shapes::Tex
     const uint32_t kind = tiled || route != Route::Plain ? privateCompressedKind(d) : 0;
     t->_gm20bOk = gm20b::shapes::create(*gRM->raw, s, route, tiled, kind, t->_raw);
     if (t->_gm20bOk)
-        announceTexture(route, s, t->_raw);
+        SWITCH_METAL_DIAGNOSTIC(announceTexture(route, s, t->_raw));
     else if (route == Route::StoredZeta)
         SWITCH_REFUSE_DETAIL("gm20b", "zeta.owned", d.pixelFormat,
                              "a stored %lux%lu depth/stencil texture of format %lu: no zeta memory or texture header "

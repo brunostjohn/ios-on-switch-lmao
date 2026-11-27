@@ -44,7 +44,8 @@ TEST(GM20BFrameCpuSource, GpuTracepointsAndTheReadsBehindThemAreDebugOnly)
 		++calls;
 		bool stats = false;
 		for (const std::string &o : open)
-			stats = stats || o.find("TGM_STATS") != std::string::npos;
+			stats = stats || o.find("TGM_STATS") != std::string::npos ||
+				o.find("SWITCH_FRAME_TIMELINE") != std::string::npos;
 		EXPECT_TRUE(stats) << line;
 	}
 	EXPECT_GE(calls, 6);

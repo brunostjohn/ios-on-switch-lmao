@@ -38,6 +38,7 @@ kernel_driver(
         "kits/SwitchDMA",
         "kits/SwitchMMIO",
         "kits/SwitchRefusal",
+        "kits/SwitchSysctl",
         "kits/SwitchTime",
     ],
 )

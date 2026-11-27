@@ -15,7 +15,6 @@ extern "C" {
 #include <sys/sysctl.h>
 #include "../../kits/SwitchSysctl/SwitchSysctl.h"
 #include "SwitchGpuCompositorRound.h"
-#include "SwitchGpuCompositorSync.h"
 #include "SwitchGpuPreemptLanding.h"
 #include "SwitchGpuSpanNotes.h"
 
@@ -161,7 +160,6 @@ int promisesSysctl SYSCTL_HANDLER_ARGS
 struct sysctl_oid gPromisesOid;
 switch_gpu_spans::Notes gSpans;
 uint64_t gCompositorJobMax;
-switch_gpu_comp_sync gSyncWindow, gSyncAsked;
 switch_gpu_comp_round gRound;
 switch_gpu_comp_deadline gDeadlineSeen;  // under processLock()
 constexpr uint64_t kPeriodNs = 16666667;
@@ -214,22 +212,6 @@ extern "C" void switch_gpu_compositor_scanned(uint64_t passes, uint64_t draws, u
 	switch_gpu_comp_round_scanned(&gRound, passes, draws, interlocks, twins);
 }
 
-extern "C" void switch_gpu_compositor_sync(uint32_t syncs, uint64_t ns, int behind)
-{
-	switch_gpu_comp_sync_add(&gSyncWindow, syncs, ns, behind);
-	switch_gpu_comp_sync_add(&gSyncAsked, syncs, ns, behind);
-}
-
-extern "C" void switch_gpu_compositor_sync_window(char *line, size_t size)
-{
-	switch_gpu_comp_sync taken = {};
-	switch_gpu_comp_sync_take(&gSyncWindow, &taken);
-	if (size)
-		line[0] = 0;
-	if (taken.subs)
-		switch_gpu_comp_sync_format(line, size, &taken);
-}
-
 extern "C" void switch_gpu_span_line(char *line, size_t size)
 {
 	if (size)
@@ -237,8 +219,6 @@ extern "C" void switch_gpu_span_line(char *line, size_t size)
 	IOLock *held = processLock();
 	if (!held)
 		return;
-	switch_gpu_comp_sync sync = {};
-	switch_gpu_comp_sync_take(&gSyncAsked, &sync);
 	switch_gpu_comp_round round = {};
 	switch_gpu_comp_round_take(&gRound, &round);
 	struct tgm_deadline_counts deadline = {};
@@ -250,10 +230,7 @@ extern "C" void switch_gpu_span_line(char *line, size_t size)
 	if (deadlineUp)
 		switch_gpu_comp_round_deadline(&round, &gDeadlineSeen, deadline.windows,
 					       holds.holds);
-	const int put = switch_gpu_comp_round_format(head, sizeof(head), &round);
-	const size_t used =
-		put > 0 && static_cast<size_t>(put) < sizeof(head) ? static_cast<size_t>(put) : 0;
-	switch_gpu_comp_sync_format(head + used, sizeof(head) - used, &sync);
+	switch_gpu_comp_round_format(head, sizeof(head), &round);
 	switch_gpu_spans::take(gSpans, __atomic_exchange_n(&gCompositorJobMax, 0, __ATOMIC_RELAXED),
 			       head, line, size);
 	IOLockUnlock(held);

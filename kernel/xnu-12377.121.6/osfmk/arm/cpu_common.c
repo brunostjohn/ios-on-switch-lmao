@@ -593,7 +593,7 @@ cpu_signal_cancel(cpu_data_t *target_proc, cpu_signal_t signal)
 	}
 }
 
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_KPROF) && SWITCH_KPROF
 /* Only the receiving CPU writes its row, with interrupts masked: ast, xcall, timer, wake, maint, other. */
 #define SWITCH_IPI_KINDS 6
 uint64_t switch_ipis_received[MAX_CPUS][SWITCH_IPI_KINDS];
@@ -661,7 +661,7 @@ cpu_signal_handler_internal(boolean_t disable_signal)
 	 * handlers.
 	 */
 	cpu_signal_t cpu_signal = os_atomic_or(&cpu_data_ptr->cpu_signal, 0, acquire);
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_KPROF) && SWITCH_KPROF
 	switch_ipi_count_received((unsigned int)cpu_data_ptr->cpu_number, cpu_signal);
 #endif
 

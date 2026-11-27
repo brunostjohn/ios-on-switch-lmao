@@ -160,12 +160,13 @@ _RECORDER_OBJECTS = {
         "switch:recorder/store.c",
     ],
     "osfmk": [
-        "osfmk/kern/switch_kprof.c",
+        "osfmk/kern/sched_prim.c",
         "osfmk/kperf/kperf.c",
         "osfmk/kperf/kptimer.c",
         "switch:diag/stall.c",
         "switch:recorder/sample.c",
         "switch:recorder/watch.c",
+        "switch:sched/busy.c",
         "switch:sched/stats.c",
     ],
 }
@@ -186,6 +187,7 @@ _KPROF_OBJECTS = {
     "osfmk": [
         "osfmk/kern/switch_kprof.c",
         "osfmk/kern/sched_prim.c",
+        "osfmk/arm/cpu_common.c",
         "osfmk/vm/vm_fault.c",
         "osfmk/vm/bsd_vm.c",
         "osfmk/vm/vm_object.c",
@@ -201,9 +203,11 @@ _STATS_SCHED_OBJECTS = {
     "osfmk": [
         "osfmk/kern/sched_prim.c",
         "osfmk/kern/thread.c",
+        "osfmk/kern/thread_call.c",
         "osfmk/kern/recount.c",
         "osfmk/kern/ledger.c",
         "osfmk/arm64/sleh.c",
+        "osfmk/ipc/ipc_kmsg.c",
         "switch:sched/stats.c",
         "switch:sched/render.c",
         "switch:sched/cpu.c",
@@ -215,10 +219,7 @@ _STATS_SCHED_OBJECTS = {
         "switch:sched/commit.c",
         "switch:sched/busy.c",
         "switch:diag/stall.c",
-        "switch:diag/stall_snapshot.c",
-        "switch:diag/stall_chain.c",
         "switch:diag/stall_frame.c",
-        "switch:diag/watch.c",
         "switch:diag/frames.c",
     ],
     "bsd": [
@@ -228,6 +229,7 @@ _STATS_SCHED_OBJECTS = {
     ],
     "iokit": [
         "iokit/Kernel/IOPMrootDomain.cpp",
+        "iokit/Kernel/IOTimerEventSource.cpp",
     ],
 }
 
@@ -235,7 +237,8 @@ _STATS_FRAME_OBJECTS = {
     "osfmk": [
         "osfmk/ipc/ipc_kmsg.c",
         "switch:diag/frames.c",
-        "switch:sched/commit.c",
+        "switch:sched/stats.c",
+        "switch:sched/render.c",
         "switch:diag/stall_frame.c",
     ],
 }
@@ -243,6 +246,7 @@ _STATS_FRAME_OBJECTS = {
 _STATS_IO_OBJECTS = {
     "osfmk": [
         "osfmk/vm/bsd_vm.c",
+        "osfmk/vm/vm_fault.c",
         "osfmk/vm/vm_object.c",
         "switch:diag/pagein.c",
     ],

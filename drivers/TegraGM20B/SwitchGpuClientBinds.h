@@ -257,7 +257,7 @@ void AGXDeviceUserClient::logFaultBindings()
 	}
 }
 
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 static_assert(kMaxChannels == TGM_BIND_CHANNELS, "a note keeps each slot's submitted seqno");
 
 void AGXDeviceUserClient::noteBind(uint8_t op, uint64_t va, uint64_t range, const Bo *bo,

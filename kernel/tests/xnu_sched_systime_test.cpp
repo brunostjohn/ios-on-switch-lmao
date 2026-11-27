@@ -118,7 +118,8 @@ TEST(XnuSchedSystimeSource, ReleaseKernelsCompileTheHooksToNothing)
     EXPECT_THAT(stubs, HasSubstr("static inline void switch_systime_entered("));
     EXPECT_THAT(stubs, HasSubstr("static inline void switch_systime_absorb("));
     EXPECT_THAT(stubs, HasSubstr("static inline void switch_systime_returned("));
-    EXPECT_THAT(switch_ios::test::SourceText("../switch/sched/systime.c"), HasSubstr("\n#if DEVELOPMENT || DEBUG\n"));
+    EXPECT_THAT(switch_ios::test::SourceText("../switch/sched/systime.c"),
+                HasSubstr("\n#if (DEVELOPMENT || DEBUG) && defined(SWITCH_STATS_SCHED) && SWITCH_STATS_SCHED\n"));
 }
 
 }  // namespace

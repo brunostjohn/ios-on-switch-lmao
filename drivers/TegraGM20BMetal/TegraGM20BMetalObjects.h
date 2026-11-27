@@ -208,9 +208,6 @@ enum class SwitchMetalShareable : uint8_t {
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     std::atomic<bool> _freshUnwritten;  // a fresh texture no command wrote yet (TegraGM20BMetalFresh.mm traceFreshUses)
 #endif
-#if SWITCH_METAL_DIAGNOSTICS
-    std::atomic<uint32_t> _replaceCount;
-#endif
 }
 @end
 
@@ -605,12 +602,11 @@ struct SwitchMetalResidencySnapshot {
 #endif
 #if SWITCH_METAL_DIAGNOSTICS
     uint64_t _committedTicks;  // mach_absolute_time as its commit began
-    uint64_t _kickedTicks;     // and as its first raw range's job went to the kernel (0: none yet)
     uint32_t _firstStamp;
-    uint8_t _enqueueTiming;
-    bool _lateWriteChecked, _lateWriteSampled;
 #endif
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+#if SWITCH_METAL_STATS
+    uint64_t _kickedTicks;  // and as its first raw range's job went to the kernel (0: none yet)
+    uint8_t _enqueueTiming;
     std::atomic<uint64_t> _heldReturnUs;  // when waitUntilScheduled returned for it held, until it was submitted
     gm20b::ScheduleNotes _scheduleNotes;  // the submit worker's turns of it, for the frame rates line
 #endif

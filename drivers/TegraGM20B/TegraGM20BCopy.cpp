@@ -306,9 +306,6 @@ int submit(Job &job, const tgm_push &push, switch_gpu_backing *source,
 			break;
 		result = queue.turn.waitForRoom(queue.lock, [&] {
 			copyUnlocked();
-#if TGM_STATS
-			tgm_stats_unlocked(TGM_UNLOCKED_COPY_ROOM, 0);
-#endif
 			return switch_gpu_chan_wait_submission_room(chan, &push, 1, count, nullptr);
 		});
 	}

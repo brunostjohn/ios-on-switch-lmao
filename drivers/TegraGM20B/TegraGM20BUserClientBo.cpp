@@ -269,7 +269,7 @@ IOReturn AGXDeviceUserClient::settleBo(const TegraGM20BAbiBoAlloc *in, const BoC
 	return kIOReturnSuccess;
 }
 
-#if SWITCH_GPU_PATH_STATS
+#if TGM_DEBUG_PROBES
 void AGXDeviceUserClient::poolLine(char *line, size_t size)
 {
 	IOLockLock(lock_);

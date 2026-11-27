@@ -225,9 +225,6 @@ static int submitBridge(const switch_gpu_backing_token *tokens, uint32_t count,
 				if (error != -11)
 					break;
 				error = queue.turn.waitForRoom(queue.lock, [&] {
-#if TGM_STATS
-					tgm_stats_unlocked(TGM_UNLOCKED_BRIDGE_ROOM, 0);
-#endif
 					return switch_gpu_chan_wait_submission_room(
 						chan, &push, 1, job.count, nullptr);
 				});
@@ -253,7 +250,7 @@ static int submitBridge(const switch_gpu_backing_token *tokens, uint32_t count,
 			}
 		}
 	}
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 	const bool consumerJobless = !error && jobless && assigns;
 #endif
 	if (abandoned) {
@@ -278,7 +275,7 @@ static int submitBridge(const switch_gpu_backing_token *tokens, uint32_t count,
 			thread_call_enter(queue.retirement);
 	}
 	IOLockUnlock(queue.lock);
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 	if (consumerJobless)
 		tgm_chan_note_jobless(wait.covering.queue);
 #endif

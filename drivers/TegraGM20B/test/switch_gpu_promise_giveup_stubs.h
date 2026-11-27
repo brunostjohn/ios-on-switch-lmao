@@ -16,7 +16,7 @@
 #include <gtest/gtest.h>
 #include "switch_gpu_interrupts_off_stubs.h"
 #define DEVELOPMENT 1
-#define TGM_STATS 1
+#define SWITCH_STATS_GPU 1
 #include "drivers/TegraGM20B/SwitchGpuJobFences.h"
 #include "drivers/TegraGM20B/SwitchGpuPathStats.h"
 #include "drivers/TegraGM20B/SwitchGpuPromiseGiveUp.h"
@@ -275,15 +275,6 @@ inline void tgm_present_promise_released(uint32_t, uint32_t)
 inline const char *tgm_promise_maker(uint32_t)
 {
 	return "maker-app";
-}
-
-inline unsigned probedReaders = 0;
-
-inline void tgm_acquire_probe_giveup(fake_tgm_chan *, uint64_t, uint64_t)
-{
-	registers("the ACQUIRE probe");
-	interrupts_off::mayBlock("the ACQUIRE probe's look (tgm_live_lock's caller)");
-	++probedReaders;
 }
 
 inline void tgm_promise_cpu_raised(uint32_t, uint32_t)

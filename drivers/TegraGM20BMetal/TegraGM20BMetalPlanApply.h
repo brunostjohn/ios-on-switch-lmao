@@ -11,7 +11,7 @@ template <typename Mask> Mask slotsToCompare(const Mask &edited, uint32_t from, 
 {
     const Mask all = firstSlots<Mask>(count);
     const Mask slots = (from == kNoSnapshot ? everySlot<Mask>() : edited) & all;
-#if SWITCH_METAL_DIAGNOSTICS
+#if SWITCH_METAL_PROF
     cursor.slotsCompared += slotCount(slots);
     cursor.slotsInTables += slotCount(all);
 #else

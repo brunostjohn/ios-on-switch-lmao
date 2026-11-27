@@ -37,7 +37,8 @@
 #include <vm/vm_shared_region_xnu.h>
 #endif
 
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && \
+    ((defined(SWITCH_STATS_SCHED) && SWITCH_STATS_SCHED) || (defined(SWITCH_RECORDER) && SWITCH_RECORDER))
 
 #define BUSY_RING  4
 #define BUSY_LINE  900 /* under the 1 KiB os_log record */
@@ -95,7 +96,7 @@ static void busy_start(void)
 {
     if (os_atomic_load(&busy_call, acquire) == NULL) {
         thread_call_t call =
-            thread_call_allocate_with_options(busy_write, NULL, THREAD_CALL_PRIORITY_KERNEL, THREAD_CALL_OPTIONS_ONCE);
+            thread_call_allocate_with_options(busy_write, NULL, THREAD_CALL_PRIORITY_USER, THREAD_CALL_OPTIONS_ONCE);
 
         nanoseconds_to_absolutetime(SWITCH_BUSY_MIN_MS * NSEC_PER_MSEC, &busy_min);
         if (call != NULL && !os_atomic_cmpxchg(&busy_call, NULL, call, release)) {
@@ -122,6 +123,7 @@ void switch_sched_busy_exec(thread_t thread)
         os_atomic_store(&s->tid, 0, release);
         s->state = (struct switch_busy){0};
         s->pid = task_pid(get_threadtask(thread));
+        os_atomic_or(&thread->switch_watch_mask, SWITCH_WATCH_MASK_BUSY, relaxed);
         os_atomic_store(&s->tid, thread->thread_id, release);
         simple_unlock(&busy_lock);
         os_atomic_or(&switch_sched_busy_watching,
@@ -199,6 +201,7 @@ void switch_sched_busy_focal(task_t task, int role, thread_t main)
         os_atomic_store(&s->tid, 0, release);
         spl = splsched();
         thread_lock(old);
+        os_atomic_and(&old->switch_watch_mask, (uint8_t)~SWITCH_WATCH_MASK_BUSY, relaxed);
         thread_unlock(old);
         splx(spl);
         thread_deallocate(old);
@@ -211,6 +214,7 @@ void switch_sched_busy_focal(task_t task, int role, thread_t main)
         s->state = (struct switch_busy){0};
         s->pid = task_pid(task);
         strlcpy(busy_focal_name[place], name, sizeof(busy_focal_name[place]));
+        os_atomic_or(&main->switch_watch_mask, SWITCH_WATCH_MASK_BUSY, relaxed);
         os_atomic_store(&s->tid, thread_tid(main), release);
         simple_unlock(&busy_lock);
         os_atomic_or(&switch_sched_busy_watching, SWITCH_SCHED_BUSY_WATCHING, relaxed);

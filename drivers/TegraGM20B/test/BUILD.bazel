@@ -40,7 +40,6 @@
 #   gm20b_preempt_landing_test SwitchGpuPreemptLanding.h: where a kick's preempt landed (a band's release, a job's end)
 #   gm20b_inheritor_sleep_test SwitchGpuInheritorSleep.h's kernel branch: an owner is pushed, no owner is a plain sleep,
 #                            and a wake reaches both
-#   gm20b_compositor_sync_test SwitchGpuCompositorSync.h: the compositor's sync pushes, kicks behind an app apart
 #   gm20b_cost_hist_test     TegraGM20BCostHist.h: the debug lines' buckets, and a p95 a single slow frame leaves alone
 #   switch_gpu_owner_memory_test SwitchGpuOwnerMemory.h: a connection's BO counts, the debug line summing them by process
 #   gm20b_sched_test         TegraGM20BSchedPolicy.h and tgm_hang_blame over deploy-2045's hang registers: what a
@@ -431,15 +430,6 @@ host_test(
     srcs = [
         "gm20b_target_peaks_test.cpp",
         "//drivers/TegraGM20B:SwitchGpuTargetPeaks.h",
-    ],
-    cxx_std = "c++17",
-)
-
-host_test(
-    name = "gm20b_compositor_sync_test",
-    srcs = [
-        "gm20b_compositor_sync_test.cpp",
-        "//drivers/TegraGM20B:SwitchGpuCompositorSync.h",
     ],
     cxx_std = "c++17",
 )
@@ -1510,6 +1500,17 @@ host_library(
     ],
 )
 
+host_library(
+    name = "backing_stats",
+    srcs = ["switch_gpu_backing_completion_stub.cpp"] + BACKING_SRCS,
+    hdrs = BACKING_HDRS,
+    defines = ["SWITCH_STATS_GPU=1"],
+    deps = [
+        ":dependency_trace",
+        ":coherency_kernel",
+    ],
+)
+
 host_test(
     name = "switch_gpu_backing_test",
     srcs = [
@@ -1590,7 +1591,6 @@ host_library(
     name = "path_stats",
     srcs = [
         "//drivers/TegraGM20B:SwitchGpuCompositorRound.h",
-        "//drivers/TegraGM20B:SwitchGpuCompositorSync.h",
         "//drivers/TegraGM20B:SwitchGpuPathStats.cpp",
         "//drivers/TegraGM20B:SwitchGpuPreemptLanding.h",
         "//drivers/TegraGM20B:SwitchGpuSpanNotes.h",
@@ -1604,7 +1604,10 @@ host_library(
         "//drivers/TegraGM20B:SwitchGpuBusy.h",
         "//drivers/TegraGM20B:deadline_stats.h",
     ],
-    defines = ["DEVELOPMENT=1"],
+    defines = [
+        "DEVELOPMENT=1",
+        "SWITCH_STATS_GPU=1",
+    ],
     deps = [":path_stats_kernel"],
 )
 
@@ -1612,7 +1615,10 @@ host_library(
 host_test(
     name = "switch_gpu_path_stats_test",
     srcs = ["switch_gpu_path_stats_test.cpp"],
-    defines = ["DEVELOPMENT=1"],
+    defines = [
+        "DEVELOPMENT=1",
+        "SWITCH_STATS_GPU=1",
+    ],
     deps = [
         ":path_stats",
         ":path_stats_kernel",
@@ -1631,7 +1637,6 @@ host_test(
         "switch_gpu_submit_stubs.h",
         "//drivers/TegraGM20B:SwitchGpuBridge.h",
         "//drivers/TegraGM20B:SwitchGpuCompositorRound.h",
-        "//drivers/TegraGM20B:SwitchGpuCompositorSync.h",
         "//drivers/TegraGM20B:SwitchGpuPathStats.cpp",
         "//drivers/TegraGM20B:SwitchGpuPreemptLanding.h",
         "//drivers/TegraGM20B:SwitchGpuSharedEvent.h",
@@ -1646,7 +1651,10 @@ host_test(
         "//kits/SwitchSysctl:SwitchSysctl.h",
     ] + BACKING_SRCS + BACKING_HDRS,
     copts = ["-fsanitize=thread"],
-    defines = ["DEVELOPMENT=1"],
+    defines = [
+        "DEVELOPMENT=1",
+        "SWITCH_STATS_GPU=1",
+    ],
     linkopts = ["-fsanitize=thread"],
     sanitize = False,
     deps = [
@@ -1722,8 +1730,9 @@ host_test(
         "switch_gpu_resource_set_test.cpp",
         "switch_gpu_backing_fixture.h",
     ],
+    defines = ["SWITCH_STATS_GPU=1"],
     deps = [
-        ":backing",
+        ":backing_stats",
         ":coherency_kernel",
     ],
 )
@@ -3322,7 +3331,10 @@ host_library(
         "//drivers/TegraGM20B:deadline_stats.h",
     ],
     c_std = "gnu11",
-    defines = ["DEVELOPMENT=1"],
+    defines = [
+        "DEVELOPMENT=1",
+        "SWITCH_STATS_GPU=1",
+    ],
 )
 
 # deadline_lines.c: the deadline's stats lines at every count's widest, and many channels' latencies, each line whole
@@ -3331,7 +3343,10 @@ host_test(
     name = "gm20b_deadline_lines_test",
     srcs = ["gm20b_deadline_lines_test.cpp"],
     cxx_std = "c++17",
-    defines = ["DEVELOPMENT=1"],
+    defines = [
+        "DEVELOPMENT=1",
+        "SWITCH_STATS_GPU=1",
+    ],
     deps = [":deadline_lines_unit"],
 )
 
@@ -3359,7 +3374,10 @@ host_library(
     hdrs = SCHED_UNIT_HDRS,
     c_std = "gnu11",
     copts = ["-Wno-unused-function"],
-    defines = ["DEVELOPMENT=1"],
+    defines = [
+        "DEVELOPMENT=1",
+        "SWITCH_STATS_GPU=1",
+    ],
 )
 
 DEADLINE_UNIT_SRCS = [
@@ -3379,7 +3397,10 @@ host_library(
     hdrs = DEADLINE_UNIT_HDRS,
     c_std = "gnu11",
     copts = ["-Wno-unused-function"],
-    defines = ["DEVELOPMENT=1"],
+    defines = [
+        "DEVELOPMENT=1",
+        "SWITCH_STATS_GPU=1",
+    ],
     deps = [":deadline_lines_unit"],
 )
 
@@ -3387,7 +3408,10 @@ host_test(
     name = "gm20b_sched_kick_test",
     srcs = ["gm20b_sched_kick_test.cpp"],
     cxx_std = "c++17",
-    defines = ["DEVELOPMENT=1"],
+    defines = [
+        "DEVELOPMENT=1",
+        "SWITCH_STATS_GPU=1",
+    ],
     deps = [":sched_unit"],
 )
 
@@ -3395,7 +3419,10 @@ host_test(
     name = "gm20b_deadline_window_test",
     srcs = ["gm20b_deadline_window_test.cpp"],
     cxx_std = "c++17",
-    defines = ["DEVELOPMENT=1"],
+    defines = [
+        "DEVELOPMENT=1",
+        "SWITCH_STATS_GPU=1",
+    ],
     deps = [":deadline_unit"],
 )
 
@@ -3443,7 +3470,10 @@ host_library(
     hdrs = HOLD_UNIT_HDRS,
     c_std = "gnu11",
     copts = ["-Wno-unused-function"],
-    defines = ["DEVELOPMENT=1"],
+    defines = [
+        "DEVELOPMENT=1",
+        "SWITCH_STATS_GPU=1",
+    ],
     deps = [":deadline_lines_unit"],
 )
 
@@ -3453,7 +3483,10 @@ host_test(
     name = "gm20b_period_test",
     srcs = ["gm20b_period_test.cpp"],
     cxx_std = "c++17",
-    defines = ["DEVELOPMENT=1"],
+    defines = [
+        "DEVELOPMENT=1",
+        "SWITCH_STATS_GPU=1",
+    ],
     deps = [
         ":deadline_unit",
         ":hold_unit",
@@ -3473,7 +3506,10 @@ host_library(
     ],
     c_std = "gnu11",
     copts = ["-fsanitize=thread"],
-    defines = ["DEVELOPMENT=1"],
+    defines = [
+        "DEVELOPMENT=1",
+        "SWITCH_STATS_GPU=1",
+    ],
     sanitize = False,
 )
 
@@ -3486,7 +3522,10 @@ host_library(
         "-Wno-unused-function",
         "-fsanitize=thread",
     ],
-    defines = ["DEVELOPMENT=1"],
+    defines = [
+        "DEVELOPMENT=1",
+        "SWITCH_STATS_GPU=1",
+    ],
     sanitize = False,
     deps = [":deadline_lines_unit_tsan"],
 )
@@ -3500,7 +3539,10 @@ host_library(
         "-Wno-unused-function",
         "-fsanitize=thread",
     ],
-    defines = ["DEVELOPMENT=1"],
+    defines = [
+        "DEVELOPMENT=1",
+        "SWITCH_STATS_GPU=1",
+    ],
     sanitize = False,
     deps = [":deadline_lines_unit_tsan"],
 )
@@ -3512,7 +3554,10 @@ host_test(
     srcs = ["gm20b_period_tsan_test.cpp"],
     copts = ["-fsanitize=thread"],
     cxx_std = "c++17",
-    defines = ["DEVELOPMENT=1"],
+    defines = [
+        "DEVELOPMENT=1",
+        "SWITCH_STATS_GPU=1",
+    ],
     linkopts = ["-fsanitize=thread"],
     sanitize = False,
     deps = [

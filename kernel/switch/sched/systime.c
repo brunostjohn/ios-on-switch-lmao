@@ -25,7 +25,7 @@
 #include <switch/idle.h>
 #include <switch/pmuv3.h>
 
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_STATS_SCHED) && SWITCH_STATS_SCHED
 
 struct systime_cpu {
     struct switch_systime counts;
@@ -108,9 +108,15 @@ static uint64_t pmc_read_ticks(void)
 static void report_pmu(char *line, size_t size, uint64_t window_ns, uint64_t transitions)
 {
     static uint64_t pmis_seen[MAX_CPUS], saves_seen[SWITCH_SMP_CORE_COUNT], save_ticks_seen[SWITCH_SMP_CORE_COUNT];
+    static uint64_t cached_read_ticks;
+    static bool read_ticks_measured;
     const unsigned int cpus = MIN((unsigned int)ml_get_max_cpu_number() + 1, (unsigned int)MAX_CPUS);
     uint64_t saves = 0, save_ticks = 0, ns = 0;
-    const uint64_t read_ticks = pmc_read_ticks();
+    if (!read_ticks_measured) {
+        cached_read_ticks = pmc_read_ticks();
+        read_ticks_measured = true;
+    }
+    const uint64_t read_ticks = cached_read_ticks;
     size_t at = switch_systime_put(
         size, 0, snprintf(line, size, "SwitchSched pmu (%llu ms): PMIs (C7 entries)", window_ns / NSEC_PER_MSEC));
 

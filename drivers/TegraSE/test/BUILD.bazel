@@ -51,8 +51,6 @@ host_test(
         "//kits/SwitchTime:SwitchTime.h",
     ],
     additional_compiler_inputs = ["//drivers/TegraSE:TegraSE.cpp"],
-    # A release kernel's bring-up: a debug one's thread goes on to its timing run and never returns.
-    copts = ["-UDEBUG"],
     defines = ["SWITCH_MMIO_HOST_MODEL=1"],
     deps = [":kernel"],
 )

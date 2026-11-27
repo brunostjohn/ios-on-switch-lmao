@@ -230,7 +230,7 @@ void SwitchAudio::free()
         jackSource->disable();
     if (pv6Source)
         pv6Source->disable();
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_IO
     if (statsTimer)
         statsTimer->cancelTimeout();
     IOEventSource *const codecSources[] = {jackSource, pv6Source, jackTimer, idleTimer, statsTimer, codecGate};
@@ -244,7 +244,7 @@ void SwitchAudio::free()
         wire->release();
     }
     OSSafeReleaseNULL(timer);
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_IO
     OSSafeReleaseNULL(statsTimer);
 #endif
     OSSafeReleaseNULL(cascade);

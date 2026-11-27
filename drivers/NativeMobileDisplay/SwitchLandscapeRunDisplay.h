@@ -6,7 +6,7 @@
 // recorded turns, and the CPU the display's kicks and frame ends and TegraVIC took. The frame ends are held routed
 // while it runs. Its state is static: the instance is at the 16 KiB a kalloc_type class may have.
 
-#if SWITCH_FRAME_TIMELINE
+#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
 struct LandscapeRunState {
     SwitchDisplayLandscapeReply reply;
     uint32_t want, savedCrc;

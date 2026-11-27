@@ -53,8 +53,8 @@ void gm20bPipelineOrphans(bool yieldOpen = false);
 bool gm20bClaimCommitSlot(SwitchMetalCommandBuffer *cb);
 void gm20bFinishEmpty(SwitchMetalCommandBuffer *cb);
 
-#if SWITCH_METAL_DIAGNOSTICS
-// Debug builds' frame rates line (TegraGM20BMetalEncoderRates.mm, frame_cpu_counts.h). The worker's: it took `cb` as its
+#if SWITCH_METAL_STATS
+// Opt-in stats builds' frame rates line (TegraGM20BMetalEncoderRates.mm, frame_cpu_counts.h). The worker's: it took `cb` as its
 // queue's head, or parked that head for `why` (gm20b::HeadWait); the finishing thread's: `cb` is done, its encode ahead
 // counted; the waiter's: its waitUntilScheduled blocked from `fromUs` to `toUs`.
 void gm20bNoteTaken(SwitchMetalCommandBuffer *cb);
@@ -62,7 +62,4 @@ void gm20bNoteParked(SwitchMetalCommandBuffer *cb, unsigned why);
 void gm20bNoteFinished(SwitchMetalCommandBuffer *cb);
 void gm20bNoteScheduledWait(SwitchMetalCommandBuffer *cb, uint64_t fromUs, uint64_t toUs);
 void gm20bNoteEnqueue(SwitchMetalCommandBuffer *cb);
-void gm20bSampleLateWrites(SwitchMetalCommandBuffer *cb, size_t from, size_t to);
-void gm20bCheckLateWrites(SwitchMetalCommandBuffer *cb);
-void gm20bDropLateWrites(SwitchMetalCommandBuffer *cb);
 #endif

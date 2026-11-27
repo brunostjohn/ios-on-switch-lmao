@@ -39,7 +39,7 @@ const std::string &facade()
 
 TEST(ProbeGate, TheSyncpointOpIsInDebugKernelsAlone)
 {
-	const CodeText release(Configured(dispatch(), "TGM_STATS", false));
+	const CodeText release(Configured(dispatch(), "TGM_DEBUG_PROBES", false));
 	EXPECT_EQ(release.count("TegraGM20BPathsOpProbeSyncpts"), 0u);
 	EXPECT_EQ(release.count("probeSyncptsLine"), 0u);
 	EXPECT_EQ(release.count("tegra_host1x_syncpt_alloc"), 0u);
@@ -47,7 +47,7 @@ TEST(ProbeGate, TheSyncpointOpIsInDebugKernelsAlone)
 
 TEST(ProbeGate, TheSyncpointOpAnswersOnlyTheProbesEntitlement)
 {
-	const CodeText debug(Configured(dispatch(), "TGM_STATS", true));
+	const CodeText debug(Configured(dispatch(), "TGM_DEBUG_PROBES", true));
 	EXPECT_TRUE(
 		debug.has("else if (op == TegraGM20BPathsOpProbeSyncpts) {"
 			  " if (!switch_gpu_task_entitled(task_, SWITCH_GPU_PROBES_ENTITLEMENT))"

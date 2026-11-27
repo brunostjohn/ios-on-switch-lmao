@@ -204,6 +204,7 @@ host_test(
         "-DDEVELOPMENT=0",
         "-UDEBUG",
         "-DDEBUG=0",
+        "-DSWITCH_STATS_IO=0",
     ],
     defines = ["KERNEL"],
 )

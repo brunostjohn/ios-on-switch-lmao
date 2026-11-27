@@ -69,7 +69,7 @@ class SwitchEMC : public OSObject {
     // A hint's deadline in the slot of the CPU it ran on, written only there with interrupts masked.
     struct HintSlot {
         uint64_t until;
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_POWER
         uint64_t asked;  // the first hint that found the EMC below its top rate, cleared by the loop that raised it
 #endif
     };
@@ -77,7 +77,7 @@ class SwitchEMC : public OSObject {
     HintSlot hints[switchperf::kSignalCpus] = {};
     uint64_t holdTicks = 0;
     switch_emc_hold holdState = {};
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_POWER
     uint64_t residency[SWITCH_EMC_MAX_RATES] = {}, since = 0;
     unsigned moves = 0;
     bool bpmpChangeLogged = false;
@@ -100,7 +100,7 @@ class SwitchEMC : public OSObject {
     static void signalFired(OSObject *owner, IOInterruptEventSource *, int);
     bool held(uint64_t now);
     uint64_t hintUntil() const;
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_POWER
     uint64_t takeAsked();
     void noteWindow(uint64_t busy, bool topHeld);
     void account(uint64_t now);
@@ -146,7 +146,7 @@ public:
     {
         return __atomic_load_n(&memoryQualified, __ATOMIC_ACQUIRE);
     }
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_POWER
     static IOReturn statsAction(OSObject *owner, void *line, void *size, void *written, void *);
     size_t stats(char *line, size_t size);
     void logMove(unsigned from, unsigned to, unsigned asked, switch_emc_reason reason) const;
@@ -362,12 +362,12 @@ void SwitchEMC::signalFired(OSObject *owner, IOInterruptEventSource *, int)
     auto *self = static_cast<SwitchEMC *>(owner);
     if (!self->governing)
         return;
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_POWER
     const unsigned before = self->cur;
     const uint64_t bpmp = mach_absolute_time();
 #endif
     self->moveTo(self->count - 1, SWITCH_EMC_REASON_HINT);
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_POWER
     const uint64_t asked = self->takeAsked();
     if (before != self->cur && asked) {
         const uint64_t now = mach_absolute_time();
@@ -409,7 +409,7 @@ IOReturn SwitchEMC::pauseAction(OSObject *owner, void *, void *, void *, void *)
     if (!self->governing)
         return kIOReturnSuccess;
     self->stopActmon();
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_POWER
     self->account(mach_absolute_time());
 #endif
     self->governing = false;
@@ -512,7 +512,7 @@ extern "C" void switch_emc_resume(void)
         emc->govern(true);
 }
 
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_POWER
 extern "C" size_t switch_emc_stats(char *line, size_t size)
 {
     SwitchEMC *emc = __atomic_load_n(&gEMC, __ATOMIC_ACQUIRE);

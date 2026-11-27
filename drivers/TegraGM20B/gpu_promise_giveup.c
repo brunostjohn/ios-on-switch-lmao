@@ -166,36 +166,12 @@ static void giveup_report(uint32_t offset, uint32_t value, const struct switch_g
 		maker, offset, value, e->waiter, waited_ns / 1000000, e->who);
 }
 
-#if TGM_STATS
-/* giveup_table_lock held: the ACQUIRE probe's look at the GPU readers still parked at a give-up */
-static void giveup_probe(const struct switch_gpu_giveup *e)
-{
-	const struct switch_gpu_giveup_readers *r = switch_gpu_giveup_readers_of(&giveups, e);
-	const u64 now = nvxnu_nanotime();
-	u32 i;
-
-	if (giveup_down || !r || !r->count)
-		return;
-	mutex_lock(&tgm_live_lock);
-	for (i = 0; i < r->count; i++) {
-		struct tgm_chan *chan = live_by_uid(r->job[i].uid);
-
-		if (chan)
-			tgm_acquire_probe_giveup(chan, e->parked_ns, now);
-	}
-	mutex_unlock(&tgm_live_lock);
-}
-
-#endif
 /* giveup_table_lock held: the mark before the word moves, taken back when the maker's own release came first */
 static void giveup_stepped(uint32_t offset, uint32_t value, int step, void *entry)
 {
 	const struct switch_gpu_giveup *e = (const struct switch_gpu_giveup *)entry;
 
 	if (step == SWITCH_GPU_PROMISE_RAISING) {
-#if TGM_STATS
-		giveup_probe(e);
-#endif
 		tgm_promise_abandon(offset, value);
 		return;
 	}
@@ -203,7 +179,7 @@ static void giveup_stepped(uint32_t offset, uint32_t value, int step, void *entr
 		tgm_promise_kept_first(offset, value);
 		return;
 	}
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 	tgm_promise_cpu_raised(offset, value);
 #endif
 	giveup_report(offset, value, e, nvxnu_nanotime() - e->parked_ns);

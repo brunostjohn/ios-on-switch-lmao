@@ -211,11 +211,15 @@ bool Service::publish(gm20b::Digest *name, const gm20b::CacheKey &key, const std
     };
     Store::Put put = putAll();
     if (put == Store::Put::Full) {
+#if SWITCH_DEBUG
         const uint32_t before = store_.entries();
+#endif
         if (!store_.makeRoom(why) || !registerStore(uint64_t(TEGRA_STACK_KEY), why))
             return false;
+#if SWITCH_DEBUG
         os_log(logger(), "SwitchShaderCompiler: the full store kept its newest %u of %u entries", store_.entries(),
                before);
+#endif
         put = putAll();
     }
     if (put != Store::Put::Added && put != Store::Put::Kept)

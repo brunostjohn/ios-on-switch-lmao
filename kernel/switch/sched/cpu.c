@@ -25,7 +25,7 @@
 #include <os/log.h>
 #include <string.h>
 
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_STATS_SCHED) && SWITCH_STATS_SCHED
 
 #define LINE              900u /* under the 1 KiB os_log record */
 #define BOOT_TASK_LOG_MAX 128u

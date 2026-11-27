@@ -56,7 +56,7 @@
 #define A64X_WORDS    (A64X_PAGE / 4)
 #define A64X_BRK_STUB 0xD4200020u /* brk #1: never executed (no branch reaches unused stub words) */
 
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_STATS_IO) && SWITCH_STATS_IO
 /* statistics (sysctl kern.a64x.*) */
 static uint64_t a64x_images, a64x_pages, a64x_stub_words, a64x_mismatch, a64x_traps, a64x_traps_unhandled;
 static uint64_t a64x_cache_pages, a64x_images_native, a64x_images_marked, a64x_island_words;
@@ -1019,11 +1019,9 @@ int a64x_emulate_user(arm_saved_state_t *state, uint32_t w)
             uint64_t patched_old = 0;
             if (a64x_copyio_cas(pc, 2, w, out, &patched_old) == 0 &&
                 switch_user_cache_maintenance(pc, sizeof(uint32_t), SWITCH_UCM_SYNC_I) == 0) {
-#if DEVELOPMENT || DEBUG
                 if ((uint32_t)patched_old == w) {
-                    OSIncrementAtomic64((SInt64 *)&a64x_jit_patches);
+                    A64X_INC(a64x_jit_patches);
                 }
-#endif
                 switch_a64x_trap_noted(c, true);
                 return 1;
             }
@@ -1178,7 +1176,7 @@ int a64x_emulate_user(arm_saved_state_t *state, uint32_t w)
     return 1;
 }
 
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_STATS_IO) && SWITCH_STATS_IO
 SYSCTL_NODE(_kern, OID_AUTO, a64x, CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_KERN, 0, "arm64e translation");
 SYSCTL_QUAD(_kern_a64x, OID_AUTO, images, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_images, "");
 SYSCTL_QUAD(_kern_a64x, OID_AUTO, text_pages, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_pages, "");

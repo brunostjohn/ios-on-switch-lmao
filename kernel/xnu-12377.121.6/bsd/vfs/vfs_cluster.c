@@ -225,7 +225,7 @@ static uint64_t switch_record_bytes[SWITCH_RECORD_KINDS];
 /* Switch (r14-launch, r17-launch): the cryptex images' reads, for the kprof image line: through the image files
  * (DiskImages; cached-read calls, those that missed, windows read ahead and their bytes, card reads issued for an image
  * and bytes), then through the direct read map (SwitchCryptex.cpp: requests, bytes, card reads). */
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_KPROF) && SWITCH_KPROF
 static uint64_t switch_image_stat[9];
 #define switch_image_count(i, n) os_atomic_add(&switch_image_stat[i], (uint64_t)(n), relaxed)
 #else
@@ -233,7 +233,7 @@ static uint64_t switch_image_stat[9];
 #endif
 static void switch_image_window(vnode_t vp, off_t offset, u_int32_t size, off_t filesize,
     int (*callback)(buf_t, void *), void *callback_arg, int bflag);
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_KPROF) && SWITCH_KPROF
 /* osfmk/kern/switch_kprof.c */
 extern void switch_kprof_wait(unsigned int kind, uint64_t elapsed, uint64_t bytes);
 #endif
@@ -1653,7 +1653,7 @@ cluster_io(vnode_t vp, upl_t upl, vm_offset_t upl_offset, off_t f_offset, int no
 #endif
 		}
 	}
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_KPROF) && SWITCH_KPROF
 	/* r14-launch: every card read of a cryptex image (demand, window), for the kprof image line. */
 	if ((flags & CL_READ) && switch_cluster_is_image(vp)) {
 		os_atomic_inc(&switch_image_stat[4], relaxed);
@@ -4941,7 +4941,7 @@ switch_cluster_prefetch_snapshot(struct switch_cluster_io_snapshot *out)
 }
 #endif
 
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_KPROF) && SWITCH_KPROF
 /* r17-launch: one request of the direct read map (SwitchCryptex.cpp): its bytes and the card reads it took. */
 void switch_cluster_image_direct(uint64_t bytes, uint32_t card_reads);
 void
@@ -4950,6 +4950,12 @@ switch_cluster_image_direct(uint64_t bytes, uint32_t card_reads)
 	os_atomic_inc(&switch_image_stat[6], relaxed);
 	os_atomic_add(&switch_image_stat[7], bytes, relaxed);
 	os_atomic_add(&switch_image_stat[8], (uint64_t)card_reads, relaxed);
+}
+#elif DEVELOPMENT || DEBUG
+void switch_cluster_image_direct(uint64_t bytes, uint32_t card_reads);
+void
+switch_cluster_image_direct(__unused uint64_t bytes, __unused uint32_t card_reads)
+{
 }
 #endif
 
@@ -4990,7 +4996,7 @@ switch_image_window(vnode_t vp, off_t offset, u_int32_t size, off_t filesize, in
 	(void)cluster_read_prefetch(vp, start, (u_int)(end - start), filesize, callback, callback_arg, bflag);
 }
 
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_KPROF) && SWITCH_KPROF
 /* The image counters since boot (switch_image_stat), for the kprof image line. */
 void switch_cluster_image_stats(uint64_t stats[9]);
 void
@@ -5149,7 +5155,7 @@ cluster_read_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t file
 	int              policy = IOPOL_DEFAULT;
 	boolean_t        iolock_inited = FALSE;
 	const bool       switch_image = !(flags & IO_NOCACHE) && switch_cluster_is_image(vp);
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_KPROF) && SWITCH_KPROF
 	uint64_t         switch_miss_began = 0;
 	uint64_t         switch_miss_bytes = 0;
 #endif
@@ -5162,7 +5168,7 @@ cluster_read_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t file
 	}
 
 	policy = throttle_get_io_policy(NULL);
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_KPROF) && SWITCH_KPROF
 	if (switch_image) {
 		switch_image_count(0, 1);
 	}
@@ -5370,7 +5376,7 @@ cluster_read_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t file
 		 * (the UPL waiting for busy pages, the I/O) is this thread's read wait (kprof waits line); a small read of a
 		 * cryptex image first reads its 64 KiB window ahead (switch_image_window).
 		 */
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_KPROF) && SWITCH_KPROF
 		switch_miss_began = mach_absolute_time();
 		switch_miss_bytes = io_size;
 #endif
@@ -5684,7 +5690,7 @@ cluster_read_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t file
 		if (retval == 0) {
 			retval = error;
 		}
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_KPROF) && SWITCH_KPROF
 		if (switch_miss_began) {
 			switch_kprof_wait(1 /* read wait */, mach_absolute_time() - switch_miss_began, switch_miss_bytes);
 			switch_miss_began = 0;

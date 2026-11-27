@@ -8,7 +8,7 @@
 
 namespace xudc {
 
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_IO
 struct XudcStats {
     // Bytes, requests, failed requests and bounced bytes per direction (0 OUT, 1 IN), requests by the serial path, why
     // packets were bounced (XudcTransfer.h PlanStats), events, time in the event drain and queueing (the filter's is

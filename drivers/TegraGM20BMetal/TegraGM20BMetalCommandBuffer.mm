@@ -114,10 +114,6 @@ static void commandBufferDropped(void *object)
     if (SwitchMetalEncoder *__unsafe_unretained e = (SwitchMetalEncoder *)b->_active)
         e->_cb = nil;
     b->_active = nil;
-#if SWITCH_METAL_DIAGNOSTICS
-    if (b->_lateWriteSampled)
-        gm20bDropLateWrites(b);
-#endif
     if (!completed) {
         b->_deferredPresents.clear();
         b->_residencySets = nil;
@@ -287,10 +283,6 @@ static const gm20b::Pipeline *recordedPipeline(const gm20b::RasterState &raster)
         if (cmd.op == OpEnd && _encOpen) {
             if (gm20bAheadReads(self))
                 gm20bPrepareEncoder(self, _encAt, _plan.size());
-#if SWITCH_METAL_DIAGNOSTICS
-            if (!_lateWriteChecked)
-                gm20bSampleLateWrites(self, _encAt, _plan.size());
-#endif
             [self closeEncoder];
             gm20bPublishEncoder(self);
         }
@@ -578,7 +570,7 @@ static void deferPresent(SwitchMetalCommandBuffer *cb, id<MTLDrawable> drawable,
 
 - (void)enqueue
 {
-#if SWITCH_METAL_DIAGNOSTICS
+#if SWITCH_METAL_STATS
     gm20bNoteEnqueue(self);
 #endif
     enqueueBuffer(self);
@@ -606,10 +598,6 @@ static void deferPresent(SwitchMetalCommandBuffer *cb, id<MTLDrawable> drawable,
     if (_active)
         [(SwitchMetalEncoder *)_active endEncoding];
     gm20bSnapshotResidencySets(self);
-#if SWITCH_METAL_DIAGNOSTICS
-    if (_lateWriteSampled)
-        gm20bCheckLateWrites(self);
-#endif
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     glassProbeCommitted(self);
 #endif
@@ -638,16 +626,16 @@ static void deferPresent(SwitchMetalCommandBuffer *cb, id<MTLDrawable> drawable,
 #if SWITCH_FRAME_TIMELINE
         const switch_frame::WaitScope frameWait(_frame);
 #endif
-#if SWITCH_METAL_DIAGNOSTICS
+#if SWITCH_METAL_STATS
         const BlockedWait blocked(gRM->stats.scheduledWaits, gRM->stats.scheduledWaitUs);
         const uint64_t from = nowUs();
 #endif
         waitFor(self, returns);
-#if SWITCH_METAL_DIAGNOSTICS
+#if SWITCH_METAL_STATS
         gm20bNoteScheduledWait(self, from, nowUs());
 #endif
     }
-#if SWITCH_METAL_DIAGNOSTICS
+#if SWITCH_METAL_STATS
     uint64_t none = 0;
     if (_held && !_scheduledDone && _heldReturnUs.compare_exchange_strong(none, nowUs()))
         gRM->stats.heldReturns++;
@@ -658,7 +646,7 @@ static void deferPresent(SwitchMetalCommandBuffer *cb, id<MTLDrawable> drawable,
 {
     if (!_committed || _completedDone)
         return;
-#if SWITCH_METAL_DIAGNOSTICS
+#if SWITCH_METAL_STATS
     const BlockedWait blocked(gRM->stats.completedWaits, gRM->stats.completedWaitUs);
 #endif
     // a range of it in flight may have ended quiet: the completion thread waits for the newest one

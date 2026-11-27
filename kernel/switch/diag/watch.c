@@ -69,7 +69,7 @@ struct switch_stall_watch *switch_stall_watch_begin(thread_t thread, uint64_t ns
     if (w == NULL) {
         return NULL;
     }
-    w->call = thread_call_allocate_with_options(watch_fire, w, THREAD_CALL_PRIORITY_KERNEL, THREAD_CALL_OPTIONS_ONCE);
+    w->call = thread_call_allocate_with_options(watch_fire, w, THREAD_CALL_PRIORITY_USER, THREAD_CALL_OPTIONS_ONCE);
     if (w->call == NULL) {
         kfree_type(struct switch_stall_watch, w);
         return NULL;

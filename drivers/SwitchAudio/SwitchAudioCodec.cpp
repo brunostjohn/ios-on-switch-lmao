@@ -30,7 +30,7 @@ void SwitchAudio::codecPowerUp()
     idleTimer->cancelTimeout();
     if (!acquireApe())
         return;
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_IO
     statsResume();
 #endif
     tegra_gpio_check_delivery(kCodecIrq, "SwitchAudio");  // before trusting the jack state
@@ -228,7 +228,7 @@ void SwitchAudio::jackSettled(OSObject *owner, IOTimerEventSource *)
         self->codec.mute(false);
 }
 
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_IO
 void SwitchAudio::statsFired(OSObject *owner, IOTimerEventSource *sender)
 {
     auto *self = static_cast<SwitchAudio *>(owner);
@@ -343,7 +343,7 @@ void SwitchAudio::codecStart()
     }
     jackSource->enable();
     jackTimer->setTimeoutMS(kJackSettleMS);
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_IO
     statsTimer = IOTimerEventSource::timerEventSource(this, &SwitchAudio::statsFired);
     if (!statsTimer || codecLoop->addEventSource(statsTimer) != kIOReturnSuccess)
         panic("SwitchAudio: stats timer setup failed");
@@ -357,7 +357,7 @@ void SwitchAudio::codecQuiesce()
     pv6Source->disable();
     jackTimer->cancelTimeout();
     idleTimer->cancelTimeout();
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_IO
     if (statsTimer)
         statsTimer->cancelTimeout();
 #endif
@@ -380,7 +380,7 @@ IOReturn SwitchAudio::codecSleepGated(OSObject *owner, void *entering, void *, v
     self->jackSource->enable();
     self->pv6Source->enable();
     self->jackTimer->setTimeoutMS(kJackSettleMS);
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_IO
     if (self->statsTimer)
         self->statsResume();
 #endif

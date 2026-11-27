@@ -78,11 +78,11 @@ uint64_t UsbSmmuSpace::translate(uint64_t address)
 
 void UsbSmmuSpace::publish()
 {
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_IO
     const uint64_t entered = mach_absolute_time();
 #endif
     switch_smmu_publish(domain_, asid_, SWITCH_DCACHE_CLEAN_INVALIDATE);
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_IO
     ++cost_.flushes;
     cost_.flushTicks += mach_absolute_time() - entered;
 #endif

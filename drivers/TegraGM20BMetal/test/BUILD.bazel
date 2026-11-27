@@ -2775,28 +2775,6 @@ host_test(
     deps = ["//kits/SwitchGM20B:classes"],
 )
 
-# surface_note.h: the render server's note of a big IOSurface it draws into takes the surface's scalars
-# and caller frames and no reference; its name, use count and purgeable state are read by id when the note is logged
-host_test(
-    name = "surface_note_test",
-    srcs = [
-        "surface_note_test.cpp",
-        "//drivers/TegraGM20BMetal:plugin/SwitchFrameTimeline.h",
-        "//drivers/TegraGM20BMetal:surface_note.h",
-    ],
-    copts = [
-        "-Idrivers/TegraGM20BMetal/plugin",
-        "-Idrivers/TegraGM20BMetal",
-    ],
-    cxx_std = "c++17",
-    linkopts = [
-        "-framework",
-        "IOSurface",
-        "-framework",
-        "CoreFoundation",
-    ],
-)
-
 host_test(
     name = "span_marks_test",
     srcs = [
@@ -3610,15 +3588,6 @@ host_test(
     ],
     cxx_std = "c++17",
     data = ["//drivers/TegraGM20BMetal:pass_begin.cpp"],
-)
-
-host_test(
-    name = "keyline_probe_test",
-    srcs = [
-        "keyline_probe_test.cpp",
-        "//drivers/TegraGM20BMetal:keyline_probe.h",
-    ],
-    cxx_std = "c++17",
 )
 
 host_test(

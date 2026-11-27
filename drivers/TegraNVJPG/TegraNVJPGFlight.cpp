@@ -65,7 +65,7 @@ int cancelled(const TegraNVJPGJob *job, uint32_t fence, uint64_t us)
     char falcon[400];
     char what[240];
     char why[288];
-#if TEGRA_NVJPG_STATS
+#if TEGRA_NVJPG_PROBES
     __atomic_fetch_add(&gCancellations, 1, __ATOMIC_RELAXED);
 #endif
     if (!gErrors.failed(why, sizeof(why)))
@@ -169,7 +169,8 @@ void tegra_nvjpg_lock_counts(uint64_t *waitsUnlocked, uint64_t *stateWaitMaxUs)
     *waitsUnlocked = __atomic_exchange_n(&gWaitsUnlocked, 0, __ATOMIC_RELAXED);
     *stateWaitMaxUs = __atomic_exchange_n(&gStateWaitMaxUs, 0, __ATOMIC_RELAXED);
 }
-
+#endif
+#if TEGRA_NVJPG_PROBES
 uint64_t tegra_nvjpg_cancellations(void)
 {
     return __atomic_load_n(&gCancellations, __ATOMIC_RELAXED);

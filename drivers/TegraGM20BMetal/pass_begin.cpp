@@ -106,7 +106,7 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass, const char **why)
     e.cb_ = this;
     e.dev_ = dev_;
     e.pass_ = pass;
-    SWITCH_METAL_DIAGNOSTIC(e.prologueMark_ = dev_->spans_.reserve());
+    SWITCH_METAL_PROFD(e.prologueMark_ = dev_->spans_.reserve());
     SWITCH_METAL_DIAGNOSTIC(if (drawTimes_) e.timePassBegin());
     // the render hardware takes one memory layout for all of a pass's color targets (nvk_rendering_linear): block-linear when
     // one of them is, or is a pitch target the hardware cannot take (rendered through a shadow either way), or beside a zeta,

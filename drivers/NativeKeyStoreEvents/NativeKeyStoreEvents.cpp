@@ -33,8 +33,6 @@
 extern "C" void native_keyevents_open_refused(void);
 extern "C" bool native_aks_state_enabled(void);
 extern "C" uint32_t native_aks_lock_state(void);
-extern "C" void native_aks_call(uint32_t selector, int32_t result);
-extern "C" void native_aks_opened(void);
 extern "C" void native_aks_device_key_start(void);
 extern "C" IOReturn native_aks_wrap(uint32_t keybag, uint32_t keyClass, const uint8_t *key, size_t length, uint8_t *out,
                                     size_t capacity, size_t *written);
@@ -337,7 +335,6 @@ OSDeclareDefaultStructors(AppleKeyStoreUserClient) public : IOReturn clientClose
                 break;
             }
         }
-        native_aks_call(selector, static_cast<int32_t>(rc));
 #if DEVELOPMENT || DEBUG
         uint64_t ns = 0;
         absolutetime_to_nanoseconds(mach_absolute_time() - began, &ns);
@@ -380,7 +377,6 @@ OSDefineMetaClassAndStructors(AppleKeyStoreUserClient, IOUserClient)
             client->release();
             return kIOReturnError;
         }
-        native_aks_opened();
         *out = client;
         return kIOReturnSuccess;
     }

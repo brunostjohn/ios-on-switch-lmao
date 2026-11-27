@@ -325,7 +325,9 @@ TEST(XnuSchedBusySource, ReleaseKernelsCompileItToNothing)
     for (const char *hook : {"switch_sched_off_core(", "switch_sched_busy_exec(", "switch_sched_busy_tick("})
         EXPECT_THAT(stubs, HasSubstr(std::string("static inline void ") + hook)) << hook;
     const std::string source = switch_ios::test::SourceText("../switch/sched/busy.c");
-    EXPECT_THAT(source, HasSubstr("\n#if DEVELOPMENT || DEBUG\n"));
+    EXPECT_THAT(source, HasSubstr("\n#if (DEVELOPMENT || DEBUG) && \\\n"
+                                  "    ((defined(SWITCH_STATS_SCHED) && SWITCH_STATS_SCHED) || "
+                                  "(defined(SWITCH_RECORDER) && SWITCH_RECORDER))\n"));
     EXPECT_THAT(source, HasSubstr("\n#endif /* DEVELOPMENT || DEBUG */\n"));
 }
 

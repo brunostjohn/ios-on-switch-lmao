@@ -68,7 +68,7 @@ void RenderEncoder::reserve()
 void RenderEncoder::finishDraw(uint32_t vertices, uint32_t instances, bool indirect)
 {
     const Pipeline &pl = *emitted_;
-#if SWITCH_METAL_DIAGNOSTICS
+#if SWITCH_METAL_PROF
     if (dev_->spans_.on()) {
         if (p_.room() < kSpanMarkWords)
             reserve();
@@ -544,8 +544,8 @@ bool RenderEncoder::indirect(uint32_t primitive, bool indexed, const Buffer *arg
         p_.m(INVALIDATE_SHADER_CACHES, kFlushData | kInvalidateConstant);
         p_.m(0x0050, 0);  // NV906F_SET_REFERENCE: pre-Turing MME command-fetch visibility (NVK indirect-read barrier)
     }
-    SWITCH_METAL_DIAGNOSTIC((drain ? frameCpuCounts().indirectDrained : frameCpuCounts().indirectFree)
-                                .fetch_add(1, std::memory_order_relaxed));
+    SWITCH_METAL_STAT((drain ? frameCpuCounts().indirectDrained : frameCpuCounts().indirectFree)
+                          .fetch_add(1, std::memory_order_relaxed));
     const auto argumentWords = [&] {
         if (inside) {
             bodies_.push_back({bodyStart_, p_.at, 0, 0, true});

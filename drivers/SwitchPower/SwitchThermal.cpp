@@ -1213,11 +1213,8 @@ void SwitchThermal::applyGovernor()
     char line[960];
     const unsigned index = switchperf::take(line, sizeof(line));
     const bool onDfll = perfRaised && dfllMode && governed;
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_POWER
     if (line[0]) {
-        const size_t n = strlen(line);
-        if (onDfll && n + 32 < sizeof(line))
-            snprintf(line + n, sizeof(line) - n, "; probe %u MHz", probeCpuKhz() / 1000);
         os_log(OS_LOG_DEFAULT, "%s", line);  // log only, never the boot console
         switch_power_stats_tick();
     }

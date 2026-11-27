@@ -50,9 +50,6 @@ void switch_diag_unnest(uint64_t start, uint64_t end);
 /* vnode_pager_data_request, on the faulting thread after the pager's read: `bytes` asked of `vp`, `read` (mach) spent
  * in it: the whole read when the file system reads synchronously (a compressed file), its issue otherwise, the wait
  * then being a busy-page wait (diag/pagein.c); the 10 s scheduling report's lines of them. */
-void switch_diag_pagein(struct vnode *vp, uint64_t bytes, uint64_t read);
-struct switch_page_wait switch_diag_page_wait(void *pager, unsigned int absent);
-void switch_diag_page_waited(const struct switch_page_wait *wait);
 void switch_diag_pagein_report(char *line, size_t size, uint64_t window_ns);
 void switch_diag_cryptex_cache(switch_cryptex_cache_counts_t counts);
 /* iOS 27's workloop filter, once one of <switch/workloop_handoff.h>'s events happened: its line (diag/workloop.c). */
@@ -85,17 +82,6 @@ static inline void switch_diag_wl_touched(__unused uint32_t command, __unused ui
 static inline void switch_diag_unnest(__unused uint64_t start, __unused uint64_t end)
 {}
 
-static inline void switch_diag_pagein(__unused struct vnode *vp, __unused uint64_t bytes, __unused uint64_t read)
-{}
-
-static inline struct switch_page_wait switch_diag_page_wait(__unused void *pager, __unused unsigned int absent)
-{
-    return (struct switch_page_wait){NULL, 0};
-}
-
-static inline void switch_diag_page_waited(__unused const struct switch_page_wait *wait)
-{}
-
 static inline void switch_diag_wl_event(__unused enum switch_wl_kind kind, __unused struct switch_wl_event *event)
 {}
 
@@ -113,6 +99,23 @@ static inline const void *switch_diag_wl_waking(__unused bool unwoken_wait, __un
 {
     return NULL;
 }
+#endif
+
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_STATS_IO) && SWITCH_STATS_IO
+void switch_diag_pagein(struct vnode *vp, uint64_t bytes, uint64_t read);
+struct switch_page_wait switch_diag_page_wait(void *pager, unsigned int absent);
+void switch_diag_page_waited(const struct switch_page_wait *wait);
+#else
+static inline void switch_diag_pagein(__unused struct vnode *vp, __unused uint64_t bytes, __unused uint64_t read)
+{}
+
+static inline struct switch_page_wait switch_diag_page_wait(__unused void *pager, __unused unsigned int absent)
+{
+    return (struct switch_page_wait){NULL, 0};
+}
+
+static inline void switch_diag_page_waited(__unused const struct switch_page_wait *wait)
+{}
 #endif
 
 __END_DECLS

@@ -23,7 +23,7 @@ void switch_gpu_chan_park_promises_locked(struct tgm_chan *chan,
 		}
 }
 
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 /* Promise words the CPU raised (a cancel, a kill, a close, a give-up): a reader parked on ACQ_GEQ for one goes on
  * only if the GPU reads the word again after that write, which the present's completion reports once
  * (tgm_promise_was_cpu_raised). */

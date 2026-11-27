@@ -27,7 +27,10 @@ extern uint64_t gPoweredAtUs;
 extern bool gUp, gWedged, gSuspended;
 extern TegraNVJPGBuffer gSetup, gStatus;
 #if TEGRA_NVJPG_STATS
-extern uint64_t gWaitsUnlocked, gStateWaitMaxUs, gCancellations;
+extern uint64_t gWaitsUnlocked, gStateWaitMaxUs;
+#endif
+#if TEGRA_NVJPG_PROBES
+extern uint64_t gCancellations;
 #endif
 
 bool powerUp(bool *wasOn);

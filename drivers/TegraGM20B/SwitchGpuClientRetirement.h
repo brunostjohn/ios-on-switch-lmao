@@ -360,7 +360,7 @@ void AGXDeviceUserClient::drainResources()
 #ifdef KERNEL
 	drainParkedRanges();
 #endif
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 	tgm_readback_closed(this);
 #endif
 	IOLockLock(lock_);

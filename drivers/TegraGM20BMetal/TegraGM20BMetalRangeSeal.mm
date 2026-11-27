@@ -288,7 +288,8 @@ bool SwitchMetalRangeEncode::seal(size_t to)
     }
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     cb->_probeTaken.add(rc->probeTaken());
-    noteReplayShape(cb, from_, to);
+#endif
+#if SWITCH_METAL_PROF
     d_->stats.slotsCompared += stateCursor_.slotsCompared;
     d_->stats.slotsInTables += stateCursor_.slotsInTables;
 #endif

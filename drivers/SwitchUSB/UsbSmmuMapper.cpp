@@ -102,7 +102,7 @@ uint64_t switch_usb_smmu_fixed(uint64_t pa, uint64_t length)
     return gSpace.attached() ? gSpace.fixedIova(pa, length) : UINT64_MAX;
 }
 
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_IO
 uint32_t switch_usb_smmu_entry(uint64_t address)
 {
     return gSpace.attached() ? gSpace.entry(address) : 0;

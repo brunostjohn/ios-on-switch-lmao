@@ -155,7 +155,10 @@ host_test(
     name = "switch_nvjpg_lock_counts_test",
     srcs = ["switch_nvjpg_lock_counts_test.cpp"] + ENGINE_MODEL,
     additional_compiler_inputs = ENGINE_SOURCES,
-    defines = ["DEVELOPMENT=1"],
+    defines = [
+        "DEVELOPMENT=1",
+        "SWITCH_STATS_IO=1",
+    ],
     deps = [":gate_kernel"],
 )
 
@@ -164,7 +167,10 @@ host_test(
     srcs = ["switch_nvjpg_lock_counts_test.cpp"] + ENGINE_MODEL,
     additional_compiler_inputs = ENGINE_SOURCES,
     copts = ["-fsanitize=thread"],
-    defines = ["DEVELOPMENT=1"],
+    defines = [
+        "DEVELOPMENT=1",
+        "SWITCH_STATS_IO=1",
+    ],
     linkopts = ["-fsanitize=thread"],
     sanitize = False,
     deps = [":gate_kernel"],
@@ -237,5 +243,6 @@ host_test(
         "//drivers/TegraNVJPG:TegraNVJPGRepack.cpp",
         "//drivers/TegraNVJPG:TegraNVJPGUserClient.cpp",
     ],
+    defines = ["SWITCH_STATS_IO=1"],
     deps = [":user_client_kernel"],
 )

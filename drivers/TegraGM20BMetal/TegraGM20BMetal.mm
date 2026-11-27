@@ -395,7 +395,7 @@ id<MTLDevice> metal_device_open(const char *packPath, uint64_t stack, uint64_t r
             }
             const gm20b::Device::Trimmed kept = gRM->raw->trim();
             gRM->raw->kernelSparesGiveBack();
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+#if SWITCH_METAL_STATS
             gm20b::Device::PurgeStats purge;
             gRM->raw->purgeArenas(gRM->committed, &purge);
 #else
@@ -409,7 +409,7 @@ id<MTLDevice> metal_device_open(const char *packPath, uint64_t stack, uint64_t r
             // A daemon over its inactive jetsam limit is killed when it goes inactive, without a pressure notification that
             // would have made malloc give back the dirty pages its zones keep free (a compile's working memory)
             const size_t relieved = malloc_zone_pressure_relief(nullptr, 0);
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+#if SWITCH_METAL_STATS
             logGivenBack(relieved, passes, kept, purge);
 #else
             (void)relieved;
@@ -421,9 +421,11 @@ id<MTLDevice> metal_device_open(const char *packPath, uint64_t stack, uint64_t r
     const bool renderServer = dev->role() == gm20b::Device::Role::RenderServer;
     if (!renderServer)
         observeBackground();
+#if SWITCH_METAL_DIAGNOSTICS
     if (renderServer)
         os_log(gm20bLog(), "SwitchMetal: shader heap %llu KB, each program placed at its state's first use",
                (unsigned long long)(dev->heapBytes() >> 10));
+#endif
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     {  // the stall line's timer (gm20bStallTick): one a process, on a serial queue of its own, which alone runs the tick
         // and so owns its state. Nothing the render server's other threads hold delays it; another process's rides the
@@ -445,7 +447,6 @@ id<MTLDevice> metal_device_open(const char *packPath, uint64_t stack, uint64_t r
         });
     }
     watchFetchBarrierWay(dev);
-    watchKeylineProbe();
     watchGlassProbe(dev);
     watchFrameWeights(dev);
 #endif

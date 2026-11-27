@@ -544,7 +544,7 @@ extern "C" int tegra_gm20b_scanout_copy(const struct TegraScanoutCopy *copy)
 		gPresentSnapshot.display = copy->display;
 		tgm_present_set_owner(copy->display);
 		tgm_present_set_filter_display(copy->display);
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 		tgm_present_read reads[TGM_PRESENT_READS] = {};
 		const uint32_t nreads = tgm_readback_take(copy, source, blockLog2, target, reads);
 		gPresentSnapshot.done = nreads ? tgm_readback_done : presentDone;
@@ -583,7 +583,7 @@ extern "C" int tegra_gm20b_scanout_copy(const struct TegraScanoutCopy *copy)
 	return offerStatus(ret);
 }
 
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 extern "C" void tegra_gm20b_scanout_bypassed(void)
 {
 	if (!presentLock())

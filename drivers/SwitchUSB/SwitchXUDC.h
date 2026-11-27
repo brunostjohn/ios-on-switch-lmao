@@ -165,7 +165,7 @@ class SwitchXUDC : public IOUSBDeviceController {
     Piece *scratchPieces;
     Run *scratchIova;
     UsbSmmuSpace smmu;
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_IO
     UsbSmmuSpace::Cost windowLogged;  // the window's cost at the last stats line
 #endif
     uint8_t secondLogged, eventsLogged;  // one-shot lines: the first second event; events for no request, errors
@@ -257,7 +257,7 @@ class SwitchXUDC : public IOUSBDeviceController {
     void setBus(bool on);
 
     // The stats line (SwitchXUDCStats.cpp): DEVELOPMENT and DEBUG kernels only.
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_IO
     void statsBegin();
     void drained(uint64_t entered);
     void logStats(uint64_t now);

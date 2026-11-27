@@ -248,8 +248,8 @@ TEST(DisplayPlanesSource, RefusedLayoutsLoggedOnlyByDebugKernels)
         "reason = native_planes::checkUpdated(updated, background, hasSurface, layers, width, height, kPlaneLimits);",
         "planeNoteRefused(reason, updated, hasSurface, layers, width, height, kPlaneLimits);"));
     const std::string totals = SourceText("../NativePlanesTotals.h");
-    const CodeText debug(Configured(totals, "SWITCH_FRAME_TIMELINE", true));
-    const CodeText release(Configured(totals, "SWITCH_FRAME_TIMELINE", false));
+    const CodeText debug(Configured(totals, "SWITCH_DISPLAY_PROBES", true));
+    const CodeText release(Configured(totals, "SWITCH_DISPLAY_PROBES", false));
     EXPECT_TRUE(debug.has("switch_refusal_k(key, \"display\", \"plane-layout\","));
     EXPECT_FALSE(release.has("switch_refusal_k(key, \"display\", \"plane-layout\","));
     EXPECT_TRUE(

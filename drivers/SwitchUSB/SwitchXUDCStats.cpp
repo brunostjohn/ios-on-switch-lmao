@@ -2,7 +2,7 @@
 // SwitchXUDC (SwitchXUDC.h): the stats lines, built into DEVELOPMENT and DEBUG kernels only.
 #include "SwitchXUDC.h"
 
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_IO
 #include <os/log.h>
 
 namespace {

@@ -63,7 +63,7 @@ uint32_t gFirstLogged;  // bit n: a decode into TEGRA_NVJPG_OUT_n has been logge
 
 void refused(const char *why, uint32_t format)
 {
-#if TEGRA_NVJPG_STATS
+#if TEGRA_NVJPG_PROBES
     tegra_nvjpg_count_refused(proc_selfpid(), format);
 #else
     (void)format;
@@ -158,28 +158,33 @@ const char *routeJob(Job *job, const SwitchNVJPGBacking &target, void **hold, ui
             layout.described && tegra_gm20b_surface_compressed && tegra_gm20b_surface_compressed(target.pages[0]);
     }
     const TegraNVJPGSurface d = surfaceDesc(job->dst.desc);
-#if TEGRA_NVJPG_STATS
+#if TEGRA_NVJPG_PROBES
     const char *why =
         job->tileProbe
             ? tegra_nvjpg_route_tile_probe(&job->request.base, job->dst.desc.length, kTegraNVJPGOutputBytes, &layout,
                                            job->tileMode, job->tileGob, &job->plan, &job->engine.setup, route)
             : tegra_nvjpg_route(&job->request.base, &d, kTegraNVJPGOutputBytes, job->dst.memory != nullptr, &layout,
                                 &job->plan, &job->engine.setup, route);
-    if (!why) {
-        tegra_nvjpg_note_route(*route, layout.held, layout.layout.row_bytes, layout.layout.y_log2, target.count,
-                               &job->engine.setup, job->plan.extent.width, job->plan.extent.height);
-        tegra_nvjpg_count_route(job->pid, *route);
-    }
 #else
     const char *why = tegra_nvjpg_route(&job->request.base, &d, kTegraNVJPGOutputBytes, job->dst.memory != nullptr,
                                         &layout, &job->plan, &job->engine.setup, route);
+#endif
+#if TEGRA_NVJPG_STATS
+    if (!why) {
+        tegra_nvjpg_note_route(*route, layout.held, layout.layout.row_bytes, layout.layout.y_log2, target.count,
+                               &job->engine.setup, job->plan.extent.width, job->plan.extent.height);
+    }
+#endif
+#if TEGRA_NVJPG_PROBES
+    if (!why)
+        tegra_nvjpg_count_route(job->pid, *route);
 #endif
     return why;
 }
 
 IOReturn ended(Job *job, int error, const nvjpg_dec_status &status, uint64_t busy)
 {
-#if TEGRA_NVJPG_STATS
+#if TEGRA_NVJPG_PROBES
     if (tegra_nvjpg_cancellations() != job->cancelsBefore)
         tegra_nvjpg_count_cancelled(job->pid);
 #endif
@@ -252,7 +257,7 @@ bool beginRepack(Job *job)
 {
     const TegraNVJPGSignal ended = {jobEngineEnded, job}, repacked = {jobRepackEnded, job};
     const char *why = nullptr;
-#if TEGRA_NVJPG_STATS
+#if TEGRA_NVJPG_PROBES
     const bool guardClosed = job->guardProbe;
 #else
     const bool guardClosed = false;
@@ -323,7 +328,7 @@ bool beginDirect(Job *job, const SwitchNVJPGBacking &target, uint32_t extent)
 // VIC's own view of the destination. True: in flight; false: ended, job->status its result.
 bool beginJob(Job *job)
 {
-#if TEGRA_NVJPG_STATS
+#if TEGRA_NVJPG_PROBES
     job->cancelsBefore = tegra_nvjpg_cancellations();
 #endif
     if (job->plan.repack == TEGRA_NVJPG_REPACK_VIC)
@@ -383,7 +388,7 @@ void conclude(Job *job)
 {
     giveHold(job);
     giveScan(job);
-#if TEGRA_NVJPG_STATS
+#if TEGRA_NVJPG_PROBES
     tegra_nvjpg_count_job(job->pid, job->plan.target.format, job->status != 0, job->engineUs, job->cpuUs,
                           static_cast<uint64_t>(job->plan.extent.width) * job->plan.extent.height,
                           static_cast<uint64_t>(job->engine.setup.bitstream_size));

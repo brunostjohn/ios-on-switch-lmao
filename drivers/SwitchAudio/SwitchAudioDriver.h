@@ -8,6 +8,7 @@
 struct alignas(8) SwitchAudioSink {
     uint32_t formats, generation;
 };
+
 SwitchAudioSink switch_audio_display_sink();
 
 // NOLINTNEXTLINE(misc-use-internal-linkage): OSDefineMetaClassAndStructors needs external linkage
@@ -73,9 +74,12 @@ class SwitchAudio : public IOService {
     IONotifier *shutdownNotifier = nullptr;
     SwitchRT5639 codec;
 #if DEVELOPMENT || DEBUG
+    uint32_t statUnderruns = 0;
+#endif
+#if SWITCH_STATS_IO
     IOTimerEventSource *statsTimer = nullptr;
     uint64_t statFrames = 0, statFramesShown = 0, statIoCyclesShown = 0, statIoFramesShown = 0;
-    uint32_t statStarts = 0, statStartsShown = 0, statUnderruns = 0;
+    uint32_t statStarts = 0, statStartsShown = 0;
     bool statsArmed = false, statsShown = false;
     int statPeak = 0;
     uint32_t statRingPeakL = 0, statRingPeakR = 0;
@@ -173,7 +177,7 @@ class SwitchAudio : public IOService {
     void captureStop();
     void tegraStop();
     void playedPeriod();
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_IO
     void notePlayed(const switch_audio_sample_t *slot, uint64_t done);
 #endif
     void captureOff();
@@ -207,9 +211,11 @@ class SwitchAudio : public IOService {
     void noteJack();
     void publishJack();
     static void jackSettled(OSObject *owner, IOTimerEventSource *);
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_IO
     static void statsFired(OSObject *owner, IOTimerEventSource *sender);
     void statsResume();
+#endif
+#if DEVELOPMENT || DEBUG
     void registerSysctl();
 #endif
     void codecStart();

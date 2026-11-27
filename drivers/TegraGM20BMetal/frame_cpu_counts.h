@@ -26,7 +26,7 @@ enum class EarlyOutcome : uint8_t {
 
 }  // namespace gm20b
 
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+#if (!defined(SWITCH_DEBUG) || SWITCH_DEBUG) && (!defined(SWITCH_STATS_GPU) || SWITCH_STATS_GPU)
 namespace gm20b {
 
 // A render pass as the recording thread opened it
@@ -119,8 +119,6 @@ struct FrameCpuCounts {
     std::atomic<uint64_t> kicks{0}, kickUs{0}, kickMaxUs{0};
     std::atomic<uint64_t> enqueues[size_t(EnqueueTiming::Count)] = {};
     std::atomic<uint64_t> early[size_t(EarlyOutcome::Count)] = {};
-    std::atomic<uint32_t> lateWritePeriod{128};
-    std::atomic<uint64_t> lateWriteSampled{0}, lateWriteBuffer{0}, lateWriteReplace{0}, lateWriteSurface{0};
 };
 
 inline FrameCpuCounts &frameCpuCounts()

@@ -182,16 +182,24 @@ static u8 chan_note_foreign(struct tgm_chan *chan,
 	}
 	return flags;
 }
+#endif
 
+#if TGM_DEBUG_PROBES
 void tgm_foreign_waits_totals(struct tgm_foreign_waits *out)
 {
+#if TGM_STATS
 	out->jobs = __atomic_load_n(&tgm_stats.foreign_total_jobs, __ATOMIC_RELAXED);
 	out->fences = __atomic_load_n(&tgm_stats.foreign_total_fences, __ATOMIC_RELAXED);
 	out->promises = __atomic_load_n(&tgm_stats.foreign_total_promises, __ATOMIC_RELAXED);
 	out->events = __atomic_load_n(&tgm_stats.foreign_total_events, __ATOMIC_RELAXED);
 	out->host1x = __atomic_load_n(&tgm_stats.foreign_total_host1x, __ATOMIC_RELAXED);
+#else
+	memset(out, 0, sizeof(*out));
+#endif
 }
+#endif
 
+#if TGM_STATS
 static void chan_set_foreign(struct tgm_chan *chan, u32 first, u32 next, u8 foreign)
 {
 	u32 s = 0;
@@ -309,13 +317,12 @@ static u32 chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 ne
 		PUSH_MTHD(push, NV906F, NON_STALL_INTERRUPT, 0);
 	}
 	chan->submit_ns = nvxnu_nanotime();
-	if (stats_on())
-		for (s = first; (s32)(next - s) >= 0; s++)
-			WRITE_ONCE(chan->stat_sub_ns[s % CHAN_NSTAMPS], chan->submit_ns);
 #if TGM_STATS
-	for (s = first; (s32)(next - s) >= 0; s++)
+	for (s = first; (s32)(next - s) >= 0; s++) {
+		WRITE_ONCE(chan->stat_sub_ns[s % CHAN_NSTAMPS], chan->submit_ns);
 		WRITE_ONCE(chan->stat_foreign[s % CHAN_NSTAMPS],
 			   READ_ONCE(chan->stat_foreign[s % CHAN_NSTAMPS]) & (u8)~TGM_STAT_LATER);
+	}
 #endif
 	if ((s32)(tgm_chan_completed(chan) - chan->submitted) >= 0) {
 		WRITE_ONCE(chan->progress_held, tgm_hold_held_ns(chan->chid, chan->submit_ns));
@@ -349,11 +356,12 @@ static u32 chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 ne
 		int later = 0;
 
 		WRITE_ONCE(job->app, kick != TGM_KICK_CLEAR);
-		if (stats_on() && queued.unread)
+#if TGM_STATS
+		if (queued.unread)
 			WRITE_ONCE(chan->stat_unread, chan->stat_unread + 1);
-		if (stats_on())
-			for (s = next; (s32)(s - first) >= 0; s--)
-				WRITE_ONCE(chan->stat_kick[s % CHAN_NSTAMPS], kick);
+		for (s = next; (s32)(s - first) >= 0; s--)
+			WRITE_ONCE(chan->stat_kick[s % CHAN_NSTAMPS], kick);
+#endif
 		WRITE_ONCE(job->asked_pt, queued.asked_pt);
 		WRITE_ONCE(job->behind, queued.behind);
 		later = tgm_deadline_kicked(!chan->kernel, kick != TGM_KICK_CLEAR);
@@ -364,8 +372,6 @@ static u32 chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 ne
 		(void)later;
 #endif
 	}
-	if (stats_on())
-		idle_stats();
 	return next;
 }
 
@@ -409,7 +415,7 @@ void switch_gpu_chan_progress(struct tgm_chan *chan, volatile uint32_t *progress
 	chan->progress_cpu = progress_cpu;
 	WRITE_ONCE(chan->progress_word_seen, initial);
 	WRITE_ONCE(chan->stall_progress_word, initial);
-	if (TGM_STATS)
+	if (TGM_DEBUG_PROBES)
 		tgm_hold_progress(chan->chid, progress_cpu);
 }
 
@@ -419,7 +425,7 @@ __attribute__((weak)) void switch_sched_render_submitted(void)
 
 static void frame_submitted(struct tgm_chan *chan, u32 seqno, u64 start)
 {
-#if TGM_STATS
+#if SWITCH_FRAME_TIMELINE
 	nvxnu_kdebug(SWITCH_KDBG_SUBMIT, chan->chid, seqno, chan->critical);
 #else
 	(void)seqno;
@@ -578,12 +584,16 @@ static inline __attribute__((always_inline)) void chan_job_entry(void *context, 
 
 	nvif_chan_gpfifo_push(&chan->chan, pushes[i].va, pushes[i].dwords << 2,
 			      pushes[i].no_prefetch || (job->unprefetched && !i));
+#if TGM_STATS && TGM_PROF
 	if (prof && chan->prof_cls[i] != TGM_PC_SKIP) {
 		push_stamp(&chan->chan.push,
 			   chan->ring_va + CHAN_PROF + i * sizeof(struct tgm_stamp),
 			   chan->submitted + 1);
 		PUSH_KICK(&chan->chan.push);
 	}
+#else
+	(void)prof;
+#endif
 }
 
 /* A batch's end inside a job: the WFI release of its seqno, as an entry of the job's kick (deferred: no GP_PUT write; the
@@ -622,17 +632,23 @@ static void chan_submission_room(struct tgm_chan *chan, const struct tgm_push *p
 				 u32 dependency_count, u32 job_fences, const struct tgm_prof **prof,
 				 u32 *entries, u32 *words)
 {
-	u32 profiled = READ_ONCE(chan->prof_seqno);
 	u32 stamps = 0;
+#if TGM_STATS && TGM_PROF
+	u32 profiled = READ_ONCE(chan->prof_seqno);
 	u32 i;
 
 	if (profiled && (s32)(tgm_chan_completed(chan) - profiled) > CHAN_NSTAMPS)
 		profiled = 0;
-	if (*prof && (!stats_on() || chan->kernel || count > TGM_PROF_MAX || profiled))
+	if (*prof && (chan->kernel || count > TGM_PROF_MAX || profiled))
 		*prof = NULL;
 	for (i = 0; *prof && i < count; i++)
 		stamps += switch_gpu_prof_stamped(chan->critical, &pushes[i], i, count,
 						  (*prof)->cls[i]);
+#else
+	(void)chan;
+	(void)pushes;
+	*prof = NULL;
+#endif
 	*entries = count + 6 + stamps + job_fences + CHAN_WAKE_ENTRIES + 1;
 	*words = CHAN_FENCE_DWORDS + 64 + 5 * (dependency_count + 1) + 16 * stamps +
 		 SWITCH_GPU_FENCE_POINT_DWORDS * job_fences + CHAN_WAKE_DWORDS + 16 +
@@ -777,11 +793,13 @@ chan_exec_body(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t co
 	}
 	/* a push profile (see "push profile"): only with the stats' stamps, one in flight per channel; one whose completion
 	 * the stats' interrupt pass no longer looks at (more than CHAN_NSTAMPS behind) is given up */
+#if TGM_STATS && TGM_PROF
 	{
 		u32 ps = READ_ONCE(chan->prof_seqno);
 		if (ps && (s32)(tgm_chan_completed(chan) - ps) > CHAN_NSTAMPS)
 			WRITE_ONCE(chan->prof_seqno, 0);
 	}
+#endif
 	chan_submission_room(chan, pushes, count,
 			     dependency_count + sibling_count + word_wait_count, fences, &prof,
 			     &entries, &words);
@@ -831,7 +849,8 @@ chan_exec_body(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t co
 	/* Release kernels stamp a high user channel with WFI only when a low channel is busy, so
 	 * hold.c measures true GR preemption latency while idle compositor and kernel kicks skip
 	 * the start stamp altogether. */
-	if (stats_on()) {
+#if TGM_STATS
+	{
 		u32 next = chan->submitted + 1;
 
 		WRITE_ONCE(chan->stat_sub_ptimer[next % CHAN_NSTAMPS],
@@ -839,7 +858,9 @@ chan_exec_body(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t co
 		push_stamp(&chan->chan.push,
 			   chan_stamps_va(chan, next) + offsetof(struct tgm_stamps, start), next);
 		PUSH_KICK(&chan->chan.push);
-	} else if (chan->high && !chan->kernel && switch_gpu_busy_low(&tgm_busy)) {
+	}
+#else
+	if (chan->high && !chan->kernel && switch_gpu_busy_low(&tgm_busy)) {
 		const u32 next = chan->submitted + 1;
 
 		push_stamp(&chan->chan.push,
@@ -848,6 +869,8 @@ chan_exec_body(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t co
 	} else if (chan->high) {
 		waits = 1;
 	}
+#endif
+#if TGM_STATS && TGM_PROF
 	if (prof) {
 		u32 stamps = 0;
 
@@ -870,6 +893,7 @@ chan_exec_body(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t co
 		WRITE_ONCE(chan->prof_seqno,
 			   chan->submitted + 1 + fences); /* before the fence that completes it */
 	}
+#endif
 	/* The L2 first: page-table lines a GPU-ordered map wrote around (TegraGM20BTlb.h) go before the TLB refetches. */
 	tlb = tgm_tlb_take(&chan->tlb, &chan->vm->tlb) || bind;
 	if ((l2_on() && host_written) || tlb) {
@@ -901,12 +925,11 @@ chan_exec_body(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t co
 	job.prof = prof;
 	job.first = chan->chan.gpfifo.cur;
 	job.unprefetched = (l2_on() && host_written) || tlb;
-	if (stats_on()) {
-		WRITE_ONCE(chan->stat_job[(chan->submitted + 1) % CHAN_NSTAMPS].last,
-			   chan->submitted + 1 + fences);
-		WRITE_ONCE(chan->stat_job[(chan->submitted + 1) % CHAN_NSTAMPS].first,
-			   chan->submitted + 1);
-	}
+#if TGM_STATS
+	WRITE_ONCE(chan->stat_job[(chan->submitted + 1) % CHAN_NSTAMPS].last,
+		   chan->submitted + 1 + fences);
+	WRITE_ONCE(chan->stat_job[(chan->submitted + 1) % CHAN_NSTAMPS].first, chan->submitted + 1);
+#endif
 	last = switch_gpu_job_emit(pushes, count, chan->submitted, &emitter);
 	tgm_hang_log_submit(&chan->hang, last, job.first, chan->chan.gpfifo.cur);
 
@@ -915,10 +938,16 @@ chan_exec_body(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t co
 #endif
 	*seqno = chan_fence_job(chan, external, chan->submitted + 1, last, quiet, releases,
 				release_count, owned, waits);
-	if (SWITCH_FRAME_TIMELINE && !chan->kernel)
+#if SWITCH_FRAME_TIMELINE || (defined(SWITCH_STATS_SCHED) && SWITCH_STATS_SCHED)
+	if (!chan->kernel)
 		frame_submitted(chan, *seqno, start);
-	if (stats_on())
-		tgm_stats_tick();
+#else
+	(void)start;
+	(void)frame_submitted;
+#endif
+#if TGM_STATS
+	tgm_stats_tick();
+#endif
 	return 0;
 
 rollback:

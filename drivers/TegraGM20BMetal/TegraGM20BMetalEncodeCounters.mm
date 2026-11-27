@@ -2,7 +2,7 @@
 #import "TegraGM20BMetalInternal.h"
 #include "object_pool.h"
 
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+#if SWITCH_METAL_PROF
 namespace {
 
 constexpr const char *kPartNames[] = {

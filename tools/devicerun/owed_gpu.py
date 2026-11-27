@@ -70,15 +70,6 @@ STATE = [
     ),
     Ref('boot.ca-no-catch-all', 'big/state'),
     Ref('boot.ca-pack-covers-all', 'big/state'),
-    line(
-        'state',
-        'mps-probe',
-        'SwitchMetal: mps probe ',
-        TIMELINE,
-        process='',
-        subsystem=METAL,
-        note='G5: the last call and answer before MPS stops, during gpu.gm20b.mps_control_flow',
-    ),
 ]
 
 SPARES = 'drivers/TegraGM20B/TegraGM20BUserClientSpares.cpp (big/memory d622fcd9e)'

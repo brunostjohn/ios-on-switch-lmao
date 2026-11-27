@@ -3,8 +3,12 @@
 #include "gpu_internal.h"
 #include "SwitchGpuChannelEpoch.h"
 
+#if TGM_STATS && TGM_PROF
 #define CHAN_SEMA_BYTES \
 	0x2000 /* nvif's GET semaphore at +0; stats stamps at CHAN_STAMPS, push profile at CHAN_PROF */
+#else
+#define CHAN_SEMA_BYTES 0x1000
+#endif
 #define CHAN_BYTES (CHAN_PUSH_BYTES + CHAN_GPFIFO_BYTES + CHAN_SEMA_BYTES)
 
 /* A channel's fence and room waiters (WaitFence, sync_for_cpu, its teardown, a submission waiting for room) sleep on its
@@ -57,8 +61,6 @@ static void chan_free(struct tgm_chan *chan)
 {
 	int i = 0;
 	tgm_fault_unpublish(chan);
-	if (stats_on())
-		tgm_stats_gr_unbind(chan);
 	if (chan->high || chan->tracked)
 		tgm_sched_forget(tgm_gpu.device, chan->chid);
 	nvif_event_dtor(&chan->kill);
@@ -130,7 +132,7 @@ static int chan_new(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *
 	/* a fence word only moves forward: a channel made in a slot continues its predecessor's sequence, so a semaphore
 	 * acquire on the old seqno (the GPU present) is never left waiting for a word that went back to 0 */
 	chan->submitted = READ_ONCE(*fence_cpu);
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 	chan->timeslice = RAMFC_TIMESLICE_DEFAULT;
 	chan->timeslice_at = chan->submitted;
 	chan->timeslice_created = 1;
@@ -138,7 +140,9 @@ static int chan_new(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *
 	chan->event_through = chan->submitted;
 	switch_gpu_jobs_init(&chan->jobs, chan->submitted);
 	switch_gpu_quiet_init(&chan->quiet, chan->submitted);
+#if TGM_STATS
 	chan->stat_done = chan->submitted;
+#endif
 	chan->woken_done = chan->submitted;
 	chan->progress_done = chan->submitted;
 	chan->seen_done = chan->submitted;
@@ -199,8 +203,6 @@ static int chan_new(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *
 	chan->chid = args.chan.chid;
 	if (!ret)
 		ret = tgm_chan_ramfc_open(chan, critical);
-	if (!ret && stats_on())
-		tgm_stats_gr_bind(chan);
 	if (!ret && critical && vm_owner)
 		chan_prioritize(chan);
 	if (!ret)
@@ -353,7 +355,7 @@ int tgm_chan_visible_at(struct tgm_chan *chan, uint32_t seqno)
 	return (s32)(__atomic_load_n(chan->visible_cpu, __ATOMIC_ACQUIRE) - seqno) >= 0;
 }
 
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 /* What closed channels counted, by process name (the last kept goes when a new name needs its place),
  * tgm_live_lock's */
 #define TGM_JOBLESS_GONE 16
@@ -435,7 +437,7 @@ void tgm_chan_del(struct tgm_chan **pchan)
 	switch_gpu_busy_close(&tgm_busy, chan->chid);
 	mutex_lock(&tgm_live_lock);
 	list_del(&chan->live);
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 	jobless_keep_locked(chan);
 #endif
 	switch_gpu_live_dir_clear(&tgm_live_dir, chan->chid);

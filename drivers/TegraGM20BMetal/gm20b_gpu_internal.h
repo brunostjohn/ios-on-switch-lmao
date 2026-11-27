@@ -210,8 +210,4 @@ inline void copySides(Push &p, const CopySide &s, const CopySide &d, uint32_t w,
 }
 }  // namespace
 
-#if SWITCH_METAL_DIAGNOSTICS
-void logEdgeMiss(const char *what, const Texture &t, const PixelBox &r, const char *detail);
-#endif
-
 }  // namespace gm20b

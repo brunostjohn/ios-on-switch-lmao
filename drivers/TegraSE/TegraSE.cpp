@@ -58,6 +58,10 @@
 #pragma clang diagnostic pop
 #include "TegraSE.h"
 #include "TegraSESmmu.h"
+#if (DEVELOPMENT || DEBUG) && !SWITCH_MMIO_HOST_MODEL
+#include <sys/errno.h>
+#include "../../kits/SwitchSysctl/SwitchSysctl.h"
+#endif
 #include "../TegraSMMU/TegraSMMU.h"
 #include "../ArmGIC/SwitchInterrupts.h"
 #include "../../kits/SwitchCAR/SwitchCAR.h"
@@ -255,7 +259,7 @@ void tally(volatile uint64_t &counter, uint64_t bytes)
         switch_refusal("TegraSE", "unreachable buffer", "%llu bytes done on the CPU: a buffer the engines cannot map",
                        bytes);
     }
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_IO
     __atomic_fetch_add(&counter, bytes, __ATOMIC_RELAXED);
 #endif
 }
@@ -402,7 +406,7 @@ bool start(Engine &e, uint32_t in, uint32_t out, bool *started)
     }
     if (!drain(e))
         return false;
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_IO
     e.ops++;
 #endif
     return true;
@@ -1464,7 +1468,7 @@ bool timingBuffers(Dma *in, Dma *out)
 // Per algorithm and size: microseconds of the whole call on each engine (lists, cache maintenance, interrupt, wake)
 // against the CPU (kernel corecrypto, input cold in the cache like the engine's), best of 5; then each algorithm's
 // cutover set to the smallest size at which every engine is no slower than the CPU; then both engines at once.
-void timing()
+[[maybe_unused]] void timing()
 {
     const uint32_t *const sizes = kTimingSizes;
     Dma in;
@@ -1575,6 +1579,29 @@ void timing()
     release(&out);
 }
 
+#if !SWITCH_MMIO_HOST_MODEL
+struct sysctl_oid gTimingOid;
+bool gTimingBusy;
+
+int timingSysctl(struct sysctl_oid *, void *, int, struct sysctl_req *req)
+{
+    int value = 0;
+    int changed = 0;
+    const int error = sysctl_io_number(req, 0, sizeof(value), &value, &changed);
+    if (error || !changed || !value)
+        return error;
+    if (!gReady || gSleeping || !clockOn())
+        return ENODEV;
+    if (__atomic_exchange_n(&gTimingBusy, true, __ATOMIC_ACQUIRE))
+        return EBUSY;
+    timing();
+    __atomic_store_n(&gTimingBusy, false, __ATOMIC_RELEASE);
+    return 0;
+}
+#endif
+#endif
+
+#if SWITCH_STATS_IO
 void stats(const char *when)
 {
     char line[256];
@@ -1697,13 +1724,16 @@ void seThread(void *, wait_result_t)
           gStateLoad ? "hooked (from each algorithm's cutover up)" : "left on the CPU: state load did not answer",
           reseeded ? "reseeded from the DRBG" : "not reseeded (entropy clock off or DRBG output implausible)");
 
-#if DEVELOPMENT || DEBUG
-    IOSleep(90000);  // the timing run waits for the boot to be over
-    if (clockOn())
-        timing();
+#if (DEVELOPMENT || DEBUG) && !SWITCH_MMIO_HOST_MODEL
+    switch_sysctl_oid(&gTimingOid, &sysctl__debug_children, "switch_se_timing",
+                      CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED, timingSysctl, "I",
+                      "run the TegraSE vs CPU timing benchmark on demand");
+    sysctl_register_oid(&gTimingOid);
+#endif
+#if SWITCH_STATS_IO
     for (;;) {
-        stats(gStateLoad ? "traffic" : "traffic (hook off)");
         IOSleep(300000);
+        stats(gStateLoad ? "traffic" : "traffic (hook off)");
     }
 #endif
 }

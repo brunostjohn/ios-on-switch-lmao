@@ -100,7 +100,7 @@ class SwitchButtons : public IOService {
     IOInterruptEventSource *volume[kVolumeCount] = {};
     IOInterruptEventSource *pmic = nullptr;
     IOInterruptEventSource *home = nullptr;  // software source (no provider): switch_buttons_bt_click
-    uint8_t clicks = 0;  // SWITCH_BT_HOME | SWITCH_BT_CAPTURE asked for (atomics)
+    uint8_t clicks = 0;                      // SWITCH_BT_HOME | SWITCH_BT_CAPTURE asked for (atomics)
 #if DEVELOPMENT || DEBUG
     IOTimerEventSource *watchdog = nullptr;
 #endif

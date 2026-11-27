@@ -185,7 +185,7 @@ CommandBuffer *Device::begin()
     }
     cb.stamp = stampOf(commits());
     cb.serial = ++begun_;
-    SWITCH_METAL_DIAGNOSTIC(spans_.begin(cb.stamp));
+    SWITCH_METAL_PROFD(spans_.begin(cb.stamp));
     cb.timings.clear();
     cb.loopsLaid = false;
     // submission prologue, as NVK opens each submission: header/sampler caches (headers written since), constant, shader data and
@@ -493,8 +493,8 @@ bool CommandBuffer::commit(uint32_t &seqno)
             admission ? (published ? uint32_t(TegraGM20BJobAdmissionContinue) : uint32_t(TegraGM20BJobAdmissionBegin)) |
                             (last ? uint32_t(TegraGM20BJobAdmissionEnd) : 0u)
                       : 0u;
-        SWITCH_METAL_DIAGNOSTIC(noteExecUses(uses.uses().size()));
-        SWITCH_METAL_DIAGNOSTIC(noteExecPushes(count));
+        SWITCH_METAL_PROFD(noteExecUses(uses.uses().size()));
+        SWITCH_METAL_PROFD(noteExecPushes(count));
         SWITCH_METAL_ENCODE_BEGIN(execSpan, Exec);
         const bool executed =
             d.job(d.setView_, d.channel_, pushes, count, uses, visibility, seq, &result, events, &memberUses_,

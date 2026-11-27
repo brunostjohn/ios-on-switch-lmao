@@ -40,8 +40,10 @@
 extern "C" {
 int di_root_image_ext(const char *, char *, size_t, dev_t *, bool);
 void switch_cluster_register_image(vnode_t);  // bsd/vfs/vfs_cluster.c
-#if DEVELOPMENT || DEBUG
-void switch_cluster_image_direct(uint64_t bytes, uint32_t cardReads);      // bsd/vfs/vfs_cluster.c
+#if SWITCH_KPROF
+void switch_cluster_image_direct(uint64_t bytes, uint32_t cardReads);  // bsd/vfs/vfs_cluster.c
+#endif
+#if SWITCH_STATS_SCHED && SWITCH_STATS_IO
 void switch_diag_cryptex_cache(size_t (*counts)(char *out, size_t size));  // kernel/switch/diag/pagein.c
 #endif
 LIBKERN_RETURNS_NOT_RETAINED IOBlockStorageDevice *
@@ -208,7 +210,7 @@ struct {
 // The kprof image line's direct reads (one per request) and the card reads they took.
 void reportDirect(uint64_t bytes, uint32_t cardReads)
 {
-#if DEVELOPMENT || DEBUG
+#if SWITCH_KPROF
     switch_cluster_image_direct(bytes, cardReads);
 #else
     (void)bytes;
@@ -218,7 +220,7 @@ void reportDirect(uint64_t bytes, uint32_t cardReads)
 
 void finishRequest(thread_call_param_t, thread_call_param_t);
 
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_SCHED && SWITCH_STATS_IO
 // The 10 s scheduling report's "SwitchSched cryptex cache" line: the cache's counts since its call before (one caller).
 size_t cacheCounts(char *out, size_t size)
 {
@@ -315,17 +317,17 @@ void failPending(Pending *p, IOReturn status)
 void finishRequest(thread_call_param_t parameter, thread_call_param_t)
 {
     auto *p = static_cast<Pending *>(parameter);
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_IO
     const uint64_t copiedBytes = p->cached ? p->length : 0;
     const bool waited = p->waited;
     uint64_t copyAbs = 0;
 #endif
     if (p->cached) {
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_IO
         const uint64_t copying = mach_absolute_time();
 #endif
         const bool copied = p->status == kIOReturnSuccess && !p->cache.failed && copyOut(p);
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_IO
         copyAbs = mach_absolute_time() - copying;
 #endif
         if (!copied)
@@ -341,13 +343,13 @@ void finishRequest(thread_call_param_t parameter, thread_call_param_t)
     const IOReturn status = p->status;
     const uint64_t bytes = status == kIOReturnSuccess ? p->length : p->bytes;
     returnPending(p);
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_IO
     const uint64_t completing = mach_absolute_time();
 #endif
     // IOStorage::complete, without binding another original IOStorageFamily symbol (as NativeSwitchBlock).
     if (client.action)
         client.action(client.target, client.parameter, status, bytes);
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_IO
     switch_cryptex_stats::note(copiedBytes, waited, copyAbs, mach_absolute_time() - completing);
 #endif
 }
@@ -649,7 +651,7 @@ IOReturn SwitchCryptexDevice::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt6
     }
     if (done < length)
         failPending(p, kIOReturnNoMemory);  // the rest was never issued
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_IO
     switch_cryptex_stats::add(&switch_cryptex_stats::Bytes::direct, done);
 #endif
     reportDirect(length, pieces);
@@ -698,7 +700,7 @@ bool SwitchCryptexDevice::cacheRead(Pending *p, IOMemoryDescriptor *buffer, uint
             const uint64_t tag = p->cache.window[i]->tag;
             raiseQueuedReads(tag, blocks - tag < kSwitchWindowBlocks ? blocks - tag : kSwitchWindowBlocks, priority);
         }
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_IO
         switch_cryptex_stats::count(&switch_cryptex_stats::Counters::joinedRaises);
 #endif
     }
@@ -751,7 +753,7 @@ IOReturn SwitchCryptexDevice::doSetPriority(IOBlockStorageDeviceExtent *extentLi
     }
     for (UInt32 i = 0; i < count; ++i)
         raiseQueuedReads(extentList[i].blockStart, extentList[i].blockCount, priority);
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_IO
     switch_cryptex_stats::count(&switch_cryptex_stats::Counters::setPriorityCalls);
 #endif
     return kIOReturnSuccess;
@@ -807,7 +809,7 @@ uint32_t SwitchCryptexDevice::issueRead(const SwitchCacheRead &read, IOStoragePr
     }
     if (done < length)
         jobFail(j, kIOReturnNoMemory);  // the rest was never issued
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_IO
     switch_cryptex_stats::add(&switch_cryptex_stats::Bytes::card, done);
 #endif
     // A tier-0 request joined this fill, or XNU raised it, between its plan and its queuing: the SD queue held nothing
@@ -815,7 +817,7 @@ uint32_t SwitchCryptexDevice::issueRead(const SwitchCacheRead &read, IOStoragePr
     // the mark it set before promoting is seen here. The window stays reading until the issuing reference goes.
     if (priority != kIOStoragePriorityHigh && __atomic_load_n(&read.window->urgent, __ATOMIC_ACQUIRE)) {
         raiseQueuedReads(read.window->tag + read.first, read.count, kIOStoragePriorityHigh);
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_IO
         switch_cryptex_stats::count(&switch_cryptex_stats::Counters::lateRaises);
 #endif
     }
@@ -860,7 +862,7 @@ bool setupCache()
         return false;
     }
     gCache.cache.init(gCache.windows, n, gCache.buckets, kBuckets);
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_SCHED && SWITCH_STATS_IO
     switch_diag_cryptex_cache(cacheCounts);
 #endif
     return true;
@@ -1068,7 +1070,7 @@ int waitVolume(unsigned index, dev_t *device, char *path, size_t capacity)
 }
 }  // namespace
 
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_IO
 extern "C" size_t switch_cryptex_io_totals(char *out, size_t size)
 {
     return switch_cryptex_stats::totals(out, size);

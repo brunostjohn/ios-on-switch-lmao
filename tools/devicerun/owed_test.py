@@ -31,7 +31,7 @@ SAMPLES = {
     'owed.frame.early-schedule': (
         'TegraGM20BMetal: backboardd frame pass=1 hit=2 kept=3 unkept=0 unkeyed=0 counters=1 owned=2 split=0 '
         'kick=0/0us ahead=0/10 enc=0/0 why=- cbs=1/1/1/1 encoders=1/1/1/1 park=- ws=4/120us(queued 1 parked 0 '
-        'encoding 0 handlers 0 other 0) wsmax=50us(1 2 3 4 5) early=5/1/0/2/0/0/1 enq=1/2/3 latew=0/0/0/0'
+        'encoding 0 handlers 0 other 0) wsmax=50us(1 2 3 4 5) early=5/1/0/2/0/0/1 enq=1/2/3'
     ),
     'owed.frame.early-promise-refused': (
         "SwitchMetal: the kernel refused the render server's early writer promise for 2 surfaces (0xe00002c2): its "

@@ -29,7 +29,7 @@
 #include "../../kits/SwitchDMA/SwitchDcache.h"
 #include "../../kits/SwitchIdle/switch_idle.h"
 #include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
-#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
+#if defined(SWITCH_STATS_IO) && SWITCH_STATS_IO
 #define SWITCH_HOST1X_STATS 1
 #include <os/log.h>
 #include "SwitchHost1xGatherStats.h"
@@ -159,7 +159,7 @@ void roomSignaled(switch_host1x_fence *fence, int)
 // Lock held. A fence its callback is already on the way for is left to it.
 void dropJobs(Channel &c)
 {
-#if SWITCH_HOST1X_STATS
+#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
     c.arena.forEachFenced([](uint32_t syncpt, uint32_t) {
         switch_host1x_syncpt_dropped(syncpt);
     });
@@ -194,7 +194,7 @@ int gatherLocked(uint32_t channel, const uint32_t *first, uint32_t count, bool f
         endReservation(c);
         return gRunning ? TEGRA_HOST1X_EINVAL : TEGRA_HOST1X_ENODEV;
     }
-#if SWITCH_HOST1X_STATS
+#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
     if (fenced)
         switch_host1x_syncpt_owed(syncpt, threshold);
 #endif

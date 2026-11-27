@@ -689,9 +689,11 @@ private:
     // a mixed pass's (mixed_samples.h): its zeta's samples, which it rasterises at; samples_ is its colour's
     uint8_t rasterSamples_ = 1;
 #if SWITCH_METAL_DIAGNOSTICS
-    uint32_t tirProbe_ = 0;                     // a mixed pass's probe row (Device::probeTir), taken at its begin
+    uint32_t tirProbe_ = 0;  // a mixed pass's probe row (Device::probeTir), taken at its begin
+#if SWITCH_METAL_PROF
     uint32_t prologueMark_ = SpanMarks::kNone;  // span_marks.h: its prologue's mark, taken ahead of its draws'
     void markSpan(Push &p, uint32_t index, SpanKind kind);
+#endif
     // draw_times.h: its prologue's two marks, taken ahead of its draws', and its pass in the capture
     uint32_t betweenTime_ = kNoMark, prologueTime_ = kNoMark;
     uint16_t timedPass_ = kNoPass;
@@ -724,8 +726,6 @@ private:
     uint32_t colorTargets() const;
     StorageFallback storageFallback(const Pipeline &pl) const;
 #if SWITCH_METAL_DIAGNOSTICS
-    void probeEdges() const;
-    void noteLargePass(const PixelBox &drawn, bool drawnKnown) const;
     void probeDraw(const Pipeline &bound, Pipeline &drawn, uint32_t primitive, int32_t first, uint32_t count,
                    bool indexed, const PixelBox &limit);
     void probeGlassDraw(const Pipeline &bound, const Pipeline &drawn, const PixelBox &limit);

@@ -468,15 +468,16 @@ TEST(GM20BBridgeSource, AJoblessSlotReadsItsTokensThenItsChannelThenItsEnd)
 		"for (uint32_t i = 0; i < owing; ++i) "
 		"switch_gpu_producer_release(owed[i].syncpoint, owed[i].threshold);"));
 	const std::string bridge = SourceText("../SwitchGpuBridge.cpp");
-	EXPECT_TRUE(CodeText(Configured(bridge, "TGM_STATS", true))
+	EXPECT_TRUE(CodeText(Configured(bridge, "TGM_DEBUG_PROBES", true))
 			    .has("IOLockUnlock(queue.lock); if (consumerJobless) "
 				 "tgm_chan_note_jobless(wait.covering.queue); return error;"));
 	EXPECT_TRUE(
 		CodeText(bridge).has("const bool consumerJobless = !error && jobless && assigns;"));
-	EXPECT_EQ(CodeText(Configured(bridge, "TGM_STATS", false)).count("tgm_chan_note_jobless"),
+	EXPECT_EQ(CodeText(Configured(bridge, "TGM_DEBUG_PROBES", false))
+			  .count("tgm_chan_note_jobless"),
 		  0u);
 	EXPECT_TRUE(CodeText(Configured(SourceText("../TegraGM20BUserClientDispatch.cpp"),
-					"TGM_STATS", true))
+					"TGM_DEBUG_PROBES", true))
 			    .has("tgm_chan_jobless(owner_)"));
 }
 
@@ -496,7 +497,7 @@ TEST(GM20BPushScanSource, EverySubmissionPathScansItsPushes)
 		Block(client(), "const tgm_prof *AGXDeviceUserClient::scanSubmission(");
 	EXPECT_EQ(clientCode().count("scanPushes(pushes, count,"), 2u);
 	EXPECT_EQ(submission.count("scanPushes(pushes, count,"), 2u);
-	EXPECT_TRUE(submission.startsWith("if (!TGM_STATS || !count) return nullptr;"));
+	EXPECT_TRUE(submission.startsWith("if (!TGM_PROF || !count) return nullptr;"));
 	EXPECT_TRUE(submission.has("tgm_scan::scanWeight(n, kScanFirst, kScanEvery);"));
 }
 
@@ -581,12 +582,13 @@ TEST(GM20BPresentSource, ReadbackRidesTheFramesPresent)
 	const CodeText reads = Block(gpu(), "static void present_push_reads(");
 	EXPECT_TRUE(reads.has("dst = {r->dst_va, r->dst_pitch, -1};"));  // pitch-linear
 	EXPECT_TRUE(reads.has("tgm_copy_texels(push->cur, &src, &dst, r->width, r->height)"));
-	EXPECT_TRUE(CodeText(Configured(gpu(), "TGM_STATS", true))
+	EXPECT_TRUE(CodeText(Configured(gpu(), "TGM_DEBUG_PROBES", true))
 			    .has("static void present_push_reads("));
-	EXPECT_FALSE(CodeText(Configured(gpu(), "TGM_STATS", false)).has("present_push_reads("));
+	EXPECT_FALSE(
+		CodeText(Configured(gpu(), "TGM_DEBUG_PROBES", false)).has("present_push_reads("));
 
 	const CodeText scanout = Block(client(), "extern \"C\" int tegra_gm20b_scanout_copy(");
-	EXPECT_TRUE(scanout.before("#if TGM_STATS tgm_present_read reads",
+	EXPECT_TRUE(scanout.before("#if TGM_DEBUG_PROBES tgm_present_read reads",
 				   "#else gPresentSnapshot.done = presentDone; ret = watch ? "
 				   "presentWatched() : 1; if (ret "
 				   "== 1) ret = tgm_present_copy_dependencies("));
@@ -598,7 +600,7 @@ TEST(GM20BPresentSource, ReadbackRidesTheFramesPresent)
 	EXPECT_TRUE(done.has("native_legacy_gpu_complete(display, status);"));
 	EXPECT_FALSE(done.has("IOLock"));
 	EXPECT_FALSE(done.has("tgm_cpu_clean_pages"));
-	EXPECT_TRUE(CodeText(Configured(readback, "TGM_STATS", false))
+	EXPECT_TRUE(CodeText(Configured(readback, "TGM_DEBUG_PROBES", false))
 			    .endsWith("#include \"TegraGM20BReadback.h\""));
 }
 
@@ -1631,8 +1633,9 @@ TEST(GM20BPresentSource, TheCopyResetHookCutsTwiceThroughTheKernelStallRuleAndNe
 			    .has("again == AGAIN_REDO, 0, 0, &killed);"));
 	EXPECT_FALSE(CodeText(hook).has("nvxnu_panic("));
 	const CodeText redo = Block(gpu(), "void tgm_present_redo_work(");
-	EXPECT_TRUE(redo.before("#if TGM_STATS again = (u32)tgm_copy_reset_again_take(); #endif",
-				"chan_push_wait("));
+	EXPECT_TRUE(
+		redo.before("#if TGM_DEBUG_PROBES again = (u32)tgm_copy_reset_again_take(); #endif",
+			    "chan_push_wait("));
 	EXPECT_TRUE(redo.before("if (again) { PUSH_MTHD(push, NV906F, NON_STALL_INTERRUPT, 0);",
 				"chan_fence_volatile(chan);"));
 }

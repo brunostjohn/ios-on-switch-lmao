@@ -103,10 +103,10 @@ struct Stats {
 #endif
 };
 
-// A wait that blocked, counted with its time into two Stats counters when it ends (debug builds; nothing in release).
+// A wait that blocked, counted with its time into two Stats counters when it ends (stats_gpu builds; nothing otherwise).
 class BlockedWait {
 public:
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+#if SWITCH_METAL_STATS
     BlockedWait(std::atomic<uint64_t> &waits, std::atomic<uint64_t> &waitedUs)
         : waits_(&waits), waitedUs_(&waitedUs), began_(nowUs())
     {}
@@ -281,10 +281,6 @@ void gm20bMadeVariants(SwitchMetalPipeline *p, MTLRenderPipelineDescriptor *d);
 // TegraGM20BMetalHeap.mm: the purged heaps a committed command buffer's resources lie in, given their pages back before it is encoded
 // (it counts as committed already, so no purge runs meanwhile)
 void restoreArenas(SwitchMetalCommandBuffer *cb);
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-// DEVELOPMENT: the structure of the plan's operations [from, to) into the device's replay tally (replay_shape.h)
-void noteReplayShape(SwitchMetalCommandBuffer *cb, size_t from, size_t to);
-#endif
 // The device's ask of `d` in an arena of `blockLinear` (a private heap's): every kind the driver keeps; false: none
 bool heapTextureAsk(MTLTextureDescriptor *d, bool blockLinear, gm20b::TextureAsk &ask);
 // TegraGM20BMetalPlainLayout.mm: the texture layout object of a texture no block-linear image of caller memory is made of, nil for
@@ -615,7 +611,7 @@ void kernelUses(SwitchMetalCommandBuffer *cb, size_t at, std::vector<gm20b::Kern
 
 // TegraGM20BMetalFootprint.mm: the idle give-back's line, `relieved` the bytes malloc gave back, `passes` and `kept` what the
 // passes' copies and the kept surface imports held until then
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+#if SWITCH_METAL_STATS
 struct SwitchMetalPassTrim;
 void logGivenBack(size_t relieved, const SwitchMetalPassTrim &passes, const gm20b::Device::Trimmed &kept,
                   const gm20b::Device::PurgeStats &purge);
@@ -628,7 +624,6 @@ void gm20bMemoryTick();
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 void gm20bStallTick();
 void watchFetchBarrierWay(gm20b::Device *dev);
-void watchKeylineProbe();
 // TegraGM20BMetalGlassProbe.mm
 void watchGlassProbe(gm20b::Device *dev);
 void glassProbeCommitted(SwitchMetalCommandBuffer *cb);

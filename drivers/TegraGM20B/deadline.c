@@ -128,7 +128,7 @@ static void window_open(u64 target, u64 since, u64 now)
 	dl.expire_at = target;
 	dl.hold_at = now ? now : 1;
 	switch_gpu_kept_done(&dl.kept, target);
-	if (TGM_STATS)
+	if (TGM_DEBUG_PROBES)
 		WRITE_ONCE(dl.windows, dl.windows + 1);
 }
 

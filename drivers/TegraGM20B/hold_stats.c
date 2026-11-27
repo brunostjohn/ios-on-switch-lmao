@@ -10,7 +10,7 @@
 
 #define HOLD_CHIDS 512 /* GM20B's channels (CCSR_CHANNEL__SIZE_1) */
 
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 extern int proc_selfpid(void);
 
 struct tgm_hold_progress_stamp {
@@ -34,7 +34,7 @@ static struct {
 
 void tgm_hold_progress(unsigned int chid, const volatile void *progress_cpu)
 {
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 	unsigned long flags = 0;
 
 	if (chid >= HOLD_CHIDS)
@@ -50,7 +50,7 @@ void tgm_hold_progress(unsigned int chid, const volatile void *progress_cpu)
 
 void tgm_hold_owner(unsigned int chid)
 {
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 	if (chid < HOLD_CHIDS)
 		WRITE_ONCE(sampled.pid[chid], proc_selfpid());
 #else
@@ -60,7 +60,7 @@ void tgm_hold_owner(unsigned int chid)
 
 void tgm_hold_landed(unsigned int chid, uint64_t asked_pt, uint64_t start_pt, uint64_t sample)
 {
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 	unsigned long flags = 0;
 	u64 progress_pt = 0;
 	const volatile struct tgm_hold_progress_stamp *progress = NULL;
@@ -86,7 +86,7 @@ void tgm_hold_landed(unsigned int chid, uint64_t asked_pt, uint64_t start_pt, ui
 #endif
 }
 
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 void tgm_hold_samples_take(int pid, uint32_t *n, uint64_t *max_ns,
 			   struct switch_gpu_preempt_counts *counts)
 {
@@ -112,7 +112,7 @@ void tgm_hold_samples_take(int pid, uint32_t *n, uint64_t *max_ns,
 
 void tgm_hold_released(unsigned int chid, uint64_t end_pt, int job_last)
 {
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 	if (chid >= HOLD_CHIDS)
 		return;
 	sampled.last[chid].end_pt = end_pt;

@@ -463,6 +463,7 @@ thread_terminate_self(void)
 
 	pal_thread_terminate_self(thread);
 	switch_sched_limit_ended();
+	switch_sched_watch_exiting(thread);
 
 	DTRACE_PROC(lwp__exit);
 

@@ -88,7 +88,7 @@ bool gm20bAheadReads(SwitchMetalCommandBuffer *cb)
 void gm20bPrepareEncoder(SwitchMetalCommandBuffer *cb, size_t from, size_t to)
 {
     cb->_plan.prepareRange(from, to);
-    SWITCH_METAL_DIAGNOSTIC(gm20b::frameCpuCounts().recordPrepares.fetch_add(1, std::memory_order_relaxed));
+    SWITCH_METAL_STAT(gm20b::frameCpuCounts().recordPrepares.fetch_add(1, std::memory_order_relaxed));
 }
 
 // Before the first hand-off: the encoders recorded so far, which the worker encodes from the tape's start
@@ -139,7 +139,7 @@ void gm20bPipelineHanded(SwitchMetalCommandBuffer *cb)
     if (cb->_pipelineDeclined.load(std::memory_order_relaxed) || cb->_committed.load(std::memory_order_acquire))
         return;
     if (a.cb) {
-        SWITCH_METAL_DIAGNOSTIC(
+        SWITCH_METAL_STAT(
             cb->_scheduleNotes.aheadLost.store(uint8_t(gm20b::AheadLost::Busy), std::memory_order_relaxed));
         cb->_pipelineDeclined.store(true, std::memory_order_release);
         aheadChanged(cb);
@@ -240,7 +240,7 @@ bool gm20bPipelineTake(SwitchMetalCommandBuffer *cb, size_t from)
     if (a.cb != cb || from)
         return false;
     if (!a.open) {
-        SWITCH_METAL_DIAGNOSTIC(
+        SWITCH_METAL_STAT(
             cb->_scheduleNotes.aheadLost.store(uint8_t(gm20b::AheadLost::Late), std::memory_order_relaxed));
         giveBack(0);
         return false;
@@ -345,8 +345,8 @@ static void splitCommittedRange(SwitchMetalCommandBuffer *cb)
     rest.from = range.to = uint32_t(at);
     rest.gpuWait = false;
     cb->_segs.insert(cb->_segs.begin() + ptrdiff_t(cb->_segNext) + 1, rest);
-    SWITCH_METAL_DIAGNOSTIC(gm20b::frameCpuCounts().splits.fetch_add(1, std::memory_order_relaxed));
-    SWITCH_METAL_DIAGNOSTIC(gm20b::frameCpuCounts().rangeSplits.fetch_add(1, std::memory_order_relaxed));
+    SWITCH_METAL_STAT(gm20b::frameCpuCounts().splits.fetch_add(1, std::memory_order_relaxed));
+    SWITCH_METAL_STAT(gm20b::frameCpuCounts().rangeSplits.fetch_add(1, std::memory_order_relaxed));
 }
 
 static size_t aheadSplitPoint(SwitchMetalCommandBuffer *cb, const SwitchMetalSegment &range)
@@ -378,7 +378,7 @@ void gm20bPipelineSplit(SwitchMetalCommandBuffer *cb)
                 rest.from = range.to = uint32_t(at);
                 rest.gpuWait = false;
                 cb->_segs.insert(cb->_segs.begin() + ptrdiff_t(cb->_segNext) + 1, rest);
-                SWITCH_METAL_DIAGNOSTIC(gm20b::frameCpuCounts().splits.fetch_add(1, std::memory_order_relaxed));
+                SWITCH_METAL_STAT(gm20b::frameCpuCounts().splits.fetch_add(1, std::memory_order_relaxed));
             }
             return;
         }

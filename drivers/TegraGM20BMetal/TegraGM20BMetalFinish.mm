@@ -4,7 +4,7 @@
 #include <time.h>
 #include "completion_source.h"
 #include "stamps.h"
-#if SWITCH_METAL_DIAGNOSTICS
+#if SWITCH_METAL_PROF
 #include "TegraGM20BPathsABI.h"
 
 // The render server's spans of span_marks.h's kLongSpanNs or more in a completed command buffer: logged, and noted to a
@@ -165,7 +165,7 @@ static void dispatchScheduled(SwitchMetalCommandBuffer *cb, NSArray *handlers)
     });
 }
 
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+#if SWITCH_METAL_STATS
 // waitUntilScheduled returned for `cb` while its queue waited on a shared event (`returnedUs`), and it is submitted now, or
 // finished without: how far its caller ran ahead of the kernel's writers, at most one line a second, with the returns since
 static void noteHeldReturn(SwitchMetalCommandBuffer *cb, uint64_t returnedUs, const char *how)
@@ -233,7 +233,7 @@ void scheduled(SwitchMetalCommandBuffer *cb)
     // an earlier range's failure came in while its last range was submitted
     if (cb->_presents && cb->_segError.set())
         withholdPresents(cb);
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+#if SWITCH_METAL_STATS
     const uint64_t heldReturnUs = cb->_heldReturnUs.exchange(0);
 #endif
     MTLCommandBufferStatus committed = MTLCommandBufferStatusCommitted;
@@ -241,12 +241,12 @@ void scheduled(SwitchMetalCommandBuffer *cb)
     const double now = hostSeconds();
     cb->_kernelEnd = now;
     cb->_gpuStart = now;
-    SWITCH_METAL_DIAGNOSTIC(cb->_scheduleNotes.scheduledUs.store(nowUs(), std::memory_order_relaxed));
+    SWITCH_METAL_STAT(cb->_scheduleNotes.scheduledUs.store(nowUs(), std::memory_order_relaxed));
     // Core Animation's render thread waits for this every frame (waitUntilScheduled): with nothing to run, no hop through
     // the handler queue
     dispatchScheduled(cb, gm20bTakeHandlers(cb, cb->_scheduledHandlers, cb->_hasScheduledHandlers));
     finishScheduledTurn(cb);
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+#if SWITCH_METAL_STATS
     if (heldReturnUs)
         noteHeldReturn(cb, heldReturnUs, "submitted");
 #endif
@@ -391,7 +391,7 @@ static void scheduledEmpty(SwitchMetalCommandBuffer *cb)
     const double now = hostSeconds();
     cb->_kernelEnd = now;
     cb->_gpuStart = now;
-    SWITCH_METAL_DIAGNOSTIC(cb->_scheduleNotes.scheduledUs.store(nowUs(), std::memory_order_relaxed));
+    SWITCH_METAL_STAT(cb->_scheduleNotes.scheduledUs.store(nowUs(), std::memory_order_relaxed));
     dispatchScheduled(cb, gm20bTakeHandlers(cb, cb->_scheduledHandlers, cb->_hasScheduledHandlers));
 }
 
@@ -529,7 +529,7 @@ static void finished(SwitchMetalCommandBuffer *cb)
         failedBy = SwitchMetalPred(cb->_failedBy);
     }
     SWITCH_METAL_DIAGNOSTIC(gRM->stats.finished.fetch_add(1, std::memory_order_relaxed));
-    SWITCH_METAL_DIAGNOSTIC(gm20bNoteFinished(cb));
+    SWITCH_METAL_STAT(gm20bNoteFinished(cb));
     cancelPromises(cb);
     releaseEventWaits(cb);
     unhold(cb);
@@ -544,7 +544,7 @@ static void finished(SwitchMetalCommandBuffer *cb)
     if (sendScheduled) {
         scheduledHandlers = gm20bTakeHandlers(cb, cb->_scheduledHandlers, cb->_hasScheduledHandlers);
         cb->_kernelEnd = hostSeconds();
-        SWITCH_METAL_DIAGNOSTIC(cb->_scheduleNotes.scheduledUs.store(nowUs(), std::memory_order_relaxed));
+        SWITCH_METAL_STAT(cb->_scheduleNotes.scheduledUs.store(nowUs(), std::memory_order_relaxed));
 #if SWITCH_FRAME_TIMELINE
         SWITCH_METAL_DIAGNOSTIC(gRM->stats.scheduledByFinish++);
 #endif
@@ -578,7 +578,7 @@ static void finished(SwitchMetalCommandBuffer *cb)
             withholdPresents(cb);
         presents.clear();
     }
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+#if SWITCH_METAL_STATS
     const uint64_t heldReturnUs = cb->_heldReturnUs.exchange(0);
 #endif
     if (sendScheduled) {
@@ -589,11 +589,11 @@ static void finished(SwitchMetalCommandBuffer *cb)
     gm20bClearCompileWaits(cb);
     cb->_submitOwner.clearIf(gRM->submitThread.load(std::memory_order_relaxed));
     gm20bChanged(cb);
-#if SWITCH_METAL_DIAGNOSTICS
+#if SWITCH_METAL_PROF
     if (cb->_gpuStamped)
         reportLongSpans(cb->_stamp, uint64_t((cb->_gpuEnd - cb->_gpuStart) * 1e9));
 #endif
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+#if SWITCH_METAL_STATS
     if (heldReturnUs)
         noteHeldReturn(cb, heldReturnUs, error ? "failed unsubmitted" : "finished unsubmitted");
 #endif

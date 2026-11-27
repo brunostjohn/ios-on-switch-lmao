@@ -111,6 +111,11 @@ static inline void *nvxnu_work_alloc(void (*fn)(void *), void *arg)
 	return switch_linux_call_alloc(fn, arg);
 }
 
+static inline void *nvxnu_work_alloc_low(void (*fn)(void *), void *arg)
+{
+	return switch_linux_call_alloc_low(fn, arg);
+}
+
 static inline void nvxnu_work_schedule(void *w)
 {
 	if (w)

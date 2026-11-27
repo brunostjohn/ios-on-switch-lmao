@@ -22,7 +22,7 @@
 #include <os/log.h>
 #include <pexpert/arm64/board_config.h>
 
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_STATS_SCHED) && SWITCH_STATS_SCHED
 
 #define SWITCH_LIMIT_CPUS MAX_CPUS
 #include "limit_shadow.h"
@@ -43,6 +43,7 @@ void switch_sched_limit_shadow(uint8_t percentage, uint64_t interval_ns)
     nanoseconds_to_absolutetime(interval_ns, &key.interval);
     disable_preemption();
     switch_limit_requested(&limits, cpu_number(), thread->thread_id, &key, mach_absolute_time());
+    os_atomic_or(&thread->switch_watch_mask, SWITCH_WATCH_LIMIT, relaxed);
     if (os_atomic_load(&limits.watching, relaxed) != 0) {
         os_atomic_store(&switch_sched_limit_watching, 1, relaxed);
     }
@@ -52,11 +53,14 @@ void switch_sched_limit_shadow(uint8_t percentage, uint64_t interval_ns)
 /* thread_set_cpulimit for anything but a lifted limit, and thread_terminate_self: on the thread itself. */
 void switch_sched_limit_ended(void)
 {
-    if (os_atomic_load(&switch_sched_limit_watching, relaxed) == 0) {
+    thread_t thread = current_thread();
+
+    if ((os_atomic_load(&thread->switch_watch_mask, relaxed) & SWITCH_WATCH_LIMIT) == 0) {
         return;
     }
     disable_preemption();
-    switch_limit_ended(&limits, cpu_number(), current_thread()->thread_id, mach_absolute_time());
+    os_atomic_and(&thread->switch_watch_mask, (uint8_t)~SWITCH_WATCH_LIMIT, relaxed);
+    switch_limit_ended(&limits, cpu_number(), thread->thread_id, mach_absolute_time());
     enable_preemption();
 }
 

@@ -644,58 +644,6 @@ TEST(GM20BRecordCost, TheFrameLineReportsEnqueueTimingAndLateBoundWrites)
     EXPECT_EQ(beforeFirst, 1u) << line;
     EXPECT_EQ(beforeCommit, 1u) << line;
     EXPECT_EQ(never, 1u) << line;
-
-    const SEL setPeriod = sel_registerName("switchMetalProbeLateWritePeriod:");
-    ASSERT_TRUE([(id)b.device respondsToSelector:setPeriod]);
-    NSNumber *prevPeriod = ((NSNumber * (*)(id, SEL, NSNumber *)) objc_msgSend)(b.device, setPeriod, @1);
-
-    struct RestorePeriod {
-        id device;
-        SEL sel;
-        NSNumber *prev;
-
-        ~RestorePeriod()
-        {
-            ((void (*)(id, SEL, NSNumber *))objc_msgSend)(device, sel, prev);
-        }
-    } restore{b.device, setPeriod, prevPeriod};
-
-    (void)metal_frame_rates(line, sizeof line);
-    {
-        id<MTLCommandBuffer> clean = [b.queue commandBuffer];
-        recordPass(clean);
-        [clean commit];
-        [clean waitUntilCompleted];
-        ASSERT_EQ(clean.status, MTLCommandBufferStatusCompleted);
-    }
-    ASSERT_GT(metal_frame_rates(line, sizeof line), 0u);
-    const char *latew = strstr(line, " latew=");
-    unsigned long long sampled = 0, bufW = 0, repW = 0, surfW = 0;
-    ASSERT_TRUE(latew && sscanf(latew, " latew=%llu/%llu/%llu/%llu", &sampled, &bufW, &repW, &surfW) == 4) << line;
-    EXPECT_EQ(sampled, 1u) << line;
-    EXPECT_EQ(bufW, 0u) << line;
-    EXPECT_EQ(repW, 0u) << line;
-    EXPECT_EQ(surfW, 0u) << line;
-
-    {
-        id<MTLCommandBuffer> dirty = [b.queue commandBuffer];
-        recordPass(dirty);
-        static_cast<uint8_t *>(sharedBuf.contents)[0] ^= 0xff;
-        const uint32_t pixels[16 * 16] = {};
-        [sharedTex replaceRegion:MTLRegionMake2D(0, 0, 16, 16) mipmapLevel:0 withBytes:pixels bytesPerRow:64];
-        IOSurfaceLock(surface, 0, nullptr);
-        IOSurfaceUnlock(surface, 0, nullptr);
-        [dirty commit];
-        [dirty waitUntilCompleted];
-        ASSERT_EQ(dirty.status, MTLCommandBufferStatusCompleted);
-    }
-    ASSERT_GT(metal_frame_rates(line, sizeof line), 0u);
-    latew = strstr(line, " latew=");
-    ASSERT_TRUE(latew && sscanf(latew, " latew=%llu/%llu/%llu/%llu", &sampled, &bufW, &repW, &surfW) == 4) << line;
-    EXPECT_EQ(sampled, 1u) << line;
-    EXPECT_EQ(bufW, 1u) << line;
-    EXPECT_EQ(repW, 1u) << line;
-    EXPECT_EQ(surfW, 1u) << line;
     CFRelease(surface);
 }
 #endif

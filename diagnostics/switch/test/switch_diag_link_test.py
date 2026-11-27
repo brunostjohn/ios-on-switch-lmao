@@ -42,31 +42,17 @@ KEPT = {
 
 # One or more names from each debug unit and each debug hook.
 DEBUG_ONLY = {
-    'switch_diag_user_syscall',
     'switch_diag_stage',
     'switch_diag_process_event',
     'switch_diag_console_putc',
     'switch_diag_hud_init',
     'switch_diag_hud_panic',
-    'switch_diag_files_update',
     'switch_diag_graphics_takeover',
     'switch_root_event',
     'switch_root_record',
     'switch_root_record_begin',
-    'switch_user_record',
-    'switch_block_record',
     'switch_power_trail',
     'switch_power_trail_report',
-    'switch_files_probe',
-    'switch_sd_probe',
-    'switch_fat_mount',
-    'switch_raw_apfs_open',
-    'switch_sd_read_sectors',
-    'switch_split_open',
-    'switch_gpt_find',
-    'switch_data_create',
-    'switch_block_create',
-    'switch_sd_dma_bind',
 }
 
 PANIC_TEXT = [
@@ -81,8 +67,6 @@ DEBUG_TEXT = [
     b'SWITCH NATIVE XNU DIAGNOSTICS',
     b'XNU PANIC - EXECUTION STOPPED',
     b'NATIVE ROOT BOOT IN PROGRESS',
-    b'READ-ONLY FAT FILE CHECK',
-    b'SD SECTOR 0 MATCHES U-BOOT',
     b'bsd_init entered',
     b'launchd exec attempt - EL0 not established',
     b'exec load_machfile enter',

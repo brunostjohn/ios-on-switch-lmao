@@ -456,7 +456,7 @@ static bool scheduleAppEarly(SwitchMetalCommandBuffer *cb, bool atCommit)
     const bool ordered = atCommit || cb->_enqueueState.load(std::memory_order_acquire) == 1;
     if (ordered && cb->_before && !cb->_before->_scheduledTurn.ran())
         return false;
-    SWITCH_METAL_DIAGNOSTIC(
+    SWITCH_METAL_STAT(
         gm20b::frameCpuCounts().early[size_t(gm20b::EarlyOutcome::Made)].fetch_add(1, std::memory_order_relaxed));
     scheduled(cb);
     if (!atCommit)
@@ -469,7 +469,7 @@ static bool tryEarlySchedule(GM20BState &r, SwitchMetalCommandBuffer *cb, bool q
 {
     if (r.raw->role() != gm20b::Device::Role::RenderServer)
         return queueHead && scheduleAppEarly(cb, false);
-#if SWITCH_METAL_DIAGNOSTICS
+#if SWITCH_METAL_STATS
     // a commit's try is followed by its queue head's: the head's is the one counted
     const auto refused = [queueHead](gm20b::EarlyOutcome why) {
         if (queueHead)
@@ -508,7 +508,7 @@ static bool tryEarlySchedule(GM20BState &r, SwitchMetalCommandBuffer *cb, bool q
         return refused(O::Busy);
     if (!promiseWritesEarly(cb, handles))
         return refused(O::Kernel);
-    SWITCH_METAL_DIAGNOSTIC(gm20b::frameCpuCounts().early[size_t(O::Made)].fetch_add(1, std::memory_order_relaxed));
+    SWITCH_METAL_STAT(gm20b::frameCpuCounts().early[size_t(O::Made)].fetch_add(1, std::memory_order_relaxed));
     if (!handles.empty()) {
         earlyPromised().push_back({(__bridge void *)cb, handles});
         cb->_earlyPromised = true;
@@ -720,7 +720,7 @@ void submitLoop()
                 cb->_submitOwner.setOwner(selfPort);
                 gm20bChanged(cb);
             }
-            SWITCH_METAL_DIAGNOSTIC(gm20bNoteTaken(cb));
+            SWITCH_METAL_STAT(gm20bNoteTaken(cb));
             auto deadline = gm20b::EventDeadline::Time::max();
             uint32_t dependencies = 0;
             bool blocked = false;
@@ -776,7 +776,7 @@ void submitLoop()
                     gm20bSetCompileWaits(cb, std::move(compileWaits));
                 else
                     cb->_submitOwner.clearIf(selfPort);
-                SWITCH_METAL_DIAGNOSTIC(gm20bNoteParked(cb, unsigned(wait)));
+                SWITCH_METAL_STAT(gm20bNoteParked(cb, unsigned(wait)));
                 if (!gm20b::holds(wait)) {
                     markHeld(marked, true);
                     continue;

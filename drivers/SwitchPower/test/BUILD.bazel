@@ -207,7 +207,10 @@ host_test(
         "//drivers/SwitchPower:SwitchEMCClock.h",
         "//drivers/SwitchPower:SwitchEMCFixed.h",
     ],
-    defines = ["DEVELOPMENT=1"],
+    defines = [
+        "DEVELOPMENT=1",
+        "SWITCH_STATS_POWER=1",
+    ],
 )
 
 host_test(
@@ -293,7 +296,10 @@ PERF_GOVERNOR_SRCS = [
 host_library(
     name = "perf_governor",
     srcs = PERF_GOVERNOR_SRCS,
-    defines = ["DEVELOPMENT=1"],
+    defines = [
+        "DEVELOPMENT=1",
+        "SWITCH_STATS_POWER=1",
+    ],
     force_includes = ["switch_perf_governor_counting.h"],
     deps = [":perf_kernel"],
 )
@@ -320,6 +326,7 @@ host_library(
         "-DDEVELOPMENT=0",
         "-UDEBUG",
         "-DDEBUG=0",
+        "-DSWITCH_STATS_POWER=0",
     ],
     force_includes = ["switch_perf_governor_counting.h"],
     deps = [":perf_kernel"],
@@ -343,7 +350,10 @@ host_library(
     name = "perf_governor_tsan",
     srcs = PERF_GOVERNOR_SRCS,
     copts = ["-fsanitize=thread"],
-    defines = ["DEVELOPMENT=1"],
+    defines = [
+        "DEVELOPMENT=1",
+        "SWITCH_STATS_POWER=1",
+    ],
     force_includes = ["switch_perf_governor_counting.h"],
     sanitize = False,
     deps = [":perf_kernel"],

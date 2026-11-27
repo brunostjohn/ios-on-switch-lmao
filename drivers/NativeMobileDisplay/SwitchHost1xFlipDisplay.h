@@ -10,7 +10,7 @@
 // static: the instance is at the 16 KiB a kalloc_type class may have. Included in the class body after
 // SwitchDcHost1xClassProbe.h.
 
-#if SWITCH_FRAME_TIMELINE
+#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
 struct Host1xFlipState {
     switch_host1x_flip::Run run;
     uint32_t syncpts[SWITCH_HOST1X_PROBE_SYNCPTS] = {};  // producer, display, window A's REG_WR_SAFE and LINE_FLIPPED

@@ -1282,7 +1282,7 @@ commit_upl(upl_t upl, upl_offset_t pl_offset, size_t uplSize, int flags, int abo
  * fault's cluster size (4 KiB pages here, 16 KiB on the iPad): requested bytes against the chunks they touch is the
  * decompression done per byte used.
  */
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_KPROF) && SWITCH_KPROF
 extern uint64_t switch_decmpfs_pageins, switch_decmpfs_small, switch_decmpfs_bytes, switch_decmpfs_chunk_bytes;
 uint64_t switch_decmpfs_pageins, switch_decmpfs_small, switch_decmpfs_bytes, switch_decmpfs_chunk_bytes;
 /* osfmk/kern/switch_kprof.c */
@@ -1304,7 +1304,7 @@ switch_decmpfs_count_pagein(vnode_t vp, uint32_t type, off_t offset, user_ssize_
 		}
 		vnode_unlock(vp);
 	}
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_KPROF) && SWITCH_KPROF
 	const uint64_t chunk = 64 * 1024;
 
 	switch_kprof_wait(2 /* decmpfs page-in, this process */, 0, (uint64_t)size);

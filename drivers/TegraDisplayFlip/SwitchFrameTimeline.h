@@ -7,7 +7,8 @@
 #pragma once
 #include <stdint.h>
 
-#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
+#if ((defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)) && defined(SWITCH_STATS_FRAME) && \
+    SWITCH_STATS_FRAME
 #define SWITCH_FRAME_TIMELINE 1
 #else
 #define SWITCH_FRAME_TIMELINE 0

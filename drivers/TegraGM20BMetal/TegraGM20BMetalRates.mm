@@ -6,7 +6,7 @@
 #include "object_pool.h"
 #include "resolve_rule.h"
 
-#if SWITCH_METAL_DIAGNOSTICS
+#if SWITCH_METAL_STATS
 // ---- the rates line ----
 static struct {
     uint64_t raw, encodeUs, draws, passes, copies, deferred, ringWaits, lastUs, poolStalls, eventsReleased, heldReturns,
@@ -40,7 +40,7 @@ const void *metal_texture_image(id<MTLTexture> texture, size_t *pitch)
 
 size_t metal_rates(char *out, size_t size)
 {
-#if SWITCH_METAL_DIAGNOSTICS
+#if SWITCH_METAL_STATS
     if (!gRM || !size)
         return 0;
     Stats &s = gRM->stats;
@@ -184,7 +184,6 @@ size_t metal_rates(char *out, size_t size)
 #endif
 }
 
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 // "fetch seq=S/Tt ilk=I/Bb r2=F r3=G rec=<reason>:n,... enc=<reason>:n,... sto=<reason>:n,...": drawn a triangle at a time
 // (the triangles), inside the pixel interlock (B of them with the fixed-function blend computed in the shader), by their
 // state's fetch-free form through the ROP's blend (r2) or its iterated blend (r3), refused as recorded and at encoding by
@@ -192,6 +191,7 @@ size_t metal_rates(char *out, size_t size)
 // The plugin's rates timer only (its 5 s windows).
 size_t metal_fetch_rates(char *out, size_t size)
 {
+#if SWITCH_METAL_STATS
     if (!gRM || !size)
         return 0;
     const gm20b::FetchCounts &k = gRM->raw->stats.fetch;
@@ -230,10 +230,16 @@ size_t metal_fetch_rates(char *out, size_t size)
                  (unsigned long long)d[0], (unsigned long long)d[1], (unsigned long long)d[2], (unsigned long long)d[3],
                  (unsigned long long)d[4], (unsigned long long)d[5], encode, storage);
     return n > 0 ? std::min(size_t(n), size - 1) : 0;
+#else
+    (void)out;
+    (void)size;
+    return 0;
+#endif
 }
 
 size_t metal_encode_rates(char *out, size_t size)
 {
+#if SWITCH_METAL_PROF
     using gm20b::EncodePart;
     if (!gRM || !size)
         return 0;
@@ -286,20 +292,17 @@ size_t metal_encode_rates(char *out, size_t size)
     const double spanNs = double(gm20b::spanCostTicksPer1024()) * tickUs * 1000.0 / 1024.0;
     const double longestPrepareUs =
         double(gRM->raw->stats.encode.longestPrepare.exchange(0, std::memory_order_relaxed)) * tickUs;
-    // per encode: state segment binds, binds of the segment the channel held, and the inline words the binds replaced;
-    // per window: command buffers whose structure was the last one's, one of the three before, or new (replay_shape.h)
+    // per encode: state segment binds, binds of the segment the channel held, and the inline words the binds replaced
     gm20b::Device::Stats &st = gRM->raw->stats;
     auto since = [](const std::atomic<uint64_t> &v, uint64_t &last) {
         const uint64_t now = v.load(std::memory_order_relaxed), d = now - last;
         last = now;
         return d;
     };
-    static uint64_t lastBinds, lastSkips, lastWords, lastSame, lastRecent, lastFresh, lastCompared, lastInTables;
+    static uint64_t lastBinds, lastSkips, lastWords, lastCompared, lastInTables;
     const double segBinds = double(since(st.segmentBinds, lastBinds)) / double(encodes),
                  segSkips = double(since(st.segmentSkips, lastSkips)) / double(encodes),
                  segWords = double(since(st.segmentWords, lastWords)) / double(encodes);
-    const uint64_t same = since(st.replay.same, lastSame), recent = since(st.replay.recent, lastRecent),
-                   fresh = since(st.replay.fresh, lastFresh);
     const double slotsCompared = double(since(st.slotsCompared, lastCompared)) / double(encodes),
                  slotsInTables = double(since(st.slotsInTables, lastInTables)) / double(encodes);
     auto part = [&](EncodePart p) {
@@ -321,7 +324,7 @@ size_t metal_encode_rates(char *out, size_t size)
         "draw=%.0f/%.1f prep=%.0f geo=%.0f desc=%.0f bar=%.0f slaunch=%.0f/%.1f blit=%.0f comp=%.0f tail=%.0f "
         "commit=%.0f prolog=%.0f exec=%.0f/%.1f uses=%.0f pushes=%.0f kern=%.0f/%.1f "
         "pmax=%.0f use=%.0f/%.1f uni=%.0f/%.1f bind=%.0f var=%.0f pprol=%.0f slots=%.0f/%.0f spans=%.0f@%.0fns "
-        "seg=%.1f/%.1f segw=%.0f replay=%llu/%llu/%llu",
+        "seg=%.1f/%.1f segw=%.0f",
         (unsigned long long)encodes, wallUs, part(EncodePart::Resources), part(EncodePart::Loop),
         part(EncodePart::State), part(EncodePart::Pass), part(EncodePart::SplitPlan), part(EncodePart::Fusion),
         part(EncodePart::PassEnd), count(EncodePart::PassEnd), part(EncodePart::Draw), count(EncodePart::Draw),
@@ -332,7 +335,7 @@ size_t metal_encode_rates(char *out, size_t size)
         part(EncodePart::Kernel), count(EncodePart::Kernel), longestPrepareUs, part(EncodePart::Use),
         count(EncodePart::Use), part(EncodePart::Uniforms), count(EncodePart::Uniforms), part(EncodePart::Bind),
         part(EncodePart::Variant), part(EncodePart::PassPrologue), slotsCompared, slotsInTables, spans, spanNs,
-        segBinds, segSkips, segWords, (unsigned long long)same, (unsigned long long)recent, (unsigned long long)fresh);
+        segBinds, segSkips, segWords);
     if (head <= 0 || size_t(head) >= size)
         return head > 0 ? size - 1 : 0;
     // self times: walk= the loop's own (the plan walk between its parts), res/tail= the phases', state/draw/prep/
@@ -367,10 +370,16 @@ size_t metal_encode_rates(char *out, size_t size)
         n += pools > 0 ? size_t(pools) : 0;
     }
     return std::min(n, size - 1);
+#else
+    (void)out;
+    (void)size;
+    return 0;
+#endif
 }
 
 size_t metal_fetch_keys(char *out, size_t size)
 {
+#if SWITCH_METAL_STATS
     if (!gRM || !size)
         return 0;
     gm20b::FetchCounts &k = gRM->raw->stats.fetch;
@@ -393,8 +402,14 @@ size_t metal_fetch_keys(char *out, size_t size)
     keys("ilk", k.interlockKeys);
     keys("gen", k.genericKeys);
     return any ? used : 0;
+#else
+    (void)out;
+    (void)size;
+    return 0;
+#endif
 }
 
+#if SWITCH_METAL_DIAGNOSTICS
 // The stall line (r7p8: the compositor stopped committing for good with nothing in the log): every 5 s, on a timer of its own,
 // what the driver has pending, read without waiting (a lock another thread holds is reported held, not waited for). Once
 // nothing was committed or completed over two ticks while work is pending or one of its locks stays held, one line names it,
@@ -425,7 +440,9 @@ static void gm20bEventWaitTick()
 void gm20bStallTick()
 {
     gm20bEventWaitTick();
+#if SWITCH_METAL_STATS
     gm20bMemoryTick();
+#endif
     static uint64_t lastCommits = ~0ull, lastDone = ~0ull;
     static int still = 0;
     static bool said = false;
@@ -464,9 +481,7 @@ void gm20bStallTick()
                  waiting, inflight, int(holders), int(device), submitted, completed, (unsigned long long)commits,
                  (unsigned long long)done);
 }
-#endif
 
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 // The fetch barrier's way, switched from the Mac within one boot (`idevicenotificationproxy -u <udid> post
 // com.brunostjohn.switch.debug.fetch-barrier-<ps|psonly|none|tiles>`), to measure what the barrier costs: the shipped
 // barrier and texture invalidate (ps) against the barrier alone (psonly), nothing (none) and the tile barrier (tiles). Measurement only: psonly and none
@@ -495,17 +510,5 @@ void watchFetchBarrierWay(gm20b::Device *dev)
                            });
         });
     }
-}
-
-// The keyline probe armed (pipeline.h armKeylineProbe) in every process by HW Test's ui.pocket_keyline before it draws
-// (`idevicenotificationproxy -u <udid> post com.brunostjohn.switch.debug.keyline-probe` from the Mac)
-void watchKeylineProbe()
-{
-    int token;
-    notify_register_dispatch("com.brunostjohn.switch.debug.keyline-probe", &token,
-                             dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^(int) {
-                                 gm20b::armKeylineProbe();
-                                 os_log(gm20bLog(), "SwitchMetal: keyline probe armed (debug notification)");
-                             });
 }
 #endif

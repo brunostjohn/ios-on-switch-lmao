@@ -220,9 +220,6 @@ void RenderEncoder::end()
     if (d.glassMemLive_)
         glassMemReached(cl);
 #endif
-#if SWITCH_METAL_DIAGNOSTICS
-    probeEdges();
-#endif
     const std::vector<uint32_t> &restore = extrasAtBegin_ ? extrasAtBegin_->restore : std::vector<uint32_t>();
     const uint32_t room = 160 + SWITCH_GM20B_KIND_SWITCH_WORDS + 8 * 32 * layers + uint32_t(cl.size()) * 48 +
                           3 * (kZetaTargetWords + kZetaClearWords + 24) + kZcullRegionWords + kSampleWords +
@@ -493,7 +490,7 @@ void RenderEncoder::end()
     }
     if (measured)
         emitDrawStamp(p, d.stamps_.va, candidate_.slot, false, candidate_.payload);
-    SWITCH_METAL_DIAGNOSTIC(markSpan(p, prologueMark_, SpanKind::Prologue));
+    SWITCH_METAL_PROFD(markSpan(p, prologueMark_, SpanKind::Prologue));
     SWITCH_METAL_DIAGNOSTIC(if (cb_->drawTimes_) d.emitDrawTime(p, prologueTime_));
     checkRoom(p, "a pass prologue");
     cb_->segment(start, p.at);

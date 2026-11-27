@@ -46,7 +46,7 @@ void sparesSeed(SparePool *p)
 	if (switch_gpu_spare_record_seed(p->books, record, length, SWITCH_GPU_SPARE_CAP_BYTES)) {
 		memcpy(p->record, record, length);
 		p->recordLength = length;
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 		for (uint32_t s = 0; s < SWITCH_GPU_SPARE_SLOTS; s++)
 			if (p->books.used[s] == SWITCH_GPU_SPARE_SEEDED)
 				p->seeded[s] = p->books.depth[s];
@@ -85,7 +85,7 @@ void spareRecordWork(thread_call_param_t param, thread_call_param_t)
 }
 }  // namespace tgm_uc
 
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 // " spare_seed_<kind>_<KiB>=<depth>" for each class the previous boot's record seeded
 extern "C" void tgm_spare_seeds_line(char *line, unsigned long size)
 {

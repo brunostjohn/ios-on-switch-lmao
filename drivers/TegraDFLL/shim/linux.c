@@ -135,8 +135,7 @@ void init_timer_deferrable(struct timer_list *timer)
 int mod_timer(struct timer_list *timer, unsigned long expires)
 {
 	unsigned long now = jiffies;
-	const u64 delay_ns =
-		(u64)(expires > now ? expires - now : 0) * (u64)(NSEC_PER_SEC / HZ);
+	const u64 delay_ns = (u64)(expires > now ? expires - now : 0) * (u64)(NSEC_PER_SEC / HZ);
 
 	timer->expires = expires;
 	if (timer->tdfll_deferrable)

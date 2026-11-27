@@ -11,11 +11,17 @@
 #include "TegraNVJPGJpeg.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
 
-// The periodic decode line: debug kernels only, so a release kernel has none of its code or strings.
-#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
+// The periodic decode line: opt-in stats only; on-demand HW-Test probes stay in development/debug builds.
+#if defined(SWITCH_STATS_IO) && SWITCH_STATS_IO
 #define TEGRA_NVJPG_STATS 1
 #else
 #define TEGRA_NVJPG_STATS 0
+#endif
+
+#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
+#define TEGRA_NVJPG_PROBES 1
+#else
+#define TEGRA_NVJPG_PROBES 0
 #endif
 
 // A physically contiguous kernel buffer below 4 GiB, mapped 1:1 in NVJPG's address space (IOVA = PA).

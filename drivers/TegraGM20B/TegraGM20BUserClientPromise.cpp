@@ -30,7 +30,7 @@ void AGXDeviceUserClient::releasePromise(uint32_t promise, bool abandoned)
 	if (!switch_gpu_promise_release(&promises_[promise], promiseWord(promise)))
 		return;
 	__asm__ volatile("dsb sy" ::: "memory");
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 	tgm_promise_cpu_raised(offset, value);
 #endif
 	tgm_present_promise_released(offset, value);

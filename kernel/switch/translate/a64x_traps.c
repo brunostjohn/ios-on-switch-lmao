@@ -17,7 +17,7 @@
 
 #include "../../../translate/arm64e/a64x/a64x.h"
 
-#if CONFIG_A64X && (DEVELOPMENT || DEBUG)
+#if CONFIG_A64X && (DEVELOPMENT || DEBUG) && defined(SWITCH_STATS_IO) && SWITCH_STATS_IO
 
 static struct switch_a64x_ring a64x_rings[MAX_CPUS] __attribute__((aligned(64)));
 static uint64_t a64x_class_traps[A64X_NCLASSES];
@@ -69,6 +69,18 @@ size_t switch_a64x_trap_window(char *out, size_t size)
     }
     at = switch_a64x_put(size, at, snprintf(out + at, size - at, "; "));
     return at + switch_a64x_window_format(out + at, size - at, &w);
+}
+
+#elif CONFIG_A64X && (DEVELOPMENT || DEBUG)
+
+size_t switch_a64x_trap_window(char *out, size_t size);
+
+size_t switch_a64x_trap_window(char *out, size_t size)
+{
+    if (size != 0) {
+        out[0] = '\0';
+    }
+    return 0;
 }
 
 #endif

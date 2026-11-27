@@ -15,7 +15,13 @@
 #include <cstddef>
 #include <cstdint>
 
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+#if (!defined(SWITCH_DEBUG) || SWITCH_DEBUG) && (!defined(SWITCH_PROF_GPU) || SWITCH_PROF_GPU)
+#define SWITCH_METAL_ENCODE_PROFILE 1
+#else
+#define SWITCH_METAL_ENCODE_PROFILE 0
+#endif
+
+#if SWITCH_METAL_ENCODE_PROFILE
 #include <TargetConditionals.h>
 #include <mach/mach_time.h>
 #include <atomic>
@@ -255,6 +261,15 @@ struct EncodeTotals {
 #else
 #include <mutex>
 #include <type_traits>
+
+namespace gm20b {
+inline void noteExecUses(uint64_t)
+{}
+
+inline void noteExecPushes(uint64_t)
+{}
+}  // namespace gm20b
+
 #define SWITCH_METAL_ENCODE_SPAN(part)        static_cast<void>(0)
 #define SWITCH_METAL_ENCODE_BEGIN(name, part) static_cast<void>(0)
 #define SWITCH_METAL_ENCODE_END(name)         static_cast<void>(0)

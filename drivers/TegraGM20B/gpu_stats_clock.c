@@ -2,7 +2,7 @@
 // The stats line's GPU clock (gpu_internal.h TRIM_GPC0_NCGPCCLK_*), with what fed the GPC clock when each count started.
 #include "gpu_internal.h"
 
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 #include "TegraGM20BNapllMath.h"
 
 int switch_gpu_gpc_khz(void)
@@ -34,7 +34,9 @@ int switch_gpu_gpc_khz(void)
 	gate_leave();
 	return rate;
 }
+#endif
 
+#if TGM_STATS
 /* Read right after a count starts, inside its 21 us: GPCPLL_COEFF (M 7:0, N 15:8, PL 21:16), GPC2CLK_OUT (VCO divider
  * 13:8, bypass divider 5:0), CLK_SLOWDOWN_0 (THERM's slowdown factor 21:16) and THERM_GATE_CTRL(0) (GR's ELCG mode 1:0).
  * A count at a fraction of the PLL's rate names its divider or slowdown here, or neither. SOC_THERM_GPU is the thermal

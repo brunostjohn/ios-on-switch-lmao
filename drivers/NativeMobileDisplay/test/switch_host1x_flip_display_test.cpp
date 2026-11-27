@@ -19,7 +19,7 @@ using switch_ios::test::SourceText;
 TEST(Host1xFlipDisplay, ItIsDebugOnlyOnTheDisplaysOwnChannel)
 {
     const std::string trial = SourceText("../SwitchHost1xFlipDisplay.h");
-    const size_t gate = trial.find("#if SWITCH_FRAME_TIMELINE");
+    const size_t gate = trial.find("#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)");
     ASSERT_NE(gate, std::string::npos);
     EXPECT_LT(gate, trial.find("int host1xFlipStart("));
     EXPECT_LT(trial.find("#else"), trial.rfind("void host1xFlipAbort(const char *)\n{}"));

@@ -118,7 +118,7 @@ static bool compilerAnswers(SwitchMetalComputeState *s, SwitchMetalFunction *f, 
     gm20b::PackComputeFacts made = {};
     const std::string key = gm20b::computeStateKey(s->_air, s->_constants, s->_maxThreads, s->_multipleOfWidth);
     const uint64_t keyHash = gm20b::Pack::fnv(key.data(), key.size());
-#if SWITCH_METAL_DIAGNOSTICS
+#if SWITCH_METAL_STATS
     gm20bNoteMiss("compute", keyHash, key, s->_direct.label);
 #endif
     if (!gRM->completion || !gRM->completion->facts(f, s->_direct, key, made, failure)) {

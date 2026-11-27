@@ -163,7 +163,7 @@ IOReturn publish()
 	return kIOReturnSuccess;
 }
 
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 // debug.switch_gpu_clkgate (debug kernels): 1 clock gating on, 0 off, for a frame-time A/B within one boot; BlueTool
 // writes it when the Mac posts com.brunostjohn.switch.debug.gpu-clkgate-on / -off.
 int gClkgateOn = 1;
@@ -253,7 +253,7 @@ void bringup(void *arg, wait_result_t)
 		}
 		// Bring-up: the text console lags the log, and logd flushes every few seconds; let both catch up so a stage
 		// that hangs the machine still leaves the previous stage's result on screen and on Data.
-		if (TGM_STATS && nvxnu_trace_paced())
+		if (TGM_DEBUG_PROBES && nvxnu_trace_paced())
 			IOSleep(3000);
 	}
 	if (stage >= 4) {
@@ -266,7 +266,7 @@ void bringup(void *arg, wait_result_t)
 			switch_gpu_pack_gpu_usable();
 		}
 	}
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 	registerClkgateSysctl();
 	switch_gpu_path_register();
 #endif
@@ -427,7 +427,7 @@ extern "C" void tegra_gm20b_display_expected(void)
 	thread_call_enter(gRailCall);
 }
 
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 // TegraGM20BRailCycle.cpp's one rail-gate and rail-up, each made under gRailLock as the rail worker makes it. 0, or
 // tgm_rail_down's -EBUSY, also while system sleep holds the GPU.
 extern "C" int tgm_rail_cycle_once(void)

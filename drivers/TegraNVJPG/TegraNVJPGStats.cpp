@@ -4,15 +4,17 @@
 #include <IOKit/IOLocks.h>
 #include <os/log.h>
 #include "TegraNVJPGStats.h"
-#if TEGRA_NVJPG_STATS
+#if TEGRA_NVJPG_PROBES
 #include "../../kits/SwitchTime/SwitchTime.h"
 
 namespace {
 IOLock *gLock;
 
+#if TEGRA_NVJPG_STATS
 struct {
     uint64_t windowStart, decodes, refused, failed, engineUs, cpuUs, pixels, bytes;
 } gWindow;
+#endif
 
 struct Process {
     int pid;
@@ -79,7 +81,9 @@ void switch_nvjpg_count_mapping(int pid)
 void tegra_nvjpg_count_refused(int pid, uint32_t format)
 {
     IOLockLock(gLock);
+#if TEGRA_NVJPG_STATS
     gWindow.refused++;
+#endif
     TegraNVJPGRouteCounts &c = slotOf(pid);
     c.refused++;
     ask(c, format);
@@ -90,12 +94,19 @@ void tegra_nvjpg_count_job(int pid, uint32_t format, bool failed, uint64_t engin
                            uint64_t bytes)
 {
     IOLockLock(gLock);
+#if TEGRA_NVJPG_STATS
     gWindow.decodes++;
     gWindow.failed += failed ? 1 : 0;
     gWindow.engineUs += engineUs;
     gWindow.cpuUs += cpuUs;
     gWindow.pixels += pixels;
     gWindow.bytes += bytes;
+#else
+    (void)engineUs;
+    (void)cpuUs;
+    (void)pixels;
+    (void)bytes;
+#endif
     TegraNVJPGRouteCounts &c = slotOf(pid);
     ask(c, format);
     if (failed) {
@@ -118,6 +129,7 @@ void tegra_nvjpg_counts_of(int pid, TegraNVJPGRouteCounts *out)
     IOLockUnlock(gLock);
 }
 
+#if TEGRA_NVJPG_STATS
 void tegra_nvjpg_stats_line(void)
 {
     IOLockLock(gLock);
@@ -166,4 +178,5 @@ void tegra_nvjpg_note_route(uint32_t route, bool held, uint32_t rowBytes, uint32
     else
         IOLog("%s\n", line);
 }
+#endif
 #endif

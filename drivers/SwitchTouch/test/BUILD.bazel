@@ -67,6 +67,8 @@ host_library(
     defines = [
         "DEVELOPMENT=1",
         "SWITCH_IPSW_KIND_21H461=1",
+        "SWITCH_STATS_IO=1",
+        "SWITCH_STATS_FRAME=1",
     ],
     deps = [
         ":headers",

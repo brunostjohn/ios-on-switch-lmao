@@ -7,7 +7,7 @@
 // boot (totals).
 #pragma once
 
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_IO
 #include <kern/clock.h>
 #include <os/log.h>
 #include <libkern/libkern.h>

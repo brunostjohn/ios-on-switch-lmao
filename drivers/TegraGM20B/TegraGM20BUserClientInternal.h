@@ -142,7 +142,8 @@ extern "C" vm_map_t get_task_map(task_t task);
 extern "C" kern_return_t vm_map_region_recurse_64(vm_map_t map, uint64_t *address, uint64_t *size,
 						  natural_t *depth, vm_region_submap_info_64_t info,
 						  mach_msg_type_number_t *count);
-
+#endif
+#if TGM_DEBUG_PROBES
 // SwitchGpuTargetPeaks.h's line of every process's largest target image since boot
 void tgm_target_peaks_line(char *line, size_t size);
 #endif
@@ -224,6 +225,8 @@ struct SparePool {
 #if TGM_STATS
 	OwnerStat owners[kOwners];
 	uint32_t misses[SWITCH_GPU_SPARE_MISSES], zeroBusy, zeroFailed, refillRefused, notUnits;
+#endif
+#if TGM_DEBUG_PROBES
 	uint16_t seeded[SWITCH_GPU_SPARE_SLOTS];  // the depths this boot's record seeded
 #endif
 };
@@ -541,7 +544,7 @@ class AGXDeviceUserClient : public IOUserClient
 	// its word in the fence page
 	static constexpr uint32_t kBindEpochWord = TegraGM20BFencePageBindEpochFirst / 4;
 	uint32_t bindIssued_ = 0, bindDone_ = 0;
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 	// NVK's own heap is the client window's lower half (its replay heap and the driver's quarter lie above): its maps
 	// and unmaps are kept apart from the driver's
 	tgm_bind_history *bindHistory_[2] = {};
@@ -677,7 +680,7 @@ class AGXDeviceUserClient : public IOUserClient
 	IOReturn settleBo(const TegraGM20BAbiBoAlloc *in, const BoCharge &charge, Bo *bo,
 			  IOReturn ret, bool chunksRefused, bool system);
 	IOReturn boAlloc(const TegraGM20BAbiBoAlloc *in, TegraGM20BAbiBoAllocReply *out);
-#if SWITCH_GPU_PATH_STATS
+#if TGM_DEBUG_PROBES
 	void poolLine(char *line, size_t size);
 #endif
 	IOReturn boImport(const TegraGM20BAbiBoImport *in, TegraGM20BAbiBoAllocReply *out);

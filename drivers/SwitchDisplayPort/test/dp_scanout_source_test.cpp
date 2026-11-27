@@ -47,10 +47,10 @@ TEST(ExternalOwnership, FrontReadLivesUntilReplacementAndGenerationChangesRefuse
                     .has("if (connected) recordLayers(reinterpret_cast<const uint8_t *>(request));"));
     EXPECT_TRUE(Block(lifecycle, "void SwitchExternalScreen::linkUp(").has("unshownErrors = 0;"));
     EXPECT_TRUE(Block(source, "void SwitchExternalScreen::recordLayers(").has("surface->retain();"));
-    EXPECT_TRUE(
-        Block(source, "void SwitchExternalScreen::requestFrame()")
-            .before("(native_planes::wordAt(bytes, swapUpdated) & ~native_planes::wordAt(bytes, swapReady)) & native_planes::kLayerBits",
-                    "takeLayers(bytes, present, layers, surfaces)"));
+    EXPECT_TRUE(Block(source, "void SwitchExternalScreen::requestFrame()")
+                    .before("(native_planes::wordAt(bytes, swapUpdated) & ~native_planes::wordAt(bytes, swapReady)) & "
+                            "native_planes::kLayerBits",
+                            "takeLayers(bytes, present, layers, surfaces)"));
     EXPECT_TRUE(Block(source, "void SwitchExternalScreen::requestFrame()")
                     .has("if (!takeLayers(bytes, present, layers, surfaces)) { dropFrame(request); return; }"));
 

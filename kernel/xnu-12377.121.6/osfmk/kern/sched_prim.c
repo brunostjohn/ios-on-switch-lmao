@@ -3824,7 +3824,7 @@ thread_dispatch(
 			 * CPU is not running.
 			 */
 			kperf_running_setup(processor, processor->last_dispatch);
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_KPROF) && SWITCH_KPROF
 			switch_kprof_running_setup(processor, processor->last_dispatch);
 #endif
 		}
@@ -4423,7 +4423,7 @@ sched_ipi_deferred_policy(processor_set_t pset, processor_t dst,
 	return SCHED_IPI_NONE;
 }
 
-#if (DEVELOPMENT || DEBUG) && !SCHED_TEST_HARNESS
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_KPROF) && SWITCH_KPROF && !SCHED_TEST_HARNESS
 #define SWITCH_SCHED_IPI_EVENTS 7
 uint64_t switch_sched_ipis[SWITCH_SCHED_IPI_EVENTS][2];
 #endif
@@ -4459,7 +4459,7 @@ sched_ipi_action(processor_t dst, thread_t thread, sched_ipi_event_t event)
 		atomic_bit_set(&pset->pending_AST_PREEMPT_cpu_mask, dst->cpu_id, memory_order_relaxed);
 		break;
 	}
-#if (DEVELOPMENT || DEBUG) && !SCHED_TEST_HARNESS
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_KPROF) && SWITCH_KPROF && !SCHED_TEST_HARNESS
 	os_atomic_inc(&switch_sched_ipis[(unsigned int)event < SWITCH_SCHED_IPI_EVENTS ? (unsigned int)event : 0][dst_idle], relaxed);
 #endif
 	return ipi_type;
@@ -6841,7 +6841,7 @@ sched_timeshare_maintenance_continue(void)
 	    sched_pri_shifts[TH_BUCKET_SHARE_FG], sched_pri_shifts[TH_BUCKET_SHARE_BG],
 	    sched_pri_shifts[TH_BUCKET_SHARE_UT], sched_pri_shifts[TH_BUCKET_SHARE_DF], 0);
 
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && ((defined(SWITCH_STATS_SCHED) && SWITCH_STATS_SCHED) || (defined(SWITCH_RECORDER) && SWITCH_RECORDER))
 	/* Switch: UI main thread stall reports (kernel/switch/diag/stall.c) sample on this tick. */
 	extern void switch_stall_tick(uint64_t now);
 	switch_stall_tick(sched_tick_ctime);

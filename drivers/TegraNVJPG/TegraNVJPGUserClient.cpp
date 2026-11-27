@@ -72,19 +72,19 @@ constexpr uint64_t kScanMax = 64ULL << 20;    // the longest scan a slot takes: 
 
 volatile uint32_t gConnections;
 
-#if TEGRA_NVJPG_STATS
+#if TEGRA_NVJPG_PROBES
 // HW Test's image.jpeg_* route: a selector 7 call with kRouteMagic at +0xcac and no source surface answers the
 // caller's TegraNVJPGRouteCounts, through the selector CMPhoto's own decodes use, which the app's sandbox admits where
 // it may deny a registry or sysctl read.
 constexpr uint32_t kRouteMagic = 0x5050;  // 'PP', as TegraGM20BMethodPaths
+static_assert(sizeof(TegraNVJPGRouteCounts::routes) / sizeof(uint64_t) == TEGRA_NVJPG_ROUTE_COUNT,
+              "a route count for every route");
 // A selector 7 decode with this at +0xcac, the tile mode at +0xcb0 and the block height code at +0xcb4: HW Test's
 // image.nvjpg_tile_probe (TegraNVJPGRoute.h tegra_nvjpg_route_tile_probe)
 constexpr uint32_t kTileProbeMagic = 0x5054;
 // A selector 7 decode with this at +0xcac: HW Test's image.nvjpg_copy_guard, whose copy-engine re-pack launches with its
 // guard 0 (TegraNVJPGRepack.cpp), as a cancelled decode's does: the destination must stay as it was
 constexpr uint32_t kGuardProbeMagic = 0x5047;
-static_assert(sizeof(TegraNVJPGRouteCounts::routes) / sizeof(uint64_t) == TEGRA_NVJPG_ROUTE_COUNT,
-              "a route count for every route");
 #endif
 
 enum RequestKind {
@@ -255,7 +255,7 @@ IOReturn AppleJPEGDriverUserClient::decode(const void *in, uint32_t inSize, void
         return kIOReturnNoMemory;
     memcpy(&job->request, in, inSize);
     const auto *req = &job->request;
-#if TEGRA_NVJPG_STATS
+#if TEGRA_NVJPG_PROBES
     if (kind == kSelector7 && req->v2024.rsvdcac == kTileProbeMagic) {
         job->tileProbe = true;
         memcpy(&job->tileMode, req->v2024.rsvd, sizeof(job->tileMode));
@@ -415,7 +415,7 @@ IOReturn AppleJPEGDriverUserClient::externalMethod(uint32_t selector, IOExternal
     case 1:
     case 5:
     case 7: {
-#if TEGRA_NVJPG_STATS
+#if TEGRA_NVJPG_PROBES
         const auto *route = static_cast<const TegraNVJPGDecodeRequest2024 *>(a->structureInput);
         if (selector == 7 && route->rsvdcac == kRouteMagic && !route->base.src_id) {
             if (a->structureOutputSize != kSize[7])
@@ -550,7 +550,7 @@ extern "C" int tegra_nvjpg_publish(void)
 {
     const TegraNVJPGTraits *t = tegra_nvjpg_traits();
     gQueueLock = IOLockAlloc();
-#if TEGRA_NVJPG_STATS
+#if TEGRA_NVJPG_PROBES
     const bool stats = tegra_nvjpg_stats_start();
 #else
     const bool stats = true;

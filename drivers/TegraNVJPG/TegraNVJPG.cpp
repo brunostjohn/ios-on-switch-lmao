@@ -159,6 +159,8 @@ IOLock *gStateLock;  // power transitions against jobs
 #if TEGRA_NVJPG_STATS
 // Written by jobs and under gStateLock, taken by the decode line's caller holding neither (relaxed).
 uint64_t gWaitsUnlocked, gStateWaitMaxUs;
+#endif
+#if TEGRA_NVJPG_PROBES
 // Jobs cancelled since boot (cancelled()), read by the service per decode (relaxed)
 uint64_t gCancellations;
 #endif

@@ -66,7 +66,6 @@ protected:
 		fake::atRegisters = nullptr;
 		fake::atAbandon = nullptr;
 		giveup_down = 0;
-		probedReaders = 0;
 		std::memset(&giveups, 0, sizeof(giveups));
 		giveup_call = nullptr;
 		for (auto &word : fake::pool)

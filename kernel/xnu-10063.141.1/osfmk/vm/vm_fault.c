@@ -4286,7 +4286,7 @@ vm_fault_internal(
 	 */
 	bool                    object_is_contended = false;
 	/* Switch (r17-faults): for the kprof faults lines (switch_kprof_fault, at done; debug kernels) */
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_KPROF) && SWITCH_KPROF
 	const uint64_t          switch_began = mach_absolute_time();
 #endif
 	bool                    switch_device = false;    /* the page entered was a device pager's */
@@ -6641,7 +6641,7 @@ done:
 		DEBUG4K_FAULT("map %p original %p vaddr 0x%llx -> 0x%x\n", map, original_map, (uint64_t)trace_real_vaddr, kr);
 	}
 
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_KPROF) && SWITCH_KPROF
 	/* Switch (r17-faults): this fault for the kprof faults lines */
 	{
 		unsigned int switch_class;

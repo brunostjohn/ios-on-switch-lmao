@@ -350,7 +350,7 @@ void SwitchAudio::noteClock()
 {
     control->rate = clientRate;
     control->ticks_per_frame_q32 = tegra ? tegraTicksPerFrame(38400000) : (hz << 32) / clientRate;
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_IO
     periodTicksQ16 = static_cast<uint64_t>(kOutPeriodFrames) * control->ticks_per_frame_q32 >> 16;
 #endif
 }

@@ -14,7 +14,7 @@
 
 __BEGIN_DECLS
 
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_STATS_SCHED) && SWITCH_STATS_SCHED
 uint64_t switch_callout_begin(void);
 void switch_callout_end(const void *function, const char *group, uint64_t begin);
 #else

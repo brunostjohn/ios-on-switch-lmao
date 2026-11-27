@@ -416,7 +416,7 @@ bool Device::open(const char *packPath, uint64_t stack, std::string &err, Role r
     SWITCH_METAL_CREATION_STAMP(loadBegan);
     if (!pack_.load(packPath, stack, err))
         return false;
-    SWITCH_METAL_DIAGNOSTIC(gPackLoadTicks = mach_absolute_time() - loadBegan);
+    SWITCH_METAL_PROFD(gPackLoadTicks = mach_absolute_time() - loadBegan);
     openFailure_ = OpenFailure::Transient;
     if (!k_.open(err))
         return false;
@@ -482,7 +482,7 @@ bool Device::init(std::string &err)
     memset(srgbEncode_.cpu, 0, srgbEncode_.bytes);
     memcpy(srgbEncode_.cpu, kSrgbEncode, sizeof kSrgbEncode);
     memset(stamps_.cpu, 0, stamps_.bytes);
-#if SWITCH_METAL_DIAGNOSTICS
+#if SWITCH_METAL_PROF
     if (role_ == Role::RenderServer && k_.allocControl(SpanMarks::kBytes, spanMarks_, ControlUse::Stamps)) {
         set_.add(k_, spanMarks_, TegraGM20BSurfaceWrite);
         spans_.open(spanMarks_.va, spanMarks_.cpu);
@@ -797,9 +797,11 @@ bool Device::slmNeed(uint64_t perWarp)
     slm_ = area;
     slmVa_.store(area.va, std::memory_order_relaxed);
     slmPerWarp_.store(perWarp, std::memory_order_release);
+#if SWITCH_METAL_DIAGNOSTICS
     os_log(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "gm20b"),
            "SwitchMetal: shader local memory: %llu bytes a warp, %llu KiB", (unsigned long long)perWarp,
            (unsigned long long)(a.bytes >> 10));
+#endif
     return true;
 }
 

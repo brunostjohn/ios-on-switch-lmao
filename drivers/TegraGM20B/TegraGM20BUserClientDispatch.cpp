@@ -19,7 +19,7 @@ static IOReturn zbcAdd(const TegraGM20BAbiZbc *in, TegraGM20BAbiZbcReply *out)
 	return kIOReturnSuccess;
 }
 
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 // HW Test probes' syncpoints (TegraGM20BPathsOpProbeSyncpts), taken from host1x's own once: the first ask takes all three,
 // and an ask while it does answers ids of 0 rather than take more
 static void probeSyncptsLine(char *line, size_t size)
@@ -229,7 +229,7 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		wantIn = sizeof(TegraGM20BAbiPackImageMap);
 		wantOut = sizeof(TegraGM20BAbiPackImageMapReply);
 		break;
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 	case TegraGM20BMethodReadback:
 		wantIn = sizeof(TegraGM20BAbiReadback);
 		wantOut = sizeof(TegraGM20BAbiReadbackReply);
@@ -246,8 +246,6 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		wantIn = sizeof(TegraGM20BAbiGrPreempt);
 		wantOut = sizeof(TegraGM20BAbiGrPreemptReply);
 		break;
-#endif
-#if SWITCH_GPU_PATH_STATS
 	case TegraGM20BMethodPaths:
 		wantIn = inSize == sizeof(TegraGM20BAbiPathsSpan) ? sizeof(TegraGM20BAbiPathsSpan)
 								  : sizeof(TegraGM20BAbiPaths);
@@ -426,7 +424,7 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		return tgm_zcull_info(static_cast<TegraGM20BAbiZcullInfo *>(out))
 			       ? kIOReturnUnsupported
 			       : kIOReturnSuccess;
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 	if (method == TegraGM20BMethodReadback) {
 		return tgm_readback_call(this, static_cast<const TegraGM20BAbiReadback *>(in),
 					 static_cast<TegraGM20BAbiReadbackReply *>(out));
@@ -445,8 +443,6 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 			return kIOReturnNoMemory;
 		return ret ? kIOReturnBadArgument : kIOReturnSuccess;
 	}
-#endif
-#if SWITCH_GPU_PATH_STATS
 	if (method == TegraGM20BMethodPaths) {
 		const uint32_t op = static_cast<const TegraGM20BAbiPaths *>(in)->op;
 		auto *reply = static_cast<TegraGM20BAbiPathsReply *>(out);
@@ -466,7 +462,6 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		else if (op == TegraGM20BPathsOpRefusals)
 			snprintf(reply->line, sizeof(reply->line), "lines=%u",
 				 __atomic_load_n(&refusalLines_, __ATOMIC_RELAXED));
-#if TGM_STATS
 		else if (op == TegraGM20BPathsOpTargetPeaks)
 			tgm_target_peaks_line(reply->line, sizeof(reply->line));
 		else if (op == TegraGM20BPathsOpProbeSyncpts) {
@@ -489,9 +484,7 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 				 static_cast<unsigned long long>(totals.promises),
 				 static_cast<unsigned long long>(totals.events),
 				 static_cast<unsigned long long>(totals.host1x));
-		}
-#endif
-		else
+		} else
 			return kIOReturnBadArgument;
 		return kIOReturnSuccess;
 	}
@@ -566,7 +559,7 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 				  wantOut ? static_cast<TegraGM20BAbiPriorityReply *>(out)
 					  : nullptr);
 		break;
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 	case TegraGM20BMethodGrPreempt: {
 		const auto *input = static_cast<const TegraGM20BAbiGrPreempt *>(in);
 		auto *reply = static_cast<TegraGM20BAbiGrPreemptReply *>(out);

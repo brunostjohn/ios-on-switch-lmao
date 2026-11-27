@@ -327,8 +327,8 @@ bool Completion::remoteLater(const Ask &a, const CacheKey &k,
     RuntimeRecord record;
     std::string why;
     if (const RecordCache::Found found = fromStore(store, packKey, record, why); found != RecordCache::Found::None) {
-        SWITCH_METAL_DIAGNOSTIC(
-            logRemote(a, k, found, "from the shader compiler's store", Obtained{"store", 0, uint32_t(qos_class_self())}));
+        SWITCH_METAL_DIAGNOSTIC(logRemote(a, k, found, "from the shader compiler's store",
+                                          Obtained{"store", 0, uint32_t(qos_class_self())}));
         settle(found, record, why);
         return true;
     }

@@ -54,7 +54,7 @@ void tgm_rail_moved(int demand);
 void tgm_journal_impl(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 #define tgm_journal(...)                               \
 	do {                                           \
-		if (TGM_STATS)                         \
+		if (TGM_DEBUG_PROBES)                  \
 			tgm_journal_impl(__VA_ARGS__); \
 	} while (0)
 int tgm_stage(void);
@@ -681,28 +681,23 @@ int tgm_writer_fence_va(struct tgm_vm *vm, uint32_t uid, uint64_t *va);
  * the surface is tiled while any such bind lives, whatever other binds of it say (tegra_gm20b_surface_tiled). */
 void tgm_coherency_tiled_bind(struct tgm_coh *c, int add);
 
-/* The stats (every periodic tegra-gm20b line, the submissions' GPU stamps, the push scan and profile): debug kernels
- * only; a release kernel has none of their code or strings. */
 #if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
+#define TGM_DEBUG_PROBES 1
+#else
+#define TGM_DEBUG_PROBES 0
+#endif
+
+#if TGM_DEBUG_PROBES && defined(SWITCH_STATS_GPU) && SWITCH_STATS_GPU
 #define TGM_STATS 1
 #else
 #define TGM_STATS 0
 #endif
-/* Debug kernels: waits that used to hold a lock (a queue's, the relayout's, the connection's, a CPU sync's), counted by
- * where they now run without it, and the stats tick's "unlocked waits" line. */
-enum tgm_unlocked {
-	TGM_UNLOCKED_SYNC_BESIDE, /* a CPU sync that started while another one was in flight */
-	TGM_UNLOCKED_COPY_ROOM, /* a kernel copy's wait for ring room, the copy queue's lock let go */
-	TGM_UNLOCKED_BRIDGE_ROOM, /* a host1x bridge job's wait for ring room, the bridge queue's lock let go */
-	TGM_UNLOCKED_RELAYOUT, /* a relayout move's or flush's GPU wait, the relayout lock let go */
-	TGM_UNLOCKED_RELAYOUT_BESIDE, /* a relayout move kicked while another one waited */
-	TGM_UNLOCKED_IMPORT, /* a BoImport wired and cleaned before lock_ and the submit gate (ns: how long) */
-	TGM_UNLOCKED_PRESENT_ROOM, /* a copy present that found no push room under tgm_present.lock */
-	TGM_UNLOCKED_KINDS
-};
 
-void tgm_stats_unlocked(enum tgm_unlocked kind, uint64_t ns);
-void tgm_stats_unlocked_window(void);
+#if TGM_DEBUG_PROBES && defined(SWITCH_PROF_GPU) && SWITCH_PROF_GPU
+#define TGM_PROF 1
+#else
+#define TGM_PROF 0
+#endif
 
 /* Debug kernels: copies a present runs after its frame's copy and before its fence (TegraGM20BReadback.cpp), each into a
  * pitch-linear destination dst_pitch bytes across, width x 4 bytes of height lines, from a pitch source (src_block_log2
@@ -718,7 +713,7 @@ struct tgm_present_read {
 
 #define TGM_PRESENT_READS 2
 
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 /* Debug kernels: clock gating on (1) or off (0), for the A/B (TegraGM20B.cpp's debug.switch_gpu_clkgate). 0 or -EBUSY. */
 int tgm_clkgate_switch(int on);
 int switch_gpu_gpc_khz(void);
@@ -886,19 +881,21 @@ struct tgm_import_cost {
 	int read_only;
 	const char *owner;
 };
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 /* Debug kernels: a writer promise's word the CPU raised (gpu_promise.c), and whether a word was one of the last few */
 void tgm_promise_cpu_raised(uint32_t offset, uint32_t value);
 int tgm_promise_was_cpu_raised(uint32_t offset, uint32_t value);
-uint64_t tgm_stats_cpu_ns(void);
-uint64_t tgm_stats_zero_fills(void);
-void tgm_stats_import_cost(const struct tgm_import_cost *cost);
 
 struct tgm_foreign_waits {
 	uint64_t jobs, fences, promises, events, host1x;
 };
 
 void tgm_foreign_waits_totals(struct tgm_foreign_waits *out);
+#endif
+#if TGM_STATS
+uint64_t tgm_stats_cpu_ns(void);
+uint64_t tgm_stats_zero_fills(void);
+void tgm_stats_import_cost(const struct tgm_import_cost *cost);
 #else
 static inline uint64_t tgm_stats_cpu_ns(void)
 {

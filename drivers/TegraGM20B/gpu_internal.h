@@ -300,14 +300,12 @@ struct tgm_chan {
 	u64 acquire_check_ns;
 	u32 acquire_done;
 	int acquire_unfired;
-#if TGM_STATS
-	/* the ACQUIRE probe: the first look that found it parked on an acquire, and what it had completed then */
-	u64 acquire_probe_ns;
-	u32 acquire_probe_done;
+#if TGM_DEBUG_PROBES
 	/* RAMFC's timeslice as last written, the seqno submitted then, and whether that was the creation's (nvkm's or
 	 * tgm_chan_ramfc_open's, not a level change's) (gpu_ramfc_probe.c) */
 	u32 timeslice, timeslice_at;
 	int timeslice_created;
+	u64 stat_jobless; /* host1x consumers' bridges that waited on this channel's own syncpoint (tgm_live_lock) */
 #endif
 	u32 acquire_unread; /* checks since its interrupt that found RAMFC naming nothing yet */
 
@@ -323,14 +321,12 @@ struct tgm_chan {
 	u32 wake_tag;
 	void (*fenced)(void *arg); /* tgm_chan_on_fence */
 	void *fenced_arg;
+#if TGM_STATS
 	u32 stat_done; /* stats: last seqno whose latency was counted, submit times by seqno */
 	u64 stat_sub_ns[CHAN_NSTAMPS];
 	u64 stat_sub_ptimer[CHAN_NSTAMPS];
-	u8 stat_kick[CHAN_NSTAMPS]; /* stats: what each high kick found (tgm_sched_kick) */
-#if TGM_STATS
+	u8 stat_kick[CHAN_NSTAMPS];    /* stats: what each high kick found (tgm_sched_kick) */
 	u8 stat_foreign[CHAN_NSTAMPS]; /* TGM_STAT_* per-seqno marks */
-	u64 stat_jobless; /* host1x consumers' bridges that waited on this channel's own syncpoint (tgm_live_lock) */
-#endif
 	u64 stat_exec,
 		stat_exec_max; /* stats: this window's stamped exec time (PTIMER units), for its owner */
 	u32 stat_exec_n;
@@ -345,6 +341,7 @@ struct tgm_chan {
 	} stat_job[CHAN_NSTAMPS];
 	struct switch_gpu_job_run stat_run;
 	struct switch_gpu_job_window stat_jobs;
+#if TGM_PROF
 	/* push profile: the profiled submission in flight (0: none), its pushes' classes, and this window's GPU time by
 	 * class (PTIMER units) and the pushes counted, for its owner */
 	u32 prof_seqno, prof_first, prof_count,
@@ -361,6 +358,8 @@ struct tgm_chan {
 	u32 prof_n[TGM_PC_COUNT];
 	u64 prof_dn[TGM_PC_COUNT],
 		prof_sdn[TGM_PC_COUNT]; /* draws, and draws shaded per sample, by class */
+#endif
+#endif
 	struct tgm_hang_log hang;
 	/* tgm_hang_recover: its GPFIFO and pushbuffer GET as last read, and when they last moved */
 	u64 get_seen, get_ns;
@@ -380,9 +379,8 @@ struct tgm_chan {
 	/* a kernel channel's steps for hang checks that found it stuck */
 	struct tgm_kernel_hang_state kernel_hang;
 	int iso_retried; /* tgm_iso_deadline asked nvkm for its kill again */
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 	u64 killed_ns; /* tgm_chan_killed's time, for a fault's line (TegraGM20BUserClient.cpp) */
-	unsigned int gr_slot; /* gpu_stats_ctx.c's slot for its GR context, plus 1; 0: none */
 #endif
 };
 
@@ -396,7 +394,7 @@ unsigned tgm_chans_completed(void);
 /* gpu_nonstall.c, M1: the job interrupts' tree 1 (SwitchGpuNonstall.h) */
 int tgm_nonstall_init(struct nvkm_device *device);
 extern struct mutex tgm_live_lock;
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 /* tgm_live_lock held: the jobless bridges closed channels of processes named `owner` counted (tgm_chan_jobless) */
 u64 tgm_chan_jobless_gone_locked(const char *owner);
 #endif
@@ -418,7 +416,7 @@ void tgm_engine_state(char *buf, unsigned int len);
 #define RAMFC_TIMESLICE_DEFAULT 0x10003080
 #define RAMFC_TIMESLICE_HIGH 0x100080c3
 void tgm_ramfc_write(u32 chid, u32 offset, u32 value);
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 u32 tgm_ramfc_read(u32 chid, u32 offset);
 /* gpu_rail_probe.c */
 void tgm_rail_wake_seen(u32 coeff);
@@ -437,13 +435,6 @@ enum tgm_wait_source {
 enum tgm_wait_source tgm_chan_wait_source(struct tgm_chan *chan, struct tgm_chan **source,
 					  char *what, unsigned int len);
 void tgm_acquire_unfired(struct tgm_chan *chan, u64 now);
-#if TGM_STATS
-/* gpu_acquire.c's ACQUIRE probe: a look at a channel (tgm_live_lock held), and the window's line, after a look at every
- * live channel */
-void tgm_acquire_probe_look(struct tgm_chan *chan, u64 now);
-void tgm_acquire_probe_window(char *line, unsigned int len, u64 now);
-void tgm_acquire_probe_giveup(struct tgm_chan *chan, u64 parked_ns, u64 now);
-#endif
 
 /* client fault isolation:
  * With every process on the GPU, one app's bad shader or stale address must not take the system down. nvgpu's policy is
@@ -579,10 +570,10 @@ static inline void tgm_stats_map(u64 small, u64 big, u64 could_be_big)
 	(void)could_be_big;
 }
 #endif
-void tgm_stats_gr_bind(struct tgm_chan *chan);
-void tgm_stats_gr_unbind(struct tgm_chan *chan);
-void tgm_stats_gr_context(void);
 void tgm_stats_tick(void);
+void tgm_stats_init(void);
+void tgm_stats_suspend(void);
+void tgm_stats_resume(void);
 #define IDLE_LOG_NS (10ULL * 1000000000ULL)
 /* gpu_pmc.c: every PMC_ENABLE change under one lock from M1 on (TegraGM20BPmcEnable.h): nvkm's mc functions wrapped,
  * and tgm_pmc_change for nvkm's direct writers (privring/gk20a.c's PRI ring reset) */
@@ -721,7 +712,7 @@ void tgm_promise_pass(void);
 uint64_t tgm_chan_check_progress_locked(struct tgm_chan *chan, const char *who, uint32_t seqno);
 void tgm_present_promise_watch(struct switch_gpu_backing_token *kept);
 void tgm_present_promise_leave(uint32_t offset, uint32_t value);
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 void tgm_present_promises_done(const struct switch_gpu_present_tokens *tokens, u64 queued,
 			       int copy);
 #endif
@@ -819,7 +810,7 @@ void tgm_present_redo_work(void *unused);
 void tgm_present_redo_kick(void);
 /* gpu_present_deadline.c: the present's deadline work item */
 void tgm_present_deadline(void *arg);
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 /* gpu_copy_reset.c (TegraGM20BCopyResetABI.h): the armed present is taken by present_copy, looked at on the present
  * channel's nonstall interrupts, and its redo and completion are counted */
 struct TegraGM20BAbiCopyReset;

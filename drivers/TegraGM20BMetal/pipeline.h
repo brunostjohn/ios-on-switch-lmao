@@ -50,12 +50,6 @@ struct SplitSource {
     mutable uint64_t fsPlaced = ~0ull, prologuePlaced = ~0ull;
 };
 
-#if SWITCH_METAL_DIAGNOSTICS
-// The keyline probe (keyline_probe.h) for 30 s or 256 lines: its budgets start again, and every Core Animation state's
-// thin draws log their line
-void armKeylineProbe();
-#endif
-
 // Whether a pack key is one of the driver's own states (own_states.h)
 bool isOwnState(uint64_t keyHash);
 
@@ -183,24 +177,13 @@ struct Pipeline {
     const SplitSource *splitSource = nullptr;
     SplitState *split = nullptr;
     const SplitState *splitOf = nullptr;
-    // DEVELOPMENT: a glass background or generic merge state's name until its uniforms show a non-finite float (one such
-    // value makes the whole glass band black), and whether non-finite halves alone were reported
-    const char *uniformProbe = nullptr;
-    bool uniformHalvesReported = false;
     bool genericState = false;  // DEVELOPMENT: Core Animation's generic merge state (..Xghfc), for the fetch keys line
     // its stages' program variants (variants.cpp; null: none): published once, whole, with release, and loaded by draws
     // with acquire, as a device-made state's may come after its first draws (Device::attachFullForm)
     const VariantTable *variantTable = nullptr;
 
-    // DEVELOPMENT: a Core Animation state's name, whose draws log their form and quads (RenderEncoder::probeDraw): a solid
-    // fill into its three-colour pass (..Xmw_A3Xhfc, the scroll edge keyline's state: fillState) its first draws and thin
-    // ones always, any other state its thin ones while the keyline probe is armed (armKeylineProbe); the probe's generation
-    // this form's lines count in, and its lines there, of any draw and of thin ones
     const char *caName = nullptr;
-    bool fillState = false;
     const char *spanName = nullptr;  // DEVELOPMENT: the driver's own states' name in the long span line (span_marks.h)
-    uint32_t probeGeneration = 0;
-    uint8_t probeLines = 0, probeThinLines = 0;
     // rotation.h: its fragment program has a turned variant (AssumeTurned), or reads a turned plane's axes with none; a
     // runtime record's turned variant's pipeline (a pack record's is one of its variant table's)
     bool turnedVariant = false, turnRefused = false;

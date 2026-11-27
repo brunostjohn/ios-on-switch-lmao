@@ -28,7 +28,8 @@
 #include <os/log.h>
 #include <string.h>
 
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && \
+    ((defined(SWITCH_STATS_FRAME) && SWITCH_STATS_FRAME) || (defined(SWITCH_STATS_SCHED) && SWITCH_STATS_SCHED))
 
 enum frame_thread {
     FRAME_RENDER_SERVER,
@@ -67,7 +68,7 @@ static void frame_watch(unsigned int which, thread_t thread, task_t task)
 
     if (os_atomic_load(&frame_call, acquire) == NULL) {
         thread_call_t call =
-            thread_call_allocate_with_options(frame_write, NULL, THREAD_CALL_PRIORITY_KERNEL, THREAD_CALL_OPTIONS_ONCE);
+            thread_call_allocate_with_options(frame_write, NULL, THREAD_CALL_PRIORITY_USER, THREAD_CALL_OPTIONS_ONCE);
 
         if (call != NULL && !os_atomic_cmpxchg(&frame_call, NULL, call, release)) {
             thread_call_free(call);

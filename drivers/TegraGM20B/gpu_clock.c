@@ -352,7 +352,7 @@ static void idle_hint_raise(void *arg)
 		nvxnu_mutex_unlock(tgm_idle.clk);
 	}
 }
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 /* Debug kernels: fn on a GPU held still, once the bring-up has reached M3: up and kept up under tgm_gpu.lock (no rail-down,
  * rail-up or system sleep), its GPCPLL divider fixed under tgm_idle.clk (taken inside tgm_gpu.lock, as sleep_idle_off takes it).
  * 0, or -EBUSY before M3. */

@@ -365,7 +365,7 @@ TEST(SwitchXudcSource, StatsLinesFitTheKernelsOsLogBuffer)
 TEST(SwitchXudcSource, StatsCompileOutOfRelease)
 {
     const std::string stats = SourceText("../SwitchXUDCStats.cpp");
-    const size_t gate = stats.find("#if DEVELOPMENT || DEBUG\n");
+    const size_t gate = stats.find("#if SWITCH_STATS_IO\n");
     ASSERT_NE(gate, std::string::npos);
     EXPECT_LT(gate, stats.find("SwitchXUDC::")) << "every definition is inside the gate";
     EXPECT_EQ(stats.rfind("#endif\n"), stats.size() - 7) << "the gate closes at the end of the file";
@@ -382,8 +382,8 @@ TEST(SwitchXudcSource, StatsCompileOutOfRelease)
     }
     for (const char *file : {"../UsbSmmuSpace.h", "../UsbSmmuSpace.cpp"}) {
         std::string release = SourceText(file);
-        for (size_t at = release.find("#if DEVELOPMENT || DEBUG\n"); at != std::string::npos;
-             at = release.find("#if DEVELOPMENT || DEBUG\n")) {
+        for (size_t at = release.find("#if SWITCH_STATS_IO\n"); at != std::string::npos;
+             at = release.find("#if SWITCH_STATS_IO\n")) {
             const size_t end = release.find("#endif\n", at);
             ASSERT_NE(end, std::string::npos) << file;
             release.erase(at, end + 7 - at);

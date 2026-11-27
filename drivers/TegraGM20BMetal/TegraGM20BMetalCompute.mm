@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 #import "TegraGM20BMetalInternal.h"
-#import "TegraGM20BMetalMpsProbe.h"
 #include "TegraGM20BMetalComplete.h"
 #include "TegraGM20BMetalDirect.h"
 #include "compute.h"
@@ -61,9 +60,6 @@ static bool heldInPlanes(SwitchMetalTexture *t)
         [self keyStandIns];
     }
     setBinding(_cb, OpKernelState, 3, 0, state, 0);
-#if SWITCH_METAL_DIAGNOSTICS
-    gm20bMpsProbeBind((__bridge void *)_cb, (__bridge void *)self, next ? next->_function.name : nil);
-#endif
 }
 
 - (void)setBytes:(const void *)bytes length:(NSUInteger)length atIndex:(NSUInteger)index
@@ -277,12 +273,6 @@ static MTLTextureDescriptor *kernelDescriptor(SwitchMetalTexture *t, SwitchMetal
 
 - (void)dispatch:(MTLSize)grid threads:(MTLSize)threads perThread:(bool)perThread
 {
-    SWITCH_MPS_PROBE(
-        (__bridge void *)_cb, (__bridge void *)self, perThread ? "dispatchThreads" : "dispatchThreadgroups",
-        ([NSString stringWithFormat:@"%@ %lux%lux%lu by %lux%lux%lu", _state ? _state->_function.name : @"-",
-                                    (unsigned long)grid.width, (unsigned long)grid.height, (unsigned long)grid.depth,
-                                    (unsigned long)threads.width, (unsigned long)threads.height,
-                                    (unsigned long)threads.depth]));
     [self dispatch:grid threads:threads perThread:perThread arguments:nil offset:0];
 }
 
@@ -438,11 +428,6 @@ static MTLTextureDescriptor *kernelDescriptor(SwitchMetalTexture *t, SwitchMetal
     m.a = uint32_t(gm20b::predicateCompare(comparison));
     m.b = reference;
     [_cb record:m];
-    SWITCH_MPS_PROBE(
-        (__bridge void *)_cb, (__bridge void *)self, "predicate",
-        ([NSString stringWithFormat:@"kind %d buffer %p offset %lu comparison %llu reference %u: %s", int(kind),
-                                    (__bridge void *)buffer, (unsigned long)offset, (unsigned long long)comparison,
-                                    reference, _predicateWithoutBuffer ? "NO" : "YES"]));
     return !_predicateWithoutBuffer;
 }
 
@@ -528,26 +513,8 @@ static MTLTextureDescriptor *kernelDescriptor(SwitchMetalTexture *t, SwitchMetal
         return skip(_cb, PredCompute, offset, arguments->_raw.length,
                     "indirect dispatch arguments past their buffer, whose grid reads a zero word: nothing launched");
     [_cb retain:buffer];
-    SWITCH_MPS_PROBE((__bridge void *)_cb, (__bridge void *)self, "dispatchThreadgroupsWithIndirectBuffer",
-                     _state ? _state->_function.name : @"-");
     [self dispatch:MTLSizeMake(1, 1, 1) threads:threads perThread:false arguments:arguments offset:aligned];
 }
-
-#if SWITCH_METAL_DIAGNOSTICS
-- (BOOL)respondsToSelector:(SEL)selector
-{
-    const BOOL responds = [super respondsToSelector:selector];
-    SWITCH_MPS_PROBE((__bridge void *)_cb, (__bridge void *)self, "respondsToSelector",
-                     ([NSString stringWithFormat:@"%@: %s", NSStringFromSelector(selector), responds ? "YES" : "NO"]));
-    return responds;
-}
-
-- (void)endEncoding
-{
-    SWITCH_MPS_PROBE((__bridge void *)_cb, (__bridge void *)self, "endEncoding", nil);
-    [super endEncoding];
-}
-#endif
 
 @end
 

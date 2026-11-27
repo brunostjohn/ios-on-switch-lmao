@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""The lines naming a state the pack lacks are debug builds' and short: no key in a log line, which a long one would cut.
+"""The lines naming a state the pack lacks are opt-in stats and short: no key in a log line, which a long one cuts.
 
-The miss line (TegraGM20BMetalStatesMiss.mm gm20bNoteMiss) is under SWITCH_METAL_DIAGNOSTICS and names the state by its
+The miss line (TegraGM20BMetalStatesMiss.mm gm20bNoteMiss) is under SWITCH_METAL_STATS and names the state by its
 hash and label; its key goes to the harvest parts under that hash, which logharvest joins. The compute state errors
 (TegraGM20BMetalComputeState.mm), which stay in every build, name the hash too, once a process each.
 usage: miss_lines_source_test.py <TegraGM20BMetalStatesMiss.mm> <TegraGM20BMetalComputeState.mm>
@@ -19,7 +19,7 @@ class MissLines(unittest.TestCase):
     def test_the_miss_line_is_debug_only_and_keyless(self):
         miss = Path(sys.argv[1]).read_text()
         body = miss[miss.index('void gm20bNoteMiss(') :]
-        debug = body[body.index('#if SWITCH_METAL_DIAGNOSTICS') : body.index('#else')]
+        debug = body[body.index('#if SWITCH_METAL_STATS') : body.index('#else')]
         calls = LOG_CALL.findall(debug)
         self.assertEqual(len(calls), 1)
         self.assertNotIn('key', calls[0].replace('keyHash', ''))

@@ -25,16 +25,6 @@ void native_keyevents_open_refused(void)
 #endif
 }
 
-// The owned AppleKeyStore answers the state queries (no passcode, nothing locked); counters feed a debug kernel's
-// diagnostic page's extension rows (slots 0-1): opens/calls, then selector:count per selector seen ('e' = the last
-// answer was an error).
-#if DEVELOPMENT || DEBUG
-extern char boot_progress_ext[8][48];
-volatile uint32_t native_aks_opens, native_aks_calls;
-static volatile uint32_t aks_count[96];
-static volatile int32_t aks_rc[96];
-#endif
-
 bool native_aks_state_enabled(void)
 {
     return true;
@@ -49,59 +39,6 @@ uint32_t native_aks_lock_state(void)
 {
     return 3;
 }
-
-#if DEVELOPMENT || DEBUG
-static void aks_publish()
-{
-    // Slot 0: counters; slot 1: selector:count tokens ('e' = the last answer was an error). Slots 2-3 belong to the Data store.
-    char row[48];
-    unsigned used = 0;
-    row[0] = 0;
-    for (unsigned sel = 0; sel < 96; ++sel) {
-        if (!aks_count[sel])
-            continue;
-        char token[16];
-        const int n = snprintf(token, sizeof token, "%u:%u%s ", sel, aks_count[sel], aks_rc[sel] ? "e" : "");
-        if (n <= 0 || used + (unsigned)n > 46)
-            break;
-        memcpy(row + used, token, (size_t)n + 1);
-        used += (unsigned)n;
-    }
-    char head[48];
-    snprintf(head, sizeof head, "AKS opens=%u calls=%u", native_aks_opens, native_aks_calls);
-    for (unsigned i = 0; i < 47; ++i)
-        boot_progress_ext[0][i] = head[i] ? head[i] : ' ';
-    boot_progress_ext[0][47] = 0;
-    unsigned i = 0;
-    for (; i < 47 && row[i]; ++i)
-        boot_progress_ext[1][i] = row[i];
-    for (; i < 47; ++i)
-        boot_progress_ext[1][i] = ' ';
-    boot_progress_ext[1][47] = 0;
-}
-
-void native_aks_opened(void)
-{
-    native_aks_opens = native_aks_opens + 1;
-    aks_publish();
-}
-
-void native_aks_call(uint32_t selector, int32_t result)
-{
-    native_aks_calls = native_aks_calls + 1;
-    if (selector < 96) {
-        aks_count[selector] = aks_count[selector] + 1;
-        aks_rc[selector] = result;
-    }
-    aks_publish();
-}
-#else
-void native_aks_opened(void)
-{}
-
-void native_aks_call(uint32_t, int32_t)
-{}
-#endif
 
 static void native_keyevents_probe()
 {

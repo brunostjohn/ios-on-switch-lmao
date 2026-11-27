@@ -9,28 +9,19 @@
 #include "bazel/testing/fresh_process.h"
 
 namespace {
-std::promise<void> gTimingOver;
-
-void longSleep(unsigned ms)
-{
-    if (ms == 90000) {  // bring-up is over: the timing run is next
-        for (AlgState &alg : gAlg)
-            alg.on = true;  // the model's engines give no real results, so no known answer passed
-        se_model::engines[0].hangFromBytes = 16384;
-        return;
-    }
-    gTimingOver.set_value();
-    for (;;)
-        std::this_thread::sleep_for(std::chrono::hours(1));
-}
-
 void timingRunWithSe1LostOnItsFirstLargeOperation()
 {
-    se_model::longSleep = longSleep;
-    auto over = gTimingOver.get_future();
-    std::thread(seThread, nullptr, THREAD_AWAKENED).detach();
-    ASSERT_EQ(over.wait_for(std::chrono::seconds(5)), std::future_status::ready) << "the timing run did not finish:\n"
-                                                                                 << se_model::log();
+    ASSERT_TRUE(se_model::finishes([] {
+        seThread(nullptr, THREAD_AWAKENED);
+    })) << "bring-up did not finish:\n"
+        << se_model::log();
+    for (AlgState &alg : gAlg)
+        alg.on = true;  // the model's engines give no real results, so no known answer passed
+    se_model::engines[0].hangFromBytes = 16384;
+    ASSERT_TRUE(se_model::finishes([] {
+        timing();
+    })) << "the timing run did not finish:\n"
+        << se_model::log();
     ASSERT_NE(se_model::engines[0].hung, 0u) << "SE1 was never given a 16 KiB operation";
     EXPECT_FALSE(gEngines[0].up);
     EXPECT_TRUE(gEngines[1].up);

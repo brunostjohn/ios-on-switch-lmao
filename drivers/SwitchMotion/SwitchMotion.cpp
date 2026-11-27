@@ -82,7 +82,7 @@
 #include "../TegraSPI/TegraSPI.h"
 #include "SwitchMotion.h"
 #include "SwitchMotionFusion.h"
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_IO
 #include "SwitchMotionStats.h"
 #endif
 
@@ -503,7 +503,7 @@ class SwitchMotion : public IOService {
     unsigned watermark = 1;
     uint64_t periodAbs = 0;       // one sample period at the current rate, in absolute time
     uint64_t lastPosted[2] = {};  // the last sample time posted per service (they only go forward)
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_IO
     uint32_t drains = 0, records = 0, overflows = 0;
 #endif
     // Orientation detector (detectOrientation): its input decimated to kOrientationMilliHz, the filtered gravity
@@ -523,7 +523,7 @@ class SwitchMotion : public IOService {
     unsigned motionEvery = 1, motionCount = 0;
     uint32_t periodUS = 0;
     uint64_t lastMotion = 0, lastGyro = 0;  // 0: the session's first
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_IO
     SwitchMotionStats stats;  // the 10 s line's window (SwitchMotionStats.h)
     void statsInterrupt();
 
@@ -531,25 +531,28 @@ class SwitchMotion : public IOService {
     {
         ++stats.empty;
     }
-
-    void statsPosted(Sensor sensor)
-    {
-        ++stats.posted[sensor];
-        if (sensor == DeviceMotion)
-            __atomic_fetch_add(&motionReports, 1, __ATOMIC_RELAXED);
-    }
-
-    uint64_t motionReports = 0;  // since boot (SwitchMotionTotals.cpp)
 #else
     void statsInterrupt()
     {}
 
     void statsEmpty()
     {}
-
-    void statsPosted(Sensor)
-    {}
 #endif
+#if DEVELOPMENT || DEBUG
+    uint64_t motionReports = 0;  // since boot (SwitchMotionTotals.cpp)
+#endif
+    void statsPosted(Sensor sensor)
+    {
+#if SWITCH_STATS_IO
+        ++stats.posted[sensor];
+#endif
+#if DEVELOPMENT || DEBUG
+        if (sensor == DeviceMotion)
+            __atomic_fetch_add(&motionReports, 1, __ATOMIC_RELAXED);
+#else
+        (void)sensor;
+#endif
+    }
 
     static void featureReceived(void *context, const uint8_t *report, size_t length);
     static void interruptOccurred(OSObject *owner, IOInterruptEventSource *sender, int count);
@@ -1260,7 +1263,7 @@ void SwitchMotion::drainFifo(uint64_t now)
         return;
     }
     if (status[0] & icm42607::FifoFull) {
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_IO
         ++overflows;
 #endif
         if (!overflowLogged) {
@@ -1326,7 +1329,7 @@ void SwitchMotion::drainFifo(uint64_t now)
         return;
     empty = 0;
     ++samples;
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_IO
     ++drains;
     records += taken;
 #endif
@@ -1343,7 +1346,7 @@ void SwitchMotion::interruptOccurred(OSObject *owner, IOInterruptEventSource *, 
     }
 }
 
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_IO
 // The 10 s line, from the interrupt action that just ran: a window restarts after 2 s without one (converting stopped).
 void SwitchMotion::statsInterrupt()
 {

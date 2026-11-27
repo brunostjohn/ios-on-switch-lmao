@@ -24,7 +24,6 @@
 #include "mme.h"
 #include "icb.h"
 #include "state_segment.h"
-#include "replay_shape.h"
 #include "split_capture.h"
 #include "split_reuse.h"
 #include "split_batch.h"
@@ -887,11 +886,13 @@ public:
     void noteCommittedTimings(std::vector<DrawTiming> &timings);
     // the measured draws the GPU has run, each teaching its state's rate: each command buffer's begin calls it
     void learnCompleted();
-#if SWITCH_METAL_DIAGNOSTICS
+#if SWITCH_METAL_PROF
     SpanMarks spans_;
     // The render server's completed command buffer's spans of kLongSpanNs or more (span_marks.h), which the facade logs
     // and notes to the kernel for HW Test ui.launch_hitch
     std::vector<StateSpan> longSpans(uint32_t stamp);
+#endif
+#if SWITCH_METAL_DIAGNOSTICS
     // The frame-weights capture (draw_capture.h): asked for from any thread, its command buffers taken at begin() and
     // handed over at commit, read back by every completer (reportDrawTimes)
     DrawTimes drawTimes_;
@@ -1210,11 +1211,12 @@ public:
         std::atomic<uint64_t> segmentBinds{0}, segmentWords{0}, segmentSkips{0}, segmentExtrasLosses{0};
         // binds of a state or depth/stencil state that has a segment, copied into the push ring instead
         std::atomic<uint64_t> segmentCopies{0};
-        ReplayTally replay;
+#if SWITCH_METAL_PROF
         // binding slots the encode compared applying recorded state, and the slots of the tables it compared
         // (TegraGM20BMetalPlanApply.h): what a comparison of every slot of each changed table looked at
         std::atomic<uint64_t> slotsCompared{0}, slotsInTables{0};
         EncodeTotals encode;
+#endif
 #endif
 #else
         std::atomic<uint64_t> heapFull{0};
@@ -1527,7 +1529,7 @@ private:
     Buffer visibilityPage_;
     std::once_flag visibilityOnce_;
     std::atomic<uint32_t> visibilityNext_{0};
-#if SWITCH_METAL_DIAGNOSTICS
+#if SWITCH_METAL_PROF
     Bo spanMarks_;
 #endif
     // m2v's handle tables and roots, made at the first ID named or state drawn through an argument buffer, and each record's

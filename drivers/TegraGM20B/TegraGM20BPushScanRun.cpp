@@ -201,17 +201,19 @@ Deferral *deferral()
 }
 }  // namespace
 
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 void tgm_uc::tgm_target_peaks_line(char *line, size_t size)
 {
 	if (size)
 		line[0] = 0;
+#if TGM_PROF
 	IOLock *held = __atomic_load_n(&gPushLock, __ATOMIC_ACQUIRE);
 	if (!held)
 		return;
 	IOLockLock(held);
 	switch_gpu_peaks::line(gTargetPeaks, line, size);
 	IOLockUnlock(held);
+#endif
 }
 #endif
 
@@ -226,7 +228,7 @@ const tgm_prof *AGXDeviceUserClient::scanSubmission(uint32_t slot, uint32_t fenc
 						    const tgm_push *pushes, uint32_t count,
 						    tgm_prof &prof, bool metalMacros)
 {
-	if (!TGM_STATS || !count)
+	if (!TGM_PROF || !count)
 		return nullptr;
 	const uint32_t n = __atomic_fetch_add(&pushSubmits_, 1u, __ATOMIC_RELAXED);
 	const uint32_t submits = tgm_scan::scanWeight(n, kScanFirst, kScanEvery);
@@ -251,7 +253,7 @@ const tgm_prof *AGXDeviceUserClient::scanSubmission(uint32_t slot, uint32_t fenc
 void AGXDeviceUserClient::scanPushes(const tgm_push *pushes, uint32_t count, tgm_prof *prof,
 				     bool metalMacros, uint32_t submits)
 {
-	if (!TGM_STATS || count > TGM_PROF_MAX)
+	if (!TGM_PROF || count > TGM_PROF_MAX)
 		return;
 	switch_gpu_scan_words words[TGM_PROF_MAX];
 	const BindingTable::Entry *hit = nullptr;

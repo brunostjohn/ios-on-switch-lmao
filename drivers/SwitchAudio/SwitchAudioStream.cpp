@@ -180,7 +180,7 @@ void SwitchAudio::tegraStart()
     xferSeen[kChOut] = static_cast<uint16_t>(switch_mmio_read32(adma, CH_XFER_STATUS));
     graced = false;
     timer->setTimeoutMS(watchdogMS());
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_IO
     ++statStarts;
 #endif
 }
@@ -295,6 +295,11 @@ void SwitchAudio::playedPeriod()
     publishHwAnchor(done, irqHost, false);
     const uint64_t now = nowFrame();
 #if DEVELOPMENT || DEBUG
+    if ((control->state & SwitchAudioOutputRunning) &&
+        static_cast<int64_t>(control->out_written) - static_cast<int64_t>(done) < 0)
+        ++statUnderruns;
+#endif
+#if SWITCH_STATS_IO
     if (statsTimer)
         notePlayed(slot, done);
 #endif
@@ -308,7 +313,7 @@ void SwitchAudio::playedPeriod()
     }
 }
 
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_IO
 void SwitchAudio::notePlayed(const switch_audio_sample_t *slot, uint64_t done)
 {
     statFrames += kOutPeriodFrames;
@@ -343,8 +348,6 @@ void SwitchAudio::notePlayed(const switch_audio_sample_t *slot, uint64_t done)
     const int64_t lead = static_cast<int64_t>(control->out_written) - static_cast<int64_t>(done);
     if (settled && lead < statLeadMin)
         statLeadMin = lead;
-    if (lead < 0)
-        ++statUnderruns;
     const int peak = static_cast<int>(switch_audio_ahub::mvcReadPeak(ahub) >> 16);
     if (peak > statPeak)
         statPeak = peak;

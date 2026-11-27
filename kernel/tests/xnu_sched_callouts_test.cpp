@@ -96,9 +96,11 @@ TEST_P(XnuSchedCalloutsSource, ThreadCallFunctionsAndTimerActionsAreBracketed)
     const std::string tree = GetParam();
     const std::string calls = switch_ios::test::SourceText("../" + tree + "/osfmk/kern/thread_call.c");
     EXPECT_THAT(switch_ios::test::Body(calls, "\nthread_call_invoke(thread_call_func_t func"),
-                HasSubstr("#if DEVELOPMENT || DEBUG\n\tconst uint64_t switch_begin = switch_callout_begin();\n#endif\n"
-                          "\t(*func)(param0, param1);\n#if DEVELOPMENT || DEBUG\n\tswitch_callout_end((const void "
-                          "*)func, group->tcg_name, switch_begin);\n#endif\n"));
+                HasSubstr("#if (DEVELOPMENT || DEBUG) && defined(SWITCH_STATS_SCHED) && SWITCH_STATS_SCHED\n"
+                          "\tconst uint64_t switch_begin = switch_callout_begin();\n#endif\n"
+                          "\t(*func)(param0, param1);\n"
+                          "#if (DEVELOPMENT || DEBUG) && defined(SWITCH_STATS_SCHED) && SWITCH_STATS_SCHED\n"
+                          "\tswitch_callout_end((const void *)func, group->tcg_name, switch_begin);\n#endif\n"));
     const std::string timer = switch_ios::test::SourceText("../" + tree + "/iokit/Kernel/IOTimerEventSource.cpp");
     EXPECT_THAT(switch_ios::test::Body(timer, "\nIOTimerEventSource::invokeAction(IOEventSource::Action _action"),
                 HasSubstr("\tconst uint64_t switch_begin = switch_callout_begin();\n\tif (kActionBlock & flags) {\n"

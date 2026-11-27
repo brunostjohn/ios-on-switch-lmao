@@ -87,6 +87,7 @@ host_library(
     ],
     additional_compiler_inputs = [":kind_21H461"],
     copts = KIND_21H461 + ["-Wno-unused-parameter"],
+    defines = ["SWITCH_STATS_POWER=1"],
     deps = [
         ":headers",
         ":kernel",
@@ -103,6 +104,7 @@ host_library(
     ],
     additional_compiler_inputs = [":kind_24B119"],
     copts = KIND_24B119 + ["-Wno-unused-parameter"],
+    defines = ["SWITCH_STATS_POWER=1"],
     deps = [
         ":headers",
         ":kernel",
@@ -141,6 +143,7 @@ host_test(
     srcs = ["switch_charging_test.cpp"],
     additional_compiler_inputs = [":kind_21H461"],
     copts = KIND_21H461 + ["-Wno-unused-parameter"],
+    defines = ["SWITCH_STATS_POWER=1"],
     deps = [
         ":headers",
         ":kernel",
@@ -155,6 +158,7 @@ host_test(
     srcs = ["switch_charging_test.cpp"],
     additional_compiler_inputs = [":kind_24B119"],
     copts = KIND_24B119 + ["-Wno-unused-parameter"],
+    defines = ["SWITCH_STATS_POWER=1"],
     deps = [
         ":headers",
         ":kernel",

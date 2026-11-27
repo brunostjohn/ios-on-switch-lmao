@@ -44,7 +44,7 @@ static void present_typed_complete(void *unused)
 	done = tgm_present.done;
 	arg = tgm_present.arg;
 	mutex_unlock(&tgm_present.lock);
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 	tgm_present_promises_done(&tgm_present.tokens, tgm_present.queued, tgm_present.copy.valid);
 #endif
 	status = switch_gpu_present_tokens_finish_visible(&tgm_present.tokens, 0,
@@ -52,7 +52,7 @@ static void present_typed_complete(void *unused)
 	mutex_lock(&tgm_present.lock);
 	__atomic_store_n(&tgm_present.typed_pending, 0, __ATOMIC_RELEASE);
 	mutex_unlock(&tgm_present.lock);
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 	tgm_copy_reset_presented(status);
 #endif
 	present_deliver(done, arg, status);
@@ -302,7 +302,7 @@ int tgm_present_unmap(uint64_t va, uint64_t bytes)
 	return tgm_present.vm ? tgm_vm_unmap_volatile(tgm_present.vm, va, bytes) : -ENODEV;
 }
 
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 /* Each read-back waits for the copies before it (NON_PIPELINED: the scanout buffer is read after the frame's copy wrote
  * it); the fence after them flushes their writes past the L2. */
 static void present_push_reads(struct nvif_push *push, const struct tgm_present_read *reads, u32 n)
@@ -352,17 +352,13 @@ static int present_copy(uint64_t src_va, uint64_t stride, int32_t src_block_log2
 		mutex_unlock(&tgm_present.lock);
 		return ret;
 	}
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 	cut = dst_va && tgm_copy_reset_armed();
 #endif
 	push = &chan->chan.push;
 	/* acquires, a start stamp, optional L2+TLB invalidate, the copy, the read-backs, the fence */
 	words = dependency_count * 5 + 57 + 18 + nreads * TGM_COPY_RECT_DWORDS +
 		cut * (TegraGM20BCopyResetCopies * TGM_PRESENT_COPY_DWORDS + 2) + CHAN_FENCE_DWORDS;
-#if TGM_STATS
-	if (push->cur + words > push->end && !tgm_chan_room(chan, 1, words))
-		tgm_stats_unlocked(TGM_UNLOCKED_PRESENT_ROOM, 0);
-#endif
 	ret = chan_push_wait(chan, words);
 	if (ret == -ETIMEDOUT) {
 		tgm_chan_stalled(chan, "present: push buffer still full after 1 s", chan->submitted,
@@ -415,14 +411,12 @@ static int present_copy(uint64_t src_va, uint64_t stride, int32_t src_block_log2
 	}
 	if (dst_va)
 		tgm_present_push_copy(push);
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 	if (cut && tgm_copy_reset_take()) {
 		PUSH_MTHD(push, NV906F, NON_STALL_INTERRUPT, 0);
 		for (u32 i = 1; i < TegraGM20BCopyResetCopies; i++)
 			tgm_present_push_copy(push);
 	}
-#endif
-#if TGM_STATS
 	if (nreads)
 		present_push_reads(push, reads, nreads);
 #endif
@@ -485,7 +479,7 @@ int tgm_present_copy_dependencies(uint64_t src_va, uint64_t stride, int32_t src_
 		gate_leave();
 	return ret;
 }
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 int tgm_present_copy_read_dependencies(uint64_t src_va, uint64_t stride, int32_t src_block_log2,
 				       uint32_t width, uint32_t height, uint64_t dst_va,
 				       uint32_t dst_pitch, uint32_t block_height_log2,

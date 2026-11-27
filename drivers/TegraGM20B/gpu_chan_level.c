@@ -87,7 +87,7 @@ int tgm_chan_ramfc_open(struct tgm_chan *chan, int critical)
 			  chan->chid, chan->owner, ret);
 		return ret;
 	}
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 	if (due.timeslice)
 		chan->timeslice = due.timeslice;
 #endif
@@ -126,7 +126,7 @@ void tgm_chan_ramfc_due(struct tgm_chan *chan)
 		}
 		return;
 	}
-#if TGM_STATS
+#if TGM_DEBUG_PROBES
 	if (due.timeslice) {
 		chan->timeslice = due.timeslice;
 		chan->timeslice_at = chan->submitted;

@@ -13,7 +13,7 @@ constexpr unsigned kLineTries = 4;
 // The tick writes gLine with gLineSeq odd; take() copies it while gLineSeq stays even and unchanged.
 uint32_t gLineSeq;
 uint32_t gLineTakenSeq;  // the owner's: the last line it took
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_POWER
 switchperf::LineTaken gLine;
 // The owner's: touch, frame and launch boosts, then the owner wakes they made, then the launches from a foreground role,
 // at its last line.
@@ -65,7 +65,7 @@ uint32_t boostsSince(unsigned source, uint32_t now)
 
 void switchperf::lineWindow(LineStats *stats, const WindowBusy &busy, uint32_t upPermille)
 {
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_POWER
     ++stats->windows;
     stats->busySum += busy.decision;
     stats->peakSum += busy.peak;
@@ -88,7 +88,7 @@ void switchperf::lineWindow(LineStats *stats, const WindowBusy &busy, uint32_t u
 
 void switchperf::lineWake(LineStats *stats)
 {
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_POWER
     ++stats->wakes;
 #else
     (void)stats;
@@ -98,7 +98,7 @@ void switchperf::lineWake(LineStats *stats)
 void switchperf::linePublish(LineStats *stats, switch_gov *gov, uint64_t now)
 {
     const uint32_t seq = gLineSeq;
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_POWER
     __atomic_store_n(&gLineSeq, seq + 1, __ATOMIC_RELAXED);
     __atomic_thread_fence(__ATOMIC_RELEASE);
     switch_gov_account(gov, now);
@@ -141,7 +141,7 @@ bool switchperf::lineTake(LineTaken *taken)
             return false;
         if (seq & 1u)
             continue;
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_POWER
         copyLine(taken, &gLine);
         __atomic_thread_fence(__ATOMIC_ACQUIRE);
 #else
@@ -157,7 +157,7 @@ bool switchperf::lineTake(LineTaken *taken)
 
 void switchperf::lineFormat(const LineTaken &taken, unsigned index, char *line, size_t len)
 {
-#if !(DEVELOPMENT || DEBUG)
+#if !SWITCH_STATS_POWER
     (void)taken;
     (void)index;
     (void)line;

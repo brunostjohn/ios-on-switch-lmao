@@ -200,7 +200,7 @@ int tgm_pool_scrub(uint64_t pa, uint64_t bytes)
 	    pa + bytes > nvxnu_pool_base_pa() + nvxnu_pool_size())
 		return -EINVAL;
 	if (!gate_try()) {
-		if (TGM_STATS && READ_ONCE(tgm_gpu.railed))
+		if (TGM_DEBUG_PROBES && READ_ONCE(tgm_gpu.railed))
 			__atomic_fetch_add(&tgm_rail_ups.cpu_zeroed, bytes, __ATOMIC_RELAXED);
 		return -EBUSY; /* the caller zeroes it on the CPU */
 	}

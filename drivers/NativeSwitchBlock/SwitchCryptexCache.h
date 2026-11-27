@@ -280,7 +280,7 @@ public:
             SwitchWindow *w = r->window[i];
             if (copied) {
                 const uint32_t fresh = r->need[i] & w->valid & ~w->served;
-#if !defined(KERNEL) || DEVELOPMENT || DEBUG
+#if !defined(KERNEL) || SWITCH_STATS_IO
                 st.served += switchBlockCount(fresh);
                 st.aheadServed += switchBlockCount(fresh & w->ahead);
 #endif

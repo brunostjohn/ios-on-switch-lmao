@@ -69,7 +69,7 @@ void gm20bOwnPass(SwitchMetalRenderEncoder *e)
 {
     if (!e->_passShared)
         return;
-    SWITCH_METAL_DIAGNOSTIC(gm20b::frameCpuCounts().passOwned.fetch_add(1, std::memory_order_relaxed));
+    SWITCH_METAL_STAT(gm20b::frameCpuCounts().passOwned.fetch_add(1, std::memory_order_relaxed));
     gm20bPassBind(e->_cb, e->_pass);
     MTLRenderPassDescriptor *own = [e->_pass copy];
     [e->_cb retain:own];
@@ -105,7 +105,7 @@ void gm20bOwnPass(SwitchMetalRenderEncoder *e)
     const bool keyed = gm20bPassKey(d, key, hash, &counters);
     if (keyed)
         if (const SwitchMetalPassEntry *kept = gm20bPassFind(self, key, hash)) {
-            SWITCH_METAL_DIAGNOSTIC(gm20b::countPass(gm20b::PassOpen::Hit));
+            SWITCH_METAL_STAT(gm20b::countPass(gm20b::PassOpen::Hit));
             return openKeptPass(self, e, *kept);
         }
     const uint8_t zetaAspects = (d.depthAttachment.texture ? 1u : 0u) | (d.stencilAttachment.texture ? 2u : 0u);
@@ -321,10 +321,10 @@ void gm20bOwnPass(SwitchMetalRenderEncoder *e)
         });
     // a pass whose making counted a skip is made again at each call, which counts it again
     const bool keeps = keyed && !_encFailed && !resolves && !skipped;
-    SWITCH_METAL_DIAGNOSTIC(gm20b::countPass(keeps      ? gm20b::PassOpen::Kept
-                                             : keyed    ? gm20b::PassOpen::Unkept
-                                             : counters ? gm20b::PassOpen::Counters
-                                                        : gm20b::PassOpen::Unkeyed));
+    SWITCH_METAL_STAT(gm20b::countPass(keeps      ? gm20b::PassOpen::Kept
+                                       : keyed    ? gm20b::PassOpen::Unkept
+                                       : counters ? gm20b::PassOpen::Counters
+                                                  : gm20b::PassOpen::Unkeyed));
     if (keeps) {
         // what the raw encode reads of it made now, so the copy is read, never changed, after this
         for (unsigned c = 0; c < 8; c++)

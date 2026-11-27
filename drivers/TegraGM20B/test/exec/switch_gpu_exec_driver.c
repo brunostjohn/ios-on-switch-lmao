@@ -257,18 +257,8 @@ void tgm_stats_tick(void)
 void tgm_stats_loud(struct tgm_chan *chan, uint32_t reason)
 {
 }
-#endif
 
-void tgm_stats_gr_context(void)
-{
-}
-
-#if TGM_STATS
 void switch_gpu_compositor_job(uint64_t ns)
-{
-}
-
-void switch_gpu_compositor_sync(uint32_t syncs, uint64_t ns, int behind)
 {
 }
 #endif

@@ -74,7 +74,7 @@ namespace bq = charge::bq;
 constexpr unsigned kBus = 1;
 constexpr uint32_t kIdentifyRetryMS = 30000;  // until the chips answer on I2C1
 constexpr uint32_t kRefreshMS = 120000;       // re-read for the values without an interrupt
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_POWER
 constexpr unsigned kStatsEvery = 2;  // re-reads per periodic stats line (4 minutes)
 #endif
 constexpr uint32_t kSettleMS = 250;   // after an interrupt: coalesce the chips' alerts, let them settle
@@ -166,6 +166,7 @@ PdSnapshot unpackPd(uint64_t w)
 
 struct Reading {
     unsigned percent, rawPercent, millivolts, cycles;
+    uint16_t qh;
     int rawCapacity, fullCapacity, designCapacity, milliamps, avgMilliamps, centiCelsius, milliCelsius, chargeAccum;
     bool external, charging, full;
     uint8_t charger[9];  // BQ24193 REG00-REG08 (one multi-read, [TI] 8.3.6.5.2)
@@ -456,6 +457,22 @@ uint32_t gTempGen;
 int gTempMilliC;
 uint64_t gTempAt;  // 0: no reading (none yet, or the last read failed)
 
+uint32_t gGaugeGen;
+switch_battery_gauge gGauge;
+bool gGaugeReady;
+
+void storeGauge(uint16_t qh, int avgMa, int nowMa, unsigned mv)
+{
+    __atomic_store_n(&gGaugeGen, gGaugeGen + 1, __ATOMIC_RELAXED);
+    __atomic_thread_fence(__ATOMIC_RELEASE);
+    __atomic_store_n(&gGauge.qh, qh, __ATOMIC_RELAXED);
+    __atomic_store_n(&gGauge.avg_ma, avgMa, __ATOMIC_RELAXED);
+    __atomic_store_n(&gGauge.now_ma, nowMa, __ATOMIC_RELAXED);
+    __atomic_store_n(&gGauge.mv, mv, __ATOMIC_RELAXED);
+    __atomic_store_n(&gGaugeReady, true, __ATOMIC_RELAXED);
+    __atomic_store_n(&gGaugeGen, gGaugeGen + 1, __ATOMIC_RELEASE);
+}
+
 void storeTemperature(bool good, int milliC)
 {
     const uint64_t before = __atomic_load_n(&gTempAt, __ATOMIC_RELAXED);
@@ -526,10 +543,11 @@ int readAll(Reading *r)
         err = gaugeWord(Cycles, &cycles);
     if (!err)
         err = gaugeWord(DesignCap, &designCap);
-#if SWITCH_IPSW_KIND_24B119
     uint16_t qh = 0;
     if (!err)
         err = gaugeWord(QH, &qh);
+    r->qh = qh;
+#if SWITCH_IPSW_KIND_24B119
     r->chargeAccum = static_cast<int16_t>(qh) * static_cast<int>(SWITCH_BATTERY_QH_UAH) / 1000;
 #endif
     if (!err)
@@ -915,6 +933,7 @@ bool SwitchBattery::refresh()
     setAmperage(r.avgMilliamps);
     __atomic_store_n(&gBatteryExternal, r.external, __ATOMIC_RELAXED);
     __atomic_store_n(&gBatteryAvgMa, r.avgMilliamps, __ATOMIC_RELAXED);
+    storeGauge(r.qh, r.avgMilliamps, r.milliamps, r.millivolts);
     setCycleCount(r.cycles);
     setKey(kIOPMFullyChargedKey, r.full ? kOSBooleanTrue : kOSBooleanFalse);
     setKey("AppleRawExternalConnected", (r.external || (inflowOff && pd.plugged)) ? kOSBooleanTrue : kOSBooleanFalse);
@@ -966,7 +985,7 @@ bool SwitchBattery::refresh()
         IOLog("SwitchBattery: gauge alert setup failed\n");
     if (r.fault)
         statsDue = true;  // a charger fault is news
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_POWER
     if (statsDue || refreshes % kStatsEvery == 0) {
         stats(r, pd);
         statsDue = false;
@@ -1629,6 +1648,27 @@ extern "C" int switch_battery_gauge_sample(struct switch_battery_gauge *sample)
     sample->now_ma = (int16_t)now * 15625 / 100000;
     sample->mv = (vcell >> 3) * 625u / 1000;
     return 0;
+}
+
+extern "C" int switch_battery_gauge_cached(struct switch_battery_gauge *sample)
+{
+    for (unsigned tries = 0; tries < 4; ++tries) {
+        const uint32_t g1 = __atomic_load_n(&gGaugeGen, __ATOMIC_ACQUIRE);
+        const bool ready = __atomic_load_n(&gGaugeReady, __ATOMIC_RELAXED);
+        switch_battery_gauge copy = {};
+        copy.qh = __atomic_load_n(&gGauge.qh, __ATOMIC_RELAXED);
+        copy.avg_ma = __atomic_load_n(&gGauge.avg_ma, __ATOMIC_RELAXED);
+        copy.now_ma = __atomic_load_n(&gGauge.now_ma, __ATOMIC_RELAXED);
+        copy.mv = __atomic_load_n(&gGauge.mv, __ATOMIC_RELAXED);
+        __atomic_thread_fence(__ATOMIC_ACQUIRE);
+        if ((g1 & 1) || g1 != __atomic_load_n(&gGaugeGen, __ATOMIC_RELAXED))
+            continue;
+        if (!ready)
+            return -1;
+        *sample = copy;
+        return 0;
+    }
+    return -1;
 }
 
 // thermalmonitord's battery sensors (SwitchBattery.h). Any context.

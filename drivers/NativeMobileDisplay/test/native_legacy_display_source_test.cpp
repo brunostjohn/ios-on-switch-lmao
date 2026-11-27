@@ -238,9 +238,11 @@ TEST(PanicRestoreSource, EveryKernelConfig)
 TEST(DisplayStatsSource, QuietDisplayWindowsAreLogged)
 {
     const CodeText stats = method("void noteStatsWindow()");
-    EXPECT_TRUE(stats.has("if (stVsyncs && !stSwaps && !stPresents)"));
-    EXPECT_TRUE(stats.before("SwitchDisplay: quiet display: ", "stSwaps = stVsyncs = "));
-    EXPECT_TRUE(stats.before("SwitchDisplay: quiet display: ", "if (logged) os_log("));
+    EXPECT_TRUE(stats.has("s.quietDisplay = stVsyncs && !stSwaps && !stPresents;"));
+    EXPECT_TRUE(stats.before("s.quietDisplay = stVsyncs && !stSwaps && !stPresents;", "stSwaps = stVsyncs = "));
+    const CodeText log = method("void logStatsWindow(const StatsSnapshot &s) const");
+    EXPECT_TRUE(log.has("if (s.quietDisplay)"));
+    EXPECT_TRUE(log.before("SwitchDisplay: quiet display: ", "if (s.logged) os_log("));
 }
 
 // An idle display wakes no core: FRAME_END reaches the CPU only while something waits for a frame end. Holders outside the
@@ -479,14 +481,14 @@ TEST(FrameEndSource, VerdictsReachTheTableThroughTheGate)
 // release kernel counts nothing (stats is SWITCH_FRAME_TIMELINE: DEVELOPMENT || DEBUG).
 TEST(DisplayStatsSource, LocksPerFrameEndLine)
 {
-    const CodeText window = method("void noteLocksWindow(uint64_t us, uint32_t swaps, uint32_t irqs)");
-    EXPECT_TRUE(window.startsWith("if (!stats) return;"));
-    EXPECT_TRUE(window.has("os_log(OS_LOG_DEFAULT, \"SwitchDisplay locks: %s\", line);"));
+    const CodeText stats = method("void noteStatsWindow()");
     for (const char *count : {"color->lockTakes()", "intMaskTakes", "switch_vic_surface_cache_locks()", "flipClaims()"})
-        EXPECT_TRUE(window.has(count)) << count;
-    EXPECT_TRUE(method("void noteStatsWindow()").has("noteLocksWindow(us, swaps, irqs);"));
+        EXPECT_TRUE(stats.has(count)) << count;
+    const CodeText window = method("static void logLocksWindow(const StatsSnapshot &s)");
+    EXPECT_TRUE(window.has("os_log(OS_LOG_DEFAULT, \"SwitchDisplay locks: %s\", line);"));
+    EXPECT_TRUE(method("void logStatsWindow(const StatsSnapshot &s) const").has("logLocksWindow(s);"));
     EXPECT_TRUE(method("void notePass()").startsWith("if (stats) ++stPasses;"));
-    EXPECT_TRUE(window.has("routedLine(line + used, sizeof(line) - used, us, swaps, irqs);"));
+    EXPECT_TRUE(window.has("routedLine(s.routed, line + used, sizeof(line) - used, s.us, s.swaps, s.irqs);"));
 }
 
 // validateSwap runs on the client's thread: it decides and observes, and everything the gate owns (the overlay's

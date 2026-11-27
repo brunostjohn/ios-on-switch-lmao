@@ -140,6 +140,7 @@ void tgm_stats_bo_import(uint64_t bytes, int read_only, int skipped, uint64_t ns
 	for (i = 0; i < TGM_PHASES; i++)
 		__atomic_fetch_add(&mstat.import_phase[i], phase_ns[i], __ATOMIC_RELAXED);
 }
+
 /* The "imports" line's histograms (TegraGM20BCostHist.h's buckets) and sums. */
 #define SLOW_IMPORT_NS (4 * NSEC_PER_MSEC)
 #define SLOW_IMPORT_LINES 8 /* a window's "slow import" lines at most */

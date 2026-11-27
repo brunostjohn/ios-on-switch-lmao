@@ -16,7 +16,7 @@
 #include "TegraSPIWords.h"
 #include "../ArmGIC/SwitchInterrupts.h"
 #include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_IO
 #include <os/log.h>
 #endif
 
@@ -314,7 +314,7 @@ void recover(Bus &b, const BusInfo &info)
     b.irq->enable();
 }
 
-#if DEVELOPMENT || DEBUG
+#if SWITCH_STATS_IO
 // Each bus's line, from its own transfers (no timer): every 10 s of traffic, its blocks (one RDY interrupt each) and
 // the FIFO words they cost the CPU each way. A 2 s pause starts a new window.
 struct BusStats {
@@ -324,8 +324,8 @@ struct BusStats {
 
 BusStats gStats[kBuses];
 
-// Under the bus's transfer lock.
-void noteBlock(unsigned bus, size_t len, int result)
+// Under the bus's transfer lock; returns true with a snapshot to log after releasing the lock.
+bool noteBlock(unsigned bus, size_t len, int result, BusStats *emit, uint64_t *msOut)
 {
     BusStats &s = gStats[bus - 1];
     const bool packed = tegra_spi_packed(len);
@@ -342,14 +342,20 @@ void noteBlock(unsigned bus, size_t len, int result)
     s.words += static_cast<uint32_t>(tegra_spi_words(len, packed));
     s.failed += result != TEGRA_SPI_OK ? 1 : 0;
     if (now - s.start < window)
-        return;
+        return false;
     absolutetime_to_nanoseconds(now - s.start, &ns);
-    const uint64_t ms = ns / NSEC_PER_MSEC;
+    *emit = s;
+    *msOut = ns / NSEC_PER_MSEC;
+    s = {now, now, 0, 0, 0, 0, 0};
+    return true;
+}
+
+void logBusStats(unsigned bus, const BusStats &s, uint64_t ms)
+{
     os_log(OS_LOG_DEFAULT,
            "TegraSPI stats: SPI%u %llu ms: %u blocks (%llu/s), %u packed, %u bytes in %u FIFO words each way, %u "
            "failed",
            bus, ms, s.blocks, ms ? uint64_t{s.blocks} * 1000 / ms : 0, s.packed, s.bytes, s.words, s.failed);
-    s = {now, now, 0, 0, 0, 0, 0};
 }
 #endif
 
@@ -437,11 +443,16 @@ extern "C" int tegra_spi_transfer(unsigned bus, unsigned cs, const void *tx, voi
     const int result = b.ready ? block(bus, b, cs, (const uint8_t *)tx, (uint8_t *)rx, len) : TEGRA_SPI_ENOTREADY;
     if (result != TEGRA_SPI_OK && result != TEGRA_SPI_ENOTREADY)
         recover(b, kBus[bus - 1]);
-#if DEVELOPMENT || DEBUG
-    if (result != TEGRA_SPI_ENOTREADY)
-        noteBlock(bus, len, result);
+#if SWITCH_STATS_IO
+    BusStats emit = {};
+    uint64_t emitMs = 0;
+    const bool logStats = result != TEGRA_SPI_ENOTREADY && noteBlock(bus, len, result, &emit, &emitMs);
 #endif
     IOLockUnlock(b.lock);
+#if SWITCH_STATS_IO
+    if (logStats)
+        logBusStats(bus, emit, emitMs);
+#endif
     return result;
 }
 

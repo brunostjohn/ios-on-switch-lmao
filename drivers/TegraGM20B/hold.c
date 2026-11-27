@@ -176,7 +176,7 @@ static int chan_hold(unsigned int chid, u64 now)
 		return 0;
 	}
 	WRITE_ONCE(hold.held_since[chid], now ? now : 1);
-	if (TGM_STATS)
+	if (TGM_DEBUG_PROBES)
 		WRITE_ONCE(hold.holds, hold.holds + 1);
 	return 1;
 }
@@ -254,7 +254,7 @@ void tgm_hold_track(struct nvkm_device *device, unsigned int chid, int on)
 	if (chid >= HOLD_CHIDS)
 		return;
 	if (on) {
-		if (TGM_STATS)
+		if (TGM_DEBUG_PROBES)
 			tgm_hold_owner(chid);
 		if (!chan_of(chid))
 			switch_gpu_chan_table_set(&hold.chans, chid, chan_find(device, chid));
@@ -279,7 +279,7 @@ static void forget(void *arg)
 	WRITE_ONCE(hold.latency[chid], TGM_PREEMPT_MIN_NS);
 	__atomic_store_n(&hold.asked_pt[chid], 0, __ATOMIC_RELAXED);
 	__atomic_store_n(&hold.isolating[chid], 0, __ATOMIC_RELAXED);
-	if (TGM_STATS)
+	if (TGM_DEBUG_PROBES)
 		tgm_hold_progress(chid, NULL);
 	switch_gpu_chan_table_set(&hold.chans, chid, NULL);
 }
@@ -461,7 +461,7 @@ void tgm_hold_sampled(unsigned int chid, uint64_t asked_pt, uint64_t start_pt)
 	__atomic_store_n(&hold.asked_pt[chid], 0, __ATOMIC_RELAXED);
 	if (TGM_STATS)
 		WRITE_ONCE(hold.samples, hold.samples + 1);
-	if (TGM_STATS)
+	if (TGM_DEBUG_PROBES)
 		tgm_hold_landed(chid, asked_pt, start_pt, sample);
 }
 

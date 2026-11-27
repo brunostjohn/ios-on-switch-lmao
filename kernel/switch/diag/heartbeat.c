@@ -324,7 +324,7 @@ const char *switch_heartbeat_arm(bool *armed)
         return switch_heartbeat_arm_line;
     }
     thread_t thread = THREAD_NULL;
-    if (kernel_thread_start_priority(switch_heartbeat_main, NULL, MAXPRI_KERNEL, &thread) != KERN_SUCCESS) {
+    if (kernel_thread_start_priority(switch_heartbeat_main, NULL, BASEPRI_KERNEL, &thread) != KERN_SUCCESS) {
         switch_heartbeat_stop();
         return "heartbeat not armed: no thread";
     }

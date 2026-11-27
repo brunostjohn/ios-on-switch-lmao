@@ -19,7 +19,7 @@
 #include <os/log.h>
 #include <pexpert/arm64/board_config.h>
 
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_STATS_SCHED) && SWITCH_STATS_SCHED
 
 static struct switch_callout_table callout_tables[MAX_CPUS] __attribute__((aligned(64)));
 static struct switch_callout_sum callout_now, callout_seen, callout_window;

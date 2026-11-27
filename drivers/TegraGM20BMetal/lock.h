@@ -6,13 +6,16 @@
 #include <cstdint>
 #include <mutex>
 
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+#if (!defined(SWITCH_DEBUG) || SWITCH_DEBUG) && (!defined(SWITCH_PROF_GPU) || SWITCH_PROF_GPU)
+#define SWITCH_METAL_LOCK_PROFILE 1
 #include <mach/mach_time.h>
+#else
+#define SWITCH_METAL_LOCK_PROFILE 0
 #endif
 
 namespace gm20b {
 
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+#if SWITCH_METAL_LOCK_PROFILE
 // The locks the runtime took through Mutex, RecursiveMutex and CondVar's wakes, on every thread since the process began
 // (gpu.path.encode_cost's ceiling). Each thread counts its own with a plain store, no read-modify-write or barrier; a
 // read sums the threads that took one, and those that ended.

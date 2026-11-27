@@ -1692,11 +1692,11 @@ thread_call_invoke(thread_call_func_t func,
 	    (unsigned) (tc_ttd & 0xFFFFFFFF), is_delayed, call);
 #endif
 
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_STATS_SCHED) && SWITCH_STATS_SCHED
 	const uint64_t switch_begin = switch_callout_begin();
 #endif
 	(*func)(param0, param1);
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_STATS_SCHED) && SWITCH_STATS_SCHED
 	switch_callout_end((const void *)func, group->tcg_name, switch_begin);
 #endif
 

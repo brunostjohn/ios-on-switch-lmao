@@ -44,7 +44,7 @@ struct Job {
     int engineResult;
     nvjpg_dec_status engineStatus;
     uint64_t engineBusy;
-#if TEGRA_NVJPG_STATS
+#if TEGRA_NVJPG_PROBES
     bool tileProbe;   // HW Test's tile probe (kTileProbeMagic): tileMode and tileGob go to the setup unchanged
     bool guardProbe;  // HW Test's copy-guard probe (kGuardProbeMagic): the re-pack's guard closed
     uint32_t tileMode, tileGob;
