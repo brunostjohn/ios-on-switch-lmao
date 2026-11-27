@@ -36,7 +36,9 @@ void SwitchXUDC::logStats(uint64_t now)
     const XudcStats::Counts &o = stats.logged;
     uint32_t *const mostTrbs = stats.mostTrbs;
     const uint32_t irqs = __atomic_load_n(&stats.interrupts, __ATOMIC_RELAXED);
-    st.ticks += __atomic_exchange_n(&stats.filterTicks, 0, __ATOMIC_RELAXED);
+    const uint64_t fTicks = __atomic_load_n(&stats.filterTicks, __ATOMIC_RELAXED);
+    st.ticks += fTicks - stats.filterTicksLogged;
+    stats.filterTicksLogged = fTicks;
     if (st.bytes[0] == o.bytes[0] && st.bytes[1] == o.bytes[1]) {
         stats.at = now;
         stats.logged = st;

@@ -226,12 +226,14 @@ void nvdec_close(NVDECClient *c)
     free(c);
 }
 
+extern os_log_t gAVDLog;
+
 // The first failure is logged: its IOReturn tells NVDEC's memory running out from a mapping the kernel refused.
 static void logOnce(int *flag, const char *what, kern_return_t kr, uint64_t size)
 {
     if (__atomic_exchange_n(flag, 1, __ATOMIC_RELAXED))
         return;
-    os_log_error(os_log_create("com.brunostjohn.switch.avd", "decoder"), "AVD: %{public}s %#x (%llu bytes)", what, kr,
+    os_log_error(gAVDLog ? gAVDLog : OS_LOG_DEFAULT, "AVD: %{public}s %#x (%llu bytes)", what, kr,
                  (unsigned long long)size);
 }
 

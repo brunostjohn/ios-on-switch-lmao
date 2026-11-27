@@ -84,7 +84,7 @@ TEST_F(NVJPGGate, AFalconErrorFailsTheDecodeAtOnceWithTheFirmwaresReason)
     EXPECT_EQ(gEngine.steps(from, {"falcon error", "flush", "reset", "fence released", "falcon start"}),
               (Steps{"falcon error", "flush", "reset", "reset", "reset", "fence released", "falcon start"}));
     EXPECT_EQ(switch_mmio_read32(gNvjpgRegisters.data(), SWITCH_FALCON_THI_INT_STATUS), 0u);
-    EXPECT_TRUE(IOWorkLoop::last()->enabled) << "the line is on again once the falcon is proven";
+    EXPECT_TRUE(switch_interrupt_nub(kErrorIntid, false)->enabled) << "the line is on again once the falcon is proven";
     const uint32_t before = gEngine.syncpt;
     EXPECT_EQ(runDecode(&job, &status), 0);
     EXPECT_EQ(gEngine.syncpt, before + 1);
@@ -357,39 +357,6 @@ TEST_F(NVJPGGate, ThePublishedTraitsTakeEveryDCTScale)
         EXPECT_EQ(tegra_nvjpg_plan(&r, &photo, &d, &shipped, 1u << 20, &plan, &kind), nullptr) << "1/" << (1u << scale);
         EXPECT_EQ(plan.target.scale, scale);
     }
-}
-
-// A decode's host1x submit and its fence's arming take no lock: the job's use of the gate keeps the engine on.
-TEST_F(NVJPGGate, AJobWaitsForTheEngineWithNoStateLockHeld)
-{
-    TegraNVJPGJob job = decodeJob();
-    nvjpg_dec_status status = {};
-    ASSERT_EQ(runDecode(&job, &status), 0);
-    gEngine.waitsUnderStateLock = 0;
-    ASSERT_EQ(runDecode(&job, &status), 0);
-    // base 2: the submit's wait for room and the job's fence armed, both under gStateLock
-    EXPECT_EQ(gEngine.waitsUnderStateLock, 0);
-}
-
-// The cancellation takes the power lock with gStateLock not held, so the only order between the two is the gate's
-// (power lock, then gateOn/gateOff's gStateLock).
-TEST_F(NVJPGGate, ACancellationTakesThePowerLockOutsideTheStateLock)
-{
-    TegraNVJPGJob job = decodeJob();
-    nvjpg_dec_status status = {};
-    ASSERT_EQ(runDecode(&job, &status), 0);
-    gEngine.waitsUnderStateLock = gEngine.powerUnderStateLock = 0;
-    switch_test_lock_taken = [](IOLock *lock) {
-        gEngine.powerUnderStateLock += lock == &gNvdecPower && gStateLock->locked;
-    };
-    gEngine.stallDecodes = true;
-    EXPECT_EQ(runDecode(&job, &status), -5);
-    switch_test_lock_taken = nullptr;
-    EXPECT_TRUE(logged("engine reset: running again"));
-    // base 1: the power lock inside gStateLock; base 4: the job's submit and fence and the reboot's proof under
-    // gStateLock
-    EXPECT_EQ(gEngine.powerUnderStateLock, 0);
-    EXPECT_EQ(gEngine.waitsUnderStateLock, 0);
 }
 
 TEST_F(NVJPGGate, AllocationsKeepDisjointMappingsUntilTheirOwnRelease)

@@ -30,8 +30,8 @@ inline uint32_t jobBoundUs(uint64_t pixels)
 }
 
 // The job on the engine, owned by gJobLock's holder from tegra_nvjpg_start to tegra_nvjpg_finish. Its end is signalled
-// exactly once: by the fence's callback (host1x's work loop), or by falconFailed (the falcon line's work loop) when it
-// takes the fence back first; switch_host1x_fence_remove decides between them. Whichever signals writes `result`
+// exactly once: by the fence's callback (host1x's work loop), or by falconFailed (the falcon line's thread call) when
+// it takes the fence back first; switch_host1x_fence_remove decides between them. Whichever signals writes `result`
 // first. gFlightLock orders falconFailed's look at `active` against start and finish, so it never takes back a fence
 // of a job that has ended; it is held only around those few lines and never across a callback.
 struct Flight {
@@ -57,8 +57,6 @@ IOLock *gFlightLock;
 // handed back to the idle gate, which powers it on at a later decode. One line per cancellation, with what the falcon
 // and the memory controller held. gJobLock held (the caller's) and the job's use of the gate, so no NVJPG power
 // transition runs meanwhile (gateOn runs only in a job, gateOff only with no user, and suspend first takes gJobLock).
-// The power lock and gStateLock are taken one after the other, never one inside the other: the gate calls gateOn and
-// gateOff with the power lock held, and they take gStateLock.
 int cancelled(const TegraNVJPGJob *job, uint32_t fence, uint64_t us)
 {
     char host[200];
@@ -106,11 +104,8 @@ int cancelled(const TegraNVJPGJob *job, uint32_t fence, uint64_t us)
     if (back)
         gErrors.on();
     IOLockUnlock(power);
-    const uint32_t next = tegra_host1x_syncpt_read(gSyncpt);
-    lockState();
-    gNext = next;
+    gNext = tegra_host1x_syncpt_read(gSyncpt);
     __atomic_store_n(&gWedged, !back, __ATOMIC_RELEASE);
-    IOLockUnlock(gStateLock);
     if (!back) {
         engineOff();
         gGate.lost();
@@ -164,10 +159,9 @@ extern "C" void tegra_nvjpg_unlock(void)
 }
 
 #if TEGRA_NVJPG_STATS
-void tegra_nvjpg_lock_counts(uint64_t *waitsUnlocked, uint64_t *stateWaitMaxUs)
+void tegra_nvjpg_lock_counts(uint64_t *waitsUnlocked)
 {
     *waitsUnlocked = __atomic_exchange_n(&gWaitsUnlocked, 0, __ATOMIC_RELAXED);
-    *stateWaitMaxUs = __atomic_exchange_n(&gStateWaitMaxUs, 0, __ATOMIC_RELAXED);
 }
 #endif
 #if TEGRA_NVJPG_PROBES

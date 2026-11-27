@@ -34,7 +34,7 @@ TEST(CryptexSource, ReadsGoToTheCardWithoutACopy)
 {
     const std::string read = body("IOReturn SwitchCryptexDevice::doAsyncReadWrite(");
     EXPECT_THAT(read,
-                HasSubstr("if (cacheHitInline(buffer, block, count, completion))\n        return kIOReturnSuccess;"));
+                HasSubstr("if (cacheHitInline(buffer, block, count, completion, &p))\n        return kIOReturnSuccess;"));
     EXPECT_LT(read.find("cacheHitInline("), read.find("takePending()"));
     EXPECT_THAT(read,
                 HasSubstr("if (cacheRead(p, buffer, block, count, cachePriority))\n        return kIOReturnSuccess;"));
@@ -80,14 +80,19 @@ TEST(CryptexSource, SmallReadsGoThroughTheCache)
         EXPECT_THAT(issue, Not(HasSubstr(copy)));
     const std::string finish = body("void finishRequest(thread_call_param_t parameter, thread_call_param_t)");
     EXPECT_LT(finish.find("copyOut(p)"), finish.find("gCache.cache.release(&p->cache, copied);"));
-    EXPECT_LT(finish.find("gCache.cache.release(&p->cache, copied);"), finish.find("p->buffer->release();"));
+    EXPECT_LT(finish.find("gCache.cache.release(&p->cache, copied);"), finish.find("pushPendingLocked(p);"));
+    EXPECT_LT(finish.find("pushPendingLocked(p);"), finish.find("IOLockUnlock(gCache.lock);"));
+    EXPECT_LT(finish.find("IOLockUnlock(gCache.lock);"), finish.find("buffer->release();"));
+    EXPECT_LT(finish.find("buffer->release();"), finish.find("client.action("));
     const std::string copy = body("bool copyOutRange(");
     EXPECT_THAT(copy, HasSubstr("switchClientCopy(buffer, bytes,"));
     EXPECT_THAT(copy, HasSubstr("copypv,"));
     const std::string job = body("void jobFinish(Job *j)");
     EXPECT_THAT(job, HasSubstr("gCache.cache.finished(j->window, j->first, j->count, j->status == kIOReturnSuccess)"));
+    EXPECT_LT(job.find("pushJobLocked(j);"), job.find("IOLockUnlock(gCache.lock);"));
     EXPECT_LT(job.find("IOLockUnlock(gCache.lock);"), job.find("pieceDone(nullptr, ready->owner,"));
     EXPECT_THAT(job, Not(HasSubstr("client.action")));
+    EXPECT_THAT(cryptex(), Not(HasSubstr("gPoolLock")));
 }
 
 // A window fill reads at High for a tier-0 requester and Default for any other, the boot replay included; a tier-0
@@ -132,7 +137,7 @@ TEST(CryptexSource, AFillPlannedButNotYetQueuedIsRaisedByItsIssuer)
     EXPECT_LT(checked, released);
     EXPECT_THAT(issue,
                 HasSubstr("raiseQueuedReads(read.window->tag + read.first, read.count, kIOStoragePriorityHigh);"));
-    EXPECT_EQ(Count(cryptex(), "issueRead(p->reads[i], priority)"), 1u) << "cacheRead is its only caller";
+    EXPECT_EQ(Count(cryptex(), "issueRead(p->reads[i], p->jobs[i], priority)"), 1u) << "cacheRead is its only caller";
     EXPECT_EQ(Count(cryptex(), "issueRead("), 3u) << "the declaration, the definition and cacheRead";
 }
 

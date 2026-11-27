@@ -4,10 +4,14 @@
 #include <IOKit/IOKitLib.h>
 #include <mach/mach.h>
 #include <os/log.h>
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#include "AVEEmitter.h"
 #include "NVENCListener.h"
 #include "../../../kits/SwitchServiceWait/SwitchServiceWait.h"
+
+extern os_log_t gLog;
 
 enum {
     kBuffers = 64,
@@ -18,12 +22,23 @@ typedef struct {
     uint8_t *va;
 } Mapping;
 
+typedef struct {
+    uint32_t magic;
+    uint32_t method;
+    TegraNVENCSubmit submit;
+} SubmitPacket;
+
+_Static_assert(offsetof(SubmitPacket, submit) == 8, "tunnel header must be 8 bytes");
+_Static_assert(sizeof(SubmitPacket) == 8 + sizeof(TegraNVENCSubmit), "submit packet must have no padding");
+
 struct NVENCClient {
     io_connect_t connection;
     uint32_t selector;
     uint32_t features;
     Mapping mappings[kBuffers];
     NVENCListener *listener;
+    SubmitPacket submitPacket;
+    SubmitPacket tilePackets[AVE_TILE_SLOTS];
 };
 
 static void remember(NVENCClient *c, uint32_t handle, void *va)
@@ -125,6 +140,12 @@ NVENCClient *nvenc_open(int *error)
         return NULL;
     }
     c->features = info.features;
+    c->submitPacket.magic = TEGRA_NVENC_TUNNEL_MAGIC;
+    c->submitPacket.method = TegraNVENCMethodSubmit;
+    for (unsigned i = 0; i < AVE_TILE_SLOTS; i++) {
+        c->tilePackets[i].magic = TEGRA_NVENC_TUNNEL_MAGIC;
+        c->tilePackets[i].method = TegraNVENCMethodSubmit;
+    }
     return c;
 }
 
@@ -148,8 +169,7 @@ static void logOnce(int *flag, const char *what, kern_return_t kr, uint64_t size
 {
     if (__atomic_exchange_n(flag, 1, __ATOMIC_RELAXED))
         return;
-    os_log_error(os_log_create("com.brunostjohn.switch.ave", "encoder"), "AVE: %{public}s %#x (%llu bytes)", what, kr,
-                 (unsigned long long)size);
+    os_log_error(gLog ? gLog : OS_LOG_DEFAULT, "AVE: %{public}s %#x (%llu bytes)", what, kr, (unsigned long long)size);
 }
 
 int nvenc_alloc(void *ctx, uint64_t size, uint32_t *handle, void **va)
@@ -177,12 +197,38 @@ void nvenc_free(void *ctx, uint32_t handle)
     forget(c, handle);
 }
 
+TegraNVENCSubmit *nvenc_submit_buffer(NVENCClient *c)
+{
+    return c ? &c->submitPacket.submit : NULL;
+}
+
+TegraNVENCSubmit *nvenc_tile_submit_buffer(NVENCClient *c, uint32_t slot)
+{
+    return c && slot < AVE_TILE_SLOTS ? &c->tilePackets[slot].submit : NULL;
+}
+
 int nvenc_submit(void *ctx, const TegraNVENCSubmit *submit, uint32_t *fence, uint32_t *input)
 {
     NVENCClient *c = ctx;
     TegraNVENCFence reply;
-    const kern_return_t kr =
-        call(c, c->selector, TegraNVENCMethodSubmit, submit, sizeof(*submit), &reply, sizeof(reply));
+    const SubmitPacket *packet = NULL;
+    if (submit == &c->submitPacket.submit) {
+        packet = &c->submitPacket;
+    } else {
+        for (unsigned i = 0; i < AVE_TILE_SLOTS; i++) {
+            if (submit == &c->tilePackets[i].submit) {
+                packet = &c->tilePackets[i];
+                break;
+            }
+        }
+    }
+    kern_return_t kr;
+    if (packet) {
+        size_t size = sizeof(reply);
+        kr = IOConnectCallStructMethod(c->connection, c->selector, packet, sizeof(*packet), &reply, &size);
+    } else {
+        kr = call(c, c->selector, TegraNVENCMethodSubmit, submit, sizeof(*submit), &reply, sizeof(reply));
+    }
     if (kr)
         return kr;
     *fence = reply.fence;

@@ -150,7 +150,6 @@ class TegraGPIO : public IOInterruptController {
     IOInterruptEventSource *deliveryKick = nullptr;
     IOLock *nubLock = nullptr;
     IOLock *deliveryLock = nullptr;
-    IOSimpleLock *portLock = nullptr;  // INT_LVL and DBC_CNT read-modify-write
     IOService *nubs[TEGRA_GPIO_COUNT] = {};
     uint8_t triggers[TEGRA_GPIO_COUNT] = {};
     uint8_t debounce[TEGRA_GPIO_COUNT / 8] = {};
@@ -254,9 +253,8 @@ bool TegraGPIO::start(IOService *provider)
     car = switch_mmio_map(kCarPA, 0x1000);
     nubLock = IOLockAlloc();
     deliveryLock = IOLockAlloc();
-    portLock = IOSimpleLockAlloc();
     vectors = IONewZero(IOInterruptVector, TEGRA_GPIO_COUNT);
-    if (!gpio || !pinmux || !car || !nubLock || !deliveryLock || !portLock || !vectors)
+    if (!gpio || !pinmux || !car || !nubLock || !deliveryLock || !vectors)
         return false;
     for (unsigned i = 0; i < TEGRA_GPIO_COUNT; ++i) {
         vectors[i].interruptLock = IOLockAlloc();
@@ -329,8 +327,6 @@ void TegraGPIO::free()
         IODelete(vectors, IOInterruptVector, TEGRA_GPIO_COUNT);
         vectors = nullptr;
     }
-    if (portLock)
-        IOSimpleLockFree(portLock);
     if (deliveryLock)
         IOLockFree(deliveryLock);
     if (nubLock)
@@ -482,10 +478,8 @@ void TegraGPIO::configurePin(unsigned pin, uint8_t trigger)
         switch_mmio_rmw32(pinmux, mux.offset, PULL_MASK, mux.pull | TRISTATE | INPUT);
     }
     maskWrite(pin, MSK_INT_ENB, false);
-    const IOInterruptState state = IOSimpleLockLockDisableInterrupt(portLock);
     const uint32_t shift = pin & 7;
     wr(portReg(pin, INT_LVL), (rd(portReg(pin, INT_LVL)) & ~(kLvlMask << shift)) | (lvlBits(trigger) << shift));
-    IOSimpleLockUnlockEnableInterrupt(portLock, state);
     maskWrite(pin, MSK_OE, false);
     maskWrite(pin, MSK_CNF, true);
     wr(portReg(pin, INT_CLR), pinBit(pin));
@@ -561,21 +555,22 @@ IOService *TegraGPIO::nubFor(unsigned pin, unsigned trigger)
 
 void TegraGPIO::setDebounce(unsigned pin, unsigned ms)
 {
+    IOLockLock(nubLock);
     if (!ms) {
         debouncePins[pin >> 3] &= static_cast<uint8_t>(~pinBit(pin));
         maskWrite(pin, MSK_DBC_EN, false);
+        IOLockUnlock(nubLock);
         return;
     }
     if (ms > 255)
         ms = 255;
-    const IOInterruptState state = IOSimpleLockLockDisableInterrupt(portLock);
     if (debounce[pin >> 3] < ms) {
         debounce[pin >> 3] = static_cast<uint8_t>(ms);
         wr(portReg(pin, DBC_CNT), ms);
     }
     debouncePins[pin >> 3] |= static_cast<uint8_t>(pinBit(pin));
-    IOSimpleLockUnlockEnableInterrupt(portLock, state);
     maskWrite(pin, MSK_DBC_EN, true);
+    IOLockUnlock(nubLock);
 }
 
 // System sleep (SwitchSuspend quiesce/active actions: boot CPU, interrupts off, the other cores off; pinmux is

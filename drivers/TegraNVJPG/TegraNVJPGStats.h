@@ -37,9 +37,8 @@ void tegra_nvjpg_stats_line(void);
 // the first of each route otherwise to the console. Engine thread only.
 void tegra_nvjpg_note_route(uint32_t route, bool held, uint32_t rowBytes, uint32_t yLog2, uint32_t pages,
                             const nvjpg_dec_drv_pic_setup_s *setup, uint32_t width, uint32_t height);
-// TegraNVJPG.cpp's, taken and zeroed: the jobs whose engine wait ran with gStateLock free, and the longest a
-// cancellation or an idle gate call waited to take gStateLock. Takes no lock: a client's refused decode calls it too.
-void tegra_nvjpg_lock_counts(uint64_t *waitsUnlocked, uint64_t *stateWaitMaxUs);
+// TegraNVJPG.cpp's, taken and zeroed: completed engine waits. Takes no lock: a client's refused decode calls it too.
+void tegra_nvjpg_lock_counts(uint64_t *waitsUnlocked);
 #endif
 
 #endif

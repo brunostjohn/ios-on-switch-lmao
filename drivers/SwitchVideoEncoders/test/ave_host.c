@@ -46,6 +46,8 @@ struct NVENCClient {
     NVENCDone done;
     void *doneContext;
     bool listening;
+    TegraNVENCSubmit submit;
+    TegraNVENCSubmit tileSubmits[AVE_TILE_SLOTS];
 };
 
 static uint32_t gLayout = TEGRA_NVENC_LAYOUT_PITCH, gChroma = TEGRA_NVENC_CHROMA_OFFSET;
@@ -156,6 +158,16 @@ bool nvenc_info(NVENCClient *c, TegraNVENCInfo *info)
 void *nvenc_buffer_va(const NVENCClient *c, uint32_t handle)
 {
     return c && handle < MAX_HANDLES ? c->va[handle] : NULL;
+}
+
+TegraNVENCSubmit *nvenc_submit_buffer(NVENCClient *c)
+{
+    return c ? &c->submit : NULL;
+}
+
+TegraNVENCSubmit *nvenc_tile_submit_buffer(NVENCClient *c, uint32_t slot)
+{
+    return c && slot < AVE_TILE_SLOTS ? &c->tileSubmits[slot] : NULL;
 }
 
 bool nvenc_listen(NVENCClient *c, dispatch_queue_t queue, NVENCDone done, void *context)

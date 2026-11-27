@@ -16,11 +16,9 @@
 // never arrives panics) on a
 // dedicated worker thread so callers never block or recurse.
 #include <IOKit/IOBSD.h>
-#include <IOKit/IOFilterInterruptEventSource.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOPlatformExpert.h>
 #include <os/log.h>
-#include <IOKit/IOWorkLoop.h>
 #include <IOKit/IOKitKeys.h>
 #include <IOKit/storage/IOBlockStorageDevice.h>
 #include <IOKit/storage/IOMedia.h>
@@ -647,7 +645,7 @@ class NativeSwitchBlock : public IOService {
     // the bounce buffer as before r10-adma2.
     static constexpr bool copyFlush = false;
     // Two-slot prepared ADMA2 pipeline (SwitchSdPipeline.h): each slot owns its 16 KiB descriptor table and read
-    // staging array; hwLock synchronizes interruptFilter's fast-issue path with the worker.
+    // staging array; hwLock synchronizes interruptHandler's fast-issue path with the worker.
     PipeSlot slots[2] = {};
     SwitchSdPipeline<PipeSlot> pipe = {};
     IOSimpleLock *hwLock = nullptr;
@@ -667,10 +665,9 @@ class NativeSwitchBlock : public IOService {
     // The interrupt status the last controlCommand() ended with, for the discard and erase refusal lines.
     uint32_t cardLastIrq = 0;
     // SDMMC1 interrupt: the controller's line is (STATUS & SIGNAL_ENABLE). The worker enables the signals it
-    // waits for and sleeps on irqEvent; the filter disables them again (lowering the line) and wakes it.
-    IOWorkLoop *irqLoop = nullptr;
-    IOFilterInterruptEventSource *irqSource = nullptr;
-    IOFilterInterruptEventSource *cdSource = nullptr;
+    // waits for and sleeps on irqEvent; the primary handler disables them again (lowering the line) and wakes it.
+    IOService *irqNub = nullptr;
+    IOService *cdNub = nullptr;
     bool cardDetectArmed = false;
     int irqEvent = 0;
 #if DEVELOPMENT || DEBUG
@@ -750,9 +747,9 @@ class NativeSwitchBlock : public IOService {
     void ended(uint32_t status);
     int awaitRelease();
     void startInterrupt();
-    static bool interruptFilter(OSObject *, IOFilterInterruptEventSource *);
+    static void interruptHandler(OSObject *, void *, IOService *, int);
     void startCardDetect();
-    static bool cardDetectFilter(OSObject *, IOFilterInterruptEventSource *);
+    static void cardDetectHandler(OSObject *, void *, IOService *, int);
     void checkCardPresent(const char *where);
     [[noreturn]] void cardRemovedPanic(const char *where, int level);
     bool waitSignal(uint32_t signals, uint64_t timeoutNs);
@@ -1137,7 +1134,7 @@ int NativeSwitchBlock::awaitRelease()
 // Primary interrupt context. Masking the signals lowers the level line, so there is nothing left for a work loop.
 // For pipelined ADMA2 commands, a clean completion rotates `active` -> `done` and immediately issues `prepared`
 // inside the ISR; errors and DAT0-busy completions leave STATUS and bus untouched for worker recovery.
-bool NativeSwitchBlock::interruptFilter(OSObject *owner, IOFilterInterruptEventSource *)
+void NativeSwitchBlock::interruptHandler(OSObject *owner, void *, IOService *, int)
 {
     auto *self = static_cast<NativeSwitchBlock *>(owner);
     IOSimpleLockLock(self->hwLock);
@@ -1145,7 +1142,7 @@ bool NativeSwitchBlock::interruptFilter(OSObject *owner, IOFilterInterruptEventS
     const uint32_t en = self->r32(SIGNAL_ENABLE);
     if (!(s & en)) {
         IOSimpleLockUnlock(self->hwLock);
-        return false;
+        return;
     }
     self->w32(SIGNAL_ENABLE, 0);
     (void)self->r32(SIGNAL_ENABLE);  // the line is low before ArmCpu ends the interrupt
@@ -1161,7 +1158,7 @@ bool NativeSwitchBlock::interruptFilter(OSObject *owner, IOFilterInterruptEventS
 #endif
         IOSimpleLockUnlock(self->hwLock);
         thread_wakeup(&self->irqEvent);
-        return false;
+        return;
     }
     SwitchSdIrqSample sample = {};
     sample.status = s;
@@ -1191,7 +1188,6 @@ bool NativeSwitchBlock::interruptFilter(OSObject *owner, IOFilterInterruptEventS
 #endif
     IOSimpleLockUnlock(self->hwLock);
     thread_wakeup(&self->workerEvent);
-    return false;
 }
 
 // Sleeps until the controller raises one of `signals` or timeoutNs passes; false on
@@ -1298,21 +1294,15 @@ uint32_t NativeSwitchBlock::awaitStatus(uint32_t awaited, uint64_t limitNs)
 void NativeSwitchBlock::startInterrupt()
 {
     IOService *nub = switch_interrupt_nub(kInterrupt, false);
-    irqLoop = IOWorkLoop::workLoop();
-    // Filter only: it never schedules the (absent) work-loop action.
-    irqSource = irqLoop ? IOFilterInterruptEventSource::filterInterruptEventSource(
-                              this, nullptr, &NativeSwitchBlock::interruptFilter, nub, 0)
-                        : nullptr;
-    if (!irqSource || irqLoop->addEventSource(irqSource) != kIOReturnSuccess) {
+    if (!nub || nub->registerInterrupt(0, this, &NativeSwitchBlock::interruptHandler, nullptr) != kIOReturnSuccess)
         panic("SwitchSD: cannot attach the SDMMC1 interrupt (INTID %u)", kInterrupt);
-    }
-    irqSource->enable();
+    irqNub = nub;
+    irqNub->enableInterrupt(0);
 }
 
-bool NativeSwitchBlock::cardDetectFilter(OSObject *owner, IOFilterInterruptEventSource *)
+void NativeSwitchBlock::cardDetectHandler(OSObject *owner, void *, IOService *, int)
 {
     static_cast<NativeSwitchBlock *>(owner)->checkCardPresent("interrupt");
-    return false;
 }
 
 void NativeSwitchBlock::cardRemovedPanic(const char *where, int level)
@@ -1339,13 +1329,11 @@ void NativeSwitchBlock::startCardDetect()
         tegra_gpio_describe(TEGRA_GPIO_SD_CD, state, sizeof(state));
         panic("SwitchSD: no interrupt nub for SD card detect (PZ1): %s", state);
     }
-    cdSource = irqLoop ? IOFilterInterruptEventSource::filterInterruptEventSource(
-                             this, nullptr, &NativeSwitchBlock::cardDetectFilter, nub, 0)
-                       : nullptr;
-    if (!cdSource || irqLoop->addEventSource(cdSource) != kIOReturnSuccess)
+    if (nub->registerInterrupt(0, this, &NativeSwitchBlock::cardDetectHandler, nullptr) != kIOReturnSuccess)
         panic("SwitchSD: cannot attach SD card detect interrupt (GPIO %u, PZ1)", TEGRA_GPIO_SD_CD);
+    cdNub = nub;
     __atomic_store_n(&cardDetectArmed, true, __ATOMIC_RELEASE);
-    cdSource->enable();
+    cdNub->enableInterrupt(0);
     checkCardPresent("boot");
 }
 
@@ -4129,12 +4117,12 @@ bool NativeSwitchBlock::reinitialize(uint32_t baseKHz, uint8_t ldo2, bool uhs, b
                     IOLog("SwitchSD: DDR200 rejected (window %u < %u, CMD13 err %d); power-cycling to SDR104\n",
                           ddr200Window, kSdMinTuneWindow, statusErr);
                     ddr200Allowed = false;
-                    if (irqSource)
-                        irqSource->disable();
+                    if (irqNub)
+                        irqNub->disableInterrupt(0);
                     powerOffCard();
                     powerOnController();
-                    if (irqSource)
-                        irqSource->enable();
+                    if (irqNub)
+                        irqNub->enableInterrupt(0);
                     return reinitialize(PLLP_KHZ * 2 / (kPllpDivider48MHz + 2), 0xc0 | kLdo3V3, true, resume);
                 }
             }
@@ -4305,10 +4293,10 @@ void NativeSwitchBlock::suspend()
     powerOffNotify();
     dmaSuspend();
     __atomic_store_n(&cardDetectArmed, false, __ATOMIC_RELEASE);
-    if (cdSource)
-        cdSource->disable();
-    if (irqSource)
-        irqSource->disable();
+    if (cdNub)
+        cdNub->disableInterrupt(0);
+    if (irqNub)
+        irqNub->disableInterrupt(0);
     powerOffCard();
 }
 
@@ -4411,10 +4399,10 @@ void NativeSwitchBlock::releaseRequestPool()
 void NativeSwitchBlock::stop(IOService *provider)
 {
     __atomic_store_n(&cardDetectArmed, false, __ATOMIC_RELEASE);
-    if (cdSource) {
-        cdSource->disable();
-        if (irqLoop)
-            irqLoop->removeEventSource(cdSource);
+    if (cdNub) {
+        cdNub->disableInterrupt(0);
+        cdNub->unregisterInterrupt(0);
+        cdNub = nullptr;
     }
     if (queueLock) {
         IOLockLock(queueLock);
@@ -4434,6 +4422,11 @@ void NativeSwitchBlock::stop(IOService *provider)
             completeBatch(b);
         }
     }
+    if (irqNub) {
+        irqNub->disableInterrupt(0);
+        irqNub->unregisterInterrupt(0);
+        irqNub = nullptr;
+    }
     if (trimCall)
         thread_call_cancel(trimCall);
     releaseRequestPool();
@@ -4442,7 +4435,6 @@ void NativeSwitchBlock::stop(IOService *provider)
 
 void NativeSwitchBlock::free()
 {
-    OSSafeReleaseNULL(cdSource);
     releaseRequestPool();
     IOService::free();
 }
@@ -4477,8 +4469,8 @@ void NativeSwitchBlock::shutdown()
     if (saveCursor)
         saveTrimCursor(cursor);
     __atomic_store_n(&cardDetectArmed, false, __ATOMIC_RELEASE);
-    if (cdSource)
-        cdSource->disable();
+    if (cdNub)
+        cdNub->disableInterrupt(0);
     if (abandoned) {
         Batch b = {};
         b.first = abandoned;
@@ -4494,8 +4486,8 @@ void NativeSwitchBlock::shutdown()
         writesDirty = false;
     powerOffNotify();
     dmaSuspend();
-    if (irqSource)
-        irqSource->disable();
+    if (irqNub)
+        irqNub->disableInterrupt(0);
 }
 
 IOReturn NativeSwitchBlock::callPlatformFunction(const OSSymbol *function, bool wait, void *p1, void *p2, void *p3,
@@ -4512,14 +4504,14 @@ IOReturn NativeSwitchBlock::callPlatformFunction(const OSSymbol *function, bool 
 
 void NativeSwitchBlock::resume()
 {
-    if (cdSource) {
+    if (cdNub) {
         __atomic_store_n(&cardDetectArmed, true, __ATOMIC_RELEASE);
-        cdSource->enable();
+        cdNub->enableInterrupt(0);
         checkCardPresent("resume");
     }
     powerOnController();
-    if (irqSource)
-        irqSource->enable();
+    if (irqNub)
+        irqNub->enableInterrupt(0);
     const bool uhs = lowVoltageBus && enablePllc4();
     if (lowVoltageBus && !uhs)
         panic("SwitchSD: PLLC4 does not lock after sleep (PLLC4_BASE 0x%08x)", switch_mmio_read32(car, CAR_PLLC4_BASE));

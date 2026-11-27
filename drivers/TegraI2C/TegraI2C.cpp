@@ -17,8 +17,12 @@
 // costs one line and that path for the boot, never a panic: a chain whose completion never comes times out (nothing is
 // left asserted), and a DMA end of count that has never reached the CPU is reported, not panicked on; once one has, a
 // lost one panics. Other buses keep one packet per message.
+#ifdef TEGRA_I2C_HOST_MODEL
 #include <IOKit/IOFilterInterruptEventSource.h>
 #include <IOKit/IOInterruptEventSource.h>
+#else
+#include <IOKit/IOService.h>
+#endif
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
 #include <IOKit/IOWorkLoop.h>
@@ -165,7 +169,11 @@ constexpr uint32_t kDriveMask = (0x1fu << 20) | (0x1fu << 12);  // DRVUP 24:20, 
 struct Bus {
     volatile uint8_t *regs;
     IOLock *lock;  // one transfer at a time
+#ifdef TEGRA_I2C_HOST_MODEL
     IOFilterInterruptEventSource *irq;
+#else
+    IOService *irqNub;
+#endif
     uint32_t hz;
     bool ready;
     bool owned;        // we reset/clocked it, so error recovery may reset it again
@@ -357,6 +365,14 @@ int drainRxFifo(Bus &b)
 
 void completeBit(Bus &b, uint32_t bit, int res)
 {
+    if (!b.dmaActive) {
+        const uint32_t cur = __atomic_load_n(&b.state, __ATOMIC_RELAXED);
+        if (!(cur & kStateActive) || !(cur & bit))
+            return;
+        __atomic_store_n(&b.state, kStateDone | encodeResult(res), __ATOMIC_RELEASE);
+        thread_wakeup(reinterpret_cast<event_t>(&b.state));
+        return;
+    }
     uint32_t cur = __atomic_load_n(&b.state, __ATOMIC_RELAXED);
     for (;;) {
         if (!(cur & kStateActive) || !(cur & bit))
@@ -378,6 +394,13 @@ void completeBit(Bus &b, uint32_t bit, int res)
 
 void completeError(Bus &b, int err)
 {
+    if (!b.dmaActive) {
+        if (!(__atomic_load_n(&b.state, __ATOMIC_RELAXED) & kStateActive))
+            return;
+        __atomic_store_n(&b.state, kStateDone | encodeResult(err), __ATOMIC_RELEASE);
+        thread_wakeup(reinterpret_cast<event_t>(&b.state));
+        return;
+    }
     uint32_t cur = __atomic_load_n(&b.state, __ATOMIC_RELAXED);
     for (;;) {
         if (!(cur & kStateActive))
@@ -390,56 +413,84 @@ void completeError(Bus &b, int err)
     }
 }
 
+void disableIrq(Bus &b)
+{
+#ifdef TEGRA_I2C_HOST_MODEL
+    if (b.irq)
+        b.irq->disable();
+#else
+    if (b.irqNub)
+        b.irqNub->disableInterrupt(0);
+#endif
+}
+
+void enableIrq(Bus &b)
+{
+#ifdef TEGRA_I2C_HOST_MODEL
+    if (b.irq)
+        b.irq->enable();
+#else
+    if (b.irqNub)
+        b.irqNub->enableInterrupt(0);
+#endif
+}
+
 // Primary interrupt context, the bus's SPI (level): mask/ack hardware before publishing kStateDone so a woken caller
-// on another core can safely start the next transfer immediately. Always returns false (zero work-loop hops).
+// on another core can safely start the next transfer immediately.
+void handleBusInterrupt(Bus &b)
+{
+    __atomic_store_n(&b.interrupts, __atomic_load_n(&b.interrupts, __ATOMIC_RELAXED) + 1u, __ATOMIC_RELAXED);
+    const uint32_t status = r32(b.regs, INT_STATUS);
+    if (!(__atomic_load_n(&b.state, __ATOMIC_ACQUIRE) & kStateActive)) {
+        w32(b.regs, INT_MASK, 0);
+        w32(b.regs, INT_STATUS, status);
+        return;
+    }
+    if (b.busClear) {
+        if (status & INT_BUS_CLEAR_DONE) {
+            w32(b.regs, INT_MASK, 0);
+            w32(b.regs, INT_STATUS, status);
+            completeBit(b, kStateNeedPacket, TEGRA_I2C_OK);
+        } else {
+            w32(b.regs, INT_STATUS, status);
+        }
+        return;
+    }
+    if (status & (INT_NO_ACK | INT_ARB_LOST)) {
+        b.faultInt = status;
+        b.faultPacket = r32(b.regs, PACKET_TRANSFER_STATUS);
+        b.faultAddr = b.addr;
+        b.faulted = true;
+        w32(b.regs, INT_MASK, 0);
+        w32(b.regs, INT_STATUS, status);
+        completeError(b, (status & INT_NO_ACK) ? TEGRA_I2C_ENACK : TEGRA_I2C_EARB);
+        return;
+    }
+    if (!b.dmaActive && !b.drainByCaller)
+        serviceFifo(b);
+    if (status & b.doneBit) {
+        const int res =
+            (!b.dmaActive && !b.drainByCaller && (b.done != b.len || b.overflow)) ? TEGRA_I2C_EIO : TEGRA_I2C_OK;
+        w32(b.regs, INT_MASK, 0);
+        w32(b.regs, INT_STATUS, status);
+        completeBit(b, kStateNeedPacket, res);
+        return;
+    }
+    if (!b.dmaActive && !b.rx && b.done == b.len && (b.intMask & INT_TX_REQ)) {
+        b.intMask &= ~INT_TX_REQ;
+        w32(b.regs, INT_MASK, b.intMask);
+    }
+    w32(b.regs, INT_STATUS, status);  // the FIFO request bits are levels and ignore this
+}
+
+#ifdef TEGRA_I2C_HOST_MODEL
 // NOLINTNEXTLINE(misc-const-correctness): IOFilterInterruptEventSource::Filter's signature
 bool filterInterrupt(OSObject *, IOFilterInterruptEventSource *sender)
 {
     for (Bus &b : gBus) {
         if (b.irq != sender)
             continue;
-        __atomic_fetch_add(&b.interrupts, 1, __ATOMIC_RELAXED);
-        const uint32_t status = r32(b.regs, INT_STATUS);
-        if (!(__atomic_load_n(&b.state, __ATOMIC_ACQUIRE) & kStateActive)) {
-            w32(b.regs, INT_MASK, 0);
-            w32(b.regs, INT_STATUS, status);
-            return false;
-        }
-        if (b.busClear) {
-            if (status & INT_BUS_CLEAR_DONE) {
-                w32(b.regs, INT_MASK, 0);
-                w32(b.regs, INT_STATUS, status);
-                completeBit(b, kStateNeedPacket, TEGRA_I2C_OK);
-            } else {
-                w32(b.regs, INT_STATUS, status);
-            }
-            return false;
-        }
-        if (status & (INT_NO_ACK | INT_ARB_LOST)) {
-            b.faultInt = status;
-            b.faultPacket = r32(b.regs, PACKET_TRANSFER_STATUS);
-            b.faultAddr = b.addr;
-            b.faulted = true;
-            w32(b.regs, INT_MASK, 0);
-            w32(b.regs, INT_STATUS, status);
-            completeError(b, (status & INT_NO_ACK) ? TEGRA_I2C_ENACK : TEGRA_I2C_EARB);
-            return false;
-        }
-        if (!b.dmaActive && !b.drainByCaller)
-            serviceFifo(b);
-        if (status & b.doneBit) {
-            const int res =
-                (!b.dmaActive && !b.drainByCaller && (b.done != b.len || b.overflow)) ? TEGRA_I2C_EIO : TEGRA_I2C_OK;
-            w32(b.regs, INT_MASK, 0);
-            w32(b.regs, INT_STATUS, status);
-            completeBit(b, kStateNeedPacket, res);
-            return false;
-        }
-        if (!b.dmaActive && !b.rx && b.done == b.len && (b.intMask & INT_TX_REQ)) {
-            b.intMask &= ~INT_TX_REQ;
-            w32(b.regs, INT_MASK, b.intMask);
-        }
-        w32(b.regs, INT_STATUS, status);  // the FIFO request bits are levels and ignore this
+        handleBusInterrupt(b);
         return false;
     }
     return false;
@@ -447,13 +498,18 @@ bool filterInterrupt(OSObject *, IOFilterInterruptEventSource *sender)
 
 void noAction(OSObject *, IOInterruptEventSource *, int)
 {}
+#else
+void i2cInterrupt(OSObject *, void *refCon, IOService *, int)
+{
+    handleBusInterrupt(*static_cast<Bus *>(refCon));
+}
+#endif
 
-// Primary interrupt context (TegraAPBDMA's filter, end of count already acknowledged): complete directly without
-// bouncing through gLoop.
+// Primary interrupt context (TegraAPBDMA's filter, end of count already acknowledged): complete directly.
 void dmaEnded(void *context)
 {
     auto *b = static_cast<Bus *>(context);
-    __atomic_fetch_add(&b->interrupts, 1, __ATOMIC_RELAXED);
+    __atomic_store_n(&b->interrupts, __atomic_load_n(&b->interrupts, __ATOMIC_RELAXED) + 1u, __ATOMIC_RELAXED);
     completeBit(*b, kStateNeedDma, TEGRA_I2C_OK);
 }
 
@@ -516,14 +572,12 @@ int sleepForAction(unsigned bus, Bus &b, uint64_t us)
         clock_interval_to_deadline(kGraceMs, kMillisecondScale, &deadline);
     }
     w32(b.regs, INT_MASK, 0);
-    if (b.irq)
-        b.irq->disable();
+    disableIrq(b);
     if (b.dmaActive)
         tegra_apbdma_stop(b.dma);
     const uint32_t prev = __atomic_exchange_n(&b.state, kStateIdle, __ATOMIC_ACQUIRE);
     if (prev & kStateDone) {
-        if (b.irq)
-            b.irq->enable();
+        enableIrq(b);
         return decodeResult(prev);
     }
     if (!b.busClear) {
@@ -533,8 +587,7 @@ int sleepForAction(unsigned bus, Bus &b, uint64_t us)
         b.faulted = true;
     }
     w32(b.regs, INT_STATUS, r32(b.regs, INT_STATUS));
-    if (b.irq)
-        b.irq->enable();
+    enableIrq(b);
     return TEGRA_I2C_ETIMEDOUT;
 }
 
@@ -565,9 +618,9 @@ int configure(unsigned bus, Bus &b)
     b.drainByCaller = false;
     b.doneBit = INT_BUS_CLEAR_DONE;
     b.intMask = INT_BUS_CLEAR_DONE;
-    __atomic_store_n(&b.state, kStateActive | kStateNeedPacket, __ATOMIC_RELEASE);
+    __atomic_store_n(&b.state, kStateActive | kStateNeedPacket, __ATOMIC_RELAXED);
 #ifndef TEGRA_I2C_HOST_MODEL
-    __asm__ volatile("dmb sy" ::: "memory");
+    __asm__ volatile("dmb oshst" ::: "memory");
 #endif
     w32(b.regs, INT_MASK, INT_BUS_CLEAR_DONE);
     w32(b.regs, BUS_CLEAR_CNFG, BC_CONFIG | BC_ENABLE);
@@ -581,10 +634,11 @@ int configure(unsigned bus, Bus &b)
     return TEGRA_I2C_OK;
 }
 
-// The bus's SPI as a filter-only event source; switch_interrupt_nub() sleeps until the GIC is up. Only called once the
-// controller is clocked, so the filter never reads an unclocked block.
+// The bus's SPI registered directly on the GIC nub (no work loop); switch_interrupt_nub() sleeps until the GIC is up.
+// Only called once the controller is clocked, so the handler never reads an unclocked block.
 void attachInterrupt(unsigned bus, Bus &b)
 {
+#ifdef TEGRA_I2C_HOST_MODEL
     if (b.irq)
         return;
     w32(b.regs, INT_MASK, 0);
@@ -594,6 +648,17 @@ void attachInterrupt(unsigned bus, Bus &b)
         panic("TegraI2C: cannot attach the I2C%u interrupt (INTID %u)", bus, intid(bus));
     }
     b.irq->enable();
+#else
+    if (b.irqNub)
+        return;
+    w32(b.regs, INT_MASK, 0);
+    IOService *nub = switch_interrupt_nub(intid(bus), false);
+    if (!nub || nub->registerInterrupt(0, nullptr, &i2cInterrupt, &b) != kIOReturnSuccess) {
+        panic("TegraI2C: cannot attach the I2C%u interrupt (INTID %u)", bus, intid(bus));
+    }
+    b.irqNub = nub;
+    b.irqNub->enableInterrupt(0);
+#endif
 }
 
 int bringUp(unsigned bus, Bus &b)
@@ -682,9 +747,9 @@ int packet(unsigned bus, Bus &b, uint8_t addr, const uint8_t *out, uint8_t *in, 
             fifoRequest = INT_TX_REQ;
         }
         b.intMask = INT_NO_ACK | INT_ARB_LOST | INT_PACKET_DONE | fifoRequest;
-        __atomic_store_n(&b.state, kStateActive | kStateNeedPacket, __ATOMIC_RELEASE);
+        __atomic_store_n(&b.state, kStateActive | kStateNeedPacket, __ATOMIC_RELAXED);
 #ifndef TEGRA_I2C_HOST_MODEL
-        __asm__ volatile("dmb sy" ::: "memory");
+        __asm__ volatile("dmb oshst" ::: "memory");
 #endif
         w32(b.regs, INT_MASK, b.intMask);
         result = sleepForAction(bus, b, 5000 + static_cast<uint64_t>(len + 2) * 18 * 1000000 / b.hz);
@@ -721,9 +786,9 @@ int chain(unsigned bus, Bus &b, uint8_t addr, const uint8_t *out, size_t outLen,
         b.doneBit = INT_ALL_PACKETS_DONE;
         b.addr = addr;
         b.intMask = INT_NO_ACK | INT_ARB_LOST | INT_ALL_PACKETS_DONE | (!dma && !drainAtEnd ? INT_RX_REQ : 0);
-        __atomic_store_n(&b.state, kStateActive | kStateNeedPacket | (dma ? kStateNeedDma : 0u), __ATOMIC_RELEASE);
+        __atomic_store_n(&b.state, kStateActive | kStateNeedPacket | (dma ? kStateNeedDma : 0u), __ATOMIC_RELAXED);
 #ifndef TEGRA_I2C_HOST_MODEL
-        __asm__ volatile("dmb sy" ::: "memory");
+        __asm__ volatile("dmb oshst" ::: "memory");
 #endif
         if (dma) {
             // Each 32-bit read of RX_FIFO pops one word of the read (four bytes; a UART's pops one byte).
@@ -779,8 +844,24 @@ bool openDma(const BusInfo &info, Bus &b, char *why, size_t whySize)
         snprintf(why, whySize, "no DMA buffer (%u bytes below 4 GiB)", kDmaBufferSize);
         return false;
     }
+    IOWorkLoop *loop = __atomic_load_n(&gLoop, __ATOMIC_ACQUIRE);
+    if (!loop) {
+        IOWorkLoop *fresh = IOWorkLoop::workLoop();
+        if (!fresh) {
+            snprintf(why, whySize, "no work loop for APB DMA");
+            return false;
+        }
+        // NOLINTNEXTLINE(misc-const-correctness): the compare-exchange writes it
+        IOWorkLoop *expected = nullptr;
+        if (!__atomic_compare_exchange_n(&gLoop, &expected, fresh, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+            fresh->release();
+            loop = expected;
+        } else {
+            loop = fresh;
+        }
+    }
     char reason[96] = "";
-    b.dma = tegra_apbdma_open(info.dmaChannel, gLoop, &dmaEnded, &b, reason, sizeof(reason));
+    b.dma = tegra_apbdma_open(info.dmaChannel, loop, &dmaEnded, &b, reason, sizeof(reason));
     if (!b.dma) {
         snprintf(why, whySize, "APB DMA channel %u: %s", info.dmaChannel, reason);
         return false;
@@ -824,15 +905,13 @@ int pollPacket(Bus &b, uint8_t addr, const uint8_t *out, uint8_t *in, size_t len
 // unclocked block. A multi-master bus only gets its FIFOs flushed: a reset's bus clear would cut into the other master.
 void recover(unsigned bus, Bus &b)
 {
-    if (b.irq)
-        b.irq->disable();
+    disableIrq(b);
     __atomic_store_n(&b.state, kStateIdle, __ATOMIC_RELAXED);
     b.fifoClean = false;
     if (b.owned && !b.multiMaster) {
         clockEnable(kBus[bus - 1]);
         w32(b.regs, INT_MASK, 0);
-        if (b.irq)
-            b.irq->enable();
+        enableIrq(b);
         (void)configure(bus, b);
         return;
     }
@@ -840,8 +919,7 @@ void recover(unsigned bus, Bus &b)
     w32(b.regs, FIFO_CONTROL, r32(b.regs, FIFO_CONTROL) | FIFO_FLUSH);
     (void)waitClear(b, FIFO_CONTROL, FIFO_FLUSH, 2000);
     w32(b.regs, INT_STATUS, r32(b.regs, INT_STATUS));
-    if (b.irq)
-        b.irq->enable();
+    enableIrq(b);
 }
 
 IOLock *setupLock()
@@ -870,10 +948,15 @@ extern "C" int tegra_i2c_init(unsigned bus)
         gApbMisc = (volatile uint8_t *)ml_io_map(kApbMiscPA, kApbMiscSize);
         gI2C = (gCar && gPinmux && gApbMisc) ? (volatile uint8_t *)ml_io_map(kI2CPA, kI2CSize) : nullptr;
     }
+#ifdef TEGRA_I2C_HOST_MODEL
     if (!gLoop)
         gLoop = IOWorkLoop::workLoop();
     Bus &b = gBus[bus - 1];
     if (!gI2C || !gLoop) {
+#else
+    Bus &b = gBus[bus - 1];
+    if (!gI2C) {
+#endif
         result = TEGRA_I2C_ENOMEM;
     } else if (!b.ready) {
         if (!b.lock)
@@ -938,8 +1021,7 @@ extern "C" void tegra_i2c_suspend(void)
         if (!b.ready)
             continue;
         IOLockLock(b.lock);
-        if (b.irq)
-            b.irq->disable();
+        disableIrq(b);
         __atomic_store_n(&b.state, kStateIdle, __ATOMIC_RELAXED);
         w32(b.regs, INT_MASK, 0);
     }
@@ -959,8 +1041,7 @@ extern "C" void tegra_i2c_resume(void)
             if (bus == 5)
                 b.hz = kClkM / info.divider / kBusDivide;
         }
-        if (b.irq)
-            b.irq->enable();
+        enableIrq(b);
         b.fifoClean = false;
         const int result = adopted ? TEGRA_I2C_OK : configure(bus, b);
         if (adopted) {

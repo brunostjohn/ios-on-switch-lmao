@@ -53,12 +53,21 @@ TEST(TegraI2CSource, AControllerClockComesUpInTheTrmOrder)
 TEST(TegraI2CSource, FilterOnlyIsrWithoutIrqLockOrDmaDoneSource)
 {
     const std::string source = switch_ios::test::SourceText("../TegraI2C.cpp");
-    EXPECT_NE(source.find("IOFilterInterruptEventSource::filterInterruptEventSource("), std::string::npos);
+    EXPECT_NE(source.find("nub->registerInterrupt(0,"), std::string::npos);
     EXPECT_NE(source.find("thread_wakeup("), std::string::npos);
+    EXPECT_EQ(source.find("dmb sy"), std::string::npos);
+    EXPECT_NE(source.find("dmb oshst"), std::string::npos);
+    EXPECT_EQ(source.find("__atomic_fetch_add(&b"), std::string::npos);
     EXPECT_EQ(source.find("irqLock"), std::string::npos);
     EXPECT_EQ(source.find("dmaDoneSource"), std::string::npos);
     EXPECT_EQ(source.find("switch_dcache_clean_invalidate"), std::string::npos);
     EXPECT_NE(source.find("switch_dcache_invalidate("), std::string::npos);
+
+    const std::string complete = switch_ios::test::Body(source, "void completeBit(");
+    ASSERT_FALSE(complete.empty());
+    EXPECT_NE(complete.find("if (!b.dmaActive)"), std::string::npos);
+    EXPECT_NE(complete.find("__atomic_store_n(&b.state, kStateDone | encodeResult(res), __ATOMIC_RELEASE);"),
+              std::string::npos);
 
     const std::string packet = switch_ios::test::Body(source, "int packet(");
     ASSERT_FALSE(packet.empty());

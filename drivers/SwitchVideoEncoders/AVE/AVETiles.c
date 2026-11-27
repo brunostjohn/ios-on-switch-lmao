@@ -11,7 +11,9 @@
 // requirements: origins on even samples both ways (0x2c46180a0..0x2c4618100), and source padding, which AVE states
 // on its newer devices (0x2c4618110). One hvcC serves every tile.
 #include <CoreVideo/CoreVideo.h>
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 #include <mach/mach_time.h>
+#endif
 #include <stdlib.h>
 #include <string.h>
 #include "AVEEncoder.h"
@@ -152,21 +154,27 @@ static OSStatus createSample(const Encoder *e, size_t size, CMSampleBufferRef *o
 static OSStatus encodeTileSync(Encoder *e, CVPixelBufferRef source, const AVERegion *r, uint8_t qp,
                                CMSampleBufferRef *out)
 {
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     const uint64_t began = mach_absolute_time();
-    TegraNVENCSubmit *submit = malloc(sizeof(*submit));
+#endif
+    TegraNVENCSubmit *submit = nvenc_submit_buffer(e->client);
     if (!submit)
         return kVTAllocationFailedErr;
     const HEVCEncPicture idr = {.idr = true, .poc = 0, .qp = qp};
     hevcnvenc_fill_submit(&e->hevc, e->config.input_layout, e->info.chroma_mode, &e->layout, &idr, &e->handles, submit);
     bool inputRefused = false;
     const bool putOk = ave_input_put_buffer(e, source, r, e->handles.input, e->inputVA, submit, &inputRefused);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     uint64_t copied = began;
+#endif
     int submitted = -1;
     uint32_t fence = 0, route = TEGRA_NVENC_INPUT_CPU;
     AVEJobStatus job = {0};
     bool waitedOk = false;
     if (putOk) {
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
         copied = mach_absolute_time();
+#endif
         memset(e->auxVA, 0, sizeof(nvenc_pic_stat_s));
         submit->clean[submit->clean_count++] = (TegraNVENCRange){e->handles.aux, 0, sizeof(nvenc_pic_stat_s), 0};
         submitted = ave_input_submit_raw(e->client, submit, &fence, &route);
@@ -189,18 +197,21 @@ static OSStatus encodeTileSync(Encoder *e, CVPixelBufferRef source, const AVEReg
                 status = createSample(e, size, out);
         }
     }
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     const uint64_t finished = mach_absolute_time();
+#endif
     pthread_mutex_lock(&e->lock);
     if (inputRefused)
         e->inputRefused++;
     if (putOk)
         ave_input_record_route(e, submit, submitted, route);
-    free(submit);
     if (status) {
         e->errors++;
     } else {
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
         e->copyTicks += copied - began;
         e->encodeTicks += finished - copied;
+#endif
         e->frames++;
         e->keyFrames++;
         e->tiles++;
@@ -213,11 +224,15 @@ static OSStatus encodeTileSync(Encoder *e, CVPixelBufferRef source, const AVEReg
 static OSStatus submitTileAsync(Encoder *e, AVEEmitter *emitter, VTEncoderTile tile, CVPixelBufferRef source,
                                 const AVERegion *r, uint8_t qp, VTEncodeInfoFlags *info)
 {
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     const uint64_t began = mach_absolute_time();
+#else
+    const uint64_t began = 0;
+#endif
     const int slotIndex = ave_emitter_acquire_tile_slot(emitter);
     if (slotIndex < 0)
         return noErr;
-    TegraNVENCSubmit *submit = malloc(sizeof(*submit));
+    TegraNVENCSubmit *submit = nvenc_tile_submit_buffer(e->client, (uint32_t)slotIndex);
     if (!submit) {
         ave_emitter_release_tile_slot(emitter, slotIndex);
         ave_tile_record_stats(e, kVTAllocationFailedErr, 0, 0, 0);
@@ -237,7 +252,9 @@ static OSStatus submitTileAsync(Encoder *e, AVEEmitter *emitter, VTEncoderTile t
     int submitted = -1;
     uint32_t fence = 0, route = TEGRA_NVENC_INPUT_CPU;
     if (putOk) {
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
         copied = mach_absolute_time();
+#endif
         memset(slot->auxVA, 0, sizeof(nvenc_pic_stat_s));
         submit->clean[submit->clean_count++] = (TegraNVENCRange){slot->auxHandle, 0, sizeof(nvenc_pic_stat_s), 0};
         CVPixelBufferRetain(source);
@@ -253,7 +270,6 @@ static OSStatus submitTileAsync(Encoder *e, AVEEmitter *emitter, VTEncoderTile t
     if (!putOk || submitted)
         e->errors++;
     pthread_mutex_unlock(&e->lock);
-    free(submit);
     if (!putOk || submitted) {
         ave_emitter_release_tile_slot(emitter, slotIndex);
         ave_emitter_push_tile(emitter, tile, NULL, -1, 0, 0, 0, kVTVideoEncoderMalfunctionErr);

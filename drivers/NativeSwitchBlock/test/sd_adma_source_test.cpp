@@ -51,10 +51,10 @@ TEST(SdAdmaSource, DriverGuards)
     const std::string prep = body("void NativeSwitchBlock::prepareAndPublishSlot(");
     EXPECT_THAT(prep, HasSubstr("outside its partition"));
     EXPECT_LT(Index(prep, "outside its partition"), Index(prep, "prepareDirect("));
-    // issue() is only called from command(); emitSlotCommand() is only called from interruptFilter and launchSlot.
+    // issue() is only called from command(); emitSlotCommand() is only called from interruptHandler and launchSlot.
     const auto calls = LinesMatching(source, R"(^.*[^:\w]issue\(static_cast|^.*[^:\w]issue\(lba)");
     EXPECT_EQ(calls.size(), 1u) << testing::PrintToString(calls);
-    EXPECT_THAT(body("bool NativeSwitchBlock::interruptFilter("), HasSubstr("emitSlotCommand("));
+    EXPECT_THAT(body("void NativeSwitchBlock::interruptHandler("), HasSubstr("emitSlotCommand("));
     EXPECT_THAT(body("void NativeSwitchBlock::launchSlot("), HasSubstr("emitSlotCommand("));
     // In ADMA2 mode the SDMA boundary interrupt is neither awaited nor acted on (resuming would rewrite the descriptor
     // table's address), and an ADMA error is the host's failure.
@@ -88,8 +88,8 @@ TEST(SdAdmaSource, PipelinedWorker)
     EXPECT_LT(Index(prep, "switchAdmaTablesOverlap("), Index(prep, "prepareDirect("));
     EXPECT_LT(Index(prep, "canOverlap("), Index(prep, "prepareDirect("));
     EXPECT_FALSE(Search(prep, R"(\b(complete|command|run|transfer|bounceChain|waitSignal)\()"));
-    // interruptFilter acquires hwLock, runs pipe.onIrq, unlocks hwLock BEFORE thread_wakeup.
-    const std::string isr = body("bool NativeSwitchBlock::interruptFilter(");
+    // interruptHandler acquires hwLock, runs pipe.onIrq, unlocks hwLock BEFORE thread_wakeup.
+    const std::string isr = body("void NativeSwitchBlock::interruptHandler(");
     EXPECT_LT(Index(isr, "IOSimpleLockLock(self->hwLock)"), Index(isr, "pipe.onIrq("));
     EXPECT_LT(Index(isr, "IOSimpleLockUnlock(self->hwLock)"), Index(isr, "thread_wakeup(&self->workerEvent)"));
     // waitForPipeline asserts wait under hwLock, unlocks before thread_block, and re-checks active before interruptLost.

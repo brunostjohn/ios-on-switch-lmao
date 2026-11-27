@@ -153,12 +153,10 @@ uint64_t guardedBytes(uint32_t mapped)
 }
 
 SwitchFalconInterrupt gErrors;
-IOLock *gJobLock;    // the job on the engine, from tegra_nvjpg_start to tegra_nvjpg_finish: sleep waits for it
-IOLock *gStateLock;  // power transitions against jobs
+IOLock *gJobLock;  // the job on the engine, from tegra_nvjpg_start to tegra_nvjpg_finish: sleep waits for it
 
 #if TEGRA_NVJPG_STATS
-// Written by jobs and under gStateLock, taken by the decode line's caller holding neither (relaxed).
-uint64_t gWaitsUnlocked, gStateWaitMaxUs;
+uint64_t gWaitsUnlocked;
 #endif
 #if TEGRA_NVJPG_PROBES
 // Jobs cancelled since boot (cancelled()), read by the service per decode (relaxed)
@@ -168,7 +166,7 @@ SwitchEngineGate<SwitchEngineGateKernel> gGate;
 uint32_t gSyncpt, gNext, gPicture;
 uint32_t gPowerOns;     // by the idle gate, since boot
 uint64_t gPoweredAtUs;  // the last of them
-bool gUp, gWedged, gSuspended, gAttached;
+bool gUp, gWedged, gAttached;
 TegraNVJPGBuffer gSetup, gStatus;
 const TegraNVJPGTraits kTraits = {
     .clipped = false,
@@ -185,20 +183,6 @@ const char *falconState()
     if (gUp && !gGate.powered())
         return "falcon powered off (idle)";
     return switch_falcon_state(gJpg, text, sizeof(text));
-}
-
-// A cancellation's or an idle gate call's gStateLock; debug kernels keep the longest wait for it.
-void lockState()
-{
-#if TEGRA_NVJPG_STATS
-    const uint64_t asked = switch_now_us();
-    IOLockLock(gStateLock);
-    const uint64_t waited = switch_now_us() - asked;
-    if (waited > __atomic_load_n(&gStateWaitMaxUs, __ATOMIC_RELAXED))
-        __atomic_store_n(&gStateWaitMaxUs, waited, __ATOMIC_RELAXED);
-#else
-    IOLockLock(gStateLock);
-#endif
 }
 
 // One physically contiguous buffer below 4 GiB, zeroed and clean in the caches.
@@ -432,11 +416,10 @@ void bringUp(void *, wait_result_t)
     gJpg = switch_mmio_map(kNvjpgPA, kNvjpgSize);
     gMc = switch_mmio_map(kMcPA, 0x1000);
     gJobLock = IOLockAlloc();
-    gStateLock = IOLockAlloc();
     gMapLock = IOLockAlloc();
     gFlightLock = IOLockAlloc();
     IOLock *power = tegra_nvdec_power_lock();
-    if (!gJpg || !gMc || !gJobLock || !gStateLock || !gMapLock || !gFlightLock || !power) {
+    if (!gJpg || !gMc || !gJobLock || !gMapLock || !gFlightLock || !power) {
         IOLog("TegraNVJPG: J0 FAIL no mapping\n");
         return;
     }
@@ -582,7 +565,6 @@ extern "C" void tegra_nvjpg_pages_unmap(uint32_t window, uint64_t address, uint3
 namespace tegra_nvjpg_engine {
 int gateOn(void *)
 {
-    lockState();
     bool wasOn = false;
     bool answered = false;
     gLine[0] = 0;
@@ -608,20 +590,14 @@ int gateOn(void *)
     gPowerOns++;
     gPoweredAtUs = switch_now_us();
     gNext = tegra_host1x_syncpt_read(gSyncpt);
-    gSuspended = false;
-    IOLockWakeup(gStateLock, &gSuspended, false);
-    IOLockUnlock(gStateLock);
     return answered ? 0 : -19;
 }
 
 int gateOff(void *, bool)
 {
-    lockState();
-    gSuspended = true;
     gErrors.off();
     const bool off =
         switch_pmc_partition_is_on(kNvdecPartition) ? switch_engine_quiesce(kPower) : switch_engine_power_down(kPower);
-    IOLockUnlock(gStateLock);
     return off ? SWITCH_ENGINE_GATE_OFF : -5;
 }
 
@@ -642,11 +618,7 @@ void engineResume()
     gLine[0] = 0;
     const bool attached = smmuAttach();
     if (!attached) {
-        IOLockLock(gStateLock);
         __atomic_store_n(&gWedged, true, __ATOMIC_RELEASE);
-        gSuspended = false;
-        IOLockWakeup(gStateLock, &gSuspended, false);
-        IOLockUnlock(gStateLock);
         IOLog("TegraNVJPG: resume FAIL %s; the next decode tries again\n", gLine);
     }
     gGate.resume();
