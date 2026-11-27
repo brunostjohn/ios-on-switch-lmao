@@ -20,6 +20,8 @@ enum tegra_se_smmu_attach_result {
 // Before the engine's first DMA, with its own buffers (all below 4 GiB). `line` says why when not attached.
 enum tegra_se_smmu_attach_result tegra_se_smmu_attach(unsigned engine, const struct switch_dma_buffer *const *buffers,
                                                       unsigned count, char *line, size_t size);
+// Permanently holds a lazily allocated engine-owned buffer (below 4 GiB) in the attached view. True if not attached.
+bool tegra_se_smmu_add_owned(unsigned engine, const struct switch_dma_buffer *buffer);
 // The entries of the list at `list` (list[0] entries less one, then address and size pairs), held and published.
 // True when the engine is not attached. False (nothing held): an entry outside RAM below 4 GiB.
 bool tegra_se_smmu_hold(unsigned engine, const uint32_t *list);

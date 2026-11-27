@@ -104,6 +104,11 @@ inline IOLock *IOLockAlloc()
     return new IOLock;
 }
 
+inline void IOLockFree(IOLock *lock)
+{
+    delete lock;
+}
+
 inline void IOLockLock(IOLock *lock) __attribute__((no_thread_safety_analysis))
 {
     lock->mutex.lock();
@@ -142,48 +147,61 @@ public:
     virtual ~OSObject() = default;
 };
 
-class IOService : public OSObject {};
+class IOService;
+using IOInterruptAction = void (*)(OSObject *target, void *refCon, IOService *nub, int source);
 
-class IOBufferMemoryDescriptor : public OSObject {};
-
-class IOFilterInterruptEventSource : public OSObject {
+class IOService : public OSObject {
 public:
-    using Filter = bool (*)(OSObject *, IOFilterInterruptEventSource *);
-    using Action = void (*)(OSObject *, void *, int);
-
-    static IOFilterInterruptEventSource *filterInterruptEventSource(OSObject *owner, Action, Filter filter,
-                                                                    IOService *provider, int = 0);
-
-    void enable()
+    IOReturn registerInterrupt(int source, OSObject *target, IOInterruptAction handler, void *refCon = nullptr)
     {
-        enabled = true;
+        if (source != 0 || !handler)
+            return -1;
+        this->target = target;
+        this->handler = handler;
+        this->refCon = refCon;
+        return kIOReturnSuccess;
     }
 
-    void disable()
+    IOReturn unregisterInterrupt(int source)
     {
+        if (source != 0)
+            return -1;
+        target = nullptr;
+        handler = nullptr;
+        refCon = nullptr;
         enabled = false;
+        return kIOReturnSuccess;
     }
 
-    bool fire()
+    IOReturn enableInterrupt(int source)
     {
-        return enabled && filter(owner, this);
+        if (source != 0 || !handler)
+            return -1;
+        enabled = true;
+        return kIOReturnSuccess;
     }
 
-    OSObject *owner = nullptr;
-    Filter filter = nullptr;
-    IOService *provider = nullptr;
+    IOReturn disableInterrupt(int source)
+    {
+        if (source != 0)
+            return -1;
+        enabled = false;
+        return kIOReturnSuccess;
+    }
+
+    void fire()
+    {
+        if (enabled && handler)
+            handler(target, refCon, this, 0);
+    }
+
+    OSObject *target = nullptr;
+    IOInterruptAction handler = nullptr;
+    void *refCon = nullptr;
     bool enabled = false;
 };
 
-class IOWorkLoop : public OSObject {
-public:
-    static IOWorkLoop *workLoop();
-
-    static IOReturn addEventSource(OSObject *)
-    {
-        return kIOReturnSuccess;
-    }
-};
+class IOBufferMemoryDescriptor : public OSObject {};
 
 #define OS_LOG_DEFAULT   nullptr
 #define os_log(log, ...) IOLog(__VA_ARGS__)

@@ -24,7 +24,6 @@ def workspace_root(target):
 # their script's stem. run_tool(ctx, "corecrypto", ...) runs //tools/kernel:corecrypto.
 KERNEL_TOOLS = [
     "corecrypto",
-    "data_seed",
     "firehose",
     "host_c_binary",
     "im4p",

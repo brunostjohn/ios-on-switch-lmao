@@ -92,3 +92,19 @@ TEST(TegraSESource, AnMccifOperationsPagesAreHeldOnlyWhileItRuns)
     EXPECT_THAT(Body(source, "void forceOnly(const Engine *only)\n"), Not(HasSubstr("IOLockSleepDeadline")));
     EXPECT_THAT(Body(source, "extern \"C\" int tegra_se_aes("), Not(HasSubstr("IOMalloc")));
 }
+
+TEST(TegraSESource, DirectIrqUnlockedSmmuAndNoBootRamWaste)
+{
+    const std::string se = SourceText("../TegraSE.cpp");
+    const std::string smmu = SourceText("../TegraSESmmu.cpp");
+    EXPECT_THAT(se, Not(HasSubstr("IOWorkLoop")));
+    EXPECT_THAT(se, Not(HasSubstr("IOFilterInterruptEventSource")));
+    EXPECT_THAT(se, Not(HasSubstr("__ATOMIC_SEQ_CST")));
+    EXPECT_THAT(se, Not(HasSubstr("__sync_bool_compare_and_swap")));
+    EXPECT_THAT(Body(se, "bool drain(Engine &e)\n"), HasSubstr("IOSleep(1)"));
+    EXPECT_THAT(Body(se, "bool engineUp(Engine &e)\n"), Not(HasSubstr("kBounceBytes")));
+    EXPECT_THAT(Body(se, "void seThread(void *, wait_result_t)\n"), Not(HasSubstr("switch_digest_compress_hook")));
+    EXPECT_THAT(smmu, Not(HasSubstr("reserveTables")));
+    EXPECT_THAT(smmu, Not(HasSubstr(".locked(")));
+    EXPECT_THAT(smmu, HasSubstr(".unlocked("));
+}

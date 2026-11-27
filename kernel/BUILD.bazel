@@ -112,12 +112,10 @@ filegroup(
         "//drivers/ArmGIC:all_files",
         "//drivers/SwitchAccelStub:all_files",
         "//drivers/NativeAES:all_files",
-        "//drivers/NativeHidInput:all_files",
         "//drivers/NativeSwitchBlock:all_files",
         "//drivers/NativeSwitchWatchdog:all_files",
         "//drivers/NativeKeyStoreEvents:all_files",
         "//drivers/NativeMobileDisplay:all_files",
-        "//drivers/NativeRamBlock:all_files",
         "//drivers/SwitchAudio:all_files",
         "//drivers/SwitchBattery:all_files",
         "//drivers/SwitchBluetooth:all_files",
@@ -216,11 +214,6 @@ outer_headers(
 )
 
 outer_headers(
-    name = "gen_native_data_seed",
-    srcs = [":native_data_seed_header"],
-)
-
-outer_headers(
     name = "gen_ipsw_volumes",
     srcs = [":ipsw_volumes_header"],
 )
@@ -243,19 +236,6 @@ tool_output(
 ipsw_volumes_header(
     name = "ipsw_volumes_header",
     out = "build/ipsw-volumes/switch_ipsw_volumes.h",
-)
-
-# NativeRamBlock's seed pins: a pure function of the pinned seed and its volume UUID (XNU_OWNER_DATA_VOLUME_UUID).
-tool_output(
-    name = "native_data_seed_header",
-    srcs = ["//bazel/pinned:data-seed/data-v10.dbr"],
-    outs = ["build/native-ram-block/NativeDataSeed.h"],
-    args = [
-        "$(execpath //bazel/pinned:data-seed/data-v10.dbr)",
-        "CCD5A1A2-2FDC-4B25-B322-AE1722871BC9",
-        "{out}",
-    ],
-    tool = "data_seed.py",
 )
 
 # --- Corecrypto, libpthread (Apple sources, built against this XNU) ---------------------------------------------------
@@ -430,7 +410,7 @@ kernel_archive(
         "//drivers/NativeMobileDisplay:NativeLegacyDisplay",
         "//kits/qemu:QemuProbes",
         "//drivers/NativeKeyStoreEvents:NativeKeyStoreEvents",
-        "//drivers/NativeHidInput:NativeHidInput",
+        "//kits/SwitchABI:IOHIDDeviceBindings",
         "//drivers/NativeMobileDisplay:NativeGOPPresenter",
         "//drivers/SwitchTouch:SwitchTouch",
         "//drivers/SwitchButtons:SwitchButtons",
@@ -516,7 +496,6 @@ xnu_kernel(
         ":libNativeLegacyDisplay",
         ":libNativeAES",
         ":libNativeSwitchBlockDevice",
-        "//drivers/NativeRamBlock:NativeRamBlock",
         ":libpthread",
         ":libVerifiedRootProbe",
         ":libmockfs_fixture",
@@ -532,7 +511,6 @@ xnu_kernel(
         "force_load",
         "force_load",
         "force_load",
-        "plain",
         "force_load",
         "force_load",
         "force_load",
@@ -560,7 +538,6 @@ xnu_kernel_12377(
         ":libNativeLegacyDisplay",
         ":libNativeAES",
         ":libNativeSwitchBlockDevice",
-        "//drivers/NativeRamBlock:NativeRamBlock",
         ":libpthread",
         ":libVerifiedRootProbe",
         ":libmockfs_fixture",
@@ -576,7 +553,6 @@ xnu_kernel_12377(
         "force_load",
         "force_load",
         "force_load",
-        "plain",
         "force_load",
         "force_load",
         "force_load",

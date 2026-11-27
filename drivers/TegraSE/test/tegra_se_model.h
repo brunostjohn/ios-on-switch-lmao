@@ -29,10 +29,17 @@ struct Engine {
     unsigned busyAfterError = 0;  // STATUS reads that still show it busy after that error: writes still queued
     unsigned busyLeft = 0;
     bool listsDoNotTake = false;  // IN_LL reads back 0
+    uint8_t fillOut = 0;          // if non-zero, overwrite output DMA buffers with this byte on completion
 };
 
 struct Mapping {
     uint8_t *va;
+    uint32_t pa;
+    size_t size;
+};
+
+struct Alias {
+    uintptr_t va;
     uint32_t pa;
     size_t size;
 };
@@ -44,13 +51,11 @@ struct Range {
 Engine engines[kEngines];
 std::vector<std::string> logged;
 std::vector<Mapping> mappings;
+std::vector<Alias> aliases;
 std::vector<Range> given;  // what a hung engine's lists named
 unsigned reused;           // later lists or frees that touched `given`
 uint32_t nextPa = 0x80000000;
-IOFilterInterruptEventSource sources[kEngines];
-unsigned sourcesMade;
-IOService nub;
-IOWorkLoop loop;
+IOService nubs[kEngines];
 void (*longSleep)(unsigned ms);  // a debug seThread's 90 s and 300 s sleeps; null: they return at once
 
 int engineAt(uintptr_t address)
@@ -60,6 +65,15 @@ int engineAt(uintptr_t address)
             return static_cast<int>(i);
     }
     return -1;
+}
+
+uint8_t *bytesAt(uint32_t pa, uint32_t size)
+{
+    for (const Mapping &m : mappings) {
+        if (pa >= m.pa && pa + size <= m.pa + m.size)
+            return m.va + (pa - m.pa);
+    }
+    return nullptr;
 }
 
 const uint32_t *listAt(uint32_t pa)
@@ -141,9 +155,15 @@ void start(unsigned index)
         engine.regs[INT_STATUS] |= kIntError;
         engine.busyLeft = engine.busyAfterError;
     } else {
+        if (engine.fillOut) {
+            for (const Range &r : out) {
+                if (uint8_t *dst = bytesAt(r.pa, r.size))
+                    memset(dst, engine.fillOut, r.size);
+            }
+        }
         engine.regs[INT_STATUS] |= kIntDone;
     }
-    gEngines[index].source->fire();
+    gEngines[index].nub->fire();
 }
 
 void write(unsigned index, uint32_t offset, uint32_t value)
@@ -203,6 +223,7 @@ size_t count(const std::string &text)
 
 // TegraSESmmu.cpp's, which the model does not build: the engines' memory clients untranslated, as at reset.
 unsigned gSmmuAttached[kEngines];  // attaches asked for, per engine
+unsigned gSmmuOwnedAdded[kEngines];
 
 tegra_se_smmu_attach_result tegra_se_smmu_attach(unsigned engine, const switch_dma_buffer *const *, unsigned,
                                                  char *line, size_t size)
@@ -210,6 +231,13 @@ tegra_se_smmu_attach_result tegra_se_smmu_attach(unsigned engine, const switch_d
     ++gSmmuAttached[engine];
     snprintf(line, size, "no SMMU in the register model");
     return TEGRA_SE_SMMU_UNTRANSLATED;
+}
+
+bool tegra_se_smmu_add_owned(unsigned engine, const switch_dma_buffer *)
+{
+    if (engine < kEngines)
+        ++gSmmuOwnedAdded[engine];
+    return true;
 }
 
 // Holds taken less holds released, per engine (an operation's lists are counted once each way), and releases made
@@ -279,6 +307,10 @@ boolean_t ml_get_interrupts_enabled(void)
 
 vm_offset_t ml_vtophys(vm_offset_t va)
 {
+    for (const se_model::Alias &a : se_model::aliases) {
+        if (va >= a.va && va < a.va + a.size)
+            return a.pa + (va - a.va);
+    }
     for (const se_model::Mapping &m : se_model::mappings) {
         const auto base = reinterpret_cast<vm_offset_t>(m.va);
         if (va >= base && va < base + m.size)
@@ -394,27 +426,9 @@ void IOSleep(unsigned ms)
     std::this_thread::sleep_for(std::chrono::milliseconds(ms));
 }
 
-IOFilterInterruptEventSource *IOFilterInterruptEventSource::filterInterruptEventSource(OSObject *owner, Action,
-                                                                                       Filter filter,
-                                                                                       IOService *provider, int)
+IOService *switch_interrupt_nub(uint32_t intid, bool)
 {
-    if (se_model::sourcesMade == kEngines)
-        return nullptr;
-    auto *source = &se_model::sources[se_model::sourcesMade++];
-    source->owner = owner;
-    source->filter = filter;
-    source->provider = provider;
-    return source;
-}
-
-IOWorkLoop *IOWorkLoop::workLoop()
-{
-    return &se_model::loop;
-}
-
-IOService *switch_interrupt_nub(uint32_t, bool)
-{
-    return &se_model::nub;
+    return &se_model::nubs[intid == gEngines[1].intid ? 1 : 0];
 }
 
 uint32_t switch_interrupt_count(uint32_t)

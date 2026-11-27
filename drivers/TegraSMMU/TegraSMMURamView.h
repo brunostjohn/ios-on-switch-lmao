@@ -25,7 +25,8 @@ struct TegraSMMURamViewEnv {
 class TegraSMMURamView {
 public:
     // The directories for ASIDs low (PA below 4 GiB) and high. False when memory is short.
-    bool init(uint32_t asidLow, uint32_t asidHigh);
+    // Pass needLock = false for single-owner views serialized externally by the caller.
+    bool init(uint32_t asidLow, uint32_t asidHigh, bool needLock = true);
     // The swgroup's fields 0 and 1 to this view, field 2 to (asid2, ptb2) or, with asid2 0, the fault ASID, field 3 to
     // the fault ASID, for each translation register the swgroup's clients are in. 0, or -1 with one line.
     int attach(uint32_t asidReg, uint32_t translationReg, uint32_t translationBits, bool alwaysTranslated,
@@ -49,17 +50,26 @@ public:
     // lock once.
     template <class Body> void locked(Body &&body)
     {
-        IOLockLock(lock_);
+        if (lock_)
+            IOLockLock(lock_);
         body(core_);
-        IOLockUnlock(lock_);
+        if (lock_)
+            IOLockUnlock(lock_);
+    }
+
+    // body(core) without locking: only for single-owner views serialized by their caller.
+    template <class Body> void unlocked(Body &&body)
+    {
+        body(core_);
     }
 
     bool ready() const
     {
-        return lock_ != nullptr;
+        return ready_;
     }
 
 private:
+    bool ready_ = false;
     IOLock *lock_ = nullptr;
     switch_dma_buffer low_ = {}, high_ = {};
     TegraSMMURamViewEnv env_;

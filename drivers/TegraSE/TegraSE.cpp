@@ -38,10 +38,9 @@
 // se_t210.h (CTCaer, naehrwert; GPL-2.0) for the key table and partial SHA; switchroot BL31 security_engine.c. Written
 // from the register facts in those sources, no code copied.
 #include <IOKit/IOBufferMemoryDescriptor.h>
-#include <IOKit/IOFilterInterruptEventSource.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
-#include <IOKit/IOWorkLoop.h>
+#include <IOKit/IOService.h>
 #include <kern/clock.h>
 #include <kern/sched_prim.h>
 #include <kern/thread.h>
@@ -138,13 +137,24 @@ constexpr uint32_t kCarSuperSe = 0x704;
 
 constexpr unsigned kEngines = 2, kFirstSlot = 1, kLastSlot = 13;
 constexpr uint32_t kBounceBytes = 256 * 1024;
-constexpr uint32_t kListBytes = 0x1000, kInList = 0x000, kOutList = 0x800, kScratch = 0xf80;  // in the list page
-constexpr unsigned kMaxEntries = 220;
+// List page (4 KiB): separate 64-byte cache lines for in/out scatter lists, inline small bounce (boot KAT/RNG), and
+// CMAC's last-block scratch so 256 KiB bounce buffers stay unallocated until bulk DMA actually needs them.
+constexpr uint32_t kListBytes = 0x1000, kInList = 0x000, kOutList = 0x640, kSmallIn = 0xc80, kSmallOut = 0xd80,
+                   kScratch = 0xf80;
+constexpr uint32_t kSmallBounceBytes = 256;
+constexpr unsigned kMaxEntries = 192;
 constexpr uint32_t kOpTimeoutMs = 200;
+#if DEVELOPMENT || DEBUG
 constexpr size_t kHookMinBytes = 1024;  // smaller compresses (finals, short updates) stay on the CPU
+#endif
 
 struct Dma {
     switch_dma_buffer buffer;
+    uint8_t *va;
+    uint32_t pa;
+};
+
+struct BounceSlice {
     uint8_t *va;
     uint32_t pa;
 };
@@ -160,9 +170,9 @@ struct Engine {
     vm_offset_t pa;
     uint32_t intid, ahbMaster;
     volatile uint8_t *regs;
-    IOFilterInterruptEventSource *source;
+    IOService *nub;
     int event;
-    volatile uint32_t seen, status, owner;
+    uint32_t seen, status, owner;
     bool up, busy, proven;
     uint16_t slotsUsable;  // bit per keyslot the engine lets EL1 update and use
     Slot slots[16];
@@ -176,9 +186,8 @@ Engine gEngines[kEngines] = {
     {"SE2", 0x70412000, 32 + 190, 1u << 13, nullptr, nullptr, 0, 0, 0, 0, false, false, false, 0, {}, 0, {}, {}, {}, 0},
 };
 volatile uint8_t *gAhb, *gMc;
-IOWorkLoop *gLoop;
 IOLock *gQueue;
-volatile bool gSleeping;  // tegra_se_suspend to tegra_se_resume: callers take the CPU path
+bool gSleeping;  // tegra_se_suspend to tegra_se_resume: callers take the CPU path
 int gQueueEvent;
 uint32_t gQueueWaiters;
 char gWhy[224];
@@ -225,10 +234,28 @@ bool forced()
 volatile bool gReady;  // bring-up done: other callers may use the engines
 const Engine *gOnly;   // forceOnly's engine, under gQueue
 
+IOLock *queueLock()
+{
+    IOLock *q = __atomic_load_n(&gQueue, __ATOMIC_ACQUIRE);
+    if (q)
+        return q;
+    IOLock *fresh = IOLockAlloc();
+    if (!fresh)
+        return nullptr;
+    IOLock *expected = nullptr;
+    if (__atomic_compare_exchange_n(&gQueue, &expected, fresh, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+        return fresh;
+    IOLockFree(fresh);
+    return expected;
+}
+
 // Only `only` (or none) handed out by the queue, under its lock: the known answers and the timing run.
 void forceOnly(const Engine *only)
 {
-    IOLockLock(gQueue);
+    IOLock *const q = queueLock();
+    if (!q)
+        return;
+    IOLockLock(q);
     const auto allIdle = [] {
         for (const Engine &e : gEngines) {
             if (e.busy && e.owner == TEGRA_SE_OWNER_DRIVER)
@@ -237,19 +264,21 @@ void forceOnly(const Engine *only)
         return true;
     };
     if (!allIdle()) {
-        __atomic_add_fetch(&gQueueWaiters, 1, __ATOMIC_SEQ_CST);
+        ++gQueueWaiters;
         while (!allIdle())
-            IOLockSleep(gQueue, &gQueueEvent, THREAD_UNINT);
-        __atomic_sub_fetch(&gQueueWaiters, 1, __ATOMIC_RELAXED);
+            IOLockSleep(q, &gQueueEvent, THREAD_UNINT);
+        --gQueueWaiters;
     }
     for (Engine &e : gEngines)
         e.busy = (only != nullptr) && &e != only;
     gOnly = only;
-    IOLockUnlock(gQueue);
+    IOLockUnlock(q);
 }
 
 volatile uint64_t gUnreachable, gUnsleepable;  // bytes left to the CPU: not mappable / caller cannot sleep
-bool gStateLoad;                               // SHA compress from a loaded state works (the hook is installed)
+#if DEVELOPMENT || DEBUG || SWITCH_STATS_IO
+uint32_t gHookAlgs;  // SHA1/SHA256/SHA512 bitmask enabled for switch_digest_compress_hook
+#endif
 
 // Work the engines declined for a reason of the caller's, done on the CPU instead: one error line per process and reason
 // (kits/SwitchRefusal), and the traffic counters only a debug kernel's traffic line reads. The size cutovers are not
@@ -303,22 +332,19 @@ uint64_t tenths(uint64_t ticks)  // of a microsecond
 }
 
 // Primary interrupt context: an operation's end (or error) acknowledged, its thread woken. Nothing else.
-// NOLINTNEXTLINE(misc-const-correctness): IOFilterInterruptEventSource::Filter fixes the signature
-bool filter(OSObject *, IOFilterInterruptEventSource *sender)
+// NOLINTNEXTLINE(misc-const-correctness): IOInterruptAction's signature
+void interruptHandler(OSObject *, void *refCon, IOService *, int)
 {
-    for (Engine &e : gEngines) {
-        if (e.source != sender || !e.regs)
-            continue;
-        const uint32_t status = rd(e, INT_STATUS);
-        if (!(status & (kIntDone | kIntError)))
-            return false;
-        wr(e, INT_STATUS, status);
-        e.status = status;
-        e.seen = e.seen + 1;
-        thread_wakeup(&e.event);
-        return false;
-    }
-    return false;
+    Engine &e = *static_cast<Engine *>(refCon);
+    if (!e.regs)
+        return;
+    const uint32_t status = rd(e, INT_STATUS);
+    if (!(status & (kIntDone | kIntError)))
+        return;
+    wr(e, INT_STATUS, status);
+    e.status = status;
+    __atomic_store_n(&e.seen, __atomic_load_n(&e.seen, __ATOMIC_RELAXED) + 1u, __ATOMIC_RELEASE);
+    thread_wakeup(&e.event);
 }
 
 void wipeSlots(Engine &e);
@@ -351,13 +377,14 @@ bool drain(Engine &e)
     };
     if (!busy())
         return true;
-    for (unsigned i = 0; i < 8; ++i) {
+    for (unsigned i = 0; i < 16; ++i) {
         if (!busy())
             return true;
+        IODelay(1);
     }
     uint64_t deadline = 0;
     clock_interval_to_deadline(5, kMillisecondScale, &deadline);
-    for (unsigned i = 0; busy(); ++i) {
+    while (busy()) {
         if (mach_absolute_time() >= deadline) {
             if (e.proven && !forced())
                 panic("TegraSE: %s output never drained (STATUS %#x)", e.name, rd(e, STATUS));
@@ -365,7 +392,7 @@ bool drain(Engine &e)
             engineOff(e, gWhy);
             return false;
         }
-        IODelay(i < 64 ? 1 : 10);
+        IOSleep(1);
     }
     return true;
 }
@@ -389,7 +416,7 @@ bool start(Engine &e, uint32_t in, uint32_t out, bool *started)
         engineOff(e, gWhy);
         return false;
     }
-    const uint32_t seen = e.seen;
+    const uint32_t seen = __atomic_load_n(&e.seen, __ATOMIC_RELAXED);
     uint64_t interval = 0;
     nanoseconds_to_absolutetime(static_cast<uint64_t>(kOpTimeoutMs) * 1000000, &interval);
     assert_wait_deadline(&e.event, THREAD_UNINT, mach_absolute_time() + interval);
@@ -397,7 +424,7 @@ bool start(Engine &e, uint32_t in, uint32_t out, bool *started)
     *started = true;
     wr(e, OPERATION, 1);
     const wait_result_t result = thread_block(THREAD_CONTINUE_NULL);
-    if (result == THREAD_TIMED_OUT || e.seen == seen) {
+    if (result == THREAD_TIMED_OUT || __atomic_load_n(&e.seen, __ATOMIC_ACQUIRE) == seen) {
         const uint32_t status = rd(e, INT_STATUS);
         char gic[160];
         switch_interrupt_describe(e.intid, gic, sizeof gic);
@@ -456,38 +483,46 @@ bool run(Engine &e, uint32_t in, uint32_t out)
     return ran;
 }
 
-bool claim(Engine &e, uint32_t owner)
+bool claimLocked(Engine &e, uint32_t owner)
 {
-    return __sync_bool_compare_and_swap(&e.owner, 0u, owner) || e.owner == owner;
+    if (e.owner == 0u || e.owner == owner) {
+        e.owner = owner;
+        return true;
+    }
+    return false;
 }
 
 // Any free engine (both run in parallel for two callers); null when none is up, or forceOnly's engine is down.
 Engine *acquire()
 {
-    IOLockLock(gQueue);
+    IOLock *const q = queueLock();
+    if (!q)
+        return nullptr;
+    IOLockLock(q);
     bool waiting = false;
     for (;;) {
-        if (gSleeping || (gOnly && !gOnly->up)) {
+        if (__atomic_load_n(&gSleeping, __ATOMIC_RELAXED) || (gOnly && !gOnly->up)) {
             if (waiting)
-                __atomic_sub_fetch(&gQueueWaiters, 1, __ATOMIC_RELAXED);
-            IOLockUnlock(gQueue);
+                --gQueueWaiters;
+            IOLockUnlock(q);
             return nullptr;
         }
         bool anyUp = false;
         for (Engine &e : gEngines) {
             anyUp |= e.up;
-            if (e.up && !e.busy && claim(e, TEGRA_SE_OWNER_DRIVER)) {
+            if (e.up && !e.busy && claimLocked(e, TEGRA_SE_OWNER_DRIVER)) {
                 e.busy = true;
                 if (waiting)
-                    __atomic_sub_fetch(&gQueueWaiters, 1, __ATOMIC_RELAXED);
-                IOLockUnlock(gQueue);
+                    --gQueueWaiters;
+                IOLockUnlock(q);
                 if (!clockOn()) {  // system sleep turned the clock off (BL31 SC7): never touch the engine then
-                    IOLockLock(gQueue);
+                    IOLockLock(q);
                     e.busy = false;
-                    __sync_bool_compare_and_swap(&e.owner, TEGRA_SE_OWNER_DRIVER, 0u);
-                    if (__atomic_load_n(&gQueueWaiters, __ATOMIC_RELAXED))
-                        IOLockWakeup(gQueue, &gQueueEvent, false);
-                    IOLockUnlock(gQueue);
+                    if (e.owner == TEGRA_SE_OWNER_DRIVER)
+                        e.owner = 0u;
+                    if (gQueueWaiters)
+                        IOLockWakeup(q, &gQueueEvent, false);
+                    IOLockUnlock(q);
                     return nullptr;
                 }
                 return &e;
@@ -495,35 +530,61 @@ Engine *acquire()
         }
         if (!anyUp) {
             if (waiting)
-                __atomic_sub_fetch(&gQueueWaiters, 1, __ATOMIC_RELAXED);
-            IOLockUnlock(gQueue);
+                --gQueueWaiters;
+            IOLockUnlock(q);
             return nullptr;
         }
         if (!waiting) {
-            // Publish waiter count with seq-cst before re-checking claim() so tegra_se_release cannot miss our sleep.
-            __atomic_add_fetch(&gQueueWaiters, 1, __ATOMIC_SEQ_CST);
+            ++gQueueWaiters;
             waiting = true;
-            continue;
         }
-        IOLockSleep(gQueue, &gQueueEvent, THREAD_UNINT);
+        IOLockSleep(q, &gQueueEvent, THREAD_UNINT);
     }
 }
 
 void giveBack(Engine *e)
 {
-    IOLockLock(gQueue);
+    IOLock *const q = __atomic_load_n(&gQueue, __ATOMIC_ACQUIRE);
+    IOLockLock(q);
     e->busy = false;
-    __sync_bool_compare_and_swap(&e->owner, TEGRA_SE_OWNER_DRIVER, 0u);
-    if (__atomic_load_n(&gQueueWaiters, __ATOMIC_RELAXED))
-        IOLockWakeup(gQueue, &gQueueEvent, false);
-    IOLockUnlock(gQueue);
+    if (e->owner == TEGRA_SE_OWNER_DRIVER)
+        e->owner = 0u;
+    if (gQueueWaiters)
+        IOLockWakeup(q, &gQueueEvent, false);
+    IOLockUnlock(q);
 }
 
 struct Side {
     const uint8_t *va;  // the caller's range
     size_t len;
-    bool bounced;  // through the engine's bounce buffer
+    uint8_t *bounceVa;  // non-null when bounced (inline small slice or lazily allocated 256 KiB buffer)
 };
+
+bool ensureBounce(Engine &e, bool output, size_t len, BounceSlice *out)
+{
+    if (len <= kSmallBounceBytes) {
+        const uint32_t off = output ? kSmallOut : kSmallIn;
+        out->va = e.list.va + off;
+        out->pa = e.list.pa + off;
+        return true;
+    }
+    if (len > kBounceBytes)
+        return false;
+    Dma &slot = output ? e.bounceOut : e.bounceIn;
+    if (!slot.va) {
+        if (!allocate(&slot, kBounceBytes))
+            return false;
+        const unsigned which = static_cast<unsigned>(&e - gEngines);
+        if (kMemif[which] && !tegra_se_smmu_add_owned(which, &slot.buffer)) {
+            switch_dma_free(&slot.buffer);
+            slot = {};
+            return false;
+        }
+    }
+    out->va = slot.va;
+    out->pa = slot.pa;
+    return true;
+}
 
 bool firstPageBelow4GiB(const void *va)
 {
@@ -531,7 +592,7 @@ bool firstPageBelow4GiB(const void *va)
     return pa != 0 && pa < 0x100000000ULL;
 }
 
-void mapBounceSide(const Engine &e, uint32_t at, const void *va, size_t len, bool output, const Dma &bounce)
+void mapBounceSide(const Engine &e, uint32_t at, const void *va, size_t len, bool output, const BounceSlice &bounce)
 {
     uint32_t *list = reinterpret_cast<uint32_t *>(e.list.va + at);
     if (!output) {
@@ -547,12 +608,12 @@ void mapBounceSide(const Engine &e, uint32_t at, const void *va, size_t len, boo
 }
 
 // Builds the list at `at` in the list page for [va, va + len): physically contiguous runs of the kernel mapping, or
-// the bounce buffer if any byte is above 4 GiB (input copied in). False if neither works (the CPU does it).
-bool mapSide(const Engine &e, uint32_t at, const void *va, size_t len, bool output, Side *side, const Dma &bounce)
+// a bounce buffer if any byte is above 4 GiB (input copied in). False if neither works (the CPU does it).
+bool mapSide(Engine &e, uint32_t at, const void *va, size_t len, bool output, Side *side)
 {
     side->va = static_cast<const uint8_t *>(va);
     side->len = len;
-    side->bounced = false;
+    side->bounceVa = nullptr;
     uint32_t *list = reinterpret_cast<uint32_t *>(e.list.va + at);
     unsigned n = 0;
     // An output that shares a cache line with other data goes through the bounce buffer: that line could be written
@@ -584,9 +645,10 @@ bool mapSide(const Engine &e, uint32_t at, const void *va, size_t len, bool outp
         done += chunk;
     }
     if (high) {
-        if (len > kBounceBytes)
+        BounceSlice bounce;
+        if (!ensureBounce(e, output, len, &bounce))
             return false;
-        side->bounced = true;
+        side->bounceVa = bounce.va;
         mapBounceSide(e, at, va, len, output, bounce);
         return true;
     }
@@ -600,15 +662,32 @@ bool mapSide(const Engine &e, uint32_t at, const void *va, size_t len, bool outp
     return true;
 }
 
-void finishOutput(const Side &side, const Dma &bounce)
+void finishOutput(const Side &side)
 {
-    if (side.bounced) {
-        switch_dcache_invalidate(bounce.va, side.len);
+    if (side.bounceVa) {
+        switch_dcache_invalidate(side.bounceVa, side.len);
         // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): an output side is the caller's writable buffer
-        memcpy(const_cast<uint8_t *>(side.va), bounce.va, side.len);
+        memcpy(const_cast<uint8_t *>(side.va), side.bounceVa, side.len);
     } else {
         switch_dcache_invalidate(side.va, side.len);
     }
+}
+
+bool listsOverlap(const uint32_t *a, const uint32_t *b)
+{
+    const uint32_t na = a[0] + 1;
+    const uint32_t nb = b[0] + 1;
+    for (uint32_t i = 0; i < na; ++i) {
+        const uint64_t a0 = a[1 + 2 * i];
+        const uint64_t a1 = a0 + a[2 + 2 * i];
+        for (uint32_t j = 0; j < nb; ++j) {
+            const uint64_t b0 = b[1 + 2 * j];
+            const uint64_t b1 = b0 + b[2 + 2 * j];
+            if (a0 < b1 && b0 < a1)
+                return true;
+        }
+    }
+    return false;
 }
 
 void writeQuad(const Engine &e, unsigned slot, unsigned quad, const uint8_t *bytes)
@@ -868,7 +947,7 @@ bool canSleep()
 void counted(unsigned alg, size_t len, const Side &a, const Side &b)
 {
     tally(gAlg[alg].bytes, len);
-    if (a.bounced || b.bounced)
+    if (a.bounceVa || b.bounceVa)
         tally(gAlg[alg].bounced, len);
 }
 
@@ -907,10 +986,28 @@ int aesStreamBounced(Engine &e, tegra_se_mode mode, bool encrypt, unsigned slot,
 {
     const unsigned alg = ECB + static_cast<unsigned>(mode);
     size_t done = 0;
+    uint8_t *bouncedMarker = nullptr;
     while (done < whole) {
         const size_t chunk = whole - done < kBounceBytes ? whole - done : kBounceBytes;
-        mapBounceSide(e, kInList, i8 + done, chunk, false, e.bounceIn);
-        mapBounceSide(e, kOutList, o8 + done, chunk, true, e.bounceOut);
+        BounceSlice inBounce;
+        BounceSlice outBounce;
+        if (!ensureBounce(e, false, chunk, &inBounce) || !ensureBounce(e, true, chunk, &outBounce)) {
+            if (!done)
+                return -1;
+            const size_t rem = whole - done;
+            uint8_t tailIn[16];
+            memcpy(tailIn, i8 + whole - 16, 16);
+            if (!cpuAes(mode, encrypt, key, keyBytes, curIv, i8 + done, o8 + done, rem)) {
+                bzero(tailIn, sizeof tailIn);
+                return -2;
+            }
+            advanceAesIv(mode, encrypt, curIv, tailIn, o8 + whole - 16, rem / 16);
+            bzero(tailIn, sizeof tailIn);
+            break;
+        }
+        bouncedMarker = inBounce.va;
+        mapBounceSide(e, kInList, i8 + done, chunk, false, inBounce);
+        mapBounceSide(e, kOutList, o8 + done, chunk, true, outBounce);
         if (!aesRun(e, mode, encrypt, slot, keyBytes, curIv, chunk / 16)) {
             runFailed(e, alg);
             if (!done)
@@ -926,12 +1023,12 @@ int aesStreamBounced(Engine &e, tegra_se_mode mode, bool encrypt, unsigned slot,
             bzero(tailIn, sizeof tailIn);
             break;
         }
-        switch_dcache_invalidate(e.bounceOut.va, chunk);
-        memcpy(o8 + done, e.bounceOut.va, chunk);
-        advanceAesIv(mode, encrypt, curIv, e.bounceIn.va + chunk - 16, e.bounceOut.va + chunk - 16, chunk / 16);
+        switch_dcache_invalidate(outBounce.va, chunk);
+        memcpy(o8 + done, outBounce.va, chunk);
+        advanceAesIv(mode, encrypt, curIv, inBounce.va + chunk - 16, outBounce.va + chunk - 16, chunk / 16);
         done += chunk;
     }
-    const Side bounced = {nullptr, done, true};
+    const Side bounced = {nullptr, done, bouncedMarker};
     if (done)
         counted(alg, done, bounced, bounced);
     return 0;
@@ -952,16 +1049,28 @@ int aesLocked(tegra_se_mode mode, bool encrypt, const uint8_t *key, unsigned key
         giveBack(e);
         return -1;
     }
+    // Save the last input block before DMA so advanceAesIv never reads overwritten plaintext on aliased buffers.
+    uint8_t savedLastIn[16];
+    memcpy(savedLastIn, i8 + whole - 16, 16);
     if (overlap) {
         result = aesStreamBounced(*e, mode, encrypt, slot, key, keyBytes, curIv, i8, o8, whole);
     } else {
         Side a;
         Side b;
-        if (mapSide(*e, kInList, i8, whole, false, &a, e->bounceIn) &&
-            mapSide(*e, kOutList, o8, whole, true, &b, e->bounceOut)) {
-            if (aesRun(*e, mode, encrypt, slot, keyBytes, curIv, whole / 16)) {
-                finishOutput(b, e->bounceOut);
-                advanceAesIv(mode, encrypt, curIv, i8 + whole - 16, o8 + whole - 16, whole / 16);
+        if (mapSide(*e, kInList, i8, whole, false, &a) && mapSide(*e, kOutList, o8, whole, true, &b)) {
+            const uint32_t *inList = reinterpret_cast<const uint32_t *>(e->list.va + kInList);
+            const uint32_t *outList = reinterpret_cast<const uint32_t *>(e->list.va + kOutList);
+            if (!a.bounceVa && !b.bounceVa && listsOverlap(inList, outList)) {
+                const bool exactAlias = inList[0] == outList[0] &&
+                                        memcmp(inList, outList, (1u + 2u * (inList[0] + 1u)) * sizeof(uint32_t)) == 0;
+                if (!exactAlias && whole > kBounceBytes) {
+                    result = -1;
+                } else {
+                    result = aesStreamBounced(*e, mode, encrypt, slot, key, keyBytes, curIv, i8, o8, whole);
+                }
+            } else if (aesRun(*e, mode, encrypt, slot, keyBytes, curIv, whole / 16)) {
+                finishOutput(b);
+                advanceAesIv(mode, encrypt, curIv, savedLastIn, o8 + whole - 16, whole / 16);
                 counted(alg, whole, a, b);
                 result = 0;
             } else {
@@ -972,6 +1081,7 @@ int aesLocked(tegra_se_mode mode, bool encrypt, const uint8_t *key, unsigned key
             result = aesStreamBounced(*e, mode, encrypt, slot, key, keyBytes, curIv, i8, o8, whole);
         }
     }
+    bzero(savedLastIn, sizeof savedLastIn);
     giveBack(e);
     return result;
 }
@@ -1062,7 +1172,7 @@ extern "C" int tegra_se_cmac(const uint8_t *key, unsigned keyBytes, const void *
     int result = -1;
     Side a = {};
     const unsigned slot = keySlot(*e, key, keyBytes);
-    bool mapped = (slot != 0u) && ((head == 0u) || mapSide(*e, kInList, msg, head, false, &a, e->bounceIn));
+    bool mapped = (slot != 0u) && ((head == 0u) || mapSide(*e, kInList, msg, head, false, &a));
     if (mapped) {
         // The modified last block from the list page's scratch, after the caller's pages: one more list entry.
         uint32_t *list = reinterpret_cast<uint32_t *>(e->list.va + kInList);
@@ -1140,7 +1250,7 @@ extern "C" int tegra_se_digest(unsigned which, const void *in, size_t len, uint8
         return -1;
     int result = -1;
     Side a;
-    if (mapSide(*e, kInList, in, len, false, &a, e->bounceIn)) {
+    if (mapSide(*e, kInList, in, len, false, &a)) {
         if (shaRun(*e, alg, len, nullptr, 0)) {
             shaDigest(*e, alg, out);
             counted(alg, len, a, a);
@@ -1156,6 +1266,7 @@ extern "C" int tegra_se_digest(unsigned which, const void *in, size_t len, uint8
 }
 
 namespace {
+#if DEVELOPMENT || DEBUG
 // switch_digest_compress_hook: corecrypto's compress of XNU's SHA-1/256/384/512, from any state, on an engine.
 int compressHook(const struct ccdigest_info *original, ccdigest_state_t state, size_t nblocks, const void *data)
 {
@@ -1170,7 +1281,10 @@ int compressHook(const struct ccdigest_info *original, ccdigest_state_t state, s
         return -1;
     }
     const size_t len = nblocks * original->block_size;
-    if (len < kHookMinBytes || (len < gCutover[alg] && !forced()) || !gAlg[alg].on)
+    const bool isForced = forced();
+    if (len < kHookMinBytes ||
+        (!isForced && (len < gCutover[alg] || !(__atomic_load_n(&gHookAlgs, __ATOMIC_RELAXED) & (1u << alg)))) ||
+        !gAlg[alg].on)
         return -1;
     if (!canSleep()) {
         tally(gUnsleepable, len);
@@ -1187,7 +1301,7 @@ int compressHook(const struct ccdigest_info *original, ccdigest_state_t state, s
     Side a;
     uint32_t next[16];
     memcpy(next, before, static_cast<size_t>(words) * 4);
-    if (mapSide(*e, kInList, data, len, false, &a, e->bounceIn)) {
+    if (mapSide(*e, kInList, data, len, false, &a)) {
         if (shaRun(*e, alg, len, next, words)) {
             counted(alg, len, a, a);
             result = 0;
@@ -1197,9 +1311,16 @@ int compressHook(const struct ccdigest_info *original, ccdigest_state_t state, s
     } else {
         const auto *src = static_cast<const uint8_t *>(data);
         bool ok = true;
+        uint8_t *bouncedMarker = nullptr;
         for (size_t done = 0; done < len;) {
             const size_t chunk = len - done < kBounceBytes ? len - done : kBounceBytes;
-            mapBounceSide(*e, kInList, src + done, chunk, false, e->bounceIn);
+            BounceSlice inBounce;
+            if (!ensureBounce(*e, false, chunk, &inBounce)) {
+                ok = false;
+                break;
+            }
+            bouncedMarker = inBounce.va;
+            mapBounceSide(*e, kInList, src + done, chunk, false, inBounce);
             if (!shaRun(*e, alg, chunk, next, words)) {
                 runFailed(*e, alg);
                 ok = false;
@@ -1208,7 +1329,7 @@ int compressHook(const struct ccdigest_info *original, ccdigest_state_t state, s
             done += chunk;
         }
         if (ok) {
-            const Side bounced = {nullptr, len, true};
+            const Side bounced = {nullptr, len, bouncedMarker};
             counted(alg, len, bounced, bounced);
             result = 0;
         }
@@ -1219,6 +1340,7 @@ int compressHook(const struct ccdigest_info *original, ccdigest_state_t state, s
     memcpy(s, next, static_cast<size_t>(words) * 4);
     return 0;
 }
+#endif
 
 const uint8_t kKey256[32] = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a,
                              0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15,
@@ -1319,6 +1441,7 @@ uint32_t knownAnswers(const Engine &only)
     return good;
 }
 
+#if DEVELOPMENT || DEBUG
 // SHA compress from a loaded state, against corecrypto's compress of the same blocks from a state that is not the
 // initial value: what the hook needs. Runs on one engine (forced) with gAlg on for the duration.
 bool stateLoadWorks(const Engine &only, unsigned alg, const struct ccdigest_info *di)
@@ -1345,6 +1468,7 @@ bool stateLoadWorks(const Engine &only, unsigned alg, const struct ccdigest_info
     forceOnly(nullptr);
     return ok;
 }
+#endif
 
 bool engineUp(Engine &e)
 {
@@ -1366,21 +1490,23 @@ bool engineUp(Engine &e)
         IOLog("TegraSE: %s has no keyslot EL1 may update (PERKEY %#x), off\n", e.name, perkey);
         return false;
     }
-    if (!allocate(&e.list, kListBytes) || !allocate(&e.bounceIn, kBounceBytes) ||
-        !allocate(&e.bounceOut, kBounceBytes)) {
+    if (!allocate(&e.list, kListBytes)) {
         IOLog("TegraSE: %s: no DMA memory below 4 GiB, off\n", e.name);
         return false;
     }
     IOService *nub = switch_interrupt_nub(e.intid, false);  // sleeps until the GIC is up
-    e.source =
-        nub ? IOFilterInterruptEventSource::filterInterruptEventSource(gLoop, nullptr, &filter, nub, 0) : nullptr;
-    if (!e.source || gLoop->addEventSource(e.source) != kIOReturnSuccess) {
+    if (!nub || nub->registerInterrupt(0, nullptr, interruptHandler, &e) != kIOReturnSuccess) {
         IOLog("TegraSE: %s: cannot attach INTID %u, off\n", e.name, e.intid);
         return false;
     }
     wr(e, INT_STATUS, rd(e, INT_STATUS));
     wr(e, INT_ENABLE, kIntDone | kIntError);
-    e.source->enable();
+    if (nub->enableInterrupt(0) != kIOReturnSuccess) {
+        nub->unregisterInterrupt(0);
+        IOLog("TegraSE: %s: cannot enable INTID %u, off\n", e.name, e.intid);
+        return false;
+    }
+    e.nub = nub;
     e.up = true;
     return true;
 }
@@ -1396,8 +1522,8 @@ bool confine(Engine &e, unsigned which)
         return true;
     }
     char why[160] = "";
-    const switch_dma_buffer *own[3] = {&e.list.buffer, &e.bounceIn.buffer, &e.bounceOut.buffer};
-    switch (tegra_se_smmu_attach(which, own, 3, why, sizeof why)) {
+    const switch_dma_buffer *own[1] = {&e.list.buffer};
+    switch (tegra_se_smmu_attach(which, own, 1, why, sizeof why)) {
     case TEGRA_SE_SMMU_ATTACHED:
         IOLog("TegraSE: %s DMA through the SMMU (MC %#x and %#x): it reaches its buffers and each operation's pages\n",
               e.name, tegra_smmu_se_swgroups[which][0], tegra_smmu_se_swgroups[which][1]);
@@ -1417,12 +1543,14 @@ bool rng(Engine &e, uint8_t out[64])
 {
     if (!switch_car_clock_enabled(kClockEntropy) || switch_car_reset_asserted(kClockEntropy))
         return false;
+    uint8_t *const dstVa = e.list.va + kSmallOut;
+    const uint32_t dstPa = e.list.pa + kSmallOut;
     uint32_t *list = reinterpret_cast<uint32_t *>(e.list.va + kOutList);
     list[0] = 0;
-    list[1] = e.bounceOut.pa;
+    list[1] = dstPa;
     list[2] = 64;
     switch_dcache_clean_lines(list, 12);
-    switch_dcache_clean_invalidate_lines(e.bounceOut.va, 64);
+    switch_dcache_clean_invalidate_lines(dstVa, 64);
     wr(e, CONFIG, 2u << 12 | 1u << 24);  // RNG, KEY192, memory
     crypto(e, 1u << 3 | kCryptoEncrypt);
     wr(e, RNG_CONFIG, 1u << 2 | 2u);  // SRC_ENTROPY | FORCE_RESEED
@@ -1430,10 +1558,10 @@ bool rng(Engine &e, uint8_t out[64])
     wr(e, LAST_BLOCK, 3);
     if (!run(e, 0, e.list.pa + kOutList))
         return false;
-    switch_dcache_invalidate(e.bounceOut.va, 64);
-    memcpy(out, e.bounceOut.va, 64);
-    bzero(e.bounceOut.va, 64);
-    switch_dcache_clean_invalidate(e.bounceOut.va, 64);
+    switch_dcache_invalidate(dstVa, 64);
+    memcpy(out, dstVa, 64);
+    bzero(dstVa, 64);
+    switch_dcache_clean_invalidate(dstVa, 64);
     uint32_t any = 0;
     for (unsigned i = 0; i < 64; ++i)
         any |= out[i];
@@ -1647,6 +1775,31 @@ bool timingBuffers(Dma *in, Dma *out)
         }
     }
     IOLog("%s\n", line);
+    // Install switch_digest_compress_hook only if timing measured a reachable cutover (< kBulk) for a SHA algorithm.
+    uint32_t hookAlgs = 0;
+
+    static const struct {
+        unsigned alg;
+        unsigned orig;
+    } kHooked[] = {{SHA1, 0}, {SHA256, 1}, {SHA512, 3}};
+
+    for (const auto &entry : kHooked) {
+        if (!gAlg[entry.alg].on || gCutover[entry.alg] >= kBulk)
+            continue;
+        bool ok = true;
+        for (const Engine &e : gEngines) {
+            if (!e.up)
+                continue;
+            const bool savedOn = gAlg[entry.alg].on;
+            ok = ok && stateLoadWorks(e, entry.alg, switch_digest_originals[entry.orig]);
+            gAlg[entry.alg].on = savedOn;
+        }
+        if (ok)
+            hookAlgs |= 1u << entry.alg;
+    }
+    __atomic_store_n(&gHookAlgs, hookAlgs, __ATOMIC_RELEASE);
+    switch_digest_compress_hook = hookAlgs ? compressHook : nullptr;
+    gForced[0] = current_thread();
     // Both engines at once: two threads hashing 1 MiB 16 times each, against one thread alone.
     const unsigned upBeforeParallel = enginesUp();
     if (gEngines[0].up && gEngines[1].up && gAlg[SHA256].on) {
@@ -1691,7 +1844,7 @@ int timingSysctl(struct sysctl_oid *, void *, int, struct sysctl_req *req)
     const int error = sysctl_io_number(req, 0, sizeof(value), &value, &changed);
     if (error || !changed || !value)
         return error;
-    if (!gReady || gSleeping || !clockOn())
+    if (!gReady || __atomic_load_n(&gSleeping, __ATOMIC_RELAXED) || !clockOn())
         return ENODEV;
     if (__atomic_exchange_n(&gTimingBusy, true, __ATOMIC_ACQUIRE))
         return EBUSY;
@@ -1725,10 +1878,8 @@ void seThread(void *, wait_result_t)
 {
     gAhb = switch_mmio_map(kAhbArbPA, 0x1000);
     gMc = switch_mmio_map(kMcPA, 0x1000);
-    gLoop = IOWorkLoop::workLoop();
-    IOLock *const queue = IOLockAlloc();
-    __atomic_store_n(&gQueue, queue, __ATOMIC_RELEASE);
-    if (!gAhb || !gMc || !gLoop || !queue) {
+    IOLock *const queue = queueLock();
+    if (!gAhb || !gMc || !queue) {
         IOLog("TegraSE: off for this boot: cannot map AHB/MC or allocate\n");
         return;
     }
@@ -1783,18 +1934,6 @@ void seThread(void *, wait_result_t)
         IOLog("TegraSE: off for this boot: no engine up\n");
         return;
     }
-    // The hook needs SHA compress from a loaded state; corecrypto's own compress is the reference.
-    gStateLoad = true;
-    for (const Engine &e : gEngines) {
-        if (!e.up)
-            continue;
-        gStateLoad =
-            gStateLoad && ((answered & (1u << SHA256)) != 0u) && stateLoadWorks(e, SHA256, switch_digest_originals[1]);
-        gStateLoad =
-            gStateLoad && ((answered & (1u << SHA512)) != 0u) && stateLoadWorks(e, SHA512, switch_digest_originals[3]);
-        if (e.up && (answered & (1u << SHA1)) && !stateLoadWorks(e, SHA1, switch_digest_originals[0]))
-            answered &= ~(1u << SHA1);
-    }
     for (unsigned alg = 0; alg < ALGS; ++alg)
         gAlg[alg].on = ((answered & (1u << alg)) != 0u);
     uint8_t seed[64];
@@ -1817,25 +1956,22 @@ void seThread(void *, wait_result_t)
     bzero(seed, sizeof seed);
     prove();
     gReady = true;
-    if (gStateLoad)
-        switch_digest_compress_hook = compressHook;
     IOLog("%s\n", line);
     IOLog("TegraSE: on the engines: %#x of %#x (sha1 sha224 sha256 sha384 sha512 ecb cbc ctr ofb cmac); XNU's SHA "
-          "compress %s; kernel PRNG %s\n",
-          answered, (1u << ALGS) - 1,
-          gStateLoad ? "hooked (from each algorithm's cutover up)" : "left on the CPU: state load did not answer",
+          "compress left on the CPU (cutover %zu KiB; hook off); kernel PRNG %s\n",
+          answered, (1u << ALGS) - 1, kBulk >> 10,
           reseeded ? "reseeded from the DRBG" : "not reseeded (entropy clock off or DRBG output implausible)");
 
 #if (DEVELOPMENT || DEBUG) && !SWITCH_MMIO_HOST_MODEL
     switch_sysctl_oid(&gTimingOid, &sysctl__debug_children, "switch_se_timing",
-                      CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED, timingSysctl, "I",
+                      static_cast<int>(CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED), timingSysctl, "I",
                       "run the TegraSE vs CPU timing benchmark on demand");
     sysctl_register_oid(&gTimingOid);
 #endif
 #if SWITCH_STATS_IO
     for (;;) {
         IOSleep(300000);
-        stats(gStateLoad ? "traffic" : "traffic (hook off)");
+        stats(__atomic_load_n(&gHookAlgs, __ATOMIC_RELAXED) ? "traffic" : "traffic (hook off)");
     }
 #endif
 }
@@ -1846,52 +1982,51 @@ extern "C" bool tegra_se_claim(unsigned engine, uint32_t owner, uint32_t ms)
     if (engine < 1 || engine > kEngines)
         return false;
     Engine &e = gEngines[engine - 1];
-    if (claim(e, owner))
-        return true;
-    if (!ms)
+    IOLock *const q = queueLock();
+    if (!q)
         return false;
+    IOLockLock(q);
+    if (claimLocked(e, owner)) {
+        IOLockUnlock(q);
+        return true;
+    }
+    if (!ms) {
+        IOLockUnlock(q);
+        return false;
+    }
     uint64_t deadline = 0;
     clock_interval_to_deadline(ms, kMillisecondScale, &deadline);
+    ++gQueueWaiters;
+    bool claimed = false;
     for (;;) {
-        IOLock *const q = __atomic_load_n(&gQueue, __ATOMIC_ACQUIRE);
-        if (q) {
-            IOLockLock(q);
-            __atomic_add_fetch(&gQueueWaiters, 1, __ATOMIC_SEQ_CST);
-            bool claimed = false;
-            for (;;) {
-                if (claim(e, owner)) {
-                    claimed = true;
-                    break;
-                }
-                if (mach_absolute_time() >= deadline)
-                    break;
-                IOLockSleepDeadline(q, &gQueueEvent, deadline, THREAD_UNINT);
-            }
-            __atomic_sub_fetch(&gQueueWaiters, 1, __ATOMIC_RELAXED);
-            IOLockUnlock(q);
-            return claimed;
+        if (claimLocked(e, owner)) {
+            claimed = true;
+            break;
         }
-        if (claim(e, owner))
-            return true;
         if (mach_absolute_time() >= deadline)
-            return false;
-        IOSleep(1);
+            break;
+        IOLockSleepDeadline(q, &gQueueEvent, deadline, THREAD_UNINT);
     }
+    --gQueueWaiters;
+    IOLockUnlock(q);
+    return claimed;
 }
 
 extern "C" void tegra_se_release(unsigned engine, uint32_t owner)
 {
     if (engine < 1 || engine > kEngines)
         return;
-    if (!__sync_bool_compare_and_swap(&gEngines[engine - 1].owner, owner, 0u))
-        return;
     IOLock *const q = __atomic_load_n(&gQueue, __ATOMIC_ACQUIRE);
-    if (q && __atomic_load_n(&gQueueWaiters, __ATOMIC_SEQ_CST)) {
-        IOLockLock(q);
-        if (__atomic_load_n(&gQueueWaiters, __ATOMIC_RELAXED))
+    if (!q)
+        return;
+    IOLockLock(q);
+    Engine &e = gEngines[engine - 1];
+    if (e.owner == owner) {
+        e.owner = 0u;
+        if (gQueueWaiters)
             IOLockWakeup(q, &gQueueEvent, false);
-        IOLockUnlock(q);
     }
+    IOLockUnlock(q);
 }
 
 extern "C" bool tegra_se2_claim(uint32_t owner, uint32_t ms)
@@ -1926,8 +2061,8 @@ extern "C" void tegra_se_suspend(void)
     if (!q)
         return;
     IOLockLock(q);
-    gSleeping = true;
-    if (__atomic_load_n(&gQueueWaiters, __ATOMIC_RELAXED))
+    __atomic_store_n(&gSleeping, true, __ATOMIC_RELAXED);
+    if (gQueueWaiters)
         IOLockWakeup(q, &gQueueEvent, false);
     IOLockUnlock(q);
     for (unsigned i = 0; i < kEngines; ++i) {
@@ -1942,14 +2077,14 @@ extern "C" void tegra_se_suspend(void)
         if (e.busy) {
             uint64_t deadline = 0;
             clock_interval_to_deadline(kSleepWaitMs, kMillisecondScale, &deadline);
-            __atomic_add_fetch(&gQueueWaiters, 1, __ATOMIC_SEQ_CST);
+            ++gQueueWaiters;
             while (e.busy && mach_absolute_time() < deadline)
                 IOLockSleepDeadline(q, &gQueueEvent, deadline, THREAD_UNINT);
-            __atomic_sub_fetch(&gQueueWaiters, 1, __ATOMIC_RELAXED);
+            --gQueueWaiters;
         }
         e.busy = true;
         IOLockUnlock(q);
-        e.source->disable();
+        e.nub->disableInterrupt(0);
     }
 }
 
@@ -1960,23 +2095,28 @@ extern "C" void tegra_se_resume(void)
         return;
     for (unsigned i = 0; i < kEngines; ++i) {
         Engine &e = gEngines[i];
-        if (!e.up || e.owner != kOwnerSleep)
+        if (!e.up)
+            continue;
+        IOLockLock(q);
+        const bool ownedBySleep = e.owner == kOwnerSleep;
+        IOLockUnlock(q);
+        if (!ownedBySleep)
             continue;
         if (clockOn()) {
             wr(e, INT_STATUS, rd(e, INT_STATUS));
             wr(e, INT_ENABLE, kIntDone | kIntError);
         }
-        e.source->enable();
+        e.nub->enableInterrupt(0);
         IOLockLock(q);
         e.busy = false;
-        if (__atomic_load_n(&gQueueWaiters, __ATOMIC_RELAXED))
+        e.owner = 0u;
+        if (gQueueWaiters)
             IOLockWakeup(q, &gQueueEvent, false);
         IOLockUnlock(q);
-        tegra_se_release(i + 1, kOwnerSleep);
     }
     IOLockLock(q);
-    gSleeping = false;
-    if (__atomic_load_n(&gQueueWaiters, __ATOMIC_RELAXED))
+    __atomic_store_n(&gSleeping, false, __ATOMIC_RELAXED);
+    if (gQueueWaiters)
         IOLockWakeup(q, &gQueueEvent, false);
     IOLockUnlock(q);
 }

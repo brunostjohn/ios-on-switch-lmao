@@ -62,19 +62,30 @@ tegra_se_smmu_attach_result tegra_se_smmu_attach(unsigned engine, const switch_d
     bool translated = false;
     for (unsigned i = 0; i < 2; ++i)
         translated |= (tegra_smmu_read(swgroups[i]) & (1u << 31)) != 0u;
-    if (count > kOwned || !gView[engine].init(kAsid[engine], kAsid[engine]) || !gView[engine].reserveTables(k4GiB)) {
+    if (count > kOwned || !gView[engine].init(kAsid[engine], kAsid[engine], false)) {
         snprintf(line, size, "no memory for its view of RAM");
         return translated ? TEGRA_SE_SMMU_TRANSLATED : TEGRA_SE_SMMU_UNTRANSLATED;
     }
-    for (unsigned i = 0; i < count; ++i) {
-        if (!gView[engine].hold(buffers[i]->pa, buffers[i]->size)) {
-            snprintf(line, size, "its buffer at %#llx is outside RAM below 4 GiB",
-                     static_cast<unsigned long long>(buffers[i]->pa));
-            return translated ? TEGRA_SE_SMMU_TRANSLATED : TEGRA_SE_SMMU_UNTRANSLATED;
+    unsigned failedIndex = count;
+    gView[engine].unlocked([&](auto &core) {
+        for (unsigned i = 0; i < count; ++i) {
+            if (buffers[i]->pa + buffers[i]->size > k4GiB || !core.hold(buffers[i]->pa, buffers[i]->size)) {
+                failedIndex = i;
+                for (unsigned j = 0; j < i; ++j)
+                    (void)core.release(buffers[j]->pa, buffers[j]->size);
+                return;
+            }
+            gOwned[engine][i] = {buffers[i]->pa, buffers[i]->size};
         }
-        gOwned[engine][i] = {buffers[i]->pa, buffers[i]->size};
+        core.commit();
+    });
+    if (failedIndex < count) {
+        for (unsigned j = 0; j < failedIndex; ++j)
+            gOwned[engine][j] = {};
+        snprintf(line, size, "its buffer at %#llx is outside RAM below 4 GiB",
+                 static_cast<unsigned long long>(buffers[failedIndex]->pa));
+        return translated ? TEGRA_SE_SMMU_TRANSLATED : TEGRA_SE_SMMU_UNTRANSLATED;
     }
-    gView[engine].commit();
     for (unsigned i = 0; i < 2; ++i) {
         if (gView[engine].attachNarrow(swgroups[i], kTranslationReg[engine][i], kClients[engine][i], line, size)) {
             if (i)
@@ -84,6 +95,32 @@ tegra_se_smmu_attach_result tegra_se_smmu_attach(unsigned engine, const switch_d
     }
     gAttached[engine] = true;
     return TEGRA_SE_SMMU_ATTACHED;
+}
+
+bool tegra_se_smmu_add_owned(unsigned engine, const switch_dma_buffer *buffer)
+{
+    if (engine >= kEngines || !gAttached[engine])
+        return true;
+    if (!buffer || !buffer->size || buffer->pa + buffer->size > k4GiB)
+        return false;
+    unsigned slot = kOwned;
+    for (unsigned i = 0; i < kOwned; ++i) {
+        if (gOwned[engine][i].bytes == 0) {
+            slot = i;
+            break;
+        }
+    }
+    if (slot == kOwned)
+        return false;
+    bool ok = false;
+    gView[engine].unlocked([&](auto &core) {
+        ok = core.hold(buffer->pa, buffer->size);
+        if (ok)
+            core.commit();
+    });
+    if (ok)
+        gOwned[engine][slot] = {buffer->pa, buffer->size};
+    return ok;
 }
 
 bool tegra_se_smmu_hold_lists(unsigned engine, const uint32_t *a, const uint32_t *b)
@@ -96,7 +133,7 @@ bool tegra_se_smmu_hold_lists(unsigned engine, const uint32_t *a, const uint32_t
     const uint32_t counts[2] = {a ? entries(a) : 0, b ? entries(b) : 0};
     uint32_t held[2] = {0, 0};
     bool ok = true;
-    gView[engine].locked([&](auto &core) {
+    gView[engine].unlocked([&](auto &core) {
         bool changed = false;
         for (unsigned li = 0; li < 2 && ok; ++li) {
             for (; held[li] < counts[li]; ++held[li]) {
@@ -134,7 +171,7 @@ void tegra_se_smmu_release_lists(unsigned engine, const uint32_t *a, const uint3
         return;
     const uint32_t *lists[2] = {b, a};
     bool released = true;
-    gView[engine].locked([&](auto &core) {
+    gView[engine].unlocked([&](auto &core) {
         bool changed = false;
         for (const uint32_t *list : lists) {
             if (!list)
