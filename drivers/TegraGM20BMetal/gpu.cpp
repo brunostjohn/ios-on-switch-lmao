@@ -188,6 +188,36 @@ const FormatInfo kFormats[] = {
 
 const PackProgram kNoPixelProgram = {};
 const uint8_t kNoPixelHeader[0x50] = {};
+
+struct ScopedUnlock {
+    gm20b::Mutex &m;
+
+    explicit ScopedUnlock(gm20b::Mutex &mutex) __attribute__((no_thread_safety_analysis)) : m(mutex)
+    {
+        m.unlock();
+    }
+
+    ~ScopedUnlock() __attribute__((no_thread_safety_analysis))
+    {
+        m.lock();
+    }
+
+    ScopedUnlock(const ScopedUnlock &) = delete;
+    ScopedUnlock &operator=(const ScopedUnlock &) = delete;
+};
+
+template <typename Pred>
+void waitUnderLock(gm20b::Mutex &m, gm20b::CondVar &cv, uint32_t &waiters, Pred &&pred)
+    __attribute__((no_thread_safety_analysis))
+{
+    if (pred())
+        return;
+    ++waiters;
+    std::unique_lock<gm20b::Mutex> adopted(m, std::adopt_lock);
+    cv.wait(adopted, std::forward<Pred>(pred));
+    adopted.release();
+    --waiters;
+}
 }  // namespace
 
 PlacedProgram noPixelProgram()
@@ -545,10 +575,26 @@ bool Device::init(std::string &err)
         }
     }
     segmentHeap_.setGrow([this](uint64_t bytes, SegmentChunk &chunk) {
-        Bo bo;
-        if (!k_.allocControl(bytes, bo, ControlUse::StateSegments))
+        if (closing_)
             return false;
-        set_.add(k_, bo, TegraGM20BSurfaceRead);
+        ++offLockChunkOps_;
+        Bo bo;
+        bool ok = false;
+        {
+            ScopedUnlock ul(lock_);
+            ok = k_.allocControl(bytes, bo, ControlUse::StateSegments);
+            if (ok)
+                set_.add(k_, bo, TegraGM20BSurfaceRead);
+        }
+        if (ok && closing_) {
+            ScopedUnlock ul(lock_);
+            k_.free(bo);
+            ok = false;
+        }
+        if (--offLockChunkOps_ == 0)
+            chunkReady_.notify_all();
+        if (!ok)
+            return false;
         chunk = {bo.cpu, bo.va, bo.bytes};
         return true;
     });
@@ -561,11 +607,14 @@ bool Device::init(std::string &err)
         const uint64_t heapStart = h.section[PackHeap].offset + packWindowBytes_;
         packPages_.reset(heapStart, mapped, mapped, packWindowBytes_);
         const uint64_t packEnd = std::max(packWindowBytes_, packPages_.windowEnd());
-        heapCopiesAt_ = heapBound_ = heapPlaced_ = (packEnd + kHeapStep - 1) & ~(kHeapStep - 1);
+        heapCopiesAt_ = heapPlaced_ = (packEnd + kHeapStep - 1) & ~(kHeapStep - 1);
+        heapBound_.store(heapCopiesAt_, std::memory_order_relaxed);
         heapStoresAt_ = heapCopiesAt_ + kHeapCopiesWindow;
         tier0Pipelines_.reset(uint32_t(pack_.tier0Entries(PackPipelines, sizeof(PackPipeline))));
-        if (packWindowBytes_ && h.tier0SlmPerWarp)
+        if (packWindowBytes_ && h.tier0SlmPerWarp) {
+            std::lock_guard<gm20b::Mutex> l(lock_);
             (void)slmNeed(h.tier0SlmPerWarp);
+        }
     }
     if (role_ == Role::Client)
         return true;
@@ -756,60 +805,121 @@ bool Device::place(uint32_t prog, uint32_t &program, uint64_t &data)
         if (!(inPlace && placeInPlace(packPages_, file, fileOffset, p.bytes, false, at)) &&
             !heapPlace(pack_.section<uint8_t>(PackHeap) + p.heapOffset, p.bytes, at))
             return false;
-        it = placedCold_.emplace(prog, uint32_t(at)).first;
-        SWITCH_METAL_DIAGNOSTIC(stats.programsPlaced++);
+        const auto [insertedIt, inserted] = placedCold_.emplace(prog, uint32_t(at));
+        it = insertedIt;
+        if (inserted)
+            SWITCH_METAL_DIAGNOSTIC(stats.programsPlaced++);
     }
     program = it->second + (p.program - p.heapOffset);
     data = p.dataBytes ? heap_.va + it->second + p.dataOffset : 0;
     return true;
 }
 
-// lock_ held: an area whose warps get `perWarp` bytes of local memory or more; the next submission gives it to the channel
-// (CommandBuffer::commit). False: no memory for it.
+// lock_ held (released across the kernel allocation and resource-set update): an area whose warps get `perWarp` bytes of
+// local memory or more; the next submission gives it to the channel (CommandBuffer::commit). False: no memory for it.
 bool Device::slmNeed(uint64_t perWarp)
 {
     if (perWarp <= slmPerWarp_.load(std::memory_order_acquire))
         return true;
+    waitUnderLock(lock_, heapReady_, heapWaiters_, [&] {
+        return !slmGrowing_;
+    });
+    if (perWarp <= slmPerWarp_.load(std::memory_order_acquire))
+        return true;
+    if (closing_)
+        return false;
+    slmGrowing_ = true;
+    ++offLockChunkOps_;
     const SlmArea a = slmArea(perWarp, k_.info().tpc_count);
     Bo area;
-    if (!k_.allocGpu(a.bytes, area))
-        return false;
-    if (slm_.bytes)
-        slmOutgrown_.push_back(slm_);
-    set_.add(k_, area, TegraGM20BSurfaceWrite, true);
-    slm_ = area;
-    slmVa_.store(area.va, std::memory_order_relaxed);
-    slmPerWarp_.store(perWarp, std::memory_order_release);
-    return true;
+    bool ok = false;
+    {
+        ScopedUnlock ul(lock_);
+        ok = k_.allocGpu(a.bytes, area);
+        if (ok)
+            set_.add(k_, area, TegraGM20BSurfaceWrite, true);
+    }
+    if (ok && closing_) {
+        ScopedUnlock ul(lock_);
+        k_.free(area);
+        ok = false;
+    }
+    if (ok) {
+        if (slm_.bytes)
+            slmOutgrown_.push_back(slm_);
+        slm_ = area;
+        slmVa_.store(area.va, std::memory_order_relaxed);
+        slmPerWarp_.store(perWarp, std::memory_order_release);
+    }
+    slmGrowing_ = false;
+    if (heapWaiters_)
+        heapReady_.notify_all();
+    if (--offLockChunkOps_ == 0)
+        chunkReady_.notify_all();
+    return ok;
 }
 
-// lock_ held: the heap bound from its start through `end`, the range past what is bound as one more part of host memory imported
-// and bound at the window's VAs. False: past the window, or no memory or the kernel refused the part.
+// lock_ held (released across host page allocation, import, bind and resource-set update): the heap bound from its start
+// through `end`, the range past what is bound as one more part of host memory imported and bound at the window's VAs.
+// False: past the window, or no memory or the kernel refused the part.
 bool Device::heapGrow(uint64_t end)
 {
-    if (end <= heapBound_)
+    if (end <= heapBound_.load(std::memory_order_relaxed))
         return true;
     if (end > heapStoresAt_)
         return false;
-    // a client's parts double from a quarter step, as its chunks do
-    const uint64_t step = role_ == Role::Client
-                              ? std::clamp(heapBound_ - heapCopiesAt_, kHeapStep / kClientHeapFirstShare, kHeapStep)
-                              : kHeapStep;
-    HeapPart part;
-    part.offset = heapBound_;
-    part.bytes = std::min(heapStoresAt_ - heapBound_, (end - heapBound_ + step - 1) & ~(step - 1));
-    vm_address_t cpu = 0;
-    if (vm_allocate(mach_task_self(), &cpu, part.bytes, VM_FLAGS_ANYWHERE) != KERN_SUCCESS)
-        return false;
-    part.cpu = reinterpret_cast<uint8_t *>(cpu);
-    if (!k_.importPages(part.cpu, part.bytes, part.bo, 0, true) ||
-        !k_.bindImportAt(part.cpu, part.bo, heap_.va + part.offset, kPteKindPitch)) {
-        vm_deallocate(mach_task_self(), cpu, part.bytes);
-        return false;
+    while (heapBound_.load(std::memory_order_relaxed) < end) {
+        waitUnderLock(lock_, heapReady_, heapWaiters_, [&] {
+            return !heapGrowing_;
+        });
+        const uint64_t curBound = heapBound_.load(std::memory_order_relaxed);
+        if (end <= curBound)
+            return true;
+        if (end > heapStoresAt_ || closing_)
+            return false;
+        // a client's parts double from a quarter step, as its chunks do
+        const uint64_t step = role_ == Role::Client
+                                  ? std::clamp(curBound - heapCopiesAt_, kHeapStep / kClientHeapFirstShare, kHeapStep)
+                                  : kHeapStep;
+        HeapPart part;
+        part.offset = curBound;
+        part.bytes = std::min(heapStoresAt_ - curBound, (end - curBound + step - 1) & ~(step - 1));
+        const uint64_t bindVa = heap_.va + part.offset;
+        heapGrowing_ = true;
+        ++offLockChunkOps_;
+        vm_address_t cpu = 0;
+        bool ok = false;
+        {
+            ScopedUnlock ul(lock_);
+            if (vm_allocate(mach_task_self(), &cpu, part.bytes, VM_FLAGS_ANYWHERE) == KERN_SUCCESS) {
+                part.cpu = reinterpret_cast<uint8_t *>(cpu);
+                if (k_.importPages(part.cpu, part.bytes, part.bo, 0, true) &&
+                    k_.bindImportAt(part.cpu, part.bo, bindVa, kPteKindPitch)) {
+                    set_.add(k_, part.bo, TegraGM20BSurfaceRead, true);
+                    ok = true;
+                } else {
+                    vm_deallocate(mach_task_self(), cpu, part.bytes);
+                }
+            }
+        }
+        if (ok && closing_) {
+            ScopedUnlock ul(lock_);
+            k_.free(part.bo);
+            vm_deallocate(mach_task_self(), cpu, part.bytes);
+            ok = false;
+        }
+        if (ok) {
+            heapParts_.push_back(part);
+            heapBound_.store(curBound + part.bytes, std::memory_order_release);
+        }
+        heapGrowing_ = false;
+        if (heapWaiters_)
+            heapReady_.notify_all();
+        if (--offLockChunkOps_ == 0)
+            chunkReady_.notify_all();
+        if (!ok)
+            return false;
     }
-    set_.add(k_, part.bo, TegraGM20BSurfaceRead, true);
-    heapParts_.push_back(part);
-    heapBound_ += part.bytes;
     return true;
 }
 
@@ -831,31 +941,36 @@ bool Device::heapPlace(const uint8_t *bytes, uint32_t size, uint64_t &offset)
 {
     if (size >= k_.info().page_size && slotLookup_ && placeFromStore(bytes, size, offset))
         return true;
-    uint64_t at = (heapPlaced_ + 0xFF) & ~uint64_t(0xFF);
-    for (const HeapPart *p = heapPartAt(at); p && at + size > p->offset + p->bytes; p = heapPartAt(at))
-        at = p->offset + p->bytes;
-    if (!heapGrow(at + size + kHeapSlack))
-        return false;
-    const HeapPart *p = heapPartAt(at);
-    uint8_t *cpu = p->cpu + (at - p->offset);
-    memcpy(cpu, bytes, size);
-    cleanToMemory(cpu, size);
-    SWITCH_METAL_CREATION_COUNT(copies, 1);
-    SWITCH_METAL_CREATION_COUNT(copiedBytes, size);
-    offset = at;
-    heapPlaced_ = at + size;
-    heapEpoch_.fetch_add(1, std::memory_order_release);
-    return true;
+    for (;;) {
+        uint64_t at = (heapPlaced_ + 0xFF) & ~uint64_t(0xFF);
+        for (const HeapPart *p = heapPartAt(at); p && at + size > p->offset + p->bytes; p = heapPartAt(at))
+            at = p->offset + p->bytes;
+        if (at + size + kHeapSlack > heapBound_.load(std::memory_order_relaxed)) {
+            if (!heapGrow(at + size + kHeapSlack))
+                return false;
+            continue;
+        }
+        const HeapPart *p = heapPartAt(at);
+        uint8_t *cpu = p->cpu + (at - p->offset);
+        memcpy(cpu, bytes, size);
+        cleanToMemory(cpu, size);
+        SWITCH_METAL_CREATION_COUNT(copies, 1);
+        SWITCH_METAL_CREATION_COUNT(copiedBytes, size);
+        offset = at;
+        heapPlaced_ = at + size;
+        heapEpoch_.fetch_add(1, std::memory_order_release);
+        return true;
+    }
 }
 
-// lock_ held: a slot of `size` bytes at `fileOffset` of the read-only mapping `file` run in place: the grains it and the
-// instruction prefetch past its end lie in imported and bound at their window offsets where they are not yet, its window
-// offset in `offset`. The kernel wires the pages read-only (BoImport's read-only retry; the GPU maps them read-only),
-// cleans them at the import (an import of no surface is never `covered`), and the bind's TLB and L2 invalidate makes the
-// GPU's first walk read them. The pack's pages need nothing more: no process can write the file, and this device's import
-// keeps them wired, so no line of them is dirty after that clean. `written`: a slot lookup's mapping (runSlotsFrom), which
-// may be the shader compiler's store: the compiler writes it while it is mapped, maybe after the import of a grain the slot
-// lies in, so the slot is cleaned here.
+// lock_ held (released across per-grain BoImport and VmBind): a slot of `size` bytes at `fileOffset` of the read-only
+// mapping `file` run in place: the grains it and the instruction prefetch past its end lie in imported and bound at their
+// window offsets where they are not yet, its window offset in `offset`. The kernel wires the pages read-only (BoImport's
+// read-only retry; the GPU maps them read-only), cleans them at the import (an import of no surface is never `covered`),
+// and the bind's TLB and L2 invalidate makes the GPU's first walk read them. The pack's pages need nothing more: no process
+// can write the file, and this device's import keeps them wired, so no line of them is dirty after that clean. `written`: a
+// slot lookup's mapping (runSlotsFrom), which may be the shader compiler's store: the compiler writes it while it is mapped,
+// maybe after the import of a grain the slot lies in, so the slot is cleaned here.
 // The imports are held as long as the device and are never a job's use or a set member: no job writes them, the CPU never
 // changes a published slot, the kernel refuses a read-only import as a member, and a connection's close kills its channels
 // before it unbinds and unwires anything (drainResources). False: not inside the file's region, or the kernel refused an
@@ -866,31 +981,72 @@ bool Device::placeInPlace(ProgramPages &pages, const uint8_t *file, uint64_t fil
     std::vector<ProgramPages::Grain> grains;
     if (!pages.missing(fileOffset, uint64_t(size) + kHeapSlack, grains))
         return false;
-    for (const ProgramPages::Grain &r : grains) {
-        SWITCH_METAL_CREATION_SPAN(pieceTicks);
-        SWITCH_METAL_CREATION_COUNT(pieces, 1);
+#if SWITCH_METAL_DIAGNOSTICS
+    const bool initialEmpty = grains.empty();
+#endif
+    while (!grains.empty()) {
+        const ProgramPages::Grain r = grains.front();
+        const std::pair<const uint8_t *, uint64_t> key{file, r.offset};
+        if (importingGrains_.count(key)) {
+            waitUnderLock(lock_, heapReady_, heapWaiters_, [&] {
+                return !importingGrains_.count(key);
+            });
+            if (!pages.missing(fileOffset, uint64_t(size) + kHeapSlack, grains))
+                return false;
+            continue;
+        }
+        if (closing_)
+            return false;
+        importingGrains_.insert(key);
+        ++offLockChunkOps_;
+        const uint64_t windowVa = heap_.va + pages.windowOffset(r.offset);
         void *cpu = const_cast<uint8_t *>(file + r.offset);
         Bo bo;
-        if (!k_.importPages(cpu, r.bytes, bo, 0, true)) {
+        bool imported = false;
+        bool bound = false;
+        {
+            ScopedUnlock ul(lock_);
+            SWITCH_METAL_CREATION_SPAN(pieceTicks);
+            SWITCH_METAL_CREATION_COUNT(pieces, 1);
+            imported = k_.importPages(cpu, r.bytes, bo, 0, true);
+            bound = imported && k_.bindImportAt(cpu, bo, windowVa, kPteKindPitch);
+        }
+        const bool closing = closing_;
+        if (bound && closing) {
+            ScopedUnlock ul(lock_);
+            k_.free(bo);
+            bound = false;
+        }
+        importingGrains_.erase(key);
+        if (bound) {
+            inPlaceImports_.push_back(bo);
+            pages.bind(r);
+        }
+        if (heapWaiters_)
+            heapReady_.notify_all();
+        if (--offLockChunkOps_ == 0)
+            chunkReady_.notify_all();
+        if (!imported) {
             os_log_error(
                 os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "gm20b"),
                 "SwitchMetal: the kernel refused %llu KiB of program pages at file offset 0x%llx: copied instead",
                 (unsigned long long)(r.bytes >> 10), (unsigned long long)r.offset);
             return false;
         }
-        if (!k_.bindImportAt(cpu, bo, heap_.va + pages.windowOffset(r.offset), kPteKindPitch)) {
-            os_log_error(
-                os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "gm20b"),
-                "SwitchMetal: the program pages at file offset 0x%llx would not bind in the window: copied instead",
-                (unsigned long long)r.offset);
+        if (!bound) {
+            if (!closing)
+                os_log_error(
+                    os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "gm20b"),
+                    "SwitchMetal: the program pages at file offset 0x%llx would not bind in the window: copied instead",
+                    (unsigned long long)r.offset);
             return false;
         }
-        inPlaceImports_.push_back(bo);
-        pages.bind(r);
+        if (!pages.missing(fileOffset, uint64_t(size) + kHeapSlack, grains))
+            return false;
     }
 #if SWITCH_METAL_DIAGNOSTICS
     std::atomic<uint64_t> &placed = written ? stats.storeSlotsPlaced : stats.packSlotsInBoundGrains;
-    if (written || grains.empty())
+    if (written || initialEmpty)
         placed.store(placed.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
 #endif
     if (written) {

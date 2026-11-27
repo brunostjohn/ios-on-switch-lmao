@@ -16,6 +16,7 @@
 #include <iterator>
 #include <map>
 #include <mutex>
+#include <set>
 #include <string>
 #include <vector>
 #include "../../kits/SwitchSeedPack/SwitchSeedStore.h"
@@ -156,7 +157,10 @@ private:
     std::atomic<const Mapping *> mapping_{nullptr};
     std::atomic<uint32_t> latest_{0};  // the newest generation a completion named
     gm20b::Mutex mapLock_, asyncLock_, libraryLock_;
+    gm20b::CondVar libraryReady_, asyncDrained_;
     std::map<RegisteredLibrary, uint64_t> registeredLibraries_;
+    std::set<RegisteredLibrary> registeringLibraries_;
+    uint32_t libraryWaiters_ = 0;
     std::vector<const Mapping *> mappings_;  // every one ever made: a reader may still be inside an older one
 
     // One notification port per class an answer is taken at, each with a queue of that class: the kernel's answer
@@ -165,16 +169,25 @@ private:
         void *port = nullptr, *queue = nullptr;
     };
 
+    struct Pending {
+        Done done;
+        bool confirmed = false;
+    };
+
     static constexpr qos_class_t kAnswerClasses[] = {QOS_CLASS_USER_INTERACTIVE, QOS_CLASS_USER_INITIATED,
                                                      QOS_CLASS_DEFAULT, QOS_CLASS_UTILITY, QOS_CLASS_BACKGROUND};
     std::array<Port, std::size(kAnswerClasses)> ports_;  // asyncLock_'s
-    std::map<uint64_t, Done> pending_;
+    std::map<uint64_t, Pending> pending_;
     std::vector<Held> held_;  // past the bound, asked once an earlier one is answered
     gm20b::ChangeWord heldChanged_;
     uint64_t nextCookie_ = 1;
+    uint64_t deliveredCount_ = 0;
+    size_t confirmedPending_ = 0;
+    uint32_t asyncInFlight_ = 0, asyncWaiters_ = 0;
+    bool closing_ = false, promoting_ = false, promoteAgain_ = false;
 
-    // asyncLock_ held: the request asked, or held past the bound; false: neither
-    bool ask(Held &&held);
+    // asyncLock_ held through `l` (released across the kernel call and recheck): asked or held past the bound; false: neither
+    bool ask(std::unique_lock<gm20b::Mutex> &l, Held &&held, bool fromHeld);
     bool capable();
     void refresh(const TegraGM20BAbiCompilerInfoReply &info);
     void recheck();

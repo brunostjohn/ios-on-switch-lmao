@@ -440,8 +440,8 @@ device_test(
 # for the next job, a NotReady the generation's mirror does not explain stays the job's, and a registration the kernel
 # refuses is made once more without the member it names (anew where it names none), a second refusal failing the job
 # with that member named and leaving no refused member behind
-host_test(
-    name = "resource_set_test",
+[host_test(
+    name = "resource_set" + suffix + "_test",
     srcs = [
         "kernel_model.h",
         "resource_set_test.cpp",
@@ -468,15 +468,26 @@ host_test(
         "//drivers/TegraGM20BMetal:shared_events.h",
         "//drivers/TegraGM20BMetal:surfaces.h",
     ],
-    copts = ["-Idrivers/TegraGM20B"],
+    copts = ["-Idrivers/TegraGM20B"] + tsan,
     cxx_std = "c++17",
+    env = {"TSAN_OPTIONS": "halt_on_error=1"},
     linkopts = [
         "-framework",
         "IOKit",
         "-framework",
         "CoreFoundation",
-    ],
-)
+    ] + tsan,
+    sanitize = not tsan,
+) for suffix, tsan in [
+    (
+        "",
+        [],
+    ),
+    (
+        "_tsan",
+        ["-fsanitize=thread"],
+    ),
+]]
 
 # gm20b::Device itself over the kernel model (device_harness.h): a kill fails what it took and the next command buffer
 # gets a new channel, a reopen the kernel refuses, rings outgrown before a kill freed once the channel is made again (its
@@ -4904,8 +4915,8 @@ host_test(
     deps = ["//drivers/TegraGM20BMetal/abi:metal_abi"],
 )
 
-host_test(
-    name = "remote_test",
+[host_test(
+    name = "remote" + suffix + "_test",
     srcs = [
         "remote_test.cpp",
         "//drivers/TegraGM20BMetal:answer_class.h",
@@ -4955,16 +4966,27 @@ host_test(
     copts = [
         "-Idrivers/TegraGM20B",
         "-Idrivers/TegraGM20BMetal/plugin",
-    ],
+    ] + tsan,
     cxx_std = "c++17",
+    env = {"TSAN_OPTIONS": "halt_on_error=1"},
     linkopts = [
         "-framework",
         "IOKit",
         "-framework",
         "CoreFoundation",
-    ],
+    ] + tsan,
+    sanitize = not tsan,
     deps = ["//drivers/TegraGM20BMetal/abi:metal_abi"],
-)
+) for suffix, tsan in [
+    (
+        "",
+        [],
+    ),
+    (
+        "_tsan",
+        ["-fsanitize=thread"],
+    ),
+]]
 
 # The runtime's C++ units as //gpu:plugin builds them (its cc_srcs, the shader compiler's among them), for this Mac
 METAL_HOST_UNITS = ["//drivers/TegraGM20BMetal:fx/" + f for f in [

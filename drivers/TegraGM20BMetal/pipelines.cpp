@@ -521,8 +521,8 @@ Pipeline *Device::placeRecord(const PackPipeline &pp, bool caTransform)
     if (tier0) {
         if (Pipeline *existing = tier0Pipelines_.slots[idx].load(std::memory_order_acquire))
             return existing;
-    } else if (const auto it = pipelines_.find(idx); it != pipelines_.end() && it->second.rec) {
-        return &it->second;
+    } else if (const auto it = pipelines_.find(idx); it != pipelines_.end() && it->second && it->second->rec) {
+        return it->second.get();
     }
     const bool tess = tessellates(pp);
     PlacedProgram vs, fs = noPixelProgram(), tessPlaced[2];
@@ -543,10 +543,14 @@ Pipeline *Device::placeRecord(const PackPipeline &pp, bool caTransform)
     if (pp.strideTwin &&
         !(twin = placeRecord(pack_.section<PackPipeline>(PackPipelines)[pp.strideTwin - 1], caTransform)))
         return nullptr;
-    std::unique_ptr<Pipeline> owned;
-    if (tier0)
-        owned = std::make_unique<Pipeline>();
-    Pipeline &pl = tier0 ? *owned : pipelines_[idx];
+    if (tier0) {
+        if (Pipeline *existing = tier0Pipelines_.slots[idx].load(std::memory_order_acquire))
+            return existing;
+    } else if (const auto it = pipelines_.find(idx); it != pipelines_.end() && it->second && it->second->rec) {
+        return it->second.get();
+    }
+    auto owned = std::make_unique<Pipeline>();
+    Pipeline &pl = *owned;
     const PackSegment *prebuilt = prebuiltPipelineSegment(idx);
     build(pl, pp, vs, fs, pack_.section<uint32_t>(PackBlob) + pp.blob, pack_.string(pp.keyString), caTransform,
           pack_.spills(pp), pack_.far(pp), tess ? tessPlaced : nullptr, prebuilt);
@@ -581,7 +585,9 @@ Pipeline *Device::placeRecord(const PackPipeline &pp, bool caTransform)
         }
         return expected;
     }
-    return &pl;
+    const auto [it, inserted] = pipelines_.emplace(idx, std::move(owned));
+    (void)inserted;
+    return it->second.get();
 }
 
 // `pl` of record `pp`, whose programs are placed at `vs` and `fs`, whose registers are `blob` (method, value pairs)

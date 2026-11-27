@@ -158,8 +158,8 @@ public:
     // dirty); the kern_return_t.
     int allocCompressible(uint64_t bytes, Bo &bo);
     // Binds it whole at a VA aligned as its memory with compressible `kind`: the VmBind's kern_return_t (kIOReturnNoResources:
-    // the kernel had no comptags left for it), or kIOReturnNoSpace with no VA left; refused, the BO is left unbound. Under the
-    // caller's lock (the VA list).
+    // the kernel had no comptags left for it), or kIOReturnNoSpace with no VA left; refused, the BO is left unbound. Safe
+    // without Device::lock_ (the VA allocator holds vaLock_).
     int bindCompressed(Bo &bo, uint32_t kind);
     // Method 19: adds a zero-bandwidth-clear entry to the GPU's table (zbc.h); the kern_return_t (kIOReturnNoResources:
     // the table is full)
