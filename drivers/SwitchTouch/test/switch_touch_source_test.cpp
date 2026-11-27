@@ -172,3 +172,18 @@ TEST(SwitchTouchSource, JoyConTouchTimestampHookOnLiveDispatchOnly)
     ASSERT_FALSE(release.empty());
     EXPECT_THAT(release, HasSubstr("flush(true, 0, false);"));
 }
+
+TEST(SwitchTouchSource, SharesWorkLoopWithHidDevice)
+{
+    const std::string start = Body(SourceText("../SwitchTouch.cpp"), "bool SwitchTouch::start(");
+    ASSERT_FALSE(start.empty());
+    const size_t loopAt = start.find("loop = IOWorkLoop::workLoop();");
+    const size_t createAt = start.find("switch_hid_create(kSwitchHIDTouch, loop)");
+    const size_t armAt = start.find("timer->setTimeoutMS(1);");
+    ASSERT_NE(loopAt, std::string::npos);
+    ASSERT_NE(createAt, std::string::npos);
+    ASSERT_NE(armAt, std::string::npos);
+    EXPECT_EQ(switch_ios::test::Count(start, "switch_hid_create("), 1u);
+    EXPECT_GT(createAt, loopAt);
+    EXPECT_LT(createAt, armAt);
+}

@@ -227,6 +227,25 @@ TEST(SwitchALSSource, CopyEventHandlerIsNonBlockingAndWired)
         EXPECT_THAT(copy, testing::Not(HasSubstr(forbidden))) << forbidden;
 }
 
+TEST(SwitchALSSource, SharesWorkLoopWithHidDevice)
+{
+    const std::string als = SourceText("../SwitchALS.cpp");
+    const std::string start = Body(als, "bool SwitchALS::start(");
+    ASSERT_FALSE(start.empty());
+    const size_t loopAt = start.find("loop = IOWorkLoop::workLoop();");
+    const size_t createAt = start.find("switch_hid_create(kSwitchHIDLight, loop)");
+    ASSERT_NE(loopAt, std::string::npos);
+    ASSERT_NE(createAt, std::string::npos);
+    EXPECT_EQ(Count(start, "switch_hid_create("), 1u);
+    EXPECT_GT(createAt, loopAt);
+
+    const std::string interval = Body(als, "void SwitchALS::reportIntervalSet(");
+    ASSERT_FALSE(interval.empty());
+    EXPECT_THAT(interval, HasSubstr("self->kick->interruptOccurred("));
+    for (const char *forbidden : {"tegra_i2c_", "writeRegister", "IOSleep", "IODelay", "runAction"})
+        EXPECT_THAT(interval, testing::Not(HasSubstr(forbidden))) << forbidden;
+}
+
 TEST(SwitchALSSource, BacklightUsesLockFreeSlotAndRealDeadlines)
 {
     const std::string backlight = SourceText("../SwitchBacklight.cpp");

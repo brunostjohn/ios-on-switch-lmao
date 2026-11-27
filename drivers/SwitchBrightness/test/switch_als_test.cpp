@@ -28,11 +28,22 @@ uint16_t gData0 = 372;
 uint16_t gData1 = 132;
 bool gDisplayOn = true;
 IOReturn gDispatchStatus = kIOReturnSuccess;
+struct FakeHidDevice : IOService {
+    SwitchHIDKind kind = kSwitchHIDTouch;
+    IOWorkLoop *sharedLoop = nullptr;
+
+    void free() override
+    {
+        OSSafeReleaseNULL(sharedLoop);
+        IOService::free();
+    }
+};
+
 SwitchHIDFeatureHandler gFeatureHandler = nullptr;
 void *gFeatureCtx = nullptr;
 SwitchHIDCopyEventHandler gCopyHandler = nullptr;
 void *gCopyCtx = nullptr;
-IOService *gHidDevice = nullptr;
+FakeHidDevice *gHidDevice = nullptr;
 unsigned gI2cInitCalls = 0;
 unsigned gI2cReadCalls = 0;
 int gEventDataSentinel = 1;
@@ -185,10 +196,21 @@ void switch_refusal(const char *, const char *, const char *, ...)
 {}
 }  // extern "C"
 
-IOService *switch_hid_create(SwitchHIDKind)
+IOService *switch_hid_create(SwitchHIDKind kind, IOWorkLoop *sharedLoop)
 {
-    gHidDevice = new IOService;
-    return gHidDevice;
+    auto *dev = new FakeHidDevice;
+    dev->kind = kind;
+    if (sharedLoop) {
+        sharedLoop->retain();
+        dev->sharedLoop = sharedLoop;
+    }
+    gHidDevice = dev;
+    return dev;
+}
+
+IOService *switch_hid_create(SwitchHIDKind kind)
+{
+    return switch_hid_create(kind, nullptr);
 }
 
 void switch_hid_set_feature_handler(IOService *, SwitchHIDFeatureHandler handler, void *context)
@@ -233,6 +255,9 @@ void resetALS()
     gDispatched.clear();
     OSMetaClass::allocs = 0;
     IOTimerEventSource::all.clear();
+    IOWorkLoop::last = nullptr;
+    IOWorkLoop::created = 0;
+    IOWorkLoop::runActionCalls = 0;
     gI2cInitCalls = 0;
     gI2cReadCalls = 0;
     gNowNS = 1000000000ULL;
@@ -447,4 +472,29 @@ TEST(SwitchALS, CopyEventOnDemandCacheAndPowerGating)
     EXPECT_EQ(fe->ch1, 700);
     EXPECT_EQ(fe->timestamp, gainStamp);
     ev->release();
+}
+
+TEST(SwitchALS, SharesWorkLoopWithHidDevice)
+{
+    resetALS();
+    initEventVtable();
+
+    ASSERT_EQ(switch_als_start(), 0);
+    EXPECT_EQ(IOWorkLoop::created, 1u);
+    ASSERT_NE(IOWorkLoop::last, nullptr);
+    ASSERT_NE(gHidDevice, nullptr);
+    EXPECT_EQ(gHidDevice->kind, kSwitchHIDLight);
+    EXPECT_EQ(gHidDevice->sharedLoop, IOWorkLoop::last);
+
+    switch_als_supply(true);
+    const unsigned runActionsBefore = IOWorkLoop::runActionCalls;
+    setReportInterval(250000);
+    EXPECT_EQ(IOWorkLoop::runActionCalls, runActionsBefore);
+    setReportInterval(0);
+    EXPECT_EQ(IOWorkLoop::runActionCalls, runActionsBefore);
+    EXPECT_EQ(gCopyHandler(gCopyCtx), nullptr);
+    EXPECT_EQ(IOWorkLoop::runActionCalls, runActionsBefore);
+
+    // SwitchALS::free() drops its loop reference while the HID device keeps its retained reference.
+    resetALS();
 }
