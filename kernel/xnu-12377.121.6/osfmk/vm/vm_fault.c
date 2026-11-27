@@ -9115,7 +9115,7 @@ vm_page_validate_cs_mapped_slow(
 	/* Boot-argument fixups of signed text land after validation, through the physical aperture, before any mapping. */
 	if (validated == VMP_CS_ALL_TRUE && tainted == VMP_CS_ALL_FALSE &&
 	    cs_text_fixup_page(vnode, mo_offset, (void *)phystokv((pmap_paddr_t)VM_PAGE_GET_PHYS_PAGE(page) << PAGE_SHIFT)) != 0) {
-		cache_sync_page(VM_PAGE_GET_PHYS_PAGE(page));
+		pmap_sync_page_data_phys(VM_PAGE_GET_PHYS_PAGE(page));
 	}
 #endif
 

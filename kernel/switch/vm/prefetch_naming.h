@@ -62,7 +62,25 @@ static inline int switch_prefetch_compare_named_files(const struct switch_named_
     return x->volume < y->volume ? -1 : (int)(x->volume > y->volume);
 }
 
-/* log sorted; groups holds `entries` slots. Entries of volumes at or past `volumes` are left out. */
+/* log sorted; returns how many groups switch_prefetch_group_log will emit. */
+static inline uint32_t switch_prefetch_count_groups(const struct switch_record_entry *log, uint32_t entries,
+                                                    uint32_t volumes)
+{
+    uint32_t count = 0;
+    for (uint32_t i = 0; i < entries;) {
+        uint32_t j = i + 1u;
+        while (j < entries && log[j].vp == log[i].vp && log[j].vid == log[i].vid && log[j].index == log[i].index) {
+            ++j;
+        }
+        if (log[i].index < volumes && log[i].index < SWITCH_PREFETCH_VOLUME_COUNT) {
+            ++count;
+        }
+        i = j;
+    }
+    return count;
+}
+
+/* log sorted; groups holds switch_prefetch_count_groups slots. Entries of volumes at or past `volumes` are left out. */
 static inline uint32_t switch_prefetch_group_log(const struct switch_record_entry *log, uint32_t entries,
                                                  uint32_t volumes, struct switch_log_group *groups)
 {

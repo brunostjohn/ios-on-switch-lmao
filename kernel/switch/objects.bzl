@@ -248,13 +248,17 @@ _STATS_IO_OBJECTS = {
         "osfmk/vm/bsd_vm.c",
         "osfmk/vm/vm_fault.c",
         "osfmk/vm/vm_object.c",
+        "osfmk/vm/vm_pageout.c",
         "switch:diag/pagein.c",
+        "switch:vm/prefetch_vm.c",
     ],
     "bsd": [
         "bsd/kern/decmpfs.c",
         "bsd/vfs/vfs_cluster.c",
+        "bsd/vm/vnode_pager.c",
         "switch:translate/a64x_xnu.c",
         "switch:translate/a64x_traps.c",
+        "switch:vm/prefetch.c",
     ],
 }
 

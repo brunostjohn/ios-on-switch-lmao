@@ -17,7 +17,7 @@
 #include <net/necp.h>
 #include <os/log.h>
 
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_DIAG_NECP) && SWITCH_DIAG_NECP
 
 static struct switch_necp_timeline switch_necp_timeline;
 static uint64_t switch_necp_dumps;
@@ -172,4 +172,4 @@ void switch_necp_policy_changed(const struct necp_kernel_socket_policy *policy, 
 #endif
 }
 
-#endif /* DEVELOPMENT || DEBUG */
+#endif /* (DEVELOPMENT || DEBUG) && SWITCH_DIAG_NECP */

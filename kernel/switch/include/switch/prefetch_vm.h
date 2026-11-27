@@ -100,7 +100,7 @@ extern uint32_t switch_vm_prefetch_stop(uint32_t reason);
 extern uint32_t switch_vm_prefetch_replay_stop_reason(void);
 extern uint32_t switch_vm_prefetch_boot_stop_reason(void);
 
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_STATS_IO) && SWITCH_STATS_IO
 struct switch_cluster_io_snapshot {
     uint64_t demand_bytes[SWITCH_PREFETCH_VOLUMES];
     uint64_t replay_reqs;

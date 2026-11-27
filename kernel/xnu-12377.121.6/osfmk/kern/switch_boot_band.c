@@ -110,9 +110,13 @@ switch_boot_band_spawned(task_t task, int band_class)
 	}
 	absolutetime_to_nanoseconds(mach_absolute_time(), &now_ns);
 	lck_mtx_lock(&band_lock);
-	if (band_closed || now_ns >= BAND_UPTIME_NS) {
-		band_closed = true;
+	if (band_closed) {
 		lck_mtx_unlock(&band_lock);
+		return;
+	}
+	if (now_ns >= BAND_UPTIME_NS) {
+		lck_mtx_unlock(&band_lock);
+		switch_boot_band_lift("120 s of uptime");
 		return;
 	}
 	if (band_call == NULL) {
@@ -152,7 +156,7 @@ switch_boot_band_lift(const char *why)
 		lck_mtx_unlock(&band_lock);
 		return;
 	}
-	band_closed = true;
+	os_atomic_store(&band_closed, true, relaxed);
 	members = band_count;
 	lck_mtx_lock(&tasks_threads_lock);
 	queue_iterate(&tasks, task, task_t, tasks) {

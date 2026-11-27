@@ -155,23 +155,29 @@ void
 switch_kprof_user_trap(arm_saved_state_t *state, uint32_t esr)
 {
 	static char         names[KPROF_TRAP_NAMES][32];
+	static uint8_t      ready[KPROF_TRAP_NAMES];
 	static unsigned int used;
 	task_t              task = current_task();
 	char                name[32];
 	uint64_t            pc, lr;
-	unsigned int        slot;
+	unsigned int        seen, slot;
 
 	task_best_name(task, name, sizeof(name));
-	for (unsigned int i = 0; i < MIN(os_atomic_load(&used, acquire), KPROF_TRAP_NAMES); i++) {
-		if (strncmp(names[i], name, sizeof(name)) == 0) {
+	seen = MIN(os_atomic_load(&used, acquire), KPROF_TRAP_NAMES);
+	for (unsigned int i = 0; i < seen; i++) {
+		if (os_atomic_load(&ready[i], acquire) && strncmp(names[i], name, sizeof(name)) == 0) {
 			return;
 		}
+	}
+	if (seen >= KPROF_TRAP_NAMES) {
+		return;
 	}
 	slot = os_atomic_inc_orig(&used, relaxed);
 	if (slot >= KPROF_TRAP_NAMES) {
 		return;
 	}
 	strlcpy(names[slot], name, sizeof(names[slot]));
+	os_atomic_store(&ready[slot], 1, release);
 	pc = kprof_user_location(task, get_saved_state_pc(state));
 	lr = kprof_user_location(task, get_saved_state_lr(state));
 	printf("SwitchTrap: %s[%d] brk #0x%x at %s%llx, lr %s%llx\n", name, task_pid(task), ISS_BRK_COMMENT(esr),

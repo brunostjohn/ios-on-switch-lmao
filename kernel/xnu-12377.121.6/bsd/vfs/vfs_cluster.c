@@ -213,7 +213,7 @@ static void switch_cluster_record(vnode_t vp, int index, off_t offset, uint64_t 
 static struct switch_quiesce switch_record_gate;
 static int switch_record_drain_event;
 static thread_t switch_record_skip_thread;
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_STATS_IO) && SWITCH_STATS_IO
 static uint64_t switch_prefetch_demand_bytes[SWITCH_PREFETCH_VOLUMES];
 static uint64_t switch_prefetch_replay_reqs;
 static uint64_t switch_prefetch_replay_gt64k;
@@ -1614,12 +1614,12 @@ cluster_io(vnode_t vp, upl_t upl, vm_offset_t upl_offset, off_t f_offset, int no
 		size = non_rounded_size;
 	}
 	upl_end_offset = upl_offset + size;
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_STATS_IO) && SWITCH_STATS_IO
 	uint64_t switch_demand_start = 0;
 #endif
 
 	bool switch_track_read = (flags & CL_READ) && !(flags & CL_PAGEOUT);
-#if !(DEVELOPMENT || DEBUG)
+#if !((DEVELOPMENT || DEBUG) && defined(SWITCH_STATS_IO) && SWITCH_STATS_IO)
 	switch_track_read = switch_track_read && __improbable(switch_quiesce_is_armed(&switch_record_gate));
 #endif
 	if (switch_track_read) {
@@ -1630,7 +1630,7 @@ cluster_io(vnode_t vp, upl_t upl, vm_offset_t upl_offset, off_t f_offset, int no
 			if (!switch_is_replay && switch_quiesce_is_armed(&switch_record_gate)) {
 				switch_cluster_record(vp, switch_vol, f_offset, (uint64_t)non_rounded_size, SWITCH_RECORD_CLUSTER);
 			}
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_STATS_IO) && SWITCH_STATS_IO
 			if (switch_is_replay) {
 				os_atomic_inc(&switch_prefetch_replay_reqs, relaxed);
 				if ((uint64_t)non_rounded_size > 65536u) {
@@ -2598,7 +2598,7 @@ create_cached_upl:
 		buf_biodone(real_bp);
 	}
 	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 22)) | DBG_FUNC_END, (int)f_offset, size, upl_offset, retval, 0);
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_STATS_IO) && SWITCH_STATS_IO
 	if (switch_demand_start != 0) {
 		os_atomic_add(&switch_prefetch_demand_abs, mach_absolute_time() - switch_demand_start, relaxed);
 	}
@@ -4895,7 +4895,7 @@ switch_cluster_record(vnode_t vp, int index, off_t offset, uint64_t size, unsign
 		log[slot].vid = (uint32_t)vp->v_id;
 		log[slot].index = (uint16_t)index;
 		os_atomic_store(&log[slot].when, (uint16_t)(elapsed < 65534 ? elapsed + 1 : 65535), release);
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_STATS_IO) && SWITCH_STATS_IO
 		os_atomic_add(&switch_record_bytes[kind], size, relaxed);
 #else
 		(void)kind;
@@ -4922,7 +4922,7 @@ switch_cluster_record_file(struct vnode *vp, int64_t offset, uint64_t size, unsi
 	}
 }
 
-#if DEVELOPMENT || DEBUG
+#if (DEVELOPMENT || DEBUG) && defined(SWITCH_STATS_IO) && SWITCH_STATS_IO
 void
 switch_cluster_prefetch_snapshot(struct switch_cluster_io_snapshot *out)
 {
